@@ -45,7 +45,7 @@ struct FloorPublishState<F, Cfg, A, C> {
 }
 
 /// A super-admin selects the (tenant, store) whose `floor`/`stations` nodes to compile and publish.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PublishFloorRequest {
     tenant_id: String,
     store_id: String,
@@ -84,10 +84,6 @@ where
         })
 }
 
-/// Compiles a store's floor & kitchen master data into its `floor`/`stations` config nodes and versions
-/// them — the same load→compile→validate→write→version shape as [`admin_publish_menu`], onto the
-/// `floor`/`stations` keys. The §10 referential rules run here (a rule to an unknown station, a stale
-/// backup): an invalid plan is a `422` with the violated rules, never a stored state.
 /// How big the plan a floor publish compiled was — for the audit trail, never the plan itself.
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct FloorPublishSummary {
@@ -168,6 +164,39 @@ where
     ))
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/floor/publish",
+    extensions(("x-permission" = json!("console.config.publish"))),
+    security(("session_cookie" = [])),
+    request_body(
+        content = PublishFloorRequest, description = "`tenant_id` and `store_id`. What is published is the store's authored floor and \
+                       kitchen, never the body",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = PublishedConfig, description = "The store's areas and tables are compiled into its `floor` node, \
+                                      and its stations and routing into its `stations` node, and both \
+                                      are published on the Store layer, the store's other settings \
+                                      kept. The body carries `config_version_id`. Audited with the \
+                                      plan's size, not the plan"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID, or a value needs \
+                                      a recorded confirmation first", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 412, description = "Every attempt to publish lost a race with another publish: \
+                                      try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 422, description = "The plan breaks a floor or kitchen rule, such as a routing rule \
+                                      to an unknown station or a stale backup, with every violation \
+                                      listed; or the store's configuration would not validate", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The floor store or the configuration store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "floor",
+)]
+/// Compiles a store's floor & kitchen master data into its `floor`/`stations` config nodes and versions
+/// them — the same load→compile→validate→write→version shape as `admin_publish_menu`, onto the
+/// `floor`/`stations` keys. The §10 referential rules run here (a rule to an unknown station, a stale
+/// backup): an invalid plan is a `422` with the violated rules, never a stored state.
 async fn admin_publish_floor<F, Cfg, A, C>(
     State(state): State<FloorPublishState<F, Cfg, A, C>>,
     headers: HeaderMap,

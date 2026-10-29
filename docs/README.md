@@ -23,6 +23,8 @@ To find the files a change touches, start from the **[repository map](repository
 | [guides/README.md](guides/README.md) | Index of the task-shaped guides, and the two tiers they assume |
 | [guides/write-an-adapter.md](guides/write-an-adapter.md) | Connect an external system to a port, proven by the contract suite |
 | [guides/add-a-country-module.md](guides/add-a-country-module.md) | Add a country's tax-invoice rules and locale pack in three edits |
+| [guides/add-a-business-area.md](guides/add-a-business-area.md) | Where each part of a new area goes, which ADRs come first, and reason codes followed through every tier |
+| [guides/add-a-setting.md](guides/add-a-setting.md) | Add a setting a store may run differently: its ADR, field, register entry, edge reader and words |
 | [guides/run-the-simulator.md](guides/run-the-simulator.md) | Drive a virtual fleet through the real decisions |
 | [guides/integrate-with-the-api.md](guides/integrate-with-the-api.md) | For a third party: get a credential, call `/v1`, receive webhooks |
 | [guides/appliance.md](guides/appliance.md) | Turn a stock Debian or Ubuntu PC into a store appliance |
@@ -36,7 +38,7 @@ To find the files a change touches, start from the **[repository map](repository
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | From zero to a reviewable pull request |
 | [../changes/README.md](../changes/README.md) | Write a pull request's change file |
 | [../deploy/README.md](../deploy/README.md) · [../deploy/edge/README.md](../deploy/edge/README.md) · [../k8s/README.md](../k8s/README.md) | Run a cloud cell on one VPS, run the edge as a service, or use the optional Kubernetes lane |
-| [../templates/adapter-template/README.md](../templates/adapter-template/README.md) · [../countries/zz/README.md](../countries/zz/README.md) | The scaffolds to copy for an adapter or a country |
+| [guides/write-an-adapter.md](guides/write-an-adapter.md) · [guides/add-a-country-module.md](guides/add-a-country-module.md) | Generate an adapter or a country with `cargo xtask new`, ([the old template](../templates/adapter-template/README.md) is to be removed) |
 
 ## Reference: look something up
 
@@ -45,15 +47,18 @@ To find the files a change touches, start from the **[repository map](repository
 | [pos-spec.md](pos-spec.md) | What the product does: business behaviour, and the event catalogue (§18) |
 | [naming-and-api.md](naming-and-api.md) | How to name anything: JSON, URLs, database, events, permissions, code and files |
 | [ui-ux.md](ui-ux.md) | How every screen must behave |
+| [languages.md](languages.md) | The UI languages the till and the console support, the register and its check, the languages country modules declare, and the fallback to `en` |
 | [glossary.md](glossary.md) | Restaurant and framework vocabulary |
 | [configuration.md](configuration.md) | Every setting a store may run differently (generated) |
 | [permissions.md](permissions.md) | The permission matrix and its default roles (generated) |
 | [state-machines.md](state-machines.md) | Every state machine's transition table (generated) |
-| [openapi.json](openapi.json) · [openapi-admin.json](openapi-admin.json) | The `/v1` integrator and `/admin` console APIs (generated) |
+| [openapi.json](openapi.json) · [openapi-admin.json](openapi-admin.json) · [openapi-edge.json](openapi-edge.json) · [openapi-device.json](openapi-device.json) | The `/v1` integrator, `/admin` console, till and store-box APIs (generated, [ADR-0177](adr/0177-openapi-is-the-route-map.md)) |
 | [generated/crate-graph.md](generated/crate-graph.md) | The workspace crates by layer, what each depends on, and what depends on it (generated) |
+| [generated/route-map.md](generated/route-map.md) | Every route the four OpenAPI documents describe: its handler, who may call it, the permission it needs and the handler's file (generated, [ADR-0177](adr/0177-openapi-is-the-route-map.md)) |
 | [generated/adr-index.md](generated/adr-index.md) | The ADRs nothing in the code cites, and any citation of an ADR that does not exist (generated). `cargo xtask gen-docs --adr-citations [ADR-NNNN]` prints which files cite each ADR |
 | [snapshots/](snapshots/) | The published contracts: [events](snapshots/events.txt), [permissions](snapshots/permissions.txt), [settings](snapshots/settings.txt), [capabilities](snapshots/capabilities.txt), [edge routes](snapshots/routes.txt). Each is generated, and CI refuses a removal |
 | [capacity-and-reliability.md](capacity-and-reliability.md) | Sizing numbers, load limits, and the failure and recovery matrix |
+| [data-residency.md](data-residency.md) | Where each class of data rests and when it crosses a border, the mechanisms that make it visible, and what waits for a second cell. Not legal advice |
 | [gate-register.md](gate-register.md) | The gates only a person, a credential, hardware or an outside body can clear |
 | [production-readiness.md](production-readiness.md) | The open list between the tree and a shop that takes money |
 | [security-review.md](security-review.md) · [security-review-ws-d.md](security-review-ws-d.md) | The pre-production security review, and the ops-hardening pass |

@@ -25,6 +25,7 @@ use crate::http::{bad_request, error_response, parse_ulid};
 
 /// A table as returned to a device.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct TableResponse {
     /// The table id, as a ULID string.
     table_id: String,
@@ -46,11 +47,39 @@ impl From<TableView> for TableResponse {
 /// Reporting data (average check per cover), never a gate: a seat with no body at all is the
 /// request every device sent before B1.2 and still means "seat the table, count unknown".
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct SeatRequest {
     #[serde(default)]
     guest_count: Option<u16>,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/tables/{id}/seat",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("sales.table.manage"))),
+    params(
+        ("id" = String, Path, description = "The table's id, a ULID"),
+    ),
+    request_body(
+        content = SeatRequest, description = "Optional `guest_count`. An empty body seats the table with the count unknown",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = TableResponse, description = "Seated, with an order opened: its id and its new `state`, a \
+                                      `TABLE_STATE_*` token"),
+        (status = 400, description = "The id is not a ULID, or a body is present that is not `guest_count`"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \
+                                      was superseded by a replacement that holds the store's lease \
+                                      (`SUPERSEDED`)"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, and nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "floor",
+))]
 /// `POST /api/tables/{id}/seat` — seat guests and open an order.
 ///
 /// The body is optional, and read as raw [`Bytes`] rather than through `Json` so that it is
@@ -62,7 +91,7 @@ pub(crate) struct SeatRequest {
 ///
 /// No screen prompts for the count yet — whether tap-to-seat should grow a step is roadmap **Q7**'s
 /// call, not this slice's; the route carries it so that decision does not also need a wire change.
-pub(crate) async fn seat<S>(
+pub(crate) async fn seat_table<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     Path(id): Path<String>,
@@ -87,8 +116,30 @@ where
     respond(edge.seat_table(actor, table_id, guest_count).await)
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/tables/{id}/clean",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("sales.table.manage"))),
+    params(
+        ("id" = String, Path, description = "The table's id, a ULID"),
+    ),
+    responses(
+        (status = 200, body = TableResponse, description = "The table: its id and its new `state`, a `TABLE_STATE_*` token"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \
+                                      was superseded by a replacement that holds the store's lease \
+                                      (`SUPERSEDED`)"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, and nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "floor",
+))]
 /// `POST /api/tables/{id}/clean` — clean the table down and release it.
-pub(crate) async fn clean<S>(
+pub(crate) async fn clean_table<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     Path(id): Path<String>,
@@ -102,10 +153,33 @@ where
     respond(edge.clean_table(actor, table_id).await)
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/tables/{id}/release",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("sales.table.manage"))),
+    params(
+        ("id" = String, Path, description = "The table's id, a ULID"),
+    ),
+    responses(
+        (status = 200, body = TableResponse, description = "Released while nothing is sold on it: its id and its new `state`, a \
+                                      `TABLE_STATE_*` token"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \
+                                      was superseded by a replacement that holds the store's lease \
+                                      (`SUPERSEDED`)"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, and nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "floor",
+))]
 /// `POST /api/tables/{id}/release` — give a table seated by mistake straight back to the floor,
 /// while nothing is sold on it
 /// ([ADR-0163](../../../../docs/adr/0163-a-table-seated-by-mistake-is-released.md)).
-pub(crate) async fn release<S>(
+pub(crate) async fn release_table<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     Path(id): Path<String>,
@@ -121,6 +195,7 @@ where
 
 /// Where the guests are moving to.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct TransferRequest {
     /// The free table they move to, as a ULID string.
     to_table_id: String,
@@ -128,6 +203,7 @@ pub(crate) struct TransferRequest {
 
 /// What a move did, as returned to a device: the order that moved, and both tables after it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct TransferResponse {
     /// The order that moved, as a ULID string.
     order_id: String,
@@ -137,9 +213,36 @@ pub(crate) struct TransferResponse {
     to_table: TableResponse,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/tables/{id}/transfer",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!(["sales.order.transfer", "sales.table.manage"]))),
+    params(
+        ("id" = String, Path, description = "The table's id, a ULID"),
+    ),
+    request_body(
+        content = TransferRequest, description = "`to_table_id`, the free table the guests and their order move to",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = TransferResponse, description = "Moved: the `order_id` that moved, and both tables after it, \
+                                      `from_table` and `to_table`"),
+        (status = 400, description = "An id is not a ULID, or the body has no `to_table_id`"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \
+                                      was superseded by a replacement that holds the store's lease \
+                                      (`SUPERSEDED`)"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, and nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "floor",
+))]
 /// `POST /api/tables/{id}/transfer` — move the guests at this table, and their order, to a free
 /// one (`sales.table.transferred`). The body is `{"to_table_id": "<ulid>"}`.
-pub(crate) async fn transfer<S>(
+pub(crate) async fn transfer_table<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     Path(id): Path<String>,
@@ -173,8 +276,26 @@ impl From<TransferView> for TransferResponse {
     }
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/tables/{id}",
+    security(("till_session" = [])),
+    params(
+        ("id" = String, Path, description = "The table's id, a ULID"),
+    ),
+    responses(
+        (status = 200, body = TableResponse, description = "The table's id and its projected `state`, a `TABLE_STATE_*` token"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+    ),
+    tag = "floor",
+))]
 /// `GET /api/tables/{id}` — the table's current projected state.
-pub(crate) async fn get<S>(State(edge): State<Arc<Edge<S>>>, Path(id): Path<String>) -> Response
+pub(crate) async fn table_state<S>(
+    State(edge): State<Arc<Edge<S>>>,
+    Path(id): Path<String>,
+) -> Response
 where
     S: EventStore + Send + Sync + 'static,
 {

@@ -1,7 +1,7 @@
 import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
 
 import { api } from "../api/client";
-import type { RejectReason, WaitingOrder } from "../api/types";
+import type { RejectReason, WaitingOrder } from "../api/schemas";
 import { ReadFailed } from "../components/StoreData";
 import { PageHeader } from "../components/ui";
 import { t } from "../i18n";

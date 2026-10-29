@@ -25,7 +25,7 @@ use crate::floorplan::{AreaStore, RoutingRuleStore, StationStore, TableStore};
 use crate::http::campaigns::campaigns_nodes;
 use crate::http::catalog::menu_nodes;
 use crate::http::config_nodes::tax_nodes;
-use crate::http::fees::{TenantFeeRules, fees_left_behind};
+use crate::http::fees::{FeePublishOutcome, TenantFeeRules, fees_left_behind};
 use crate::http::floor::floor_nodes;
 use crate::http::inventory::inventory_nodes;
 use crate::http::people::permissions_nodes;
@@ -220,7 +220,7 @@ impl BatchNodePlan for MenuBatchPlan {
         nodes: &mut Vec<(String, serde_json::Value)>,
     ) -> Option<String> {
         let Some(fees) = self.fees.as_ref().and_then(|fees| fees.for_store(store_id)) else {
-            return Some(fees_left_behind("FEE_PUBLISH_FAILED", &[]));
+            return Some(fees_left_behind(FeePublishOutcome::Failed, &[]));
         };
         let on_tree = fees.on_tree(tree, nodes);
         if let Some(node) = on_tree.node() {

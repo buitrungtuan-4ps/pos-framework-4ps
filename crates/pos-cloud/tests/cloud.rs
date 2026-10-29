@@ -32,6 +32,8 @@ mod catalog_menus;
 mod catalog_publish;
 #[path = "cloud/catalog_taxonomy.rs"]
 mod catalog_taxonomy;
+#[path = "cloud/cell_standing.rs"]
+mod cell_standing;
 #[path = "cloud/chain.rs"]
 mod chain;
 #[path = "cloud/config_nodes.rs"]
@@ -70,6 +72,8 @@ mod fees;
 mod fleet;
 #[path = "cloud/floor.rs"]
 mod floor;
+#[path = "cloud/hq_rollups.rs"]
+mod hq_rollups;
 #[path = "cloud/integrations.rs"]
 mod integrations;
 #[path = "cloud/inventory.rs"]
@@ -10639,10 +10643,12 @@ fn store_group_app(
         config_trees,
         catalog,
         InMemoryFeeRules::new(),
+        Arc::new(NoopAuditRecorder),
     )
 }
 
-/// [`store_group_app`] over a tenant's fee rules, which a menu batch brings to each member.
+/// [`store_group_app`] over a tenant's fee rules, which a menu batch brings to each member, with
+/// the group routes recording to `audit`.
 fn store_group_app_with_fees(
     admin: FakeAdmin,
     groups: FakeStoreGroups,
@@ -10650,6 +10656,7 @@ fn store_group_app_with_fees(
     config_trees: FakeConfigTrees,
     catalog: FakeCatalog,
     fee_rules: InMemoryFeeRules,
+    audit: Arc<dyn AuditRecorder>,
 ) -> axum::Router {
     let app = app_all(
         Cloud::new(FakeStore::new()),
@@ -10685,7 +10692,7 @@ fn store_group_app_with_fees(
             people,
             admin.clone(),
             clock(),
-            Arc::new(NoopAuditRecorder),
+            audit,
         ))
         .merge(http::config_preview_router(
             config_trees,

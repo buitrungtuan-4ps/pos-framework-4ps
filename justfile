@@ -13,7 +13,7 @@ default: preflight
 # The gate. Ordered so the cheapest failure surfaces first: a contributor with a
 # naming mistake should not wait for a full clippy pass to hear about it.
 # ---------------------------------------------------------------------------
-preflight: fmt-check lint-config deps-rule vendor-neutral-core print-agent-deps tls-modes actions-pinned changelog-check links crates gen-docs-check code-size mirrored-files clippy clippy-backbone test deny
+preflight: fmt-check lint-config deps-rule vendor-neutral-core print-agent-deps tls-modes actions-pinned changelog-check links guides-check crates gen-docs-check code-size mirrored-files api-types hand-types repo-map i18n clippy clippy-backbone test deny
     @echo "preflight ok — ready for a pull request"
 
 fmt:
@@ -108,6 +108,15 @@ links:
     cargo run -q -p xtask -- links
     cargo run -q -p xtask -- countries
 
+# What a guide in docs/guides/ marks is still true to the tree (docs/guides/README.md).
+guides-check:
+    cargo run -q -p xtask -- guides --check
+
+# Does what each guide says, in a scratch worktree of the last commit: its `cargo xtask new` commands,
+# then its verify steps. Slow (it builds what the guides generate), so it is not part of preflight.
+guides:
+    cargo run -q -p xtask -- guides --run
+
 # Every workspace crate has a README and a [package.metadata.pos] contract card, and both agree with
 # cargo metadata and CODEOWNERS (ADR-0170 decisions 1 and 5).
 crates:
@@ -130,6 +139,25 @@ code-size base="origin/main":
 # in packages/shared/, and a copy in either front end fails.
 mirrored-files:
     cargo run -q -p xtask -- mirrored-files
+
+# Each front end's generated API types came from the OpenAPI document as committed (ADR-0177): after a
+# document changes, `pnpm gen:api` in ui/ and dashboard/ regenerates them. No Node is needed here.
+api-types:
+    cargo run -q -p xtask -- api-types --check
+
+# Each front end mirrors no more wire types by hand than tools/hand-types-baseline.toml allows, and
+# the number only falls (ADR-0177).
+hand-types:
+    cargo run -q -p xtask -- hand-types
+
+# Every path the repository map names in backticks exists, so it cannot point at a file that moved.
+repo-map:
+    cargo run -q -p xtask -- repo-map
+
+# Every supported UI language is complete in both front ends, settings' words included, and a
+# language a country declares but nobody has reviewed yet is named (packages/shared/i18n/languages.json).
+i18n:
+    cargo run -q -p xtask -- i18n
 
 # No external vendor's brand name may appear in pos-core / pos-proto production code — the
 # automated half of the integration doctrine (ADR-0083).

@@ -14,7 +14,7 @@
 
 import { createSignal } from "solid-js";
 
-import type { ApproverRequest } from "../api/types";
+import type { ApproverRequest } from "../api/schemas";
 import { asksApprover } from "./permissions";
 import { employeeId } from "./session";
 import { state } from "./store";

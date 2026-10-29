@@ -154,40 +154,81 @@ where
     // The real edge stores events in SQLite (ADR-0015); the example uses the in-memory fakes.
     let store = SqliteStore::open(&config.store_path).map_err(EdgeError::Store)?;
     let identity = StoreIdentity::for_store(config.store_id);
-    // The store's own writer thread is the gapless receipt authority (ADR-0025); a clone shares it,
-    // so the loop that appends the settled event and the authority that numbers it are one store.
-    let receipts = Arc::new(store.clone());
-    // The same single writer thread is the durable daily queue-number authority (ADR-0064), so a
-    // relayed takeaway order gets a number that survives a restart; another clone carries it into
-    // `serve`, which builds the relay's intake from it (ADR-0087).
-    let queue = store.clone();
-    // And the same writer thread is the durable OTA self-test authority (ADR-0048's
-    // highest-precedence rule reads it, and an install deliberately restarts the edge, so the
-    // verdict has to be on disk rather than in process memory — ADR-0055 Amendment 1).
-    let ota_state = store.clone();
-    // …and the durable lease authority (ADR-0108). The generation this box holds must survive the
-    // same restart for the same reason: a held generation rebuilt from config on every boot would be
-    // re-adopted on every boot, and a machine a replacement superseded would promote itself back.
-    let lease_state = store.clone();
-    // …and the durable record of which paired device answers for which terminal (ADR-0112). Same
-    // reason again: the binding is a managerial act performed once at the box, and re-doing it after
-    // every restart would mean a manager at the till in the middle of service.
-    let print_agents = store.clone();
-    // …and the durable print queue itself (ADR-0112). Same writer thread again, and it must be the
-    // same *store*: the dispatch that enqueues a ticket and the route the agent claims it from are
-    // two halves of one table.
-    let print_queue = store.clone();
-    // …and the one that answers "is this log still the log I wrote", below.
-    let chain = store.clone();
+    let authorities = Authorities::of(&store);
     let edge = Arc::new(
-        Edge::new(store, identity, EdgeSession::bootstrap(), receipts)
-            .map_err(EdgeError::Entropy)?,
+        Edge::new(
+            store,
+            identity,
+            EdgeSession::bootstrap(),
+            authorities.receipts,
+        )
+        .map_err(EdgeError::Entropy)?,
     );
 
     // Replay the durable log into the projection before serving, so a restart resumes exactly where
     // the last committed transaction left off (ADR-0015, the crash-recovery half of P5).
     edge.rebuild().await.map_err(EdgeError::Rebuild)?;
 
+    spawn_store_loops(&edge, authorities.chain, &config);
+
+    serve_until(
+        config,
+        edge,
+        authorities.queue,
+        authorities.ota_state,
+        authorities.lease_state,
+        authorities.print_agents,
+        authorities.print_queue,
+        stop,
+    )
+    .await
+}
+
+/// The store's own writer thread, shared as each authority the edge and `serve` need: a clone
+/// shares it, so every one of them is the same store.
+struct Authorities {
+    /// The gapless receipt authority (ADR-0025): the loop that appends the settled event and the
+    /// authority that numbers it are one store.
+    receipts: Arc<SqliteStore>,
+    /// The durable daily queue-number authority (ADR-0064), so a relayed takeaway order gets a
+    /// number that survives a restart; `serve` builds the relay's intake from it (ADR-0087).
+    queue: SqliteStore,
+    /// The durable OTA self-test authority (ADR-0048's highest-precedence rule reads it, and an
+    /// install deliberately restarts the edge, so the verdict has to be on disk rather than in
+    /// process memory — ADR-0055 Amendment 1).
+    ota_state: SqliteStore,
+    /// The durable lease authority (ADR-0108). The generation this box holds must survive the same
+    /// restart for the same reason: a held generation rebuilt from config on every boot would be
+    /// re-adopted on every boot, and a machine a replacement superseded would promote itself back.
+    lease_state: SqliteStore,
+    /// The durable record of which paired device answers for which terminal (ADR-0112). Same
+    /// reason again: the binding is a managerial act performed once at the box, and re-doing it
+    /// after every restart would mean a manager at the till in the middle of service.
+    print_agents: SqliteStore,
+    /// The durable print queue itself (ADR-0112). Same writer thread again, and it must be the
+    /// same *store*: the dispatch that enqueues a ticket and the route the agent claims it from are
+    /// two halves of one table.
+    print_queue: SqliteStore,
+    /// The one that answers "is this log still the log I wrote", at start.
+    chain: SqliteStore,
+}
+
+impl Authorities {
+    fn of(store: &SqliteStore) -> Self {
+        Self {
+            receipts: Arc::new(store.clone()),
+            queue: store.clone(),
+            ota_state: store.clone(),
+            lease_state: store.clone(),
+            print_agents: store.clone(),
+            print_queue: store.clone(),
+            chain: store.clone(),
+        }
+    }
+}
+
+/// The loops the store runs on its own, beside serving: the chain walk, retention and the clock.
+fn spawn_store_loops(edge: &Arc<Edge<SqliteStore>>, chain: SqliteStore, config: &EdgeConfig) {
     // The store verifies its own chain at startup, with no internet
     // ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md) decision 3, for
     // [ADR-0001](../../../docs/adr/0001-offline-first-store-autonomy.md)'s reason: a shop that
@@ -231,24 +272,12 @@ where
     // Retention (ADR-0145): once an hour, the events that are synced, old and needed by nothing
     // still open are deleted. It waits ten minutes before its first sweep, so it never runs
     // across the chain walk above.
-    pos_edge::retention::spawn(Arc::clone(&edge));
+    pos_edge::retention::spawn(Arc::clone(edge));
 
     // The clock (roadmap-v3 PF4): every quarter hour, measured against a time server, and the
     // reading put where `GET /api/sync` reports it. Started here rather than in `serve`, like
     // retention, so the on-fakes example and the test compositions send no datagram anywhere.
-    pos_edge::sntp::spawn(Arc::clone(&edge), &config.sntp_server);
-
-    serve_until(
-        config,
-        edge,
-        queue,
-        ota_state,
-        lease_state,
-        print_agents,
-        print_queue,
-        stop,
-    )
-    .await
+    pos_edge::sntp::spawn(Arc::clone(edge), &config.sntp_server);
 }
 
 /// The pre-commit smoke test the OTA installer runs against a *staged* binary: can these bytes run

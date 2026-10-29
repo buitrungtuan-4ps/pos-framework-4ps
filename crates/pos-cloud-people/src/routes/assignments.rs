@@ -8,6 +8,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use pos_cloud_api::console::{audit_action, mint_ulid, require_permission};
+use pos_cloud_api::response::StoresPublished;
 use pos_cloud_api::response::{api_error_with_details, parse_ulid_fields};
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{StoreId, TenantId};
@@ -18,6 +19,7 @@ use super::assignment_scope::{
     already_assigned, assignment_audit, assignment_ids, requested_scope,
 };
 use super::checks::refuse_unassignable;
+use super::publish::PermissionsPublishResult;
 use super::requests::{
     AssignmentListQuery, AssignmentListing, CreateAssignmentRequest, PeopleTenantQuery,
     people_entropy_unavailable, people_error_response,
@@ -33,6 +35,46 @@ use crate::registry::RegistryStore;
 use crate::store_groups::StoreGroupId;
 use pos_cloud_api::refusal::{enum_refusal, not_found};
 
+/// What an assignment's create answers: the id it minted, and, where the assignment reached a
+/// store at once, how publishing to each went (ADR-0158 decision 7).
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+pub(super) struct AssignmentCreated {
+    /// The new assignment's id, a ULID.
+    id: String,
+    /// One result per store the assignment reached, absent when it reached none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    stores: Option<Vec<PermissionsPublishResult>>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/assignments",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.people.read"))),
+    params(
+        ("tenant_id" = String, Query, description = "The tenant whose assignments to list (a 26-character ULID)"),
+        ("store_id" = Option<String>, Query, description = "Everyone who works at this store: every \
+                                                          assignment that reaches it, its own, its \
+                                                          groups' and the tenant's"),
+        ("employee_id" = Option<String>, Query, description = "Everything this person holds"),
+        ("store_group_id" = Option<String>, Query, description = "The assignments naming this store group"),
+        ("scope_kind" = Option<String>, Query, description = "`ASSIGNMENT_SCOPE_TENANT`: the \
+                                                            assignments that reach every store"),
+    ),
+    responses(
+        (status = 200, body = [Assignment], description = "The assignments, as an array. Each says its scope and names \
+                                      the person it grants, by name and staff code"),
+        (status = 400, description = "tenant_id is absent or not a ULID; not exactly one of \
+                                      store_id, employee_id, store_group_id and scope_kind is sent; \
+                                      the id sent is not a ULID; or scope_kind is not \
+                                      `ASSIGNMENT_SCOPE_TENANT`", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.people.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The people store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "people",
+)]
 /// A super-admin lists assignments, by exactly one of four selectors: everyone who works at a store
 /// (`?store_id=` — every assignment that reaches it: its own, its groups' and the tenant's), all a
 /// person holds (`?employee_id=`), those naming a store group (`?store_group_id=`), or those that
@@ -136,6 +178,38 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/assignments",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.people.manage"))),
+    request_body(
+        content = CreateAssignmentRequest, description = "`tenant_id`, `employee_id`, `role_template_id`, and where the role is held: \
+                       a `store_id` for one store, a `store_group_id` for every store the group holds, \
+                       or `scope_kind` `ASSIGNMENT_SCOPE_TENANT` for every store of the tenant \
+                       (ADR-0158 decision 3)",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, body = AssignmentCreated, description = "Assigned. The body is `{ \"id\": … }`. An assignment to a \
+                                      group or to every store is published at once to every open \
+                                      store it reaches, and the body also carries `stores`, each \
+                                      with its `outcome`, `PERMISSIONS_PUBLISH_APPLIED` with its \
+                                      `config_version_id` or `PERMISSIONS_PUBLISH_FAILED`. One to a \
+                                      single store is published when someone publishes"),
+        (status = 400, description = "An id is absent or not a ULID, the scope is named twice or not \
+                                      at all, or scope_kind is not one the route accepts", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.people.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The tenant has no such employee, store, store group or role. \
+                                      The error names the field that carried the id", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 409, description = "The employee, store, store group or role is archived, or the \
+                                      person already holds an assignment there. Nothing is written", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The people store, the registry, the store groups or the \
+                                      entropy source is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "people",
+)]
 /// A super-admin assigns an employee with a role, at one store, a store group or every store of the
 /// tenant ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
 /// decision 3; [`requested_scope`] reads which). Audited `assignment.create` with the ids and the
@@ -230,21 +304,17 @@ where
                 )),
             )
             .await;
-            let created = match reached {
-                None => serde_json::json!({ "id": assignment_id.to_string() }),
-                Some(reached) => {
-                    let stores = state
+            let id = assignment_id.to_string();
+            let stores = match reached {
+                None => None,
+                Some(reached) => Some(
+                    state
                         .publisher()
-                        .publish_all(
-                            &context,
-                            tenant_id,
-                            &reached,
-                            ("assignment_id", &assignment_id.to_string()),
-                        )
-                        .await;
-                    serde_json::json!({ "id": assignment_id.to_string(), "stores": stores })
-                }
+                        .publish_all(&context, tenant_id, &reached, ("assignment_id", &id))
+                        .await,
+                ),
             };
+            let created = AssignmentCreated { id, stores };
             (StatusCode::CREATED, Json(created)).into_response()
         }
         Err(AssignmentStoreError::AlreadyAssigned(_)) => already_assigned(scope),
@@ -252,6 +322,31 @@ where
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/admin/assignments/{assignment_id}",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.people.manage"))),
+    params(
+        ("assignment_id" = String, Path, description = "The assignment's 26-character ULID"),
+        ("tenant_id" = String, Query, description = "The tenant that owns it (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, body = StoresPublished<PermissionsPublishResult>, description = "Removed, and every store the assignment reached is published \
+                                      to at once, so the person cannot sign in there a moment longer \
+                                      (ADR-0158 decision 7): `stores` lists each store with its \
+                                      `outcome`, `PERMISSIONS_PUBLISH_APPLIED` with its \
+                                      `config_version_id` or `PERMISSIONS_PUBLISH_FAILED`, which \
+                                      `POST /admin/people/publish` retries"),
+        (status = 400, description = "tenant_id or assignment_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.people.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The tenant has no assignment with that id", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The people store, the registry or the store groups is \
+                                      unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "people",
+)]
 /// A super-admin removes an assignment — offboarding a person from where it reached. Audited
 /// `assignment.remove` when a row was actually removed, with the ids and the scope it bound; a no-op
 /// removal records nothing.
@@ -338,5 +433,36 @@ where
         }
         Ok(false) => not_found("assignment"),
         Err(error) => people_error_response(&error),
+    }
+}
+
+#[cfg(test)]
+mod answer_tests {
+    //! [`AssignmentCreated`] serialises to the bytes the `json!` it replaced did.
+
+    use super::AssignmentCreated;
+
+    #[test]
+    fn a_create_that_reached_no_store_is_the_bare_id() {
+        let created = AssignmentCreated {
+            id: "01J0000000000000000000000A".to_owned(),
+            stores: None,
+        };
+        assert_eq!(
+            serde_json::to_value(created).expect("json"),
+            serde_json::json!({ "id": "01J0000000000000000000000A" })
+        );
+    }
+
+    #[test]
+    fn a_create_that_reached_stores_carries_their_results() {
+        let created = AssignmentCreated {
+            id: "01J0000000000000000000000A".to_owned(),
+            stores: Some(Vec::new()),
+        };
+        assert_eq!(
+            serde_json::to_value(created).expect("json"),
+            serde_json::json!({ "id": "01J0000000000000000000000A", "stores": [] })
+        );
     }
 }

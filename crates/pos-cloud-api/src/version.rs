@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 /// The version a record was read at, as an opaque token.
 ///
 /// Minted by the adapter, echoed by the client, compared only for equality.
-#[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(transparent)]
 pub struct Version(String);
 
@@ -62,7 +62,7 @@ impl core::fmt::Display for Version {
 /// and no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten
 /// buffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —
 /// a real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses.
-#[derive(Clone, PartialEq, Eq, Debug, Serialize)]
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, utoipa::ToSchema)]
 pub struct Versioned<T> {
     /// The record itself, flattened so the wire shape is unchanged but for `etag`.
     #[serde(flatten)]
@@ -82,6 +82,7 @@ pub struct Versioned<T> {
     /// [`new`](Self::new) call sites compile untouched, and a read that does not project the
     /// column serialises exactly the bytes it did before.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub updated_at_ms: Option<i64>,
 }
 

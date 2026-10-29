@@ -14,9 +14,9 @@
 //! 2. [`require_signed_in`] — every *command* (and the store reads beside them) additionally requires a
 //!    real employee signed in on that device. The command then runs under that person's
 //!    [`Actor`], not a placeholder — so every sale, void and shift is attributable to who did it
-//!    (S0b). The **session routes** below ([`sign_in`], [`sign_out`], [`current`]) sit behind the first
-//!    gate but not the second: signing in is how a device passes the second gate, so it cannot itself
-//!    require having passed it.
+//!    (S0b). The **session routes** below ([`sign_in`], [`sign_out`], [`current_session`]) sit
+//!    behind the first gate but not the second: signing in is how a device passes the second gate,
+//!    so it cannot itself require having passed it.
 //!
 //! Both gates run as middleware rather than per-handler extractors, so they guard the whole router in
 //! one place — reads included: an unpaired or unsigned device has no more business reading the store's
@@ -186,9 +186,9 @@ fn subprotocol_token(request: &Request) -> Option<DeviceToken> {
         .find_map(|offered| DeviceToken::parse(offered.trim()))
 }
 
-/// What the session routes ([`sign_in`], [`sign_out`], [`current`]) share: the [`Edge`] whose synced
-/// roster a sign-in verifies against, the [`Sessions`] map it records the binding in, and the
-/// [`Lockout`] that rate-limits PIN attempts. Cheap to clone — every field is an [`Arc`].
+/// What the session routes ([`sign_in`], [`sign_out`], [`current_session`]) share: the [`Edge`]
+/// whose synced roster a sign-in verifies against, the [`Sessions`] map it records the binding in,
+/// and the [`Lockout`] that rate-limits PIN attempts. Cheap to clone — every field is an [`Arc`].
 pub(crate) struct SignInDeps<S> {
     pub edge: Arc<Edge<S>>,
     pub sessions: Arc<Sessions>,
@@ -208,6 +208,7 @@ impl<S> Clone for SignInDeps<S> {
 
 /// A sign-in: the badge `code` a person types and their `pin`. Both are secrets and never logged.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct SignInRequest {
     code: String,
     pin: String,
@@ -215,6 +216,7 @@ pub(crate) struct SignInRequest {
 
 /// A successful sign-in: the employee the device now acts as.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct SignedIn {
     employee_id: String,
 }
@@ -233,9 +235,11 @@ pub(crate) struct SignInRefused {
 
 /// The current sign-in on a device, for the UI to restore its state after a reload.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct SessionState {
     signed_in: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     employee_id: Option<String>,
     /// Whether a replacement machine has taken this store — `active`, `superseded` or `invalid`
     /// ([ADR-0123](../../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
@@ -288,6 +292,23 @@ fn permission_ids(set: PermissionSet) -> Vec<&'static str> {
     ids
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/session/sign-in",
+    security(("till_session" = [])),
+    request_body(
+        content = SignInRequest, description = "`code`, the badge code a person types, and `pin`. Both are secrets and are never logged",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = SignedIn, description = "Signed in: the body carries the `employee_id` the device now acts as"),
+        (status = 401, description = "Refused: `outcome` is `wrong` or `locked_out`, with `remaining` attempts or \
+                                      `locked_until_ms`. A wrong code and a wrong PIN answer the same; an unpaired \
+                                      device also gets 401"),
+        (status = 503, description = "The sign-in could not be recorded"),
+    ),
+    tag = "session",
+))]
 /// `POST /api/session/sign-in` — verify a badge code + PIN against the synced roster and, on success,
 /// bind the signed-in employee to this device (S0b/ADR-0084).
 pub(crate) async fn sign_in<S>(
@@ -367,6 +388,16 @@ where
     }
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/session/sign-out",
+    security(("till_session" = [])),
+    responses(
+        (status = 204, description = "Signed out, or nobody was signed in"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+    ),
+    tag = "session",
+))]
 /// `POST /api/session/sign-out` — clear the sign-in on this device (end of shift, or handing the tablet
 /// on). Idempotent: signing out a device nobody is signed in on still returns `204`.
 pub(crate) async fn sign_out<S>(
@@ -386,9 +417,21 @@ where
     StatusCode::NO_CONTENT.into_response()
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/session",
+    security(("till_session" = [])),
+    responses(
+        (status = 200, body = SessionState, description = "Whether anyone is signed in on this device and who; the box's lease \
+                                      standing; whether anyone can sign in; the person's permissions, held \
+                                      directly and with approval; the till's idle lock; and the opening float"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+    ),
+    tag = "session",
+))]
 /// `GET /api/session` — who is signed in on this (paired) device, so the UI resumes on the right screen
 /// after a reload without re-typing a PIN.
-pub(crate) async fn current<S>(
+pub(crate) async fn current_session<S>(
     State(deps): State<SignInDeps<S>>,
     Extension(device_id): Extension<DeviceId>,
 ) -> Response

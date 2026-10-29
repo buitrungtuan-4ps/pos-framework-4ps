@@ -454,3 +454,41 @@ fn a_duplicate_append_does_not_advance_the_sequence() {
         }
     }
 }
+
+// --- pinned before `verify_chain_chunk` is split (ADR-0170 decision 7) ---------------------------
+
+/// A store that has written nothing is intact, has checked nothing, and has no head to report.
+#[test]
+fn an_empty_log_is_intact_with_nothing_checked_and_no_head() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let store = SqliteStore::open(dir.path().join("store.db")).expect("open");
+    match verify(&store) {
+        ChainStatus::Intact {
+            checked,
+            unchained,
+            head,
+        } => {
+            assert_eq!((checked, unchained), (0, 0));
+            assert!(
+                head.is_none(),
+                "nothing written, nothing to anchor a head on"
+            );
+        }
+        other @ ChainStatus::Broken { .. } => panic!("an empty log is not broken: {other:?}"),
+    }
+}
+
+/// A stored envelope that is not JSON at all is an error to report, not a verdict about the chain:
+/// the walk cannot say whether the row was edited if it cannot read it.
+#[test]
+fn an_envelope_that_cannot_be_read_is_an_error_not_a_break() {
+    let (fixture, _store) = Fixture::new();
+    tamper(
+        &fixture.path,
+        "UPDATE events SET envelope = 'not json' WHERE seq = 3",
+    );
+    assert!(
+        block_on(fixture.reopen().verify_chain(store_id())).is_err(),
+        "an unreadable row stops the walk with an error"
+    );
+}

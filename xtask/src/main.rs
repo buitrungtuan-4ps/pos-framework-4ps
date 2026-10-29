@@ -14,6 +14,7 @@ mod code_stats;
 mod finding;
 mod gen_docs;
 mod impact;
+mod scaffold;
 
 pub use finding::Finding;
 
@@ -32,17 +33,60 @@ cargo xtask <check>
   links           internal documentation links resolve
   todos           TODO markers are not older than one release
   actions-pinned  every GitHub action is pinned to a commit SHA
+  api-types       each front end's generated API types name the committed OpenAPI document's blob
+                  (run `pnpm gen:api` in ui/ and dashboard/ to regenerate them; ADR-0177)
   countries       every country module is named, wired into the workspace, and selectable
   crates          every workspace crate has a README and a contract card, and both agree with cargo metadata
+  guides          every block a guide in docs/guides/ marks is still true to the tree; --run also
+                  does each guide's `cargo xtask new` commands and verify steps in a scratch worktree
+  hand-types      each front end mirrors no more wire types by hand in src/api/types.ts than
+                  tools/hand-types-baseline.toml allows, and no fewer; --write-baseline lowers it,
+                  and refuses to raise it (ADR-0177)
+  i18n            every supported UI language is complete in ui/ and dashboard/, settings included;
+                  a country's language not yet supported is reported (packages/shared/i18n/languages.json)
   mirrored-files  the files ui/ and dashboard/ share live once, in packages/shared, and nowhere else
   print-agent-deps  pos-print-agent links only the three workspace crates ADR-0112 allows
+  repo-map        every path docs/repository-map.md names in backticks exists
   tls-modes       every accepted TLS_MODE has its Caddyfile, and it imports the shared block
   vendor-neutral-core  no vendor brand name appears in pos-core / pos-proto production code
 
 cargo xtask gen-docs [--check | --adr-citations [ADR-NNNN]]
 
-  write docs/generated/ (crate graph, ADR index) from the tree; --check fails where it differs or an
-  ADR that does not exist is cited; --adr-citations prints which files cite each ADR, uncommitted
+  write docs/generated/ (crate graph, CODEOWNERS lines from the cards, ADR index) from the tree;
+  --check fails where it differs, where a crate's own CODEOWNERS line names other owners than its
+  card, or where an ADR that does not exist is cited; --adr-citations prints which files cite each ADR, uncommitted
+
+cargo xtask new crate <name> --layer <layer> --purpose <one line> [--adr <number>]... [--dry-run]
+
+  write a workspace crate that `xtask crates` accepts: manifest and contract card, README, crate
+  root, and its `members` line; owners come from CODEOWNERS; never overwrites (ADR-0176)
+
+cargo xtask new adapter --kind printer|storage|card|fiscal|courier|erp|delivery
+    [--dry-run]
+
+  write crates/adapters/<kind>-sandbox: a port implementation over a transport seam, and the port's
+  contract suite wired in tests/contract.rs; it names no vendor, and every kind but printer and
+  storage carries its `<family>.sandbox` descriptor, registered nowhere (ADR-0176)
+
+cargo xtask new country <cc> --display-name <name> --currency <ISO 4217> --exponent <0-4>
+    --prices-include-tax <true|false> --cash-rounding <none|minor units>
+    --tax-rate <food|alcohol|exempt>=<basis points>... [--tax-rate <class>@<channel>=<bp>]...
+    --retention-days <n> --language <tag> [--dry-run]
+
+  write countries/<cc> from the values its law sets, every one a required flag, passing the
+  Fiscalization suite; wire it into pos-edge and pos-cloud as a feature in no default (ADR-0176)
+
+cargo xtask new screen --app ui <id> --path <path> --title <English> --title-vi <Vietnamese>
+    [--dry-run]
+
+  write a till screen and its lines in the registry, App.tsx, every string catalogue and the replay
+  route walk; each catalogue other than en needs its --title-<locale>, so nothing is left untranslated
+
+cargo xtask new screen --app dashboard <id> --path <path> --title <English> --title-vi <Vietnamese>
+    --scope <tenant|store|console> --icon <name in ICON_NAMES> --nav-group <group> [--dry-run]
+
+  write a console screen and its vitest test, and its lines in the registry and its nav group,
+  App.tsx and every string catalogue; a nav group already holding six screens is refused
 
 cargo xtask affected --classes [--base <ref>] [--all]
 
@@ -103,17 +147,23 @@ fn main() -> ExitCode {
         "deps-rule" => checks::deps_rule::run(&rest),
         "lint-config" => checks::lint_config::run(&rest),
         "actions-pinned" => checks::actions_pinned::run(&rest),
+        "api-types" => checks::api_types::run(&rest),
         "changelog" => checks::changelog::run(&rest),
         "code-stats" => code_stats::ratchet::run(&rest),
         "countries" => checks::countries::run(&rest),
         "crates" => checks::crates::run(&rest),
         "gen-docs" => gen_docs::run(&rest),
+        "guides" => checks::guides::run(&rest),
+        "hand-types" => checks::hand_types::run(&rest),
+        "i18n" => checks::i18n::run(&rest),
         "impact" => impact::run(&rest),
         "links" => checks::links::run(&rest),
         "snapshot" => checks::snapshot::run(&rest),
         "migrations" => checks::migrations::run(&rest),
         "mirrored-files" => checks::mirrored_files::run(&rest),
+        "new" => scaffold::run(&rest),
         "print-agent-deps" => checks::print_agent_deps::run(&rest),
+        "repo-map" => checks::repo_map::run(&rest),
         "tls-modes" => checks::tls_modes::run(&rest),
         "vendor-neutral-core" => checks::vendor_neutral_core::run(&rest),
         "-h" | "--help" | "help" => {

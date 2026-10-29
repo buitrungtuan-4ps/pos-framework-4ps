@@ -4,7 +4,12 @@
 //! The batch publish to a store group (ADR-0122): an outcome per member, a batch that cannot
 //! compile, an unknown node, an empty or archived cohort, the group's history and the session.
 
+use std::sync::Arc;
+
 use axum::http::StatusCode;
+use pos_cloud::audit::AuditSink;
+use pos_cloud::auth::admin::AdminRole;
+use pos_cloud::fees::InMemoryFeeRules;
 use pos_cloud::registry::EntityStatus;
 use pos_cloud::store_groups::{StoreGroup, StoreGroupId};
 use pos_proto::ids::{StoreId, TenantId};
@@ -12,9 +17,10 @@ use pos_proto::ulid::Ulid;
 use tower::ServiceExt;
 
 use crate::{
-    FakeCatalog, FakeConfigTrees, FakeRegistry, FakeStoreGroups, admin_cookie, author_a_menu,
-    get_with_cookie, json_body, post_json, post_with_cookie, provisioned_admin,
-    seed_menu_prerequisites, seed_store, store_group_app, ulid_text,
+    FakeAudit, FakeCatalog, FakeConfigTrees, FakeRegistry, FakeStoreGroups, admin_cookie,
+    author_a_menu, get_with_cookie, json_body, post_json, post_with_cookie, provisioned_admin,
+    put_with_cookie, put_with_etag, role_session_cookie, seed_menu_prerequisites, seed_store,
+    store_group_app, store_group_app_with_fees, ulid_text,
 };
 
 #[tokio::test]
@@ -453,4 +459,280 @@ async fn a_batch_publish_needs_a_session() {
         .await
         .expect("route the batch publish");
     assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
+}
+
+// --- pinned before `admin_set_store_group_members` and `admin_publish_to_store_group` are split --
+// --- (ADR-0170 decision 7) ---------------------------------------------------------------------
+
+/// A cohort of two seeded stores and the group routes recording to `audit`, under `admin`.
+fn seeded_cohort(
+    admin: crate::FakeAdmin,
+    audit: &FakeAudit,
+) -> (axum::Router, FakeStoreGroups, StoreGroupId, [StoreId; 2]) {
+    let tenant_id = TenantId::new(Ulid::from_u128(1));
+    let stores = [
+        StoreId::new(Ulid::from_u128(11)),
+        StoreId::new(Ulid::from_u128(12)),
+    ];
+    let registry = FakeRegistry::default();
+    for store in stores {
+        seed_store(&registry, tenant_id, store, true);
+    }
+    let group_id = StoreGroupId::new(Ulid::from_u128(21));
+    let groups = FakeStoreGroups::default();
+    groups.seed(
+        StoreGroup {
+            group_id,
+            tenant_id,
+            name: "Airport branches".to_owned(),
+            status: EntityStatus::Active,
+        },
+        &[],
+    );
+    let router = store_group_app_with_fees(
+        admin,
+        groups.clone(),
+        registry,
+        FakeConfigTrees::default(),
+        FakeCatalog::default(),
+        InMemoryFeeRules::new(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    (router, groups, group_id, stores)
+}
+
+/// A membership write is refused in the order it reads its request — the session, the ids, the
+/// cap, each store id, the stores the tenant has, then the `If-Match` and the version — and none of
+/// them records anything.
+#[tokio::test]
+async fn a_membership_write_is_refused_in_the_order_it_reads_its_request() {
+    let admin = provisioned_admin();
+    let audit = FakeAudit::default();
+    let (router, _, group_id, [first, _]) = seeded_cohort(admin.clone(), &audit);
+    // The owner logs in first: the login names no email, so it is the only admin when it does.
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+    let url = format!("/admin/store-groups/{}/members", group_id.as_ulid());
+    let body = |ids: Vec<String>| serde_json::json!({ "tenant_id": tenant, "store_ids": ids });
+    let first = first.as_ulid().to_string();
+    let stranger = ulid_text(99);
+
+    let ops = role_session_cookie(&admin, AdminRole::Ops, "ops-token").await;
+    let by_ops = router
+        .clone()
+        .oneshot(put_with_etag(&url, &body(vec![first.clone()]), &ops, "1"))
+        .await
+        .expect("route the membership");
+    assert_eq!(by_ops.status(), StatusCode::FORBIDDEN);
+
+    let too_many: Vec<String> = (0..201).map(|_| "not-a-ulid".to_owned()).collect();
+    for (target, sent, etag, status, field) in [
+        (
+            "not-a-ulid".to_owned(),
+            body(vec![first.clone()]),
+            Some("1"),
+            StatusCode::BAD_REQUEST,
+            Some("group_id"),
+        ),
+        (
+            url.clone(),
+            body(too_many),
+            None,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            None,
+        ),
+        (
+            url.clone(),
+            body(vec![first.clone(), "not-a-ulid".to_owned()]),
+            None,
+            StatusCode::BAD_REQUEST,
+            Some("store_ids"),
+        ),
+        (
+            url.clone(),
+            body(vec![first.clone(), stranger]),
+            None,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            None,
+        ),
+        (
+            url.clone(),
+            body(vec![first.clone()]),
+            None,
+            StatusCode::BAD_REQUEST,
+            Some("if-match"),
+        ),
+        (
+            url.clone(),
+            body(vec![first.clone()]),
+            Some("7"),
+            StatusCode::PRECONDITION_FAILED,
+            None,
+        ),
+        (
+            format!("/admin/store-groups/{}/members", ulid_text(22)),
+            body(vec![first.clone()]),
+            Some("1"),
+            StatusCode::NOT_FOUND,
+            None,
+        ),
+    ] {
+        let uri = if target.starts_with('/') {
+            target.clone()
+        } else {
+            format!("/admin/store-groups/{target}/members")
+        };
+        let request = match etag {
+            Some(etag) => put_with_etag(&uri, &sent, &cookie, etag),
+            None => put_with_cookie(&uri, &sent, &cookie),
+        };
+        let response = router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("route the membership");
+        assert_eq!(response.status(), status, "{uri}");
+        if let Some(field) = field {
+            let refusal = json_body(response).await;
+            assert_eq!(
+                refusal["error"]["details"][0]["field"], field,
+                "{uri}: {refusal}"
+            );
+        }
+    }
+    assert!(audit.entries.lock().expect("lock").is_empty());
+}
+
+/// A membership write answers the membership deduplicated, with the new version in the header and
+/// the body, and records the membership it stored.
+#[tokio::test]
+async fn a_membership_write_answers_and_records_the_deduplicated_membership() {
+    let audit = FakeAudit::default();
+    let (router, groups, group_id, [first, second]) = seeded_cohort(provisioned_admin(), &audit);
+    let cookie = admin_cookie(&router).await;
+    let ids = [first, second, first].map(|id| id.as_ulid().to_string());
+    let written = router
+        .oneshot(put_with_etag(
+            &format!("/admin/store-groups/{}/members", group_id.as_ulid()),
+            &serde_json::json!({ "tenant_id": ulid_text(1), "store_ids": ids }),
+            &cookie,
+            "1",
+        ))
+        .await
+        .expect("route the membership");
+    assert_eq!(written.status(), StatusCode::OK);
+    let header = written
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let body = json_body(written).await;
+    let membership = serde_json::json!([first.as_ulid().to_string(), second.as_ulid().to_string()]);
+    assert_eq!(body["store_ids"], membership);
+    assert_eq!(
+        body["stores"],
+        serde_json::json!([]),
+        "no assignment names the group"
+    );
+    assert_eq!(
+        header.as_deref(),
+        body["etag"].as_str(),
+        "the header and the body agree"
+    );
+    assert_eq!(
+        groups
+            .members
+            .lock()
+            .expect("lock")
+            .get(&(TenantId::new(Ulid::from_u128(1)), group_id))
+            .cloned(),
+        Some(vec![first, second])
+    );
+
+    let entries = audit.entries.lock().expect("lock").clone();
+    let [entry] = entries.as_slice() else {
+        panic!("one audit entry: {entries:?}");
+    };
+    assert_eq!(entry.action, "store_group.members");
+    assert_eq!(entry.entity_type, "store_group");
+    assert_eq!(entry.entity_id, group_id.as_ulid().to_string());
+    assert_eq!(entry.after, Some(membership));
+}
+
+/// A batch publish records one entry naming the batch, the node, its counts and its summary.
+#[tokio::test]
+async fn a_batch_publish_records_the_batch_its_node_and_its_counts() {
+    let tenant_id = TenantId::new(Ulid::from_u128(1));
+    let ready = StoreId::new(Ulid::from_u128(13));
+    let archived = StoreId::new(Ulid::from_u128(14));
+    let registry = FakeRegistry::default();
+    seed_store(&registry, tenant_id, ready, true);
+    seed_store(&registry, tenant_id, archived, false);
+    let config_trees = FakeConfigTrees::default();
+    seed_menu_prerequisites(&config_trees, tenant_id, ready);
+    let group_id = StoreGroupId::new(Ulid::from_u128(21));
+    let groups = FakeStoreGroups::default();
+    groups.seed(
+        StoreGroup {
+            group_id,
+            tenant_id,
+            name: "Airport branches".to_owned(),
+            status: EntityStatus::Active,
+        },
+        &[ready, archived],
+    );
+    let audit = FakeAudit::default();
+    let router = store_group_app_with_fees(
+        provisioned_admin(),
+        groups.clone(),
+        registry,
+        config_trees,
+        FakeCatalog::default(),
+        InMemoryFeeRules::new(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let cookie = admin_cookie(&router).await;
+    let tenant = tenant_id.as_ulid().to_string();
+    let menu_id = author_a_menu(&router, &cookie, &tenant).await;
+    let published = router
+        .oneshot(post_with_cookie(
+            &format!("/admin/store-groups/{}/publish", group_id.as_ulid()),
+            &serde_json::json!({ "tenant_id": tenant, "node": "menu", "arguments": { "menu_id": menu_id } }),
+            &cookie,
+        ))
+        .await
+        .expect("route the batch publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    let report = json_body(published).await;
+
+    let batch_id = groups.batches.lock().expect("lock")[0]
+        .batch_id
+        .as_ulid()
+        .to_string();
+    assert_eq!(report["batch_id"], batch_id.as_str());
+    let entries = audit.entries.lock().expect("lock").clone();
+    let [entry] = entries.as_slice() else {
+        panic!("one audit entry: {entries:?}");
+    };
+    assert_eq!(entry.action, "store_group.publish");
+    assert_eq!(entry.entity_type, "store_group");
+    assert_eq!(entry.entity_id, group_id.as_ulid().to_string());
+    assert_eq!(entry.tenant_id, Some(tenant_id));
+    let after = entry.after.clone().expect("an after");
+    assert_eq!(after["batch_id"], batch_id.as_str());
+    assert_eq!(after["node"], "menu");
+    assert_eq!(after["audit_action"], "catalog.publish");
+    assert_eq!(after["summary"], serde_json::json!({ "menu_id": menu_id }));
+    assert_eq!(
+        (
+            after["applied"].clone(),
+            after["skipped"].clone(),
+            after["failed"].clone()
+        ),
+        (
+            serde_json::json!(1),
+            serde_json::json!(1),
+            serde_json::json!(0)
+        )
+    );
 }

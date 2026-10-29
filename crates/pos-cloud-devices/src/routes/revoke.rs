@@ -42,7 +42,7 @@ struct DeviceRevokeState<Cfg, A, C> {
 /// **not** a console `Device.device_id`. Nothing joins those two identity spaces, so an id taken
 /// from the wrong list names a device the store has never had, and the store records it as done
 /// without retiring anything.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct RevokeDeviceRequest {
     tenant_id: String,
     local_device_id: String,
@@ -80,11 +80,14 @@ where
 #[utoipa::path(
     post,
     path = "/admin/stores/{store_id}/devices/revoke",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.stores.manage"))),
     params(
         ("store_id" = String, Path, description = "The store the till belongs to (a 26-character ULID)"),
     ),
+    request_body(content = RevokeDeviceRequest, content_type = "application/json"),
     responses(
-        (status = 200, description = "The deny-list now names the device, as of the config version \
+        (status = 200, body = PublishedConfig, description = "The deny-list now names the device, as of the config version \
                                       returned. The store carries it out on its next config pull — \
                                       within thirty seconds for a store with a working link, and on \
                                       its next boot otherwise — and the admitted-devices roster \

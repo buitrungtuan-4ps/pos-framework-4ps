@@ -331,6 +331,14 @@ fn a_pre_bill_is_the_receipts_rows_under_a_reference_and_no_number() {
         !lines_of(&document).iter().any(|line| line.starts_with('#')),
         "a pre-bill carries no receipt number"
     );
+    assert!(
+        matches!(
+            document.blocks.first(),
+            Some(PrintBlock::Text { line, style })
+                if line == "PRE-BILL" && style.emphasised && style.centred
+        ),
+        "the heading is centred in bold"
+    );
     assert_eq!(document.blocks.last(), Some(&PrintBlock::Cut));
 }
 

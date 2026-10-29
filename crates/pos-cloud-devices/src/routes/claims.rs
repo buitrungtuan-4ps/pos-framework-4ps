@@ -80,7 +80,7 @@ where
 }
 
 /// What `POST /claim` answers. The box shows `user_code` and keeps `secret` to itself.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct OpenedClaim {
     claim_id: String,
     /// The code to show, as `XXXX-XXXX`.
@@ -91,6 +91,36 @@ struct OpenedClaim {
     poll_interval_secs: u64,
 }
 
+/// What collecting a claim nobody has bound yet answers: that it is pending.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+struct ClaimPending {
+    /// Always `PENDING`.
+    status: PendingStatus,
+}
+
+/// The one status a pending claim answers with.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+enum PendingStatus {
+    /// Nobody has bound the code yet; the box asks again.
+    #[serde(rename = "PENDING")]
+    Pending,
+}
+
+#[utoipa::path(
+    post,
+    path = "/claim",
+    security(),
+    extensions(("x-public-reason" = json!("nothing: its code works only once the console binds it"))),
+    responses(
+        (status = 201, body = OpenedClaim, description = "A claim: its `claim_id`, the `user_code` the box shows, the `secret` \
+                                      it keeps to collect with, when it expires, and how often to poll \
+                                      (ADR-0148)"),
+        (status = 429, description = "Too many activation attempts from this client: `Retry-After` says when \
+                                      to try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The claim store, or the OS entropy source, is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "box activation",
+)]
 /// A box opens a claim. Unauthenticated: the box has nothing to authenticate with yet.
 async fn open_claim<Cl, A, C>(State(state): State<ClaimState<Cl, A, C>>) -> Response
 where
@@ -139,13 +169,13 @@ where
 }
 
 /// A box presents its secret to collect.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct CollectClaimRequest {
     secret: String,
 }
 
 /// What a collection answers once: the box's slot and its device credential.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct CollectedClaim {
     tenant_id: String,
     store_id: String,
@@ -154,6 +184,33 @@ struct CollectedClaim {
     credential: String,
 }
 
+#[utoipa::path(
+    post,
+    path = "/claim/{claim_id}/collect",
+    security(),
+    extensions(("x-public-reason" = json!("the secret the claim was opened with"))),
+    params(
+        ("claim_id" = String, Path, description = "The claim the box opened, a ULID"),
+    ),
+    request_body(
+        content = CollectClaimRequest, description = "`secret`, the one the claim was opened with",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = CollectedClaim, description = "Bound: the box's `tenant_id`, `store_id` and `device_id`, and its \
+                                      device `credential`, returned this once"),
+        (status = 202, body = ClaimPending, description = "Nobody has bound the code yet: `status` is `PENDING`, and the box asks \
+                                      again"),
+        (status = 400, description = "claim_id is not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "This claim cannot be collected. Every such refusal answers the same, \
+                                      so it reveals nothing", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 409, description = "The claim has expired (`EXPIRED`): open a new one", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 429, description = "Too many collection polls from this client: `Retry-After` says when to \
+                                      try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The claim store, or the OS entropy source, is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "box activation",
+)]
 /// A box polls for its credential. `202` while nobody has bound the code, the credential once it
 /// has, `409` with reason `EXPIRED` when the hour is over, and one `403` for everything else.
 async fn collect_claim<Cl, A, C>(
@@ -205,7 +262,9 @@ where
             .into_response(),
         Ok(CollectOutcome::Pending) => (
             StatusCode::ACCEPTED,
-            Json(serde_json::json!({ "status": "PENDING" })),
+            Json(ClaimPending {
+                status: PendingStatus::Pending,
+            }),
         )
             .into_response(),
         Ok(CollectOutcome::Expired) => api_error_with_details(
@@ -225,7 +284,7 @@ where
 }
 
 /// A console user binds the code a box shows to a device slot.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct BindClaimRequest {
     user_code: String,
     tenant_id: String,
@@ -233,6 +292,29 @@ struct BindClaimRequest {
     device_id: String,
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/claims/bind",
+    extensions(("x-permission" = json!("console.devices.manage"))),
+    security(("session_cookie" = [])),
+    request_body(
+        content = BindClaimRequest, description = "The `user_code` a box installed with no store shows on its screen, eight \
+                       letters and digits, and the device slot to give it: `tenant_id`, `store_id` \
+                       and `device_id` (ADR-0148). The box collects its credential on its next poll",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 204, description = "Bound, and audited"),
+        (status = 400, description = "An id is not a ULID, or user_code is not a claim code", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.devices.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "No box is waiting with that code", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 409, description = "The code has expired, and the box shows a new one, or it has \
+                                      already been used", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The claim store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "box activation",
+)]
 /// Binds a claim. Needs `console.devices.manage`, and is audited as `device.claim`.
 async fn admin_bind_claim<Cl, A, C>(
     State(state): State<ClaimState<Cl, A, C>>,
@@ -333,4 +415,22 @@ fn mint_user_code() -> Option<UserCode> {
     let mut entropy = [0_u8; USER_CODE_ENTROPY];
     getrandom::fill(&mut entropy).ok()?;
     Some(UserCode::from_entropy(entropy))
+}
+
+#[cfg(test)]
+mod answer_tests {
+    //! The answer serialises to the bytes the `json!` it replaced did.
+
+    use super::{ClaimPending, PendingStatus};
+
+    #[test]
+    fn a_pending_claim_answers_pending() {
+        let answer = ClaimPending {
+            status: PendingStatus::Pending,
+        };
+        assert_eq!(
+            serde_json::to_value(answer).expect("json"),
+            serde_json::json!({ "status": "PENDING" })
+        );
+    }
 }

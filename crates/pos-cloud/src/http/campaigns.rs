@@ -41,6 +41,16 @@ pub use publish::config_campaigns_router;
 pub(super) use scheduled::scheduled_error_response;
 pub use scheduled::scheduled_publish_router;
 pub use vouchers::voucher_router;
+// The handlers the console's OpenAPI document names.
+pub(crate) use authoring::{
+    __path_admin_create_campaign, __path_admin_delete_campaign, __path_admin_get_campaign,
+    __path_admin_list_campaigns, __path_admin_update_campaign,
+};
+pub(crate) use publish::{__path_admin_publish_campaigns, __path_preview_publish_campaigns};
+pub(crate) use scheduled::{
+    __path_admin_cancel_scheduled, __path_admin_list_scheduled, __path_admin_schedule_campaigns,
+};
+pub(crate) use vouchers::{__path_admin_generate_vouchers, __path_admin_list_vouchers};
 
 // --- Campaigns (ADR-0077, Track M3): author the promotions the edge's pricing engine evaluates ----
 
@@ -60,7 +70,7 @@ struct CampaignState<Camp, A, C> {
 /// A create/update body: the tenant and the campaign's authoring fields. The id is **server-owned** —
 /// minted on create, the path id on update — so a client never supplies or forges it. Everything else
 /// is the wire campaign's own shape (kind, action, conditions), reused rather than re-declared.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct CampaignRequest {
     tenant_id: String,
     name: String,

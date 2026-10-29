@@ -1,0 +1,17 @@
+// The Stock count screen, written by `cargo xtask new screen --app dashboard`: it draws its title.
+// Test what the screen does here as it grows.
+
+import { cleanup, render, screen } from "@solidjs/testing-library";
+import { afterEach, describe, expect, it } from "vitest";
+
+import { t } from "../src/i18n";
+import { StockCount } from "../src/screens/StockCount";
+
+afterEach(cleanup);
+
+describe("StockCount", () => {
+  it("draws its title", () => {
+    render(() => <StockCount />);
+    expect(screen.getByRole("heading", { name: t("nav.stockCount") })).toBeTruthy();
+  });
+});

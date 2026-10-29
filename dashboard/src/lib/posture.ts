@@ -17,8 +17,8 @@
 // A card's *support* line is unchanged by any of this and still carries the same fact in words — the
 // hue stays a second channel, never the only one (ADR-0020's accessibility floor).
 
-import type { DailyRollup, FleetStore } from "../api/types";
 import type { MessageKey } from "../i18n";
+import type { DailyRollup, FleetStore } from "../api/schemas";
 
 /**
  * How a card's headline reads at a glance. The support line always repeats the fact in words, so a

@@ -68,13 +68,13 @@ struct ArchiveUploadQuery {
 }
 
 /// The key a store seals with, as it comes back over `/sync`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 struct ArchiveKeyResponse {
     key: String,
 }
 
 /// What the cloud recorded, echoed so a store can log what it shipped.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 struct ArchiveAcceptedResponse {
     object_key: String,
     size_bytes: i64,
@@ -128,6 +128,29 @@ where
         })
 }
 
+#[utoipa::path(
+    post,
+    path = "/sync/stores/{store_id}/archive-key",
+    security(("device_credential" = ["read_config"])),
+    params(
+        ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
+    ),
+    responses(
+        (status = 200, body = ArchiveKeyResponse, description = "`key`: the key this store seals its archives with, minted on the first \
+                                      ask (ADR-0124)"),
+        (status = 400, description = "store_id is not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No credential, or one the cloud does not accept: one answer for every \
+                                      credential problem", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The credential lacks the `read_config` scope, or belongs to another \
+                                      store", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 429, description = "Too many requests to the store sync surface: `Retry-After` says when \
+                                      to try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The credential store, or the archive registry, is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 500, description = "The stored key cannot be opened with the configured secret, or no key \
+                                      could be minted", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "archives",
+)]
 /// `POST /sync/stores/{store_id}/archive-key` — the key this store seals its archives with, minted
 /// on the first ask.
 ///
@@ -238,6 +261,38 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/sync/stores/{store_id}/archive",
+    security(("device_credential" = ["read_config"])),
+    params(
+        ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
+        ("taken_at" = i64, Query, description = "When the store took the archive, in milliseconds since the \
+                                                 epoch by its own clock"),
+    ),
+    request_body(
+        content = pos_cloud_api::body_schema::Binary, description = "The sealed archive's bytes, as `pos-edge archive` writes them. The cloud checks the \
+                       header and cannot open the rest",
+        content_type = "application/octet-stream",
+    ),
+    responses(
+        (status = 200, body = ArchiveAcceptedResponse, description = "Stored: the archive's `object_key`, `size_bytes` and `sha256`, for the \
+                                      store to log"),
+        (status = 400, description = "store_id is not a ULID, taken_at is not a positive time, or the body \
+                                      is not a store archive", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No credential, or one the cloud does not accept: one answer for every \
+                                      credential problem", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The credential lacks the `read_config` scope, or belongs to another \
+                                      store", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 413, description = "The body is larger than 256 MiB", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 429, description = "Too many requests to the store sync surface: `Retry-After` says when \
+                                      to try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The credential store, or the object store or archive registry, is \
+                                      unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 500, description = "The archive's storage key could not be built", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "archives",
+)]
 /// `POST /sync/stores/{store_id}/archive?taken_at=` — a store ships a sealed archive.
 ///
 /// The cloud is a **sink for bytes it cannot read**. It does not open the archive, does not parse

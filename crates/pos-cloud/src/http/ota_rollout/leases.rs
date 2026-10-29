@@ -25,6 +25,59 @@ use crate::http::{Json, lease_bump};
 use crate::lease::{LeaseBumpOutcome, LeaseStore, lease_node, resolve_region};
 use crate::ota::ArtifactStore;
 
+/// What the lease read answers: the store's authoritative generation.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+struct LeaseRead {
+    /// The generation, or `null` when the store was never issued one.
+    #[schema(required = true)]
+    generation: Option<u64>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/admin/config/lease/bump",
+    extensions(("x-permission" = json!("console.stores.manage"))),
+    security(("session_cookie" = [])),
+    params(
+        ("If-Match" = String, Header, description = "The lease generation the decision was made \
+                                                     against, or `*` for a store never issued one. \
+                                                     Required"),
+    ),
+    request_body(
+        content = BumpLeaseRequest, description = "`tenant_id` and `store_id`; optionally `edge_placement` \
+                       (`EDGE_PLACEMENT_IN_STORE`, `EDGE_PLACEMENT_HOSTED_BY_OPERATOR` or \
+                       `EDGE_PLACEMENT_HOSTED_BY_PLATFORM`) when the store is moving, absent for a \
+                       swap in place (ADR-0110); for a hosted placement, `region_country` and \
+                       `region_label`, where its data will rest (ADR-0114); and \
+                       `acknowledge_undrained`, the undrained generation this bump knowingly \
+                       abandons. No body names a generation: the server issues it",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = pos_cloud_config::route::PublishedConfig, description = "Issued and published: a different machine is the store now \
+                                      (ADR-0108). The new generation is published as the store's \
+                                      `lease` node, with the receipt floor beside it where the cloud \
+                                      has one (ADR-0149), and the box on the old generation stops \
+                                      installing updates. The body carries `config_version_id`. \
+                                      Audited with the generation issued"),
+        (status = 400, description = "tenant_id or store_id is not a ULID; edge_placement is not one \
+                                      of the three; the region is incomplete, malformed or given \
+                                      where no hosted placement is named; If-Match is absent or \
+                                      malformed; or a value needs a recorded confirmation first", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.stores.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 409, description = "The lease moved since you read it: re-read and retry. The \
+                                      error names the current generation", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "Every attempt to publish the lease node lost a race with \
+                                      another publish: try again", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "The previous machine still holds events this cloud has never \
+                                      seen, naming the generation to acknowledge to proceed, which \
+                                      abandons them; or the store's configuration would not validate \
+                                      with the node", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The lease store or the configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "lease",
+)]
 /// `POST /admin/config/lease/bump` — issues this store's next lease generation and publishes it
 /// ([ADR-0108](../../../docs/adr/0108-the-lease-generation-is-authority.md)).
 ///
@@ -183,6 +236,26 @@ async fn receipt_floor<Cfg: LeaseStore>(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/config/lease",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
+        ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, body = LeaseRead, description = "`generation`, the store's authoritative lease generation, or \
+                                      `null` if it has never been issued one. Read from the lease \
+                                      itself, not from what the tills were told"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The lease store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "lease",
+)]
 /// `GET /admin/config/lease` — the store's authoritative lease generation, or `null` if it has never
 /// been issued one. Behind [`ConsolePermission::Read`].
 ///
@@ -220,11 +293,34 @@ where
     match state.config_trees.current(tenant_id, store_id).await {
         Ok(current) => (
             StatusCode::OK,
-            Json(serde_json::json!({
-                "generation": current.map(LeaseGeneration::value),
-            })),
+            Json(LeaseRead {
+                generation: current.map(LeaseGeneration::value),
+            }),
         )
             .into_response(),
         Err(error) => lease_store_error_response(&error),
+    }
+}
+
+#[cfg(test)]
+mod answer_tests {
+    //! Each answer serialises to the bytes the `json!` it replaced did.
+
+    use super::LeaseRead;
+
+    #[test]
+    fn the_lease_read_is_its_generation_or_null() {
+        let issued = serde_json::to_value(LeaseRead {
+            generation: Some(3),
+        });
+        assert_eq!(
+            issued.expect("json"),
+            serde_json::json!({ "generation": 3 })
+        );
+        let never = serde_json::to_value(LeaseRead { generation: None });
+        assert_eq!(
+            never.expect("json"),
+            serde_json::json!({ "generation": null })
+        );
     }
 }

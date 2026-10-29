@@ -8,12 +8,14 @@ use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use pos_cloud_api::console::{audit_action, require_permission};
+use pos_cloud_api::response::StoresPublished;
 use pos_cloud_api::response::parse_ulid_fields;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{FeeId, TenantId};
 use serde::Deserialize;
 
 use super::layout::{FeeCatalog, FeeLayout};
+use super::publish::FeePublishResult;
 use super::publish::publish_fees_to;
 use super::rule::parse_fee_scope;
 use super::write::{FeeWrite, check_fee_write};
@@ -38,6 +40,8 @@ pub(super) struct DeleteFeeQuery {
 #[utoipa::path(
     delete,
     path = "/admin/fees",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.config.publish"))),
     params(
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
         ("scope" = String, Query, description = "FEE_SCOPE_TENANT, _BRAND or _STORE"),
@@ -45,7 +49,7 @@ pub(super) struct DeleteFeeQuery {
         ("fee_id" = String, Query, description = "The fee"),
     ),
     responses(
-        (status = 200, description = "Removed, and every store it reached republished, with the \
+        (status = 200, body = StoresPublished<FeePublishResult>, description = "Removed, and every store it reached republished, with the \
                                       same per-store outcomes as a write. A store that ran it runs \
                                       the fee's broader rule if there is one, and otherwise no \
                                       longer charges it"),
@@ -153,9 +157,5 @@ where
         Some(fee_publish_counts(&results)),
     )
     .await;
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({ "stores": results })),
-    )
-        .into_response()
+    (StatusCode::OK, Json(StoresPublished { stores: results })).into_response()
 }

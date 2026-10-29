@@ -29,6 +29,7 @@ use crate::sync_status::{OUTBOX_PLANNED_DEPTH, SyncReport};
 
 /// The cloud link and the outbox, as a device draws them.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct SyncResponse {
     /// Events committed on this box and not yet acknowledged by the cloud.
     outbox_depth: u64,
@@ -40,6 +41,7 @@ pub(crate) struct SyncResponse {
     cloud_link: &'static str,
     /// When the outbox drain last reached the cloud; absent if it has not since the edge started.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     last_sync_time: Option<Timestamp>,
     /// `CLOCK_DRIFT_OK`, `CLOCK_DRIFT_ALARM` past `clock_drift_alarm_ms`, or
     /// `CLOCK_DRIFT_UNSPECIFIED` when no probe has succeeded since the edge started.
@@ -48,9 +50,11 @@ pub(crate) struct SyncResponse {
     clock_drift_alarm_ms: u64,
     /// This box's clock minus the time server's, in milliseconds; absent until measured.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     clock_offset_ms: Option<i64>,
     /// When that was measured, on this box's own clock; absent until measured.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     clock_measure_time: Option<Timestamp>,
 }
 
@@ -72,8 +76,21 @@ impl SyncResponse {
     }
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/sync",
+    security(("till_session" = [])),
+    responses(
+        (status = 200, body = SyncResponse, description = "The outbox depth and its level against the planned depth, the cloud link, \
+                                      when the outbox last reached the cloud, and the box's measured clock offset. \
+                                      The store sells at any depth"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+    ),
+    tag = "status",
+))]
 /// `GET /api/sync` — the outbox depth, its level, the cloud link, and the box's clock.
-pub(crate) async fn read<S>(State(edge): State<Arc<Edge<S>>>) -> Response
+pub(crate) async fn sync_status<S>(State(edge): State<Arc<Edge<S>>>) -> Response
 where
     S: EventStore + Send + Sync + 'static,
 {

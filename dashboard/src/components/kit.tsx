@@ -17,12 +17,12 @@ import {
   Show,
 } from "solid-js";
 
-import type { NodePreview } from "../api/types";
 import { t } from "../i18n";
 import { useClickOutside } from "../lib/dismiss";
 import type { EntityCrud } from "../lib/entity-crud";
 import { useEscape } from "../lib/escape";
 import { Banner, Button, TextField } from "./ui";
+import type { NodePreview } from "../api/schemas";
 
 // --- Pager --------------------------------------------------------------------------------------
 

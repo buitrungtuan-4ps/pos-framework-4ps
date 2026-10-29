@@ -168,6 +168,25 @@ impl<E: WireEnum> fmt::Display for Open<E> {
     }
 }
 
+/// An `Open<E>`'s schema. `utoipa` asks a generic type for `ComposeSchema`, which also gives it
+/// `PartialSchema`; `Open<E>` composes to the same schema whatever it is passed, since `E` is
+/// fixed by the field's own type.
+#[cfg(feature = "openapi")]
+impl<E: WireEnum + utoipa::ToSchema> utoipa::__dev::ComposeSchema for Open<E> {
+    fn compose(
+        _generics: Vec<utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>>,
+    ) -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        crate::openapi::open::<E>(&E::name())
+    }
+}
+
+#[cfg(feature = "openapi")]
+impl<E: WireEnum + utoipa::ToSchema> utoipa::ToSchema for Open<E> {
+    fn name() -> std::borrow::Cow<'static, str> {
+        crate::openapi::open_name(&E::name())
+    }
+}
+
 impl<E: WireEnum> Serialize for Open<E> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(self.as_wire())
@@ -259,7 +278,36 @@ macro_rules! wire_enum {
                 f.write_str($crate::wire_enum::WireEnum::as_wire(*self))
             }
         }
+
+        $crate::__wire_enum_schema!($name);
     };
+}
+
+/// The `ToSchema` a `wire_enum!` enum implements under `pos-proto`'s `openapi` feature: one of its
+/// tokens (ADR-0177 decision 3). Chosen by this crate's features, not the caller's, so an enum
+/// declared in another crate gets a schema exactly when `pos-proto` is built with one.
+#[cfg(feature = "openapi")]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __wire_enum_schema {
+    ($name:ident) => {
+        impl $crate::__utoipa::PartialSchema for $name {
+            fn schema()
+            -> $crate::__utoipa::openapi::RefOr<$crate::__utoipa::openapi::schema::Schema> {
+                $crate::openapi::wire_enum::<Self>()
+            }
+        }
+
+        impl $crate::__utoipa::ToSchema for $name {}
+    };
+}
+
+/// Without the `openapi` feature a `wire_enum!` enum has no schema, and nothing is generated.
+#[cfg(not(feature = "openapi"))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __wire_enum_schema {
+    ($name:ident) => {};
 }
 
 #[cfg(test)]

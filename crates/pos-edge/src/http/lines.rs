@@ -41,6 +41,7 @@ use crate::printing::{PrintOutcome, Printers};
 
 /// A line as a device asks for it to be added — the amounts captured from the menu it holds.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct LineRequest {
     menu_item_id: MenuItemId,
     display_name: DisplayName,
@@ -89,6 +90,7 @@ impl From<LineRequest> for LineDraft {
 /// (ADR-0072), and this is only the fallback for a store with no station plan yet — an absent field
 /// lets the plan decide entirely.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct FireRequest {
     #[serde(default)]
     station_id: Option<StationId>,
@@ -96,6 +98,7 @@ pub(crate) struct FireRequest {
 
 /// A line as returned to a device after a command.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct LineResponse {
     order_id: String,
     order_line_id: String,
@@ -103,10 +106,12 @@ pub(crate) struct LineResponse {
     state: String,
     /// The station the published routing sent this fire to, absent on an add (ADR-0072).
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     station_id: Option<String>,
     /// What came of the kitchen ticket: `PRINTED`, `NO_PRINTER`, `PRINTER_UNAVAILABLE` or
     /// `UNPRINTABLE_TEXT`. Absent on an add, which prints nothing (ADR-0100).
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     ticket_print: Option<String>,
 }
 
@@ -125,8 +130,39 @@ impl From<LineView> for LineResponse {
     }
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/tables/{id}/lines",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("sales.line.add"))),
+    params(
+        ("id" = String, Path, description = "The table's id, a ULID"),
+    ),
+    request_body(
+        content = LineRequest, description = "The line as the till captured it from the menu it holds: `menu_item_id`, \
+                       `display_name`, `quantity` (in thousandths), `unit_price`, `line_total`, \
+                       `tax_class_id` and `tax_rate`, with optional `seat`, `course_id`, \
+                       `modifier_menu_item_ids` and `note`",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = LineResponse, description = "The line: `order_id`, `order_line_id`, its `state`, and `station_id` \
+                                      once fired"),
+        (status = 400, description = "The id is not a ULID, or a note longer than 200 characters or with a \
+                                      control character"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \
+                                      was superseded by a replacement that holds the store's lease \
+                                      (`SUPERSEDED`)"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, and nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "orders",
+))]
 /// `POST /api/tables/{id}/lines` — add a line to the order the table holds.
-pub(crate) async fn add<S>(
+pub(crate) async fn add_table_line<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     Path(id): Path<String>,
@@ -148,8 +184,36 @@ where
     )
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/lines/{id}/fire",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("sales.line.fire"))),
+    params(
+        ("id" = String, Path, description = "The order line's id, a ULID"),
+    ),
+    request_body(
+        content = FireRequest, description = "Optional `station_id`, to send the food to that station rather than the one the line \
+                       routes to. `{}` routes as published",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = LineResponse, description = "The line, as a line command answers, with `ticket_print`: what came of \
+                                      printing its station's ticket"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \
+                                      was superseded by a replacement that holds the store's lease \
+                                      (`SUPERSEDED`)"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, and nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "kitchen",
+))]
 /// `POST /api/lines/{id}/fire` — fire a line to its station.
-pub(crate) async fn fire<S>(
+pub(crate) async fn fire_line<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     printers: Option<Extension<Arc<Printers>>>,
@@ -186,10 +250,38 @@ where
 /// being told what the line comes to. One less number a caller can get wrong, and one less way for a
 /// guest to be charged a total that does not follow from the price they were quoted.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct QuantityRequest {
     quantity: Quantity,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/lines/{id}/quantity",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("sales.line.add"))),
+    params(
+        ("id" = String, Path, description = "The order line's id, a ULID"),
+    ),
+    request_body(
+        content = QuantityRequest, description = "`quantity`, in thousandths, greater than zero",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = LineResponse, description = "The line: `order_id`, `order_line_id`, its `state`, and `station_id` \
+                                      once fired"),
+        (status = 400, description = "The id is not a ULID, or the quantity is not greater than zero"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \
+                                      was superseded by a replacement that holds the store's lease \
+                                      (`SUPERSEDED`)"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, and nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "orders",
+))]
 /// `POST /api/lines/{id}/quantity` — change how many, while the line is still editable.
 ///
 /// A non-positive quantity is refused here rather than by the domain, and the distinction is
@@ -218,6 +310,34 @@ where
     )
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/orders/{id}/fire",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("sales.line.fire"))),
+    params(
+        ("id" = String, Path, description = "The order's id, a ULID"),
+    ),
+    request_body(
+        content = FireRequest, description = "Optional `station_id`, to send the food to that station rather than the one the line \
+                       routes to. `{}` routes as published",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = Vec<LineResponse>, description = "Each line fired, as a line command answers, with `ticket_print`: what \
+                                      came of printing its station's ticket"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \
+                                      was superseded by a replacement that holds the store's lease \
+                                      (`SUPERSEDED`)"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, and nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "kitchen",
+))]
 /// `POST /api/orders/{id}/fire` — send every unsent line on an order, in one transaction.
 ///
 /// The operator's act is "send this order". Firing line by line made it one tap and one round trip
@@ -273,6 +393,35 @@ where
     body
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/orders/{id}/fire/{course_id}",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("sales.line.fire"))),
+    params(
+        ("id" = String, Path, description = "The order's id, a ULID"),
+        ("course_id" = String, Path, description = "The course's id, a ULID"),
+    ),
+    request_body(
+        content = FireRequest, description = "Optional `station_id`, to send the food to that station rather than the one the line \
+                       routes to. `{}` routes as published",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = Vec<LineResponse>, description = "Each line fired, as a line command answers, with `ticket_print`: what \
+                                      came of printing its station's ticket"),
+        (status = 400, description = "An id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \
+                                      was superseded by a replacement that holds the store's lease \
+                                      (`SUPERSEDED`)"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, and nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "kitchen",
+))]
 /// `POST /api/orders/{id}/fire/{course_id}` — send every unsent line on one course (ADR-0130).
 ///
 /// [`fire_order`] narrowed to one course: "starters away" rather than "send the order". A separate
@@ -359,6 +508,7 @@ fn respond(outcome: Result<LineView, crate::app::AppError>) -> Response {
 /// know the fired/unfired rule, and the edge, which does, answers `403` when the PIN is the missing
 /// piece.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct VoidLineRequest {
     reason_code_id: ReasonCodeId,
     /// The approving manager's badge code, when one is needed.
@@ -379,13 +529,41 @@ impl VoidLineRequest {
     }
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/lines/{id}/void",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!(["sales.line.add", "sales.line.void_fired"]))),
+    params(
+        ("id" = String, Path, description = "The order line's id, a ULID"),
+    ),
+    request_body(
+        content = VoidLineRequest, description = "`reason_code_id`, a void reason from the managed list, and, where the void needs a \
+                       manager, `approver_code` and `approver_pin`. Both are secrets and are never logged",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = LineResponse, description = "The line: `order_id`, `order_line_id`, its `state`, and `station_id` \
+                                      once fired"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; the void \
+                                      needs a manager's approval that was missing or refused, or the \
+                                      approver is locked out; or this box was superseded by a replacement"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, and nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "orders",
+))]
 /// `POST /api/lines/{id}/void` — void a line, citing a reason from the store's managed list
 /// (ADR-0115, roadmap B2.2).
 ///
 /// A fired line needs [`pos_core::permission::Permission::VoidFiredLine`] and a manager's PIN with
 /// it; an unfired one is an ordinary cancel. The edge decides which, so the till sends the same
 /// request either way.
-pub(crate) async fn void<S>(
+pub(crate) async fn void_line<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     Path(id): Path<String>,

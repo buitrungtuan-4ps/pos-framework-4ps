@@ -44,7 +44,7 @@ const MOST_SAMPLE_UNITS: i64 = 999;
 
 /// A `POST /admin/fees/preview` body: a store, the rules as they would be written, and the lines of
 /// a sample bill.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct PreviewFeesRequest {
     tenant_id: String,
     store_id: String,
@@ -61,7 +61,7 @@ pub(super) struct PreviewFeesRequest {
 }
 
 /// One rule a preview writes in place, as a `PUT` body carries it.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PreviewFeeRule {
     scope: String,
     scope_id: String,
@@ -69,7 +69,7 @@ struct PreviewFeeRule {
 }
 
 /// One sample line: an item on the store's menu, and how many.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct SampleLineRequest {
     menu_item_id: String,
     quantity: i64,
@@ -77,9 +77,10 @@ struct SampleLineRequest {
 
 /// A sample bill as the console draws it: each line, each fee with its tax, the tax per class, and
 /// what the guest would pay.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct SampleBillView {
     store_id: String,
+    #[schema(value_type = SalesChannel)]
     sales_channel: &'static str,
     lines: Vec<SampleLineView>,
     subtotal: Money,
@@ -93,7 +94,7 @@ struct SampleBillView {
 }
 
 /// A sample line, priced from the store's menu.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct SampleLineView {
     menu_item_id: String,
     display_name: DisplayName,
@@ -104,7 +105,7 @@ struct SampleLineView {
 }
 
 /// A fee the sample bill charges, with its tax.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct SampleFeeLineView {
     fee_id: String,
     code: String,
@@ -116,7 +117,7 @@ struct SampleFeeLineView {
 }
 
 /// The part of a fee taxed at one class.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct SampleFeeShareView {
     tax_class_id: String,
     amount: Money,
@@ -124,7 +125,7 @@ struct SampleFeeShareView {
 }
 
 /// The tax at one class, on the base the fees joined.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct SampleTaxLineView {
     tax_class_id: String,
     taxable_base: Money,
@@ -198,8 +199,10 @@ impl SampleBillView {
 #[utoipa::path(
     post,
     path = "/admin/fees/preview",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.reports.revenue"))),
     request_body(
-        description = "The tenant, a store, the sales channel (dine-in when absent), the rules as \
+        content = PreviewFeesRequest, description = "The tenant, a store, the sales channel (dine-in when absent), the rules as \
                        they would be written — each with its scope and scope_id and the rule as a \
                        PUT sends it, its fee_id absent for a fee not created yet — and the sample \
                        bill's lines, each a menu_item_id from the store's menu and a quantity of \
@@ -207,7 +210,7 @@ impl SampleBillView {
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "The sample bill as the store would assemble it with those \
+        (status = 200, body = SampleBillView, description = "The sample bill as the store would assemble it with those \
                                       rules in place: each line priced from its menu, each fee \
                                       charged with its tax and the parts of it taxed at each \
                                       class, the tax per class, the cash rounding and the total \

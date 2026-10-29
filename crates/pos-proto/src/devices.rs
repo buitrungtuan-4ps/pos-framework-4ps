@@ -138,6 +138,7 @@ impl PaperWidth {
 
 /// One approved device the store may address.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct PublishedDevice {
     /// The device's identity, as the cloud's approval assigned it.
@@ -285,6 +286,7 @@ impl PublishedDevice {
 
 /// The `devices` config node: the store's approved, addressable devices.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct PublishedDevices {
     /// The approved devices. An empty list published means the store addresses none.

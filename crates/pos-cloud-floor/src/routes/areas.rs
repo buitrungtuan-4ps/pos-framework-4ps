@@ -7,7 +7,9 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use pos_cloud_api::console::{audit_action, mint_ulid, require_permission};
+use pos_cloud_api::response::CreatedId;
 use pos_cloud_api::response::{api_error_with_details, parse_ulid_fields};
+use pos_cloud_api::version::Versioned;
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{AreaId, StoreId, TenantId};
@@ -19,7 +21,7 @@ use super::{
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::catalog::CatalogStore;
-use crate::floorplan::{AreaStore, AreaUpdate, NewArea};
+use crate::floorplan::{Area, AreaStore, AreaUpdate, NewArea};
 use crate::registry::EntityStatus;
 use crate::version::UpdateOutcome;
 use axum::Json;
@@ -27,6 +29,25 @@ use pos_cloud_api::conditional::{if_match, version_mismatch, versioned_ok, with_
 use pos_cloud_api::refusal::not_found;
 use pos_cloud_config::route::{entity_status_refusal, parse_entity_status};
 
+#[utoipa::path(
+    get,
+    path = "/admin/floor/areas",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
+        ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, body = [Versioned<Area>], description = "The store's areas, active and archived, as an array, each with its `etag`"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The floor store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "floor",
+)]
+/// A super-admin lists a store's floor areas.
 pub(super) async fn admin_list_areas<F, A, C, Cat>(
     State(state): State<FloorState<F, A, C, Cat>>,
     headers: HeaderMap,
@@ -58,6 +79,26 @@ where
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/floor/areas/{area_id}",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    params(
+        ("area_id" = String, Path, description = "The area (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The tenant the record belongs to (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, body = Versioned<Area>, description = "The area. The ETag carries the version it was read at"),
+        (status = 400, description = "area_id or tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The tenant has no area with that id", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The floor store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "floor",
+)]
+/// A super-admin reads one floor area, with the version it was read at.
 pub(super) async fn admin_get_area<F, A, C, Cat>(
     State(state): State<FloorState<F, A, C, Cat>>,
     headers: HeaderMap,
@@ -95,6 +136,26 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/floor/areas",
+    extensions(("x-permission" = json!("console.floor.manage"))),
+    security(("session_cookie" = [])),
+    request_body(
+        content = CreateAreaRequest, description = "`tenant_id` and `store_id`, and the area's `name`, which may not be blank",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, body = CreatedId, description = "Created, active, with the id minted here. The body carries `id`, and the ETag carries \
+                                      its version. Audited"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID, or name is blank", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.floor.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The floor store or the entropy source is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "floor",
+)]
+/// A super-admin creates a floor area; its id is minted here and returned once.
 pub(super) async fn admin_create_area<F, A, C, Cat>(
     State(state): State<FloorState<F, A, C, Cat>>,
     headers: HeaderMap,
@@ -162,11 +223,7 @@ where
             )
             .await;
             with_etag(
-                (
-                    StatusCode::CREATED,
-                    Json(serde_json::json!({ "id": area_id.to_string() })),
-                )
-                    .into_response(),
+                (StatusCode::CREATED, Json(CreatedId::new(area_id))).into_response(),
                 &version,
             )
         }
@@ -174,6 +231,34 @@ where
     }
 }
 
+#[utoipa::path(
+    patch,
+    path = "/admin/floor/areas/{area_id}",
+    extensions(("x-permission" = json!("console.floor.manage"))),
+    security(("session_cookie" = [])),
+    params(
+        ("area_id" = String, Path, description = "The area (a 26-character ULID)"),
+        ("If-Match" = String, Header, description = "The ETag the record was read at (ADR-0094). \
+                                                     Required; a wildcard is refused"),
+    ),
+    request_body(
+        content = UpdateAreaRequest, description = "`tenant_id`, and the area's `name` and `status` (`active` or `archived`) as they should now \
+                       stand",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 204, description = "Updated. The body is empty and the ETag carries the new version. Audited"),
+        (status = 400, description = "area_id or tenant_id is not a ULID, name is blank, status is not `active` or `archived`, or \
+                                      If-Match is absent, malformed or a wildcard", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.floor.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The tenant has no area with that id", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 412, description = "The area changed since you read it: re-read it and try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The floor store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "floor",
+)]
+/// A super-admin sets a floor area's whole new state, conditional on the version it was read at.
 pub(super) async fn admin_update_area<F, A, C, Cat>(
     State(state): State<FloorState<F, A, C, Cat>>,
     headers: HeaderMap,

@@ -24,32 +24,27 @@ use pos_proto::ids::{DeviceId, StoreId};
 use pos_proto::session::PublishedSession;
 use updater_minisign::MinisignVerifier;
 
+use self::cloud_loops::spawn_cloud_loops;
 use crate::activation::{activation_router, boot_standing};
 use crate::admission_events::AdmissionEvents;
 use crate::app::{Edge, EdgeSession};
 use crate::auth::Sessions;
 use crate::clock::SystemClock;
-use crate::cloud_http::{
-    CloudHttpClient, ConfigHttpTransport, HeartbeatHttpTransport, OtaHttpTransport,
-    RelayHttpTransport,
-};
+use crate::cloud_http::{CloudHttpClient, OtaHttpTransport};
 use crate::config::{EdgeConfig, NatsConfig, ValueSource};
-use crate::config_client::{ConfigClient, restore_device_revocations, restore_session_from_store};
+use crate::config_client::{restore_device_revocations, restore_session_from_store};
 use crate::device_revocations::DeviceRevocations;
 use crate::discovery::{Advertiser, NoopAdvertiser};
 use crate::durable_auth::{DurableAuth, EdgeRegistry};
 use crate::error::EdgeError;
 use crate::event_publish::EventPublisher;
-use crate::heartbeat_client::{HeartbeatClient, StoreReport};
 use crate::installer::SystemdInstaller;
 use crate::lease_state::LeaseAuthority;
 use crate::lease_state::{LeaseWatch, StoreLease};
-use crate::order_in::EdgeOrderIn;
 use crate::ota_client::{BootStanding, OtaClient, RestartIntent, RestartRequest};
 use crate::ota_state::OtaStateAuthority;
 use crate::pairing::{ANNOUNCE_TARGET, Minter, Pairing, hosted_pairing_url, pairing_url};
 use crate::queue::QueueNumberAuthority;
-use crate::relay_client::RelayClient;
 use crate::state::AppState;
 
 /// The environment variable carrying the store's scoped `read_config` API key
@@ -350,52 +345,10 @@ where
     J: crate::print_queue::PrintQueue + 'static,
     F: Future<Output = ()> + Send + 'static,
 {
-    // Read what binding and the startup banner need before `config` moves into the composition.
-    let bind = config.bind;
-    let advertised_host = config.advertised_host();
-    let public_origin = config.public_origin.clone();
-    let store_id = config.store_id;
-    let drain_status_path = crate::drain_status::path_beside(&config.store_path);
-    // Whether the store's data is closed to other local accounts, said once at start (ADR-0174).
-    crate::state_access::log_at_start(crate::state_access::state_dir(&config.store_path)).await;
-    // The outbox depth is read from the store once the last drain is over, which is after `edge`
-    // has moved into the composition.
-    let drained_edge = Arc::clone(&edge);
-
-    // The install seam, when this box is laid out for over-the-air updates (ADR-0055 Amendment 1).
-    // Settling the boot marker comes *first*, before anything is composed or bound: if a committed
-    // version has now used up its attempts, the seam has already pointed the running binary back at
-    // the previous one, and the only correct next step is to exit so the service manager starts it.
-    let installer = ota_installer(&config);
-    let boot = match settle_boot(installer.as_ref()) {
-        Ok(standing) => standing,
-        // The seam has already pointed `current` back at the version that worked, so the binary on
-        // disk is not this one: the process must end *and be started again*, which is what a
-        // reverted box coming back trading depends on.
-        Err(BootGaveUp) => return Ok(ServeOutcome::RestartWanted),
+    let Ok(mut starting) = Starting::read(&config, &edge).await else {
+        return Ok(ServeOutcome::RestartWanted);
     };
-
-    // One shutdown signal, fanned to the server and every background loop so a Ctrl-C / SIGTERM
-    // drains them together. A task translates the OS signal into a watched flag; each consumer waits
-    // on its own clone. It is created here rather than in `compose` because installing an OS signal
-    // handler is a property of *running*, not of composing — a test composes without one.
-    //
-    // Behind an `Arc` because the OTA loop holds it too: an installed binary only becomes the
-    // running one after a restart, and asking for it through this channel means the restart drains
-    // in-flight requests exactly as a `SIGTERM` does rather than dropping a sale.
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let shutdown_tx = Arc::new(shutdown_tx);
-    // The OTA loop's handle on that shutdown, which also records *why* the stop happened. The stop
-    // the caller passed is not a restart, so it flips the watch directly and leaves the intent
-    // alone: a store told to stop must stay stopped.
-    let restart = RestartIntent::new(Arc::clone(&shutdown_tx));
-    let signal_tx = Arc::clone(&shutdown_tx);
-    tokio::spawn(async move {
-        stop.await;
-        let _ignored = signal_tx.send(true);
-    });
-
-    let ota_edge = Arc::clone(&edge);
+    let (shutdown_rx, restart) = shutdown_on(stop);
     let composed = compose(
         config,
         edge,
@@ -408,23 +361,184 @@ where
     )
     .await?;
 
-    // The OTA loop, once there is a keyed cloud client to fetch a release through and a box laid out
-    // to install one into. Either missing is an ordinary state, not a fault: a LAN-only store and a
-    // store provisioned before the layout existed both simply do not update over the air.
-    spawn_ota(
-        OtaWiring {
-            client: composed.cloud.clone(),
-            installer,
-            authority: ota_authority,
-            lease: lease_authority,
-            edge: ota_edge,
-            store_id,
-            boot,
-            restart: restart.clone(),
-        },
+    starting.start_ota(
+        composed.cloud.clone(),
+        ota_authority,
+        lease_authority,
+        restart.clone(),
         &shutdown_rx,
     );
 
+    let listener = starting.listen_and_announce(&composed.pairing).await?;
+    let served = axum::serve(listener, composed.app.into_make_service())
+        .with_graceful_shutdown(wait_for_shutdown(shutdown_rx))
+        .await;
+    starting
+        .finish(served, composed.publisher, composed.farewell, &restart)
+        .await
+}
+
+/// What [`serve_until`] reads before `config` moves into the composition, and the boot it settled.
+struct Starting<S> {
+    bind: std::net::SocketAddr,
+    advertised_host: Option<std::net::IpAddr>,
+    public_origin: Option<url::Url>,
+    store_id: StoreId,
+    drain_status_path: std::path::PathBuf,
+    /// The outbox depth is read from the store once the last drain is over, which is after `edge`
+    /// has moved into the composition; the OTA loop holds the same edge.
+    edge: Arc<Edge<S>>,
+    /// The install seam, when this box is laid out for over-the-air updates; the OTA loop takes it.
+    installer: Option<SystemdInstaller>,
+    boot: BootStanding,
+}
+
+impl<S> Starting<S>
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    /// Reads what binding and the startup banner need, says whether the store's data is closed to
+    /// other local accounts (ADR-0174), and settles the boot marker.
+    ///
+    /// The install seam, when this box is laid out for over-the-air updates (ADR-0055 Amendment 1).
+    /// Settling the boot marker comes *first*, before anything is composed or bound: if a committed
+    /// version has now used up its attempts, the seam has already pointed the running binary back at
+    /// the previous one, and the only correct next step is to exit so the service manager starts it.
+    ///
+    /// [`BootGaveUp`] is that exit: the binary on disk is not this one, so the process must end
+    /// *and be started again*, which is what a reverted box coming back trading depends on.
+    async fn read(config: &EdgeConfig, edge: &Arc<Edge<S>>) -> Result<Self, BootGaveUp> {
+        let bind = config.bind;
+        let advertised_host = config.advertised_host();
+        let public_origin = config.public_origin.clone();
+        let store_id = config.store_id;
+        let drain_status_path = crate::drain_status::path_beside(&config.store_path);
+        crate::state_access::log_at_start(crate::state_access::state_dir(&config.store_path)).await;
+        let edge = Arc::clone(edge);
+        let installer = ota_installer(config);
+        let boot = settle_boot(installer.as_ref())?;
+        Ok(Self {
+            bind,
+            advertised_host,
+            public_origin,
+            store_id,
+            drain_status_path,
+            edge,
+            installer,
+            boot,
+        })
+    }
+
+    /// The OTA loop, once there is a keyed cloud client to fetch a release through and a box laid
+    /// out to install one into. Either missing is an ordinary state, not a fault: a LAN-only store
+    /// and a store provisioned before the layout existed both simply do not update over the air.
+    fn start_ota<A, L>(
+        &mut self,
+        client: Option<CloudHttpClient>,
+        authority: A,
+        lease: L,
+        restart: RestartIntent,
+        shutdown_rx: &tokio::sync::watch::Receiver<bool>,
+    ) where
+        A: OtaStateAuthority + 'static,
+        L: LeaseAuthority + 'static,
+    {
+        spawn_ota(
+            OtaWiring {
+                client,
+                installer: self.installer.take(),
+                authority,
+                lease,
+                edge: Arc::clone(&self.edge),
+                store_id: self.store_id,
+                boot: self.boot,
+                restart,
+            },
+            shutdown_rx,
+        );
+    }
+
+    /// Binds, then shows the operator how to pair.
+    ///
+    /// After the bind, not before: the pairing file is what the Windows installer waits for before
+    /// it prints the URL and opens /setup, so it must not exist until the port accepts a connection.
+    /// A box that cannot bind publishes no code at all, and the installer reports the log instead
+    /// of a URL for a server that is exiting.
+    async fn listen_and_announce(&self, pairing: &Pairing) -> Result<TcpListener, EdgeError> {
+        let listener = listen(self.bind).await?;
+        announce_pairing(
+            pairing,
+            self.public_origin.as_ref(),
+            self.advertised_host,
+            self.bind.port(),
+        );
+        // mDNS is a convenience behind the Advertiser trait; the default advertises nothing and the
+        // raw-IP pairing URL above still works (ADR-0030).
+        NoopAdvertiser.advertise("pos", self.bind.port());
+        Ok(listener)
+    }
+
+    /// The stop, once serving has ended: the publish loop's last drain, the farewell beat, then
+    /// how the process ends.
+    async fn finish(
+        self,
+        served: std::io::Result<()>,
+        publisher: Option<tokio::task::JoinHandle<()>>,
+        farewell: Option<FarewellBeat>,
+        restart: &RestartIntent,
+    ) -> Result<ServeOutcome, EdgeError> {
+        // It is waited for even when serving failed, and especially then: a store whose HTTP
+        // surface fell over still has committed events, and that is exactly when they should be
+        // pushed out before the process goes.
+        let drain = last_drain(publisher, &self.edge, self.store_id, self.drain_status_path).await;
+
+        // Only now is there anything true to say. The drain above is what makes the outbox depth
+        // mean something, and this beat is the only one that carries it: the heartbeat loop stopped
+        // ticking when the shutdown watch flipped, long before the drain ran. Without it a machine
+        // that drained perfectly and a machine that never drained at all look identical from the
+        // console — and the cloud, which releases a handover only on a beat carrying a drained
+        // outbox (ADR-0110), would never release one at all.
+        //
+        // Placed after `served` is awaited and before it is unwrapped, so a store whose HTTP
+        // surface fell over still reports its stop. That is the case where the report matters most.
+        if let Some(farewell) = farewell {
+            farewell.deliver().await;
+        }
+
+        served.map_err(EdgeError::Serve)?;
+        Ok(stop_outcome(restart, drain.as_ref()))
+    }
+}
+
+/// One shutdown signal, fanned to the server and every background loop so a Ctrl-C / SIGTERM
+/// drains them together. A task translates the caller's stop into a watched flag; each consumer
+/// waits on its own clone. It is created by [`serve_until`] rather than in `compose` because
+/// installing an OS signal handler is a property of *running*, not of composing — a test composes
+/// without one.
+///
+/// Behind an `Arc` because the OTA loop holds it too: an installed binary only becomes the
+/// running one after a restart, and asking for it through this channel means the restart drains
+/// in-flight requests exactly as a `SIGTERM` does rather than dropping a sale. The returned
+/// [`RestartIntent`] is the OTA loop's handle on that shutdown, which also records *why* the stop
+/// happened. The stop the caller passed is not a restart, so it flips the watch directly and leaves
+/// the intent alone: a store told to stop must stay stopped.
+fn shutdown_on<F>(stop: F) -> (tokio::sync::watch::Receiver<bool>, RestartIntent)
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let shutdown_tx = Arc::new(shutdown_tx);
+    let restart = RestartIntent::new(Arc::clone(&shutdown_tx));
+    let signal_tx = Arc::clone(&shutdown_tx);
+    tokio::spawn(async move {
+        stop.await;
+        let _ignored = signal_tx.send(true);
+    });
+    (shutdown_rx, restart)
+}
+
+/// Binds the configured address and says so.
+async fn listen(bind: std::net::SocketAddr) -> Result<TcpListener, EdgeError> {
     let listener = TcpListener::bind(bind)
         .await
         .map_err(|source| EdgeError::Bind { addr: bind, source })?;
@@ -433,83 +547,61 @@ where
         protocol_version = pos_proto::PROTOCOL_VERSION,
         "pos_edge listening",
     );
+    Ok(listener)
+}
 
-    // After the bind, not before: the pairing file is what the Windows installer waits for before it
-    // prints the URL and opens /setup, so it must not exist until the port accepts a connection. A
-    // box that cannot bind publishes no code at all, and the installer reports the log instead of a
-    // URL for a server that is exiting.
-    announce_pairing(
-        &composed.pairing,
-        public_origin.as_ref(),
-        advertised_host,
-        bind.port(),
-    );
-
-    // mDNS is a convenience behind the Advertiser trait; the default advertises nothing and the
-    // raw-IP pairing URL above still works (ADR-0030).
-    NoopAdvertiser.advertise("pos", bind.port());
-
-    let served = axum::serve(listener, composed.app.into_make_service())
-        .with_graceful_shutdown(wait_for_shutdown(shutdown_rx))
-        .await;
-
-    // The publish loop's last drain (ADR-0110, production-readiness **D8**). It started the moment
-    // the shutdown watch flipped — the same instant `axum` began draining in-flight requests — so by
-    // here it has usually already finished and this waits for nothing. Waiting is nonetheless what
-    // makes the drain real: this function returning is what stops the runtime polling that task, and
-    // an outbox that never drained costs nothing on a box in a shop (the SQLite file survives the
-    // restart) but loses events on a hosted placement, whose container and volume go together.
-    //
-    // It is waited for even when serving failed, and especially then: a store whose HTTP surface
-    // fell over still has committed events, and that is exactly when they should be pushed out
-    // before the process goes.
-    let drain = if let Some(publisher) = composed.publisher {
-        let began = tokio::time::Instant::now();
-        match tokio::time::timeout(crate::event_publish::STOP_GRACE, publisher).await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => tracing::error!(
-                %error,
-                "the event-publish loop ended abnormally; the outbox may not have drained"
-            ),
-            Err(_elapsed) => tracing::error!(
-                grace_secs = crate::event_publish::STOP_GRACE.as_secs(),
-                "the event-publish loop did not finish its last drain in time; exiting with events \
-                 still in the outbox"
-            ),
-        }
-        Some(report_drain(&drained_edge, store_id, began.elapsed(), drain_status_path).await)
-    } else {
-        // Nothing publishes on a LAN-only or unactivated box, so there was no drain to report and
-        // its outbox waiting is its ordinary state, not an unfinished stop.
-        None
-    };
-
-    // Only now is there anything true to say. The drain above is what makes the outbox depth mean
-    // something, and this beat is the only one that carries it: the heartbeat loop stopped ticking
-    // when the shutdown watch flipped, long before the drain ran. Without it a machine that drained
-    // perfectly and a machine that never drained at all look identical from the console — and the
-    // cloud, which releases a handover only on a beat carrying a drained outbox
-    // (ADR-0110), would never release one at all.
-    //
-    // Placed after `served` is awaited and before it is unwrapped, so a store whose HTTP surface
-    // fell over still reports its stop. That is the case where the report matters most.
-    if let Some(farewell) = composed.farewell {
-        farewell.deliver().await;
+/// The publish loop's last drain (ADR-0110, production-readiness **D8**), and what it left.
+///
+/// It started the moment the shutdown watch flipped — the same instant `axum` began draining
+/// in-flight requests — so by here it has usually already finished and this waits for nothing.
+/// Waiting is nonetheless what makes the drain real: [`serve_until`] returning is what stops the
+/// runtime polling that task, and an outbox that never drained costs nothing on a box in a shop
+/// (the SQLite file survives the restart) but loses events on a hosted placement, whose container
+/// and volume go together.
+async fn last_drain<S>(
+    publisher: Option<tokio::task::JoinHandle<()>>,
+    edge: &Edge<S>,
+    store_id: StoreId,
+    path: std::path::PathBuf,
+) -> Option<crate::drain_status::DrainStatus>
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    // Nothing publishes on a LAN-only or unactivated box, so there was no drain to report and
+    // its outbox waiting is its ordinary state, not an unfinished stop.
+    let publisher = publisher?;
+    let began = tokio::time::Instant::now();
+    match tokio::time::timeout(crate::event_publish::STOP_GRACE, publisher).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => tracing::error!(
+            %error,
+            "the event-publish loop ended abnormally; the outbox may not have drained"
+        ),
+        Err(_elapsed) => tracing::error!(
+            grace_secs = crate::event_publish::STOP_GRACE.as_secs(),
+            "the event-publish loop did not finish its last drain in time; exiting with events \
+             still in the outbox"
+        ),
     }
+    Some(report_drain(edge, store_id, began.elapsed(), path).await)
+}
 
-    served.map_err(EdgeError::Serve)?;
-
-    // A restart comes back on the same volume, so its outbox goes out at the next start whatever the
-    // drain managed; only a stop that leaves events behind is worth telling a supervisor about.
+/// How the stop ended, said once. A restart comes back on the same volume, so its outbox goes out
+/// at the next start whatever the drain managed; only a stop that leaves events behind is worth
+/// telling a supervisor about.
+fn stop_outcome(
+    restart: &RestartIntent,
+    drain: Option<&crate::drain_status::DrainStatus>,
+) -> ServeOutcome {
     let outcome = if restart.wanted() {
         ServeOutcome::RestartWanted
-    } else if drain.as_ref().is_some_and(|status| !status.drained()) {
+    } else if drain.is_some_and(|status| !status.drained()) {
         ServeOutcome::DrainIncomplete
     } else {
         ServeOutcome::Stopped
     };
     tracing::info!(?outcome, "pos_edge stopped");
-    Ok(outcome)
+    outcome
 }
 
 /// Reads the outbox once the last drain is over and writes `drain-status.json` beside the store's
@@ -887,24 +979,28 @@ where
     let mut publisher = None;
     let mut farewell = None;
     if let Some(cloud_url) = cloud_url {
+        let vault = open_vault().await;
         let surface = compose_cloud_surface(
             app,
-            &cloud_url,
-            store_id,
-            &config_edge,
-            queue,
-            lease_authority,
-            Arc::clone(&lease_watch),
-            Arc::clone(&agents),
+            CloudWiring {
+                cloud_url: &cloud_url,
+                store_id,
+                edge: &config_edge,
+                queue,
+                lease: lease_authority,
+                lease_watch: Arc::clone(&lease_watch),
+                agents: Arc::clone(&agents),
+                held_config_version,
+                origins: &origins,
+                revocations: &revocations,
+                backup,
+            },
             nats.as_ref(),
-            held_config_version,
-            &origins,
-            &revocations,
-            backup,
             Lifecycle {
                 shutdown_rx,
                 restart,
                 state_dir,
+                vault,
             },
         )
         .await;
@@ -971,14 +1067,28 @@ where
     revocations
 }
 
-/// How the cloud surface is stopped, restarted and told where the store's data is: what
-/// [`compose_cloud_surface`] passes through to the loops and the activation routes.
-struct Lifecycle<'a> {
+/// The vault the device credential (activation) and the scoped sync key are kept in: sealed under
+/// the vault key when the unit's vault drop-in gave the service one (ADR-0151), in the OS keyring
+/// otherwise (ADR-0086). Announced and migrated before anything reads it.
+async fn open_vault() -> Arc<OsVault> {
+    let vault = Arc::new(OsVault::from_env());
+    crate::vault::log_vault(vault.standing());
+    crate::vault::migrate_vault(&vault).await;
+    vault
+}
+
+/// How the cloud surface is stopped, restarted and told where the store's data is, and the vault
+/// its keys are kept in: what [`compose_cloud_surface`] passes through to the loops and the
+/// activation routes.
+struct Lifecycle<'a, V> {
     shutdown_rx: &'a tokio::sync::watch::Receiver<bool>,
     restart: Option<Arc<dyn RestartRequest>>,
     /// The directory the database lives in, whose access the activation standing reports
     /// (ADR-0174).
     state_dir: std::path::PathBuf,
+    /// The device credential and the scoped sync key. [`compose`] passes the box's own vault,
+    /// already announced and migrated; a test passes a fake that holds what it needs.
+    vault: Arc<V>,
 }
 
 /// What [`compose_cloud_surface`] hands back: the router with the cloud routes merged onto it, plus
@@ -991,83 +1101,79 @@ struct CloudSurface {
     farewell: Option<FarewellBeat>,
 }
 
-/// Composes the cloud surface onto `app` for a store that has a `cloud_url` (ADR-0086): the OS-keyring
-/// vault and a `cloud-sync-http` `CloudSync`, the activation routes (`POST /api/activate`,
-/// `GET /api/activation`) so a fresh box can be set up, and — when the box is already activated — the
-/// config-pull and heartbeat loops. Returns the router with the activation routes merged (or `app`
-/// unchanged if the cloud transport could not be built). Never blocks local trading: an unactivated
-/// box still binds, pairs, and serves the LAN, and the operator UI routes it to `/setup`.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the cloud surface needs everything the cloud loops need: the router to merge onto, \
-              where the cloud is, which store this is, the live session, the queue, lease and \
-              print-agent authorities, the optional stream, the held config version, and the \
-              shutdown. Every one is passed straight through to a loop that needs exactly it"
-)]
-async fn compose_cloud_surface<S, Q, L, P>(
-    app: axum::Router,
-    cloud_url: &url::Url,
+impl CloudSurface {
+    /// The router with nothing running behind it: a box whose cloud cannot be reached from here,
+    /// or that is not yet activated.
+    const fn without_sync(app: axum::Router) -> Self {
+        Self {
+            app,
+            cloud: None,
+            publisher: None,
+            farewell: None,
+        }
+    }
+}
+
+/// What the cloud loops are wired to: where the cloud is, which store this is, the live edge, the
+/// queue, lease and print-agent authorities, the config version the box already holds, the
+/// allow-list and revocations the config loop keeps current, and the archive plan. Every field is
+/// passed straight through to a loop that needs exactly it.
+struct CloudWiring<'a, S, Q, L, P> {
+    cloud_url: &'a url::Url,
     store_id: StoreId,
-    edge: &Arc<Edge<S>>,
+    edge: &'a Arc<Edge<S>>,
     queue: Q,
     lease: L,
     lease_watch: Arc<LeaseWatch>,
     agents: P,
-    nats: Option<&NatsConfig>,
     held_config_version: Option<String>,
-    origins: &Arc<crate::origins::Origins>,
-    revocations: &Arc<DeviceRevocations>,
+    origins: &'a Arc<crate::origins::Origins>,
+    revocations: &'a Arc<DeviceRevocations>,
     backup: Option<BackupPlan>,
-    lifecycle: Lifecycle<'_>,
+}
+
+/// Composes the cloud surface onto `app` for a store that has a `cloud_url` (ADR-0086): the vault
+/// [`compose`] opened and a `cloud-sync-http` `CloudSync`, the activation routes (`POST /api/activate`,
+/// `GET /api/activation`) so a fresh box can be set up, and — when the box is already activated — the
+/// config-pull and heartbeat loops. Returns the router with the activation routes merged (or `app`
+/// unchanged if the cloud transport could not be built). Never blocks local trading: an unactivated
+/// box still binds, pairs, and serves the LAN, and the operator UI routes it to `/setup`.
+async fn compose_cloud_surface<S, Q, L, P, V>(
+    app: axum::Router,
+    wiring: CloudWiring<'_, S, Q, L, P>,
+    nats: Option<&NatsConfig>,
+    lifecycle: Lifecycle<'_, V>,
 ) -> CloudSurface
 where
     S: EventStore + IntakeLedger + ConfigStore + Send + Sync + 'static,
     Q: QueueNumberAuthority + 'static,
     L: LeaseAuthority + 'static,
     P: crate::print_agent::PrintAgents + 'static,
+    V: KeyVault + Send + Sync + 'static,
 {
     let Lifecycle {
         shutdown_rx,
         restart,
         state_dir,
+        vault,
     } = lifecycle;
-    // The device credential (activation) and the scoped sync key: sealed under the vault key when the
-    // unit's vault drop-in gave the service one (ADR-0151), in the OS keyring otherwise (ADR-0086).
-    let vault = Arc::new(OsVault::from_env());
-    crate::vault::log_vault(vault.standing());
-    crate::vault::migrate_vault(&vault).await;
-    // One HTTPS transport for the activation exchange; the config-pull/heartbeat loops dial over their
-    // own bearer-carrying client (cloud_http), keyed by a store key when one is set and by the device
-    // credential otherwise (ADR-0143).
-    let transport = match TlsHttpTransport::new(cloud_url.as_str(), ACTIVATION_TIMEOUT) {
-        Ok(transport) => transport,
-        Err(error) => {
-            tracing::error!(
-                %error,
-                "cloud_url is set but the cloud transport could not be built; running LAN-only"
-            );
-            return CloudSurface {
-                app,
-                cloud: None,
-                publisher: None,
-                farewell: None,
-            };
-        }
+    let Some(transport) = cloud_transport(wiring.cloud_url) else {
+        return CloudSurface::without_sync(app);
     };
     // Activation only, so the store id and target carried here are never used for a path: `/activate`
     // is not store-scoped and is deliberately unauthenticated (the box has no key yet). They are
     // passed because the adapter is one type — the OTA loop builds its own over a keyed transport.
     let cloud = Arc::new(HttpCloudSync::new(
         transport,
-        store_id,
+        wiring.store_id,
         crate::version::target(),
     ));
     let app = app.merge(activation_router(
-        Arc::clone(edge),
+        Arc::clone(wiring.edge),
         cloud,
         Arc::clone(&vault),
-        Some(Arc::clone(&lease_watch)),
-        origins,
+        Some(Arc::clone(&wiring.lease_watch)),
+        wiring.origins,
         restart,
         Some(state_dir),
     ));
@@ -1075,52 +1181,74 @@ where
     // Boot gate: start the cloud loops only once the box holds a device credential (ADR-0086). Reading
     // the vault can itself fail (a locked or absent keyring) — that is not "unactivated", so it is
     // logged and the box runs without cloud sync rather than refusing to start.
-    let mut keyed_client = None;
-    let mut publisher = None;
-    let mut farewell = None;
     match boot_standing(&*vault).await {
         Ok(ActivationStanding::Activated) => {
-            let sync_key = resolve_sync_key(&*vault).await;
-            // The signal that releases the stopping store's last beat. Created here so the sender
-            // travels back out to whoever owns the lifetime and the receiver goes into the loop —
-            // the two halves of "drain, *then* beat" (see [`FarewellBeat`]).
-            let (drained_tx, drained_rx) = tokio::sync::oneshot::channel();
-            if let Some(loops) = spawn_cloud_loops(
-                cloud_url,
-                store_id,
-                edge,
-                queue,
-                lease,
-                lease_watch,
-                agents,
-                sync_key,
-                held_config_version,
-                origins,
-                revocations,
-                backup,
-                shutdown_rx,
-                drained_rx,
-            ) {
-                keyed_client = Some(loops.client);
-                farewell = Some(FarewellBeat {
-                    drained: drained_tx,
-                    task: loops.heartbeat,
-                });
-            }
-            // The event rail is spawned beside the `/sync` loops rather than inside them: it has its
-            // own endpoint and presents the device credential whatever key the loops use
-            // (ADR-0087, ADR-0143).
-            publisher = spawn_event_publish(edge, nats, cloud_url, &*vault, shutdown_rx).await;
+            start_cloud_sync(app, wiring, nats, &*vault, shutdown_rx).await
         }
         Ok(ActivationStanding::NeedsActivation) => {
             tracing::info!(
                 "device not activated: open /setup to enter the activation code (no cloud sync until then)"
             );
+            CloudSurface::without_sync(app)
         }
         Err(error) => {
             tracing::warn!(%error, "could not read the vault to check activation; running without cloud sync");
+            CloudSurface::without_sync(app)
         }
     }
+}
+
+/// One HTTPS transport for the activation exchange; the config-pull/heartbeat loops dial over their
+/// own bearer-carrying client (`cloud_http`), keyed by a store key when one is set and by the device
+/// credential otherwise (ADR-0143). `None`, said once, when it cannot be built.
+fn cloud_transport(cloud_url: &url::Url) -> Option<TlsHttpTransport> {
+    match TlsHttpTransport::new(cloud_url.as_str(), ACTIVATION_TIMEOUT) {
+        Ok(transport) => Some(transport),
+        Err(error) => {
+            tracing::error!(
+                %error,
+                "cloud_url is set but the cloud transport could not be built; running LAN-only"
+            );
+            None
+        }
+    }
+}
+
+/// The cloud surface of an activated box: the `/sync` loops keyed by [`resolve_sync_key`], and the
+/// event rail beside them.
+async fn start_cloud_sync<S, Q, L, P, V>(
+    app: axum::Router,
+    wiring: CloudWiring<'_, S, Q, L, P>,
+    nats: Option<&NatsConfig>,
+    vault: &V,
+    shutdown_rx: &tokio::sync::watch::Receiver<bool>,
+) -> CloudSurface
+where
+    S: EventStore + IntakeLedger + ConfigStore + Send + Sync + 'static,
+    Q: QueueNumberAuthority + 'static,
+    L: LeaseAuthority + 'static,
+    P: crate::print_agent::PrintAgents + 'static,
+    V: KeyVault,
+{
+    let (edge, cloud_url) = (wiring.edge, wiring.cloud_url);
+    let sync_key = resolve_sync_key(vault).await;
+    // The signal that releases the stopping store's last beat. Created here so the sender
+    // travels back out to whoever owns the lifetime and the receiver goes into the loop —
+    // the two halves of "drain, *then* beat" (see [`FarewellBeat`]).
+    let (drained_tx, drained_rx) = tokio::sync::oneshot::channel();
+    let mut keyed_client = None;
+    let mut farewell = None;
+    if let Some(loops) = spawn_cloud_loops(wiring, sync_key, shutdown_rx, drained_rx) {
+        keyed_client = Some(loops.client);
+        farewell = Some(FarewellBeat {
+            drained: drained_tx,
+            task: loops.heartbeat,
+        });
+    }
+    // The event rail is spawned beside the `/sync` loops rather than inside them: it has its
+    // own endpoint and presents the device credential whatever key the loops use
+    // (ADR-0087, ADR-0143).
+    let publisher = spawn_event_publish(edge, nats, cloud_url, vault, shutdown_rx).await;
     CloudSurface {
         app,
         cloud: keyed_client,
@@ -1323,155 +1451,6 @@ impl BackupPlan {
             source,
         })
     }
-}
-
-/// What [`spawn_cloud_loops`] hands back when it starts: the keyed client the OTA loop dials on, and
-/// the heartbeat task a stop has to release and then wait for.
-struct CloudLoops {
-    client: CloudHttpClient,
-    heartbeat: tokio::task::JoinHandle<()>,
-}
-
-/// Spawns the config-pull, heartbeat, and order-relay loops for an activated store, keyed by
-/// `sync_key` ([`resolve_sync_key`]). A `None` key means not even the device credential could be read
-/// back: that is logged and skipped, and the box trades locally. The loops share the passed
-/// shutdown, so they drain with the server.
-///
-/// `drained` is the one exception to sharing that shutdown: the heartbeat loop stops *ticking* with
-/// the others and then waits for this before sending its last report, so the report carries the
-/// outbox as the final drain left it rather than as the stop found it ([`FarewellBeat`]).
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the drain signal is a parameter precisely because the heartbeat loop must not decide \
-              for itself when a stopping store has finished draining — the publish loop it has no \
-              handle on decides that; the origin allow-list is one the config loop keeps current for \
-              the CORS layer the routers already hold (ADR-0111); and the print-agent record is what \
-              lets the same beat say whether a ticket is stuck behind a terminal (ADR-0112)"
-)]
-fn spawn_cloud_loops<S, Q, L, P>(
-    cloud_url: &url::Url,
-    store_id: StoreId,
-    edge: &Arc<Edge<S>>,
-    queue: Q,
-    lease: L,
-    lease_watch: Arc<LeaseWatch>,
-    agents: P,
-    sync_key: Option<String>,
-    held_config_version: Option<String>,
-    origins: &Arc<crate::origins::Origins>,
-    revocations: &Arc<DeviceRevocations>,
-    backup: Option<BackupPlan>,
-    shutdown_rx: &tokio::sync::watch::Receiver<bool>,
-    drained: tokio::sync::oneshot::Receiver<()>,
-) -> Option<CloudLoops>
-where
-    S: EventStore + IntakeLedger + ConfigStore + Send + Sync + 'static,
-    Q: QueueNumberAuthority + 'static,
-    L: LeaseAuthority + 'static,
-    P: crate::print_agent::PrintAgents + 'static,
-{
-    let Some(sync_key) = sync_key else {
-        tracing::warn!(
-            "the store is activated but neither a sync key (vault or {SYNC_KEY_ENV}) nor its device \
-             credential could be read; config-pull and heartbeat are idle"
-        );
-        return None;
-    };
-    let client = match CloudHttpClient::new(cloud_url, sync_key) {
-        Ok(client) => client,
-        Err(error) => {
-            tracing::error!(
-                %error,
-                "cloud_url is set but the sync client could not be built; running without cloud sync"
-            );
-            return None;
-        }
-    };
-
-    // Seeded with what the boot restore found on disk, so the first pull asks the cloud for a
-    // *change* rather than re-fetching the document the counter is already selling on (C1).
-    let config_client = ConfigClient::new(
-        ConfigHttpTransport::new(client.clone(), store_id),
-        Arc::clone(edge),
-        held_config_version,
-    )
-    // The same list the CORS layer reads on every request, handed to the only writer there is: a
-    // published `origins` node reaches the layer through this handle and nowhere else (ADR-0111).
-    .with_origins(Arc::clone(origins))
-    // And the same pairing state the request gates answer from, so a `revoked_devices` node retires
-    // a till on this box rather than only in the console's picture of it (ADR-0118 §6).
-    .with_device_revocations(Arc::clone(revocations))
-    // …and this box's own lease, so a pull that carries a newer generation makes the box stop
-    // seating tables rather than only stop installing updates (ADR-0123). The same `Arc` the
-    // application layer refuses on and the response header reports.
-    .with_lease(lease_watch);
-    tokio::spawn(config_client.run(CONFIG_POLL_INTERVAL, wait_for_shutdown(shutdown_rx.clone())));
-
-    // The heartbeat reports the store's own publish backlog alongside its liveness, so the fleet
-    // console can see a box whose events are piling up behind a down link (ADR-0068) — the lease
-    // generation it holds, so a box that has been *replaced* is distinguishable from one that is
-    // merely quiet (ADR-0108) — and one standing per print agent, so a ticket stuck behind a terminal
-    // reaches an operator before the night ends rather than in a phone call the next morning
-    // (ADR-0112).
-    let heartbeat_client = HeartbeatClient::reporting(
-        HeartbeatHttpTransport::new(client.clone(), store_id),
-        StoreReport::new(Arc::clone(edge), lease, agents),
-        HEARTBEAT_INTERVAL,
-    );
-    // A dropped sender resolves the receiver too, so a caller that never signals still gets the last
-    // beat rather than a task parked forever — the beat simply reports whatever the outbox holds.
-    let heartbeat = tokio::spawn(heartbeat_client.run(
-        wait_for_shutdown(shutdown_rx.clone()),
-        async move {
-            let _ignored = drained.await;
-        },
-    ));
-
-    // The order relay (ADR-0061, ADR-0087): pull the store's parked orders, make each one through the
-    // edge's own `OrderIn` — repriced from this store's menu, deduped in the order's transaction — and
-    // ack the outcome. The same scoped key as the loops above, which must also carry `relay_orders`.
-    // The relay paces itself on the cloud's long-poll, so it takes no interval of its own.
-    let relay_client = RelayClient::new(
-        RelayHttpTransport::new(client.clone(), store_id),
-        EdgeOrderIn::new(Arc::clone(edge), queue, system_device_id(store_id)),
-    );
-    tokio::spawn(relay_client.run(wait_for_shutdown(shutdown_rx.clone())));
-
-    // The store's own off-box backup (ADR-0124): a `VACUUM INTO` snapshot, sealed at the till under
-    // a key the cloud hands out but cannot use, shipped to the cloud as ciphertext. It dials the
-    // same keyed client as the OTA loop — `/sync/stores/{id}/archive` is behind the store's scoped
-    // key, and the archive key is minted on the first ask.
-    //
-    // Deliberately *not* gated on this box's lease standing (ADR-0123): a superseded box holds
-    // exactly the events its replacement does not, so it is the box whose database most needs
-    // saving. See `crate::backup_client` for the rest of that argument.
-    //
-    // It follows the store's `backup` node, whose interval wins from the next archive on; this box's
-    // own interval, from its file or the default, applies while the node sets none (ADR-0160
-    // decision 6). The loop says which at start-up and whenever it changes.
-    if let Some(plan) = backup {
-        let archiver = crate::backup_client::BackupClient::new(
-            HttpCloudSync::new(
-                OtaHttpTransport::new(client.clone()),
-                store_id,
-                crate::version::target(),
-            ),
-            store_id,
-            plan.database,
-            plan.interval,
-        )
-        .following(Arc::<Edge<S>>::clone(edge), plan.source);
-        tokio::spawn(archiver.run(wait_for_shutdown(shutdown_rx.clone())));
-        tracing::info!("store archiving enabled");
-    }
-
-    tracing::info!(
-        %cloud_url,
-        "cloud sync enabled: config-pull, heartbeat, and order-relay loops running"
-    );
-    // Handed back for the OTA loop, which `serve` composes because it needs the shutdown sender, and
-    // for the stop, which has to release the heartbeat's last beat once the drain is done.
-    Some(CloudLoops { client, heartbeat })
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1950,176 +1929,6 @@ pub async fn shutdown_signal() {
     tracing::info!("shutdown signal received; draining in-flight requests");
 }
 
+mod cloud_loops;
 #[cfg(test)]
-mod tests {
-    use pos_fakes::FakeKeyVault;
-    use pos_fakes::executor::run_ready;
-    use pos_ports::key_vault::{KeyVault as _, Secret, SecretName};
-    use pos_proto::ids::StoreId;
-    use pos_proto::ulid::Ulid;
-
-    use super::{
-        BackupPlan, ServeOutcome, ValueSource, choose_sync_key, idle_window_source,
-        system_device_id, usable_env_key,
-    };
-
-    fn holding(secrets: &[(SecretName, &str)]) -> FakeKeyVault {
-        let vault = FakeKeyVault::new();
-        for (name, value) in secrets {
-            run_ready(vault.store(*name, &Secret::new(value.as_bytes().to_vec())))
-                .expect("the fake stores");
-        }
-        vault
-    }
-
-    /// The sign-in idle window is the store's when its `session` node sets one, the local file's
-    /// deprecated value when only that does — the one case the start-up warning names — and thirty
-    /// minutes when neither does (ADR-0160 decision 6).
-    #[test]
-    fn the_idle_window_is_the_nodes_then_the_files_then_the_default() {
-        use crate::config::EdgeConfig;
-        use pos_proto::session::PublishedSession;
-
-        let store = "store_id = \"01J0000000000000000000000A\"";
-        let plain = EdgeConfig::from_toml_str(store).expect("parses");
-        let with_file =
-            EdgeConfig::from_toml_str(&format!("{store}\nsign_in_idle_timeout_minutes = 45"))
-                .expect("parses");
-        let unset = PublishedSession::default();
-        let published = PublishedSession {
-            sign_in_idle_timeout_minutes: Some(15),
-            ..PublishedSession::default()
-        };
-        // Outside the bounds, so the node sets nothing the edge can run.
-        let unreadable = PublishedSession {
-            sign_in_idle_timeout_minutes: Some(0),
-            ..PublishedSession::default()
-        };
-
-        assert_eq!(
-            idle_window_source(&with_file, &published),
-            ValueSource::Published
-        );
-        assert_eq!(
-            idle_window_source(&plain, &published),
-            ValueSource::Published
-        );
-        assert_eq!(
-            idle_window_source(&with_file, &unset),
-            ValueSource::LocalFile
-        );
-        assert_eq!(
-            idle_window_source(&with_file, &unreadable),
-            ValueSource::LocalFile
-        );
-        assert_eq!(idle_window_source(&plain, &unset), ValueSource::Default);
-    }
-
-    /// A box archives every `backup_interval_hours` its file still sets, and every day when it sets
-    /// none, until the store's configuration sets an interval; `0` is the one way to switch
-    /// archiving off, and it starts no loop, so no published value can switch it back on
-    /// (ADR-0160 decision 6).
-    #[test]
-    fn the_file_sets_the_boxs_own_interval_and_zero_starts_no_loop() {
-        use crate::config::EdgeConfig;
-        use core::time::Duration;
-
-        let store = "store_id = \"01J0000000000000000000000A\"";
-        let plan = |extra: &str| {
-            BackupPlan::from_config(
-                &EdgeConfig::from_toml_str(&format!("{store}\n{extra}")).expect("parses"),
-            )
-        };
-
-        let neither = plan("").expect("a box archives by default");
-        assert_eq!(neither.interval, Duration::from_secs(24 * 3600));
-        assert_eq!(neither.source, ValueSource::Default);
-
-        let from_file = plan("backup_interval_hours = 6").expect("a number keeps archiving on");
-        assert_eq!(from_file.interval, Duration::from_secs(6 * 3600));
-        assert_eq!(from_file.source, ValueSource::LocalFile);
-
-        assert!(
-            plan("backup_interval_hours = 0").is_none(),
-            "the file's zero is the one off-switch: no loop starts to read a published interval"
-        );
-    }
-
-    /// A store key wins wherever it is set, and a box given nothing but its activation code syncs
-    /// with its device credential (ADR-0143).
-    #[test]
-    fn the_sync_key_falls_back_to_the_device_credential() {
-        let both = holding(&[
-            (SecretName::SyncKey, "pos_key_secret"),
-            (SecretName::DeviceCredential, "posdev_id_secret"),
-        ]);
-        assert_eq!(
-            run_ready(choose_sync_key(&both, Some("pos_env_secret".to_owned()))).as_deref(),
-            Some("pos_key_secret")
-        );
-        let credential_only = holding(&[(SecretName::DeviceCredential, "posdev_id_secret")]);
-        assert_eq!(
-            run_ready(choose_sync_key(
-                &credential_only,
-                Some("pos_env_secret".to_owned())
-            ))
-            .as_deref(),
-            Some("pos_env_secret")
-        );
-        assert_eq!(
-            run_ready(choose_sync_key(&credential_only, None)).as_deref(),
-            Some("posdev_id_secret")
-        );
-        assert_eq!(run_ready(choose_sync_key(&FakeKeyVault::new(), None)), None);
-    }
-
-    /// The hint an old console wrote after the `=` is not a key, and must not shadow the device
-    /// credential behind it.
-    #[test]
-    fn a_commented_environment_key_is_ignored() {
-        assert_eq!(
-            usable_env_key("  # issue a key in step 2, or paste one here"),
-            None
-        );
-        assert_eq!(usable_env_key("   "), None);
-        assert_eq!(
-            usable_env_key(" pos_id_secret ").as_deref(),
-            Some("pos_id_secret")
-        );
-        let credential_only = holding(&[(SecretName::DeviceCredential, "posdev_id_secret")]);
-        assert_eq!(
-            run_ready(choose_sync_key(
-                &credential_only,
-                Some("# issue a key in step 2".to_owned())
-            ))
-            .as_deref(),
-            Some("posdev_id_secret")
-        );
-    }
-
-    #[test]
-    fn the_system_device_id_is_stable_for_a_store() {
-        // One box, one identity: every system event this store writes carries the same device id, so
-        // the cloud can group them however many times the box restarts.
-        let store_id = StoreId::new(Ulid::from_u128(7));
-        assert_eq!(system_device_id(store_id), system_device_id(store_id));
-    }
-
-    #[test]
-    fn two_stores_never_share_a_system_device_id() {
-        // The reason it is derived from the store rather than a fixed sentinel: two shops must not
-        // collide in the cloud's own analytics.
-        let one = system_device_id(StoreId::new(Ulid::from_u128(7)));
-        let other = system_device_id(StoreId::new(Ulid::from_u128(8)));
-        assert_ne!(one, other);
-    }
-
-    /// The codes a host agent reads (ADR-0113). They are a wire: changing one is changing what every
-    /// supervisor already deployed takes the exit to mean.
-    #[test]
-    fn each_way_of_stopping_has_its_own_exit_code() {
-        assert_eq!(ServeOutcome::Stopped.exit_code(), 0);
-        assert_eq!(ServeOutcome::RestartWanted.exit_code(), 10);
-        assert_eq!(ServeOutcome::DrainIncomplete.exit_code(), 11);
-    }
-}
+mod tests;

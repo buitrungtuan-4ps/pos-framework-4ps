@@ -28,35 +28,27 @@
 //! truncated or mis-pasted file at the moment a human is watching rather than at every box in the
 //! ring hours later.
 //!
-//! # Why the transport is written out rather than borrowed
+//! # The transport
 //!
-//! [`crate::webhook::transport`] already dials over the same `hyper`/`rustls` stack, but it is a
-//! `POST` of a signed body to one vetted address with no redirect handling — every one of those
-//! differs here. What *is* shared is the property that matters: the destination is vetted with
-//! [`crate::webhook::ssrf`] and then dialed **at the address that vet approved**, on every hop. A
-//! release asset download lands on a signed URL at a host the forge chooses, so the redirect target
-//! is third-party input and is treated as such.
+//! Each GET is [`crate::outbound::HttpsGet`], shared with the HQ federation of rollups (ADR-0179
+//! C10). [`crate::webhook::transport`] dials over the same `hyper`/`rustls` stack, but it is a
+//! `POST` of a signed body to one vetted address with no redirect handling. What all three share is
+//! the property that matters: the destination is vetted with [`crate::webhook::ssrf`] and then
+//! dialed **at the address that vet approved**, on every hop. This module alone follows redirects:
+//! a release asset download lands on a signed URL at a host the forge chooses, so the redirect
+//! target is third-party input and is treated as such.
 
 use core::fmt;
 use core::future::Future;
 use core::time::Duration;
-use std::net::SocketAddr;
 use std::sync::Arc;
 
 use base64::Engine as _;
-use bytes::Bytes;
-use http_body_util::{BodyExt as _, Empty, Limited};
-use hyper::Request;
-use hyper::header::{ACCEPT, AUTHORIZATION, HOST, LOCATION, USER_AGENT};
-use hyper_util::rt::TokioIo;
+use hyper::header::{ACCEPT, AUTHORIZATION, USER_AGENT};
 use serde::Deserialize;
-use tokio::net::TcpStream;
-use tokio_rustls::TlsConnector;
-use tokio_rustls::rustls::pki_types::ServerName;
-use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 
 use crate::ota::{MAX_ARTIFACT_BYTES, MINISIGN_SIGNATURE_LEN, TargetTriple};
-use crate::webhook::ssrf::vet_blocking;
+use crate::outbound::{Answer, HttpsGet};
 
 /// How many redirects one download follows before giving up.
 ///
@@ -321,23 +313,15 @@ struct AssetDocument {
     size: u64,
 }
 
-/// One answer from the forge: enough to follow a redirect or read a body.
-#[derive(Debug)]
-struct Answer {
-    status: u16,
-    location: Option<String>,
-    body: Vec<u8>,
-}
-
 /// A [`ReleaseSource`] over a GitHub-shaped REST API.
 ///
-/// Cheap to clone — a shared rustls config and three short strings — so the router holds one.
+/// Cheap to clone — a shared HTTPS client and three short strings — so the router holds one.
 #[derive(Clone)]
 pub struct GithubReleases {
     api_base: String,
     repository: String,
     token: Option<Arc<str>>,
-    tls: Arc<ClientConfig>,
+    client: HttpsGet,
 }
 
 // Hand-written so a token cannot reach a log through a `?state` in some future tracing call.
@@ -365,20 +349,11 @@ impl GithubReleases {
     /// can, so this is a build-time impossibility, not a runtime path.
     #[must_use]
     pub fn new(api_base: &str, repository: &str, token: Option<&str>) -> Self {
-        let mut roots = RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        let tls = ClientConfig::builder_with_provider(Arc::new(
-            tokio_rustls::rustls::crypto::ring::default_provider(),
-        ))
-        .with_safe_default_protocol_versions()
-        .expect("the ring provider supplies the safe default protocol versions")
-        .with_root_certificates(roots)
-        .with_no_client_auth();
         Self {
             api_base: api_base.trim_end_matches('/').to_owned(),
             repository: repository.trim_matches('/').to_owned(),
             token: token.map(Into::into),
-            tls: Arc::new(tls),
+            client: HttpsGet::new(),
         }
     }
 
@@ -393,85 +368,17 @@ impl GithubReleases {
         authorize: bool,
         max_bytes: usize,
     ) -> Result<Answer, ReleaseSourceError> {
-        let vetted = vet_blocking(url)
-            .await
-            .map_err(|reason| ReleaseSourceError::Unavailable(format!("{url}: {reason}")))?;
-        let parsed = url::Url::parse(&vetted.url)
-            .map_err(|error| ReleaseSourceError::Unavailable(format!("{url}: {error}")))?;
-        let host = parsed
-            .host_str()
-            .ok_or_else(|| ReleaseSourceError::Unavailable(format!("{url}: no host")))?
-            .to_owned();
-        let port = parsed.port_or_known_default().unwrap_or(443);
-        let mut target = parsed.path().to_owned();
-        if let Some(query) = parsed.query() {
-            target.push('?');
-            target.push_str(query);
-        }
-
-        let stream = connect(&vetted.addresses, port).await?;
-        // SNI and certificate verification bind to the hostname, never the vetted IP we dialed.
-        let server_name = ServerName::try_from(host.clone()).map_err(|_| {
-            ReleaseSourceError::Unavailable(format!("{host} is not a valid TLS server name"))
-        })?;
-        let tls = TlsConnector::from(Arc::clone(&self.tls))
-            .connect(server_name, stream)
-            .await
-            .map_err(|error| {
-                ReleaseSourceError::Unavailable(format!(
-                    "the TLS handshake with {host} failed: {error}"
-                ))
-            })?;
-        let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(tls))
-            .await
-            .map_err(|error| {
-                ReleaseSourceError::Unavailable(format!(
-                    "the HTTP handshake with {host} failed: {error}"
-                ))
-            })?;
-        // The connection future must be driven for the request to make progress; it ends when the
-        // response completes and `sender` is dropped.
-        tokio::spawn(async move {
-            let _ = connection.await;
-        });
-
-        let mut request = Request::builder()
-            .method("GET")
-            .uri(&target)
-            .header(HOST, host.as_str())
-            .header(USER_AGENT, USER_AGENT_VALUE)
-            .header(ACCEPT, accept);
+        let mut headers = vec![
+            (USER_AGENT, USER_AGENT_VALUE.to_owned()),
+            (ACCEPT, accept.to_owned()),
+        ];
         if let (true, Some(token)) = (authorize, self.token.as_ref()) {
-            request = request.header(AUTHORIZATION, format!("Bearer {token}"));
+            headers.push((AUTHORIZATION, format!("Bearer {token}")));
         }
-        let request = request.body(Empty::<Bytes>::new()).map_err(|error| {
-            ReleaseSourceError::Unavailable(format!("building the request failed: {error}"))
-        })?;
-
-        let response = sender.send_request(request).await.map_err(|error| {
-            ReleaseSourceError::Unavailable(format!("the request to {host} failed: {error}"))
-        })?;
-        let status = response.status().as_u16();
-        let location = response
-            .headers()
-            .get(LOCATION)
-            .and_then(|value| value.to_str().ok())
-            .map(ToOwned::to_owned);
-        let body = Limited::new(response.into_body(), max_bytes)
-            .collect()
+        self.client
+            .get_once(url, &headers, max_bytes, "the release source")
             .await
-            .map_err(|_over| {
-                ReleaseSourceError::Unavailable(format!(
-                    "{host} answered with more than {max_bytes} bytes"
-                ))
-            })?
-            .to_bytes()
-            .to_vec();
-        Ok(Answer {
-            status,
-            location,
-            body,
-        })
+            .map_err(ReleaseSourceError::Unavailable)
     }
 
     /// A GET that follows the forge's redirects, dropping the token the moment the host changes.
@@ -646,24 +553,6 @@ impl ReleaseSource for GithubReleases {
             artifacts,
         })
     }
-}
-
-/// Connects to the first vetted address that accepts a TCP connection.
-async fn connect(
-    addresses: &[std::net::IpAddr],
-    port: u16,
-) -> Result<TcpStream, ReleaseSourceError> {
-    let mut last_error = None;
-    for address in addresses {
-        match TcpStream::connect(SocketAddr::new(*address, port)).await {
-            Ok(stream) => return Ok(stream),
-            Err(error) => last_error = Some(error),
-        }
-    }
-    Err(ReleaseSourceError::Unavailable(match last_error {
-        Some(error) => format!("connecting to the release source failed: {error}"),
-        None => "the release source had no vetted address to dial".to_owned(),
-    }))
 }
 
 /// Percent-encodes one path segment.

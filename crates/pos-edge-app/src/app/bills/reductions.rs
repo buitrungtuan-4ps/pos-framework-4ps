@@ -4,20 +4,22 @@
 //! What reduces a bill: a discount, within the person's ceiling or with an approver's, and waiving a
 //! fee.
 
-use pos_core::billing::BillTotals;
-use pos_core::decision::{Actor, BillCommand, decide_bill, over_ceiling};
+use pos_core::billing::{BillTotals, ClassBase};
+use pos_core::decision::{Actor, BillCommand, DecisionCtx, decide_bill, over_ceiling};
 use pos_core::error::DomainError;
 use pos_core::machines::{Bill, BillTrigger};
 use pos_core::permission::Permission;
 use pos_core::{StateMachine, billing};
 use pos_ports::event_store::EventStore;
+use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::events::{BillingDiscountApplied, BillingFeeWaived};
-use pos_proto::ids::{BillId, FeeId, ReasonCodeId};
-use pos_proto::money::Money;
+use pos_proto::ids::{BillId, EmployeeId, FeeId, ReasonCodeId};
+use pos_proto::money::{CurrencyCode, Money};
 use pos_proto::reason_codes::ReasonAction;
 use pos_proto::{Open, ReductionKind};
 
-use crate::app::{AppError, Approval, Edge};
+use crate::app::{AppError, Approval, BillRecord, Edge, EdgeSession, OrderSnapshot};
+use crate::fanout::ServerMessage;
 
 impl<S: EventStore> Edge<S> {
     /// Takes money off a bill before it settles — a bill-level discount (`docs/pos-spec.md` §14.4,
@@ -59,42 +61,17 @@ impl<S: EventStore> Edge<S> {
             .lock_projection()
             .bill(bill_id)
             .ok_or(AppError::UnknownBill)?;
-        if !session
-            .reason_codes
-            .accepts(reason_code_id, ReasonAction::Discount)
-        {
-            return Err(AppError::VoidReasonNotValid);
-        }
+        discount_reason_accepted(&session, reason_code_id)?;
 
-        // The pre-tax base is what there is to reduce: tax follows from it, so reducing past it
-        // would make the tax negative before the total was.
         let order = self.bill_snapshot(&bill, &session)?;
-        let mut reducible = Money::zero(session.currency);
-        for base in &order.class_bases {
-            reducible = reducible
-                .checked_add(base.amount)
-                .map_err(DomainError::from)?;
-        }
+        let reducible = reducible_base(&order.class_bases, session.currency)?;
         let (discount, comp) = bill.reductions(session.currency);
         let applied = discount.checked_add(comp).map_err(DomainError::from)?;
 
         // What this person may discount on their own, read from the roster the cloud published. Read
         // *before* the step-up, because it is what decides whether a step-up was needed at all.
         let ceiling = session.staff.discount_ceiling_for(actor.employee_id);
-
-        // The step-up is attempted only when the till sent one, exactly as a line void does: the
-        // till does not have to know the ceiling rule, and the domain answers with the permission
-        // that was missing when it needed one and none came. And only when the discount goes over
-        // the ceiling: under it there is nothing to approve, so an approval the till sent anyway is
-        // not checked and records no override, which would otherwise carry an `exceeded_by` of
-        // zero or less — an audit entry for nothing.
-        let over = over_ceiling(amount, ceiling).map_err(AppError::Domain)?;
-        let approver = match approval {
-            Some(_) if over => {
-                self.resolve_step_up(&mut ctx, Permission::OverrideDiscountCeiling, approval)?
-            }
-            _ => None,
-        };
+        let approver = self.discount_approver(&mut ctx, amount, ceiling, approval)?;
 
         // The decision is the gate, not a value: a reduction moves the bill nowhere and runs no
         // effect, so there is nothing in it to carry forward. What it does is refuse.
@@ -113,7 +90,74 @@ impl<S: EventStore> Edge<S> {
             &ctx,
         )?;
 
-        let applied_event = BillingDiscountApplied {
+        let applied_event = Self::bill_discount(bill_id, amount, reason_code_id);
+        let (envelopes, messages) =
+            self.discount_events(&ctx, &applied_event, approver, ceiling)?;
+        self.append_and_publish(envelopes, messages).await?;
+
+        self.lock_projection()
+            .add_reduction(bill_id, ReductionKind::Discount, amount)
+            .map_err(AppError::Domain)?;
+
+        self.discounted_totals(bill_id, &session, &bill, &order)
+    }
+
+    /// The new figure, so the till redraws the bill from the edge's arithmetic rather than
+    /// subtracting the discount itself and risking a second opinion about the tax: the
+    /// reductions as the projection now holds them, on the order and fees the discount was
+    /// decided on.
+    fn discounted_totals(
+        &self,
+        bill_id: BillId,
+        session: &EdgeSession,
+        bill: &BillRecord,
+        order: &OrderSnapshot,
+    ) -> Result<BillTotals, AppError> {
+        let (discount, comp) = self
+            .lock_projection()
+            .bill(bill_id)
+            .ok_or(AppError::UnknownBill)?
+            .reductions(session.currency);
+        Ok(billing::assemble(&Self::bill_input(
+            session,
+            order,
+            &bill.fee_rules,
+            &bill.waived_fee_ids,
+            (discount, comp),
+        ))?)
+    }
+
+    /// Who approved a discount over the person's ceiling, if anybody had to.
+    ///
+    /// The step-up is attempted only when the till sent one, exactly as a line void does: the
+    /// till does not have to know the ceiling rule, and the domain answers with the permission
+    /// that was missing when it needed one and none came. And only when the discount goes over
+    /// the ceiling: under it there is nothing to approve, so an approval the till sent anyway is
+    /// not checked and records no override, which would otherwise carry an `exceeded_by` of
+    /// zero or less — an audit entry for nothing.
+    fn discount_approver(
+        &self,
+        ctx: &mut DecisionCtx,
+        amount: Money,
+        ceiling: Option<Money>,
+        approval: Option<&Approval>,
+    ) -> Result<Option<EmployeeId>, AppError> {
+        let over = over_ceiling(amount, ceiling).map_err(AppError::Domain)?;
+        match approval {
+            Some(_) if over => {
+                self.resolve_step_up(ctx, Permission::OverrideDiscountCeiling, approval)
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// A bill-level discount a person decided.
+    fn bill_discount(
+        bill_id: BillId,
+        amount: Money,
+        reason_code_id: ReasonCodeId,
+    ) -> BillingDiscountApplied {
+        BillingDiscountApplied {
             bill_id,
             // Bill-level: the whole check, not a line on it. A line-level discount is the same
             // event with this set, and is its own change.
@@ -124,8 +168,19 @@ impl<S: EventStore> Edge<S> {
             kind: Open::from_known(ReductionKind::Discount),
             amount,
             reason_code_id: Some(reason_code_id),
-        };
-        let (event_envelope, event_message) = self.prepare(&ctx, &applied_event)?;
+        }
+    }
+
+    /// The discount, then the override that let it past the ceiling when there was one, prepared
+    /// to commit together.
+    fn discount_events(
+        &self,
+        ctx: &DecisionCtx,
+        applied_event: &BillingDiscountApplied,
+        approver: Option<EmployeeId>,
+        ceiling: Option<Money>,
+    ) -> Result<(Vec<EventEnvelope<RawPayload>>, Vec<ServerMessage>), AppError> {
+        let (event_envelope, event_message) = self.prepare(ctx, applied_event)?;
         let mut envelopes = vec![event_envelope];
         let mut messages = vec![event_message];
         if let Some(approver) = approver {
@@ -133,6 +188,7 @@ impl<S: EventStore> Edge<S> {
             // role configures none (the ceiling is zero, so all of it is over), and the difference
             // when it does. A void's override carries no figure at all because a void is not an
             // amount over anything, and that asymmetry is the point of the field.
+            let amount = applied_event.amount;
             let exceeded_by = match ceiling {
                 Some(ceiling) => amount.checked_sub(ceiling).map_err(DomainError::from)?,
                 None => amount,
@@ -142,30 +198,11 @@ impl<S: EventStore> Edge<S> {
                 approver,
                 Some(exceeded_by),
             );
-            let (envelope, message) = self.prepare(&ctx, &record)?;
+            let (envelope, message) = self.prepare(ctx, &record)?;
             envelopes.push(envelope);
             messages.push(message);
         }
-        self.append_and_publish(envelopes, messages).await?;
-
-        self.lock_projection()
-            .add_reduction(bill_id, ReductionKind::Discount, amount)
-            .map_err(AppError::Domain)?;
-
-        // The new figure, so the till redraws the bill from the edge's arithmetic rather than
-        // subtracting the discount itself and risking a second opinion about the tax.
-        let (discount, comp) = self
-            .lock_projection()
-            .bill(bill_id)
-            .ok_or(AppError::UnknownBill)?
-            .reductions(session.currency);
-        Ok(billing::assemble(&Self::bill_input(
-            &session,
-            &order,
-            &bill.fee_rules,
-            &bill.waived_fee_ids,
-            (discount, comp),
-        ))?)
+        Ok((envelopes, messages))
     }
 
     /// Waives one of a bill's fees, citing a reason from the store's managed list
@@ -244,4 +281,30 @@ impl<S: EventStore> Edge<S> {
         self.lock_projection().waive_fee_record(bill_id, fee_id);
         self.bill_totals(bill_id)
     }
+}
+
+/// Refuses a reason the store does not publish for a discount.
+fn discount_reason_accepted(
+    session: &EdgeSession,
+    reason_code_id: ReasonCodeId,
+) -> Result<(), AppError> {
+    if !session
+        .reason_codes
+        .accepts(reason_code_id, ReasonAction::Discount)
+    {
+        return Err(AppError::VoidReasonNotValid);
+    }
+    Ok(())
+}
+
+/// What a discount can reduce: the pre-tax base, every class of it. Tax follows from it, so
+/// reducing past it would make the tax negative before the total was.
+fn reducible_base(class_bases: &[ClassBase], currency: CurrencyCode) -> Result<Money, AppError> {
+    let mut reducible = Money::zero(currency);
+    for base in class_bases {
+        reducible = reducible
+            .checked_add(base.amount)
+            .map_err(DomainError::from)?;
+    }
+    Ok(reducible)
 }

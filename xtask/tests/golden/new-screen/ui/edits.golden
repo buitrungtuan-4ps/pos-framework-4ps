@@ -1,0 +1,6 @@
+ui/src/state/screens.ts:   stockCount: { path: "/stock", key: "stock_count.title" },
+ui/src/App.tsx: import { StockCount } from "./screens/StockCount";
+ui/src/App.tsx:   stockCount: StockCount,
+ui/src/i18n/en.json:   "stock_count.title": "Stock count"
+ui/src/i18n/vi.json:   "stock_count.title": "Kiểm kho"
+ui/tests/replay.spec.mjs:   { path: "/stock", title: "stock_count.title" },

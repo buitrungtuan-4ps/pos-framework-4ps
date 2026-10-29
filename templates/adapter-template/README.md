@@ -2,6 +2,12 @@
 
 **Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-09-29
 
+**Do not copy this for a printer, storage, card-terminal, e-invoice, courier, ERP or delivery
+adapter:** run `cargo xtask new adapter --kind <kind>`, which writes a sandbox that
+already passes the port's suite ([ADR-0176](../../docs/adr/0176-the-adapter-and-country-standard.md)).
+Every kind this template was extracted for now has a generator, so it is to be removed, which is when
+ADR-0176 decision 6 removes it.
+
 This directory is a **scaffold you copy**, not a crate. It is deliberately not a workspace member and
 its source files carry a `.tmpl` suffix, so Cargo, `clippy`, `rustfmt`, and `cargo test` never see it —
 copy it out, drop the suffix, and fill in the placeholders.

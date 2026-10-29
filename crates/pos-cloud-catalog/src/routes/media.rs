@@ -4,6 +4,7 @@
 //! Media (`/admin/media`): upload, serve, list and delete image renditions
 //! ([ADR-0075](../../../../docs/adr/0075-media-and-file-rail.md)).
 
+use pos_cloud_api::paged::ListOrPage;
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
@@ -42,7 +43,7 @@ struct MediaState<M, A, C> {
 }
 
 /// One media asset as listed — id, content type, the detail rendition's size, and when it was stored.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct MediaSummaryView {
     media_id: String,
     content_type: String,
@@ -51,7 +52,7 @@ struct MediaSummaryView {
 }
 
 /// The `POST /admin/media` response: the id the caller references the new asset by, and its size.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct UploadedMedia {
     media_id: String,
     detail_bytes: u64,
@@ -97,6 +98,31 @@ where
         })
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/media",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
+        ("limit" = Option<u32>, Query, description = "How many assets to return, 1 to 500. Absent, \
+                                                    the whole library as an array rather than a page"),
+        ("offset" = Option<u32>, Query, description = "How many assets to skip, 0 to 100000. Only \
+                                                     with `limit`"),
+    ),
+    responses(
+        (status = 200, body = ListOrPage<MediaSummaryView>, description = "Without `limit`, every asset as an array; with it, a page: \
+                                      `items`, `total`, `limit` and `offset`. Each asset has \
+                                      `media_id`, `content_type`, `detail_bytes` and \
+                                      `created_at_ms`, and no image bytes"),
+        (status = 400, description = "tenant_id is absent or not a ULID, limit or offset is not an \
+                                      integer in range, or offset is sent without limit", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The media store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "media",
+)]
 /// A super-admin lists a tenant's media assets (summaries, without the bytes).
 async fn admin_list_media<M, A, C>(
     State(state): State<MediaState<M, A, C>>,
@@ -156,6 +182,38 @@ fn media_views(rows: Vec<crate::media::MediaSummary>) -> Vec<MediaSummaryView> {
         .collect()
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/media",
+    extensions(("x-permission" = json!("console.media.manage"))),
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
+    ),
+    request_body(
+        content = pos_cloud_api::body_schema::Binary, description = "The image as the raw request body, at most 8 MB. It is re-encoded into two \
+                       bounded JPEG renditions, a thumbnail and a detail image (ADR-0042, ADR-0075); \
+                       the upload itself is never stored",
+        content_type = "application/octet-stream",
+    ),
+    responses(
+        (status = 201, body = UploadedMedia, description = "Stored. The body carries `media_id`, what an item's \
+                                      `image_ref` names, and `detail_bytes`. Audited"),
+        (status = 400, description = "tenant_id is absent or not a ULID, or the upload is not a \
+                                      decodable image", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.media.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 413, description = "The upload is over 8 MB. Answered by the server's body limit, \
+                                      without the error envelope"),
+        (status = 422, description = "The image could not be reduced within the renditions' size \
+                                      budget", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 429, description = "The server is at its rendering limit: send the upload again \
+                                      shortly", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 500, description = "The image could not be encoded or rendered", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The media store or the entropy source is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "media",
+)]
 /// A super-admin uploads an image: it is re-encoded to two bounded JPEG renditions and stored. The raw
 /// upload is never persisted. `?tenant_id=` names the owner.
 async fn admin_upload_media<M, A, C>(
@@ -328,6 +386,27 @@ where
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/media/{media_id}/thumbnail",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    params(
+        ("media_id" = String, Path, description = "The asset (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, body = pos_cloud_api::body_schema::Binary, content_type = "image/jpeg", description = "The thumbnail rendition as `image/jpeg`. A rendition never \
+                                      changes, since a new image is a new id, so it is cached \
+                                      privately for a year"),
+        (status = 400, description = "tenant_id or media_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The tenant has no asset with that id", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The media store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "media",
+)]
 /// A super-admin (or any reader) fetches an asset's thumbnail rendition.
 async fn admin_get_media_thumbnail<M, A, C>(
     State(state): State<MediaState<M, A, C>>,
@@ -350,6 +429,27 @@ where
     .await
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/media/{media_id}/detail",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    params(
+        ("media_id" = String, Path, description = "The asset (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, body = pos_cloud_api::body_schema::Binary, content_type = "image/jpeg", description = "The detail rendition as `image/jpeg`. A rendition never \
+                                      changes, since a new image is a new id, so it is cached \
+                                      privately for a year"),
+        (status = 400, description = "tenant_id or media_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The tenant has no asset with that id", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The media store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "media",
+)]
 /// A super-admin (or any reader) fetches an asset's detail rendition.
 async fn admin_get_media_detail<M, A, C>(
     State(state): State<MediaState<M, A, C>>,
@@ -372,6 +472,25 @@ where
     .await
 }
 
+#[utoipa::path(
+    delete,
+    path = "/admin/media/{media_id}",
+    extensions(("x-permission" = json!("console.media.manage"))),
+    security(("session_cookie" = [])),
+    params(
+        ("media_id" = String, Path, description = "The asset (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 204, description = "Deleted, and audited"),
+        (status = 400, description = "tenant_id or media_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.media.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The tenant has no asset with that id", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The media store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "media",
+)]
 /// A super-admin deletes a media asset.
 async fn admin_delete_media<M, A, C>(
     State(state): State<MediaState<M, A, C>>,

@@ -19,7 +19,7 @@ use crate::auth::console_rbac::ConsolePermission;
 use crate::http::{CloudApp, Json, mint_api_key_id, parse_scopes, random_hex_32};
 
 /// A super-admin request to provision a new API key for a tenant.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(in crate::http) struct CreateApiKeyRequest {
     /// The tenant the key will act for (a 26-character ULID).
     tenant_id: String,
@@ -39,7 +39,7 @@ pub(in crate::http) struct CreateApiKeyRequest {
 }
 
 /// The one-time response to a provisioning request: the id, and the token shown exactly once.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct CreateApiKeyResponse {
     /// The key's public id (the ULID half of the token).
     id: String,
@@ -55,6 +55,32 @@ pub(in crate::http) struct ListApiKeysQuery {
     tenant_id: String,
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/api-keys",
+    extensions(("x-permission" = json!("console.apikeys.manage"))),
+    security(("session_cookie" = [])),
+    request_body(
+        content = CreateApiKeyRequest, description = "`tenant_id`; `store_id` to bind the key to one store, or absent for a \
+                       tenant-wide key (a store's own sync credential must name its store); \
+                       `scopes`, the only things the key may do: `read_rollups`, `read_config`, \
+                       `manage_devices`, `place_orders`, `relay_orders` or `publish_events`; and \
+                       `expires_at_ms`, or absent for a key that never expires",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, body = CreateApiKeyResponse, description = "Provisioned. The body carries the key's `id` and its `token`, \
+                                      `pos_<id>_<secret>`. The token is returned exactly once — only \
+                                      a hash of the secret is stored. The audit entry records the \
+                                      scopes and the expiry, never the token"),
+        (status = 400, description = "tenant_id or store_id is not a ULID, a scope is unknown, or \
+                                      expires_at_ms is out of range", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.apikeys.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The key store or the entropy source is unavailable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "integrator access",
+)]
 /// Provisions a new scoped per-tenant API key and returns the one-time token (super-admin only).
 ///
 /// Behind the session guard. Mints a CSPRNG id and secret at the edge, [`issue`]s the key, and
@@ -159,6 +185,25 @@ where
         .into_response()
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/api-keys",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The tenant whose keys to list (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, body = [pos_cloud_api::auth::apikey::ApiKeySummary], description = "The tenant's keys, as an array: each with `id`, `store_id` \
+                                      (absent for a tenant-wide key), `scopes`, `revoked` and \
+                                      `expires_at_ms`. Never a token or a secret"),
+        (status = 400, description = "tenant_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The key store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "integrator access",
+)]
 /// Lists a tenant's API keys as metadata only — never a secret (super-admin only).
 pub(in crate::http) async fn admin_list_api_keys<S, R, K, C, A, T, W>(
     State(app): State<CloudApp<S, R, K, C, A, T, W>>,
@@ -192,6 +237,25 @@ where
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/admin/api-keys/{id}",
+    extensions(("x-permission" = json!("console.apikeys.manage"))),
+    security(("session_cookie" = [])),
+    params(
+        ("id" = String, Path, description = "The key's id, the ULID half of its token"),
+    ),
+    responses(
+        (status = 204, description = "No live key has that id any more. Idempotent: the answer is the \
+                                      same whether a live key was found, so it reveals nothing, and \
+                                      only a revocation that retired one is audited"),
+        (status = 400, description = "id is not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.apikeys.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The key store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "integrator access",
+)]
 /// Revokes an API key by id (super-admin only). `204` whether or not a live key was found — revoking
 /// is idempotent, and telling the caller which it was is a needless enumeration signal.
 pub(in crate::http) async fn admin_revoke_api_key<S, R, K, C, A, T, W>(

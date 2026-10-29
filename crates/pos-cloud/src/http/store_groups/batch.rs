@@ -16,7 +16,7 @@ use crate::registry::EntityStatus;
 use crate::store_groups::BatchOutcome;
 
 /// A `POST /admin/store-groups/{group_id}/publish` body.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct PublishToStoreGroupRequest {
     pub(super) tenant_id: String,
     /// Which node kind to publish — one of the thirteen batchable ones (ADR-0122 §4).
@@ -29,24 +29,26 @@ pub(super) struct PublishToStoreGroupRequest {
 }
 
 /// What a batch did at one store.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(super) struct BatchResultView {
     pub(super) store_id: String,
-    /// `applied`, `skipped` or `deferred`-free: exactly the three of ADR-0122 §6.
-    pub(super) outcome: String,
+    /// `applied`, `skipped` or `failed`: exactly the three of ADR-0122 §6.
+    pub(super) outcome: BatchOutcome,
     /// The refusal's own message, for `skipped` and `failed`. For `applied`, absent unless the
     /// write left something behind: a menu whose store's fees did not go with it says so, with the
     /// fee publish's outcome and reason tokens.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub(super) detail: Option<String>,
     /// The config version the publish produced, for `applied`.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub(super) config_version_id: Option<String>,
     pub(super) at_ms: i64,
 }
 
 /// A batch and what it did at every member — the response body, and the read routes' shape.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(super) struct BatchReport {
     pub(super) batch_id: String,
     pub(super) group_id: String,
@@ -56,6 +58,7 @@ pub(super) struct BatchReport {
     pub(super) started_at_ms: i64,
     /// Absent for a batch that died mid-fan-out — exactly the row an operator goes looking for.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub(super) finished_at_ms: Option<i64>,
     pub(super) applied: usize,
     pub(super) skipped: usize,

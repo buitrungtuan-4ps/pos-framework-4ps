@@ -46,6 +46,10 @@ pub(crate) use connections::{
 };
 pub(crate) use providers::__path_admin_list_providers;
 pub(crate) use publish::__path_admin_publish_integrations;
+pub(crate) use webhooks::{
+    __path_admin_delete_webhook, __path_admin_enable_webhook, __path_admin_list_webhooks,
+    __path_admin_register_webhook,
+};
 
 // --- Vendor connections (`/admin/integrations/connections`, ADR-0153) ---------------------------
 
@@ -60,6 +64,8 @@ struct ConnectionState<S, A, C> {
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
+    /// The cell's home country, which each connection's processing country is compared with.
+    cell_country: Option<pos_proto::locale::CountryCode>,
 }
 
 /// A create/update body for a connection. The id is server-owned: minted on create, the path id on
@@ -69,7 +75,7 @@ struct ConnectionState<S, A, C> {
 /// connection already holds, because the console cannot show it to be sent back. `clear_secrets`
 /// removes a stored value on purpose. Switching `provider_id` drops every stored secret: one
 /// vendor's key is never another's, even when both call the field `api_key`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct ConnectionRequest {
     tenant_id: String,
     provider_id: String,
@@ -86,6 +92,10 @@ struct ConnectionRequest {
     secrets: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     clear_secrets: Vec<String>,
+    /// The country the vendor processes this connection's data in (`SG`), when known (ADR-0179
+    /// C7). Recorded, compared with the cell's home country, and never a reason to refuse.
+    #[serde(default)]
+    processing_country: Option<String>,
 }
 
 /// The default for [`ConnectionRequest::enabled`].
@@ -108,6 +118,7 @@ struct ConnectionAuditSummary {
     enabled: bool,
     setting_keys: Vec<String>,
     secrets_set: Vec<String>,
+    processing_country: Option<String>,
 }
 
 impl ConnectionAuditSummary {
@@ -121,6 +132,7 @@ impl ConnectionAuditSummary {
             enabled: connection.enabled,
             setting_keys: connection.settings.keys().cloned().collect(),
             secrets_set: connection.secrets_set().into_iter().collect(),
+            processing_country: connection.processing_country.clone(),
         }
     }
 }
@@ -139,6 +151,7 @@ pub fn connection_router<S, A, C>(
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
+    cell_country: Option<pos_proto::locale::CountryCode>,
 ) -> Router
 where
     S: crate::connections::ConnectionStore + Clone + Send + Sync + 'static,
@@ -163,6 +176,7 @@ where
             admin,
             clock,
             audit,
+            cell_country,
         })
 }
 
@@ -279,6 +293,7 @@ fn build_connection(
         .into_response());
     };
     let scope_id = connection_scope_id(request)?;
+    let processing_country = checked_processing_country(request)?;
 
     // What the connection already holds sealed, for the same provider only.
     let mut sealed = existing
@@ -331,7 +346,34 @@ fn build_connection(
         enabled: request.enabled,
         settings: request.settings.clone(),
         sealed_secrets: sealed,
+        processing_country,
     })
+}
+
+/// The processing country a write names, upper-case, or `None` when it names none (ADR-0179 C7).
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the 400 the caller returns"
+)]
+fn checked_processing_country(request: &ConnectionRequest) -> Result<Option<String>, Response> {
+    request
+        .processing_country
+        .as_deref()
+        .map(str::trim)
+        .filter(|code| !code.is_empty())
+        .map(|code| {
+            pos_proto::locale::CountryCode::parse(code)
+                .map(|code| code.as_str().to_owned())
+                .map_err(|_| {
+                    FieldRefusal::new(
+                        "processing_country is an ISO 3166-1 alpha-2 code, such as SG, or is left out",
+                        "processing_country",
+                        "INVALID_FORMAT",
+                    )
+                    .into_response()
+                })
+        })
+        .transpose()
 }
 
 /// Refuses a second enabled connection in a family a scope may have only one of — one e-invoice

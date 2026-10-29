@@ -9,6 +9,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use pos_cloud_api::console::{audit_action, mint_ulid, require_permission};
 use pos_cloud_api::response::parse_ulid_fields;
+use pos_cloud_api::version::Versioned;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{DisplayCategoryId, DisplaySubcategoryId, TenantId};
 
@@ -27,6 +28,23 @@ use crate::routes::{
 };
 use crate::version::UpdateOutcome;
 
+#[utoipa::path(
+    get,
+    path = "/admin/catalog/display-categories",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The tenant whose display categories to list (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, body = [Versioned<DisplayCategory>], description = "The tenant's display categories, as an array, each with its `etag`"),
+        (status = 400, description = "tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The catalog store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "catalog taxonomy",
+)]
 /// A super-admin lists a tenant's display categories.
 pub(super) async fn admin_list_display_categories<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,
@@ -58,6 +76,25 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/catalog/display-categories",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
+    security(("session_cookie" = [])),
+    request_body(
+        content = CreateDisplayCategoryRequest, description = "`tenant_id` and the category's `name`, as the till's layout shows it",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, body = Versioned<DisplayCategory>, description = "Created, active, with the id minted here. The body is the \
+                                      record and the ETag carries its version. Audited"),
+        (status = 400, description = "tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.catalog.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The catalog store or the entropy source is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "catalog taxonomy",
+)]
 /// A super-admin creates a display category; the id is minted here and returned once.
 pub(super) async fn admin_create_display_category<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,
@@ -115,6 +152,34 @@ where
     }
 }
 
+#[utoipa::path(
+    patch,
+    path = "/admin/catalog/display-categories/{display_category_id}",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
+    security(("session_cookie" = [])),
+    params(
+        ("display_category_id" = String, Path, description = "The display category (a 26-character ULID)"),
+        ("If-Match" = String, Header, description = "The ETag the record was read at (ADR-0094). \
+                                                     Required; a wildcard is refused"),
+    ),
+    request_body(
+        content = UpdateDisplayCategoryRequest, description = "`tenant_id`, and the category's `name` and `status` (`active` or `archived`) as they should now stand",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = Versioned<DisplayCategory>, description = "Updated. The body is the record and the ETag carries its new \
+                                      version. Audited"),
+        (status = 400, description = "display_category_id or tenant_id is not a ULID, status is not `active` or `archived`, or If-Match is \
+                                      absent, malformed, or a wildcard", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.catalog.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The tenant has no display category with that id", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 412, description = "The display category changed since you read it: re-read it and try \
+                                      again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The catalog store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "catalog taxonomy",
+)]
 /// A super-admin renames a display category and/or sets its status.
 pub(super) async fn admin_update_display_category<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,
@@ -187,6 +252,23 @@ where
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/catalog/display-subcategories",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The tenant whose display sub-categories to list (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, body = [Versioned<DisplaySubcategory>], description = "The tenant's display sub-categories, as an array, each with its `etag`, and the `display_category_id` it belongs to"),
+        (status = 400, description = "tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The catalog store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "catalog taxonomy",
+)]
 /// A super-admin lists a tenant's display sub-categories.
 pub(super) async fn admin_list_display_subcategories<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,
@@ -218,6 +300,25 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/catalog/display-subcategories",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
+    security(("session_cookie" = [])),
+    request_body(
+        content = CreateDisplaySubcategoryRequest, description = "`tenant_id`, the parent `display_category_id`, and the sub-category's `name`",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, body = Versioned<DisplaySubcategory>, description = "Created, active, with the id minted here. The body is the \
+                                      record and the ETag carries its version. Audited"),
+        (status = 400, description = "tenant_id or display_category_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.catalog.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The catalog store or the entropy source is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "catalog taxonomy",
+)]
 /// A super-admin creates a display sub-category under a parent display category; the id is minted here.
 pub(super) async fn admin_create_display_subcategory<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,
@@ -282,6 +383,34 @@ where
     }
 }
 
+#[utoipa::path(
+    patch,
+    path = "/admin/catalog/display-subcategories/{display_subcategory_id}",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
+    security(("session_cookie" = [])),
+    params(
+        ("display_subcategory_id" = String, Path, description = "The display sub-category (a 26-character ULID)"),
+        ("If-Match" = String, Header, description = "The ETag the record was read at (ADR-0094). \
+                                                     Required; a wildcard is refused"),
+    ),
+    request_body(
+        content = UpdateDisplaySubcategoryRequest, description = "`tenant_id`, and the sub-category's parent `display_category_id`, `name` and `status` (`active` or `archived`) as they should now stand",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = Versioned<DisplaySubcategory>, description = "Updated. The body is the record and the ETag carries its new \
+                                      version. Audited"),
+        (status = 400, description = "display_subcategory_id, tenant_id or display_category_id is not a ULID, status is not `active` or `archived`, or If-Match is \
+                                      absent, malformed, or a wildcard", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.catalog.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The tenant has no display sub-category with that id", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 412, description = "The display sub-category changed since you read it: re-read it and try \
+                                      again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The catalog store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "catalog taxonomy",
+)]
 /// A super-admin renames a display sub-category, (re)parents it, and/or sets its status.
 pub(super) async fn admin_update_display_subcategory<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,

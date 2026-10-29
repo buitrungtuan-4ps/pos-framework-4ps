@@ -39,7 +39,7 @@ struct ArchiveReadState<R, A, C> {
 ///
 /// No key and nothing that could open one — this is the *index*, and the key is a separate,
 /// deliberate ask. `object_key` is here because it is what an operator types into a restore.
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
 struct ArchiveView {
     /// When the store took the snapshot, Unix ms. **This is the recovery point** — not
     /// `received_at_ms`, which is when a possibly-delayed upload landed.
@@ -57,7 +57,7 @@ struct ArchiveView {
 }
 
 /// The answer: what this store has, newest first.
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
 struct StoreArchivesResponse {
     archives: Vec<ArchiveView>,
 }
@@ -91,12 +91,14 @@ where
 #[utoipa::path(
     get,
     path = "/admin/stores/{store_id}/archives",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     params(
         ("store_id" = String, Path, description = "The store whose archives to list (a 26-character ULID)"),
         ("tenant_id" = String, Query, description = "The tenant the store belongs to (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "This store's sealed archives, newest first — the first row's \
+        (status = 200, body = StoreArchivesResponse, description = "This store's sealed archives, newest first — the first row's \
                                       taken_at_ms is the recovery point. An empty list is this \
                                       answer too: the store has never archived"),
         (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),

@@ -30,6 +30,8 @@
 //   a counter order could only arrive over a relay the example does not run; since the counter
 //   starts its own orders (ADR-0146), each sets one up as a cashier would.)
 
+import { readFileSync } from "node:fs";
+
 import { expect, test } from "@playwright/test";
 
 import { TASKS } from "../scripts/step-tasks.mjs";
@@ -5201,4 +5203,65 @@ test("every flow is replayed except the ones that say why they cannot be", () =>
     );
   }
   expect(replayed.length + skipped.length).toBe(TASKS.length);
+});
+
+// Every route the till declares opens its own screen, and a path it does not declare opens none.
+// Each screen is recognised by something only it draws on a fresh store, so a route pointed at the
+// wrong screen fails here as surely as a route that went missing.
+const SCREEN_TITLES = JSON.parse(
+  readFileSync(new URL("../src/i18n/en.json", import.meta.url), "utf8"),
+);
+const ROUTED_SCREENS = [
+  { path: "/", shows: '[data-outcome="floor"]' },
+  {
+    path: "/table/t1",
+    shows: '[data-outcome="order-open"] >> nth=0',
+    also: '[data-step="releaseTable"]',
+  },
+  { path: "/table/t1/pay", shows: '[data-step="splitEvenly"] >> nth=0' },
+  { path: "/kds", shows: '[data-outcome="board-clear"]' },
+  { path: "/expo", shows: '[data-outcome="pass-clear"]' },
+  { path: "/counter", shows: '[data-outcome="counter"]' },
+  {
+    path: "/order/o1",
+    shows: '[data-outcome="order-open"] >> nth=0',
+    also: '[data-step="takePayment"]',
+  },
+  { path: "/guests", title: "confirm.title" },
+  { path: "/today", shows: '[data-outcome="today-takings"]' },
+  { path: "/shift", shows: '[data-step="openShift"]' },
+  { path: "/devices", shows: '[data-outcome="till"]' },
+  { path: "/setup", title: "setup.title" },
+];
+
+test("every route the till declares opens its own screen, and an undeclared one opens none", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await page.goto(`${edge.baseURL}/pair`);
+    await expect(page.locator("#pair-submit")).toBeVisible();
+    await pair(page, edge);
+    await expect(page.locator('[data-step="submit"]')).toBeVisible();
+    await signIn(page, edge);
+    for (const screen of ROUTED_SCREENS) {
+      await page.goto(`${edge.baseURL}${screen.path}`);
+      await expect(page, `${screen.path} stays where it is`).toHaveURL(
+        (url) => url.pathname === screen.path,
+      );
+      const main = page.locator("main");
+      if (screen.title !== undefined) {
+        await expect(main.locator("h1"), screen.path).toHaveText(SCREEN_TITLES[screen.title]);
+      } else {
+        await expect(main.locator(screen.shows), screen.path).toBeVisible();
+      }
+      if (screen.also !== undefined) {
+        await expect(main.locator(screen.also), screen.path).toBeVisible();
+      }
+    }
+    await page.goto(`${edge.baseURL}/no-such-screen`);
+    await expect(page.locator("main")).toBeEmpty();
+  } finally {
+    await edge.stop();
+  }
 });

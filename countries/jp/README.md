@@ -47,6 +47,11 @@ marketplace). Both are defaults a store overrides if it uses the channel for som
 Japan's authority allocates **no** invoice numbers — a seller chooses its own serial — so the
 locally allocated range here is the correct answer rather than a stand-in.
 
+## Conformance
+
+[`CONFORMANCE.md`](CONFORMANCE.md) lists the legal requirements a person must confirm, and the golden
+bills in [`tests/conformance.rs`](tests/conformance.rs) that exercise them.
+
 ## Depends on / used by
 
 - **Depends on** (workspace crates): `pos-country`, `pos-ports`, `pos-proto`; in tests, `pos-contract-tests`, `pos-fakes`.

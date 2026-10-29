@@ -30,7 +30,7 @@ use pos_cloud_config::route::PublishedConfig;
 /// One capability flag as the console's form editor reads it: its config key, default, and the
 /// one-line description (§10 catalogue). Mirrors `pos-core`'s `CapabilityMeta` so the console renders
 /// toggles from the framework's own source of truth rather than a hand-kept list.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct CapabilityFlagView {
     key: &'static str,
     default_on: bool,
@@ -60,7 +60,7 @@ const fn offered(capability: pos_core::capability::Capability) -> bool {
 
 /// One capability preset (§10) — a named starting profile the console offers as a button, given as the
 /// set of flag keys it turns on.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct CapabilityPresetView {
     id: &'static str,
     keys: Vec<&'static str>,
@@ -68,7 +68,7 @@ struct CapabilityPresetView {
 
 /// One inter-flag rule (§10) the console previews before publish, so a conflict shows the moment it is
 /// created rather than as a `422` on publish.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct CapabilityRuleView {
     id: &'static str,
     description: &'static str,
@@ -76,7 +76,7 @@ struct CapabilityRuleView {
 
 /// The whole capability catalogue the form editor needs: the flags, the presets, and the inter-flag
 /// rules — all §10 data, tenant-independent.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct CapabilityCatalogueView {
     flags: Vec<CapabilityFlagView>,
     presets: Vec<CapabilityPresetView>,
@@ -117,6 +117,22 @@ where
         .with_state(CapabilitiesState { admin, clock })
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/capabilities",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    responses(
+        (status = 200, body = CapabilityCatalogueView, description = "The capability catalogue, the same for every tenant: `flags`, \
+                                      each with its `key`, `default_on`, `description` and `offered` \
+                                      (whether the console offers it as a switch); `presets`, each \
+                                      an `id` and the keys it turns on; and `rules`, the inter-flag \
+                                      rules a publish enforces"),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "config nodes",
+)]
 /// Serves the §10 capability catalogue for the console's form editor. Each flag says whether the
 /// console offers it as a switch ([`offered`]).
 async fn admin_list_capabilities<A, C>(
@@ -198,7 +214,7 @@ struct ConfigCapabilitiesState<Cfg, A, C> {
 
 /// A super-admin sets a store's capability flags from the form editor: the (tenant, store) and the flag
 /// values to write. Only the flags named are changed; the rest of the store's config is untouched.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PublishCapabilitiesRequest {
     tenant_id: String,
     store_id: String,
@@ -273,6 +289,32 @@ pub fn capability_flag_nodes(
         .collect())
 }
 
+#[utoipa::path(
+    put,
+    path = "/admin/config/capabilities",
+    extensions(("x-permission" = json!("console.config.publish"))),
+    security(("session_cookie" = [])),
+    request_body(
+        content = PublishCapabilitiesRequest, description = "`tenant_id` and `store_id`, then `flags`, each capability key from `GET /admin/capabilities` with its value. Only the flags \
+                       named are changed",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = PublishedConfig, description = "Published as the store's `capabilities` node on its \
+                                      Store layer. The body carries `config_version_id`, which the \
+                                      store pulls on its next sync. Audited"),
+        (status = 400, description = "tenant_id or store_id is not a ULID, a key is not a capability flag, or a value needs \
+                                      a recorded confirmation first (ADR-0169)", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 412, description = "Every attempt to write the store's configuration lost a race \
+                                      with another publish: try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 422, description = "The store's configuration would not validate with the \
+                                      node, naming each inter-flag rule it breaks", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The configuration store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "config nodes",
+)]
 /// Merges a store's capability flags into its Store config layer and versions it — the same
 /// load→merge→publish→version shape as the catalog publish, onto the top-level flag keys instead of a
 /// node. Rejects an unknown flag key (the form only sends catalogue keys). The §10 inter-flag rules run

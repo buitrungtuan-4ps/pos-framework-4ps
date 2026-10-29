@@ -58,14 +58,16 @@ where
 #[utoipa::path(
     get,
     path = "/admin/integrations/providers",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     responses(
-        (status = 200, description = "Every provider compiled into this cloud, grouped by family: \
+        (status = 200, body = crate::providers::CatalogueView, description = "Every provider compiled into this cloud, grouped by family: \
                                       its id, where its adapter runs, the countries it serves, \
                                       whether it is a sandbox, and the typed fields a connection \
                                       to it needs. A secret field is marked as one and has no \
                                       value here or anywhere else the API answers"),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
-        (status = 403, description = "The role lacks console.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
     ),
     tag = "integrations",
 )]

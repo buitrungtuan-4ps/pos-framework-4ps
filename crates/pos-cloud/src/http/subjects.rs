@@ -38,7 +38,7 @@ struct SubjectState<Su, A, C> {
 /// A subject lookup — existence and status, without the personal fields. What a lookup returns so the
 /// operator can confirm the right subject before exporting or erasing; the values only leave the server
 /// on an explicit export.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct SubjectMetaView {
     subject_id: String,
     collected_at_ms: i64,
@@ -51,7 +51,7 @@ struct SubjectMetaView {
 /// A subject export — the portability/access payload: the record with its field values. This is the one
 /// route that returns the personal data, and only to an operator holding `console.subjects.manage`; the
 /// audit trail records that an export happened and how many fields, never the values.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct SubjectExportView {
     subject_id: String,
     collected_at_ms: i64,
@@ -117,6 +117,43 @@ fn parse_subject_target(
     Ok((TenantId::new(tenant), SubjectId::new(subject)))
 }
 
+/// What an erasure answers: that it is done, and whether the record was already masked.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+struct SubjectErased {
+    /// Always `true`: the record is masked now.
+    erased: bool,
+    /// Whether it was masked before this request.
+    already_masked: bool,
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/subjects/{subject_id}",
+    extensions(("x-permission" = json!("console.subjects.manage"))),
+    security(("session_cookie" = [])),
+    params(
+        ("subject_id" = String, Path, description = "The subject's 26-character ULID — the id an \
+                                                     event or an invoice carries in place of the \
+                                                     person's data"),
+        ("tenant_id" = String, Query, description = "The tenant the subject belongs to (a \
+                                                   26-character ULID). Another tenant's subject is \
+                                                   not found"),
+    ),
+    responses(
+        (status = 200, body = SubjectMetaView, description = "The subject exists: `subject_id`, `collected_at_ms`, `masked` \
+                                      (whether it has been erased) and `field_count`, how many \
+                                      personal fields the record holds. No field value is returned. \
+                                      This is the step that confirms the right person before an \
+                                      export or an erasure. Audited"),
+        (status = 400, description = "tenant_id or subject_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.subjects.manage, which only an owner \
+                                      holds", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no subject with that id", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The subject store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "subject requests",
+)]
 /// Looks a subject up — its existence and whether it is masked — without returning the personal fields.
 async fn admin_lookup_subject<Su, A, C>(
     State(state): State<SubjectState<Su, A, C>>,
@@ -174,6 +211,36 @@ where
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/subjects/{subject_id}/export",
+    extensions(("x-permission" = json!("console.subjects.manage"))),
+    security(("session_cookie" = [])),
+    params(
+        ("subject_id" = String, Path, description = "The subject's 26-character ULID — the id an \
+                                                     event or an invoice carries in place of the \
+                                                     person's data"),
+        ("tenant_id" = String, Query, description = "The tenant the subject belongs to (a \
+                                                   26-character ULID). Another tenant's subject is \
+                                                   not found"),
+    ),
+    responses(
+        (status = 200, body = SubjectExportView, description = "The record for an access or portability request: \
+                                      `subject_id`, `collected_at_ms`, `masked` and `fields`, the \
+                                      personal field values by name. The only route on this surface \
+                                      that returns them. An erased record returns its redacted \
+                                      values. Audited with the field count, never the values. \
+                                      Moving the payload across a border is the operator's to clear \
+                                      first"),
+        (status = 400, description = "tenant_id or subject_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.subjects.manage, which only an owner \
+                                      holds", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no subject with that id", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The subject store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "subject requests",
+)]
 /// Exports a subject's record — the portability/access payload, including the field values. Audited as
 /// an export (field count only). A masked record exports its redacted values (nothing personal remains).
 async fn admin_export_subject<Su, A, C>(
@@ -234,6 +301,34 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/subjects/{subject_id}/erase",
+    extensions(("x-permission" = json!("console.subjects.manage"))),
+    security(("session_cookie" = [])),
+    params(
+        ("subject_id" = String, Path, description = "The subject's 26-character ULID — the id an \
+                                                     event or an invoice carries in place of the \
+                                                     person's data"),
+        ("tenant_id" = String, Query, description = "The tenant the subject belongs to (a \
+                                                   26-character ULID). Another tenant's subject is \
+                                                   not found"),
+    ),
+    responses(
+        (status = 200, body = SubjectErased, description = "Erased: every personal field value is masked in place and the \
+                                      erasure time stamped, while the id and `collected_at` remain so \
+                                      the books still reconcile (ADR-0035). Irreversible. Idempotent: \
+                                      erasing a subject already masked changes nothing and still \
+                                      succeeds. The body is `erased` and `already_masked`. Audited"),
+        (status = 400, description = "tenant_id or subject_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.subjects.manage, which only an owner \
+                                      holds", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no subject with that id", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The subject store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "subject requests",
+)]
 /// Erases a subject — masks every personal field value in place ([ADR-0035](../../../docs/adr/0035-retention-and-pii-masking.md)),
 /// keeping the id and `collected_at` so the books still reconcile. Irreversible and idempotent: erasing
 /// an already-masked subject is a no-op that still returns `200`. Audited as an erasure.
@@ -291,7 +386,10 @@ where
     .await;
     (
         StatusCode::OK,
-        Json(serde_json::json!({ "erased": true, "already_masked": already_masked })),
+        Json(SubjectErased {
+            erased: true,
+            already_masked,
+        }),
     )
         .into_response()
 }
@@ -303,4 +401,23 @@ fn subject_error_response(error: &RetentionError) -> Response {
         ErrorStatus::Unavailable,
         "the subject service is unavailable",
     )
+}
+
+#[cfg(test)]
+mod answer_tests {
+    //! Each answer serialises to the bytes the `json!` it replaced did.
+
+    use super::SubjectErased;
+
+    #[test]
+    fn an_erasure_answers_that_it_is_done() {
+        let answer = SubjectErased {
+            erased: true,
+            already_masked: false,
+        };
+        assert_eq!(
+            serde_json::to_value(answer).expect("json"),
+            serde_json::json!({ "erased": true, "already_masked": false })
+        );
+    }
 }

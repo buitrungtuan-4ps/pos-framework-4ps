@@ -32,6 +32,14 @@ mod leases;
 mod placement;
 mod rollout;
 
+// The handlers the console's OpenAPI document names.
+pub(crate) use handovers::{__path_admin_retire_handover, __path_admin_settle_handover};
+pub(crate) use leases::{__path_admin_bump_lease, __path_admin_get_lease};
+pub(crate) use placement::{__path_admin_get_placement, __path_admin_publish_placement};
+pub(crate) use rollout::{
+    __path_admin_get_rollout, __path_admin_halt_rollout, __path_admin_publish_rollout,
+};
+
 // --- OTA rollout levers (`/admin/config/ota`, ADR-0078, Track O3) --------------------------------
 
 /// The collaborators the OTA rollout routes need: the config-tree store the `fleet_update` node is
@@ -47,7 +55,7 @@ struct OtaConfigState<Cfg, A, C, L> {
 
 /// A `PUT /admin/config/ota` body: the `(tenant, store)` and the rollout to publish. There is no
 /// `halted` field — a fresh publish is live; the kill switch is `POST /admin/config/ota/halt`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PublishRolloutRequest {
     tenant_id: String,
     store_id: String,
@@ -61,7 +69,7 @@ struct PublishRolloutRequest {
 
 /// A `POST /admin/config/ota/halt` body: the `(tenant, store)` whose rollout to halt (`true`) or
 /// resume (`false`) — the kill switch, without re-typing the whole rollout.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct HaltRolloutRequest {
     tenant_id: String,
     store_id: String,
@@ -85,7 +93,7 @@ struct OtaRolloutQuery {
 /// and every bump this route served before the field existed, which is why it defaults rather than
 /// being required. Present, it means the store is **moving**, and this is the only route in the tree
 /// that writes the value.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct BumpLeaseRequest {
     tenant_id: String,
     store_id: String,
@@ -118,7 +126,7 @@ struct BumpLeaseRequest {
 
 /// A `PUT /admin/config/ota/placement` body: the `(tenant, store)` and where in the rollout it sits —
 /// its ring, and the stable canary bucket that fixes its place in the fleet ramp.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PublishPlacementRequest {
     tenant_id: String,
     store_id: String,
@@ -196,8 +204,12 @@ where
         })
 }
 
-/// `412` for a bump whose `If-Match` does not match the row
-/// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)).
+/// `409` (`FAILED_PRECONDITION`) for a bump whose `If-Match` does not match the row.
+///
+/// Not the `412` (`VERSION_MISMATCH`) that
+/// [ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md) gives a stale `If-Match`
+/// elsewhere in the console. Changing this route's status would be a wire change, so it stays
+/// `409`, as the console's OpenAPI document states. The details name the current generation.
 ///
 /// `current` is read *after* the refusal, so it can already be stale by the time it is rendered.
 /// That is fine and deliberate: it is for the message, never for a decision. The decision was the

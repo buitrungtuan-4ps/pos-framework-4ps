@@ -43,6 +43,7 @@ use crate::wire_enum::Open;
 /// line, so a modifier that the store does not sell is refused exactly as an unknown base item is
 /// ("modifiers are optional additions priced when chosen", `pos-core` inventory §8).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct MenuEntry {
     /// The item this prices — the identifier an inbound order names.
@@ -181,6 +182,7 @@ impl MenuEntry {
 /// grouping; a set of names with no order is a taxonomy, not a service sequence. The cloud emits
 /// these already sorted, ties broken by id, so a reader may take the order as given.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct MenuCourse {
     /// The course's identifier, which a [`MenuEntry`] names.
@@ -246,6 +248,7 @@ impl MenuCourse {
 /// itself, and a `required` boolean beside a minimum is the kind of pair that drifts and then has to
 /// be reconciled in a refund.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct MenuModifierGroup {
     /// The group's identifier, which a [`MenuEntry`] names.
@@ -304,6 +307,7 @@ impl MenuModifierGroup {
 /// store's menu is a couple of hundred items and an order a handful of lines, so the scan is never
 /// the cost that matters, and a `Vec` keeps the wire form honest.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct MenuCatalog {
     items: Vec<MenuEntry>,
@@ -500,6 +504,7 @@ impl MenuCatalog {
 
 /// One channel's price book within a [`MenuBook`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct ChannelCatalog {
     /// The channel this catalog prices. `Open`, so a book published by a newer cloud that has learned
@@ -523,6 +528,7 @@ pub struct ChannelCatalog {
 /// [`crate::locale::TaxRateTable`] are lists. A single-channel store is the degenerate case: one row,
 /// or just the fallback.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct MenuBook {
     channels: Vec<ChannelCatalog>,

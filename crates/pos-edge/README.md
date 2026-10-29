@@ -17,8 +17,8 @@ The store binary, `pos_edge`, and its library. It owns the async runtime, the HT
 
 ## Depends on / used by
 
-- **Depends on** (workspace crates): `cloud-sync-http`, `key-vault-keyring`, `link-nats`, `pos-core`, `pos-country`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-edge-app`, `pos-edge-printing`, `pos-ports`, `pos-proto`, `pos-render`, `printer-escpos`, `store-sqlite`, `updater-minisign`, `windows-protect`; in tests, `pos-contract-tests`, `pos-fakes`.
-- **Used by** (workspace crates): `minimal-edge`.
+- **Depends on** (workspace crates): `cloud-sync-http`, `key-vault-keyring`, `link-nats`, `pos-core`, `pos-country`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-edge-app`, `pos-edge-printing`, `pos-ports`, `pos-proto`, `pos-render`, `printer-escpos`, `store-sqlite`, `updater-minisign`, `windows-protect`; in tests, `pos-contract-tests`, `pos-edge`, `pos-fakes`.
+- **Used by** (workspace crates): `minimal-edge`; in tests, `pos-edge`.
 
 ## Entry points
 

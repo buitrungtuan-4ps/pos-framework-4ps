@@ -83,7 +83,7 @@ pos-framework/
 ├── k8s/                       The optional Kubernetes lane
 ├── apps/pos-station/          The store's desktop shell (Tauri)
 ├── examples/                  Runnable examples (built by CI)
-├── templates/adapter-template/   Extracted at the *third* adapter, not before (rule of three)
+├── templates/adapter-template/   To be removed: cargo xtask new adapter covers its kinds
 ├── xtask/                     The repository's own checks (cargo xtask <check>)
 ├── tools/                     Allow-lists and baselines the checks read
 ├── changes/                   One change file per pull request, folded into CHANGELOG.md
@@ -102,9 +102,10 @@ just run-edge      # or: cargo run -p minimal-edge      →  open http://127.0.0
 Actions secrets, and run the **deploy** workflow. The exact secrets and ordered steps are the single
 source of truth in the [deploy runbook](docs/deploy-runbook.md).
 
-New here, or picking a task? The four short [**guides**](docs/guides/) each finish in one sitting:
+New here, or picking a task? The short [**guides**](docs/guides/) each finish in one sitting:
 [start from zero](docs/guides/start-from-zero.md) · [write an adapter](docs/guides/write-an-adapter.md) ·
-[add a country](docs/guides/add-a-country-module.md) · [run the simulator](docs/guides/run-the-simulator.md).
+[add a country](docs/guides/add-a-country-module.md) · [add a setting](docs/guides/add-a-setting.md) ·
+[add a business area](docs/guides/add-a-business-area.md) · [run the simulator](docs/guides/run-the-simulator.md).
 
 ## Documentation map
 
@@ -112,7 +113,7 @@ Every document is indexed by purpose in [docs/README.md](docs/README.md), and [d
 
 | Document | Read it when you need to know |
 |---|---|
-| [docs/guides/](docs/guides/) | Task-shaped how-tos: start from zero, write an adapter, add a country, run the simulator |
+| [docs/guides/](docs/guides/) | Task-shaped how-tos: start from zero, write an adapter, add a country, add a setting, add a business area, run the simulator |
 | [docs/deploy-runbook.md](docs/deploy-runbook.md) | Fork → set secrets → live admin UI: the deployment checklist and every secret |
 | [docs/go-live.md](docs/go-live.md) | Fork → trading store, in order, with every point the sequence stops for a human |
 | [docs/gate-register.md](docs/gate-register.md) | The gates only a person, a credential, real hardware or an outside body can clear |

@@ -22,6 +22,29 @@ use crate::routes::RegistryTenantQuery;
 use crate::version::{UpdateOutcome, Versioned};
 use crate::{export, import};
 
+#[utoipa::path(
+    get,
+    path = "/admin/catalog/export/items",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, body = String, content_type = "text/csv", description = "`items.csv`, as a `text/csv` attachment: the header \
+                                      `menu_item_id,name,status,tax_class_id,item_category_id,\
+                                      item_subcategory_id,image_ref`, then one row per item. No \
+                                      price, no translation and no course. A name a spreadsheet \
+                                      would read as a formula is escaped. Audited by row count, \
+                                      never the contents"),
+        (status = 400, description = "tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.catalog.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 500, description = "The CSV could not be built", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The catalog store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "catalog items",
+)]
 /// A super-admin exports a tenant's catalog items as CSV ([ADR-0075](../../../docs/adr/0075-media-and-file-rail.md),
 /// Track M5). Behind [`ConsolePermission::ManageCatalog`] and audited — the entry records who exported
 /// which domain and how many rows, never the row contents. No price is exported (prices are per-channel
@@ -188,6 +211,34 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/catalog/import/items/dry-run",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
+    ),
+    request_body(
+        content = String, description = "The CSV `GET /admin/catalog/export/items` writes, with the same header, as \
+                       the raw request body. A row with a `menu_item_id` this tenant has updates \
+                       that item; a row with none creates one; any other id is rejected, so a file \
+                       cannot mint an item id. The format carries no price, translation or course, \
+                       and an update keeps what it does not carry",
+        content_type = "text/csv",
+    ),
+    responses(
+        (status = 200, body = import::ImportReport, description = "What the file would do, writing nothing: `rows`, one per data row in file order, each with its `key` and its `action`: `create`, `update`, or `reject` with a `reason`; and `create_count`, `update_count` and `reject_count`. A row \
+                                      naming a tax class, category, sub-category or image the \
+                                      tenant does not have is rejected here, by row. Not audited"),
+        (status = 400, description = "tenant_id is absent or not a ULID, or the body is not CSV or \
+                                      its header is not the export's", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.catalog.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The catalog store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "catalog items",
+)]
 /// `POST /admin/catalog/import/items/dry-run` — what an item-master CSV **would** do, row by row,
 /// writing nothing (roadmap-v3 **F15**, [ADR-0075](../../../docs/adr/0075-media-and-file-rail.md)).
 ///
@@ -240,6 +291,38 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/catalog/import/items/apply",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
+    ),
+    request_body(
+        content = String, description = "The CSV `GET /admin/catalog/export/items` writes, with the same header, as \
+                       the raw request body. A row with a `menu_item_id` this tenant has updates \
+                       that item; a row with none creates one; any other id is rejected, so a file \
+                       cannot mint an item id. The format carries no price, translation or course, \
+                       and an update keeps what it does not carry",
+        content_type = "text/csv",
+    ),
+    responses(
+        (status = 200, body = import::ImportReport, description = "Applied: the valid rows are written one at a time and the \
+                                      report is the dry run's, with any row whose write failed \
+                                      turned into a rejection naming why — `rows`, one per data row in file order, each with its `key` and its `action`: `create`, `update`, or `reject` with a `reason`; and `create_count`, `update_count` and `reject_count`. Not one \
+                                      transaction: re-importing the same file after a fix is safe. \
+                                      An update is conditional on the version read when the \
+                                      import began, so a row changed meanwhile is rejected rather \
+                                      than overwritten. Audited by counts, never the contents"),
+        (status = 400, description = "tenant_id is absent or not a ULID, or the body is not CSV or \
+                                      its header is not the export's", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.catalog.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The catalog store or the entropy source is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "catalog items",
+)]
 /// `POST /admin/catalog/import/items` — the confirm after a dry run: the valid rows are written and
 /// the rejected ones are reported, never written.
 ///
@@ -252,8 +335,8 @@ where
 /// Wrapping the whole file in one transaction would mean one bad row discarding an operator's whole
 /// afternoon, which is the behaviour the dry run exists to make unnecessary.
 ///
-/// An update is conditional on the version the dry run read, so a row somebody else changed in
-/// between is refused rather than silently overwritten
+/// An update is conditional on the version read when the import began, so a row somebody else
+/// changed in between is refused rather than silently overwritten
 /// ([ADR-0094](../../../docs/adr/0094-optimistic-concurrency-on-admin.md)).
 ///
 /// Behind [`ConsolePermission::ManageCatalog`] and audited — the row counts, never the contents.

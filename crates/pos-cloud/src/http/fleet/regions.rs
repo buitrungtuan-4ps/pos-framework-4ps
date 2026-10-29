@@ -13,10 +13,11 @@ use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{StoreId, TenantId};
 use pos_proto::locale::CountryCode;
+use pos_proto::time::Timestamp;
 use serde::Deserialize;
 
 use super::{FleetState, RegionAcknowledgementView, fleet_error_response};
-use crate::auth::admin::AdminStore;
+use crate::auth::admin::{AdminContext, AdminStore};
 use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::{ConfigTreeState, ConfigTreeStore};
 use crate::fleet::FleetStore;
@@ -35,7 +36,7 @@ use crate::lease::{RegionAcknowledgement, RegionAcknowledgementStore};
 /// `If-Match` would have to name one of them and silently miss changes to the other. Naming both
 /// codes catches every move of either, and says in the request exactly what the admin was looking at
 /// when they decided. The departure is written up in the record's delivery note.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct AcknowledgeRegionRequest {
     /// The tenant the store belongs to.
     tenant_id: String,
@@ -128,14 +129,16 @@ struct RegionDifference {
 #[utoipa::path(
     post,
     path = "/admin/stores/{store_id}/region-acknowledgement",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.stores.manage"))),
     params(("store_id" = String, Path, description = "The store's 26-character ULID")),
     request_body(
-        description = "The tenant, the two country codes the console showed, and one sentence \
+        content = AcknowledgeRegionRequest, description = "The tenant, the two country codes the console showed, and one sentence \
                        saying why the difference between them is correct",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Recorded. The body is the answer as stored"),
+        (status = 200, body = RegionAcknowledgementView, description = "Recorded. The body is the answer as stored"),
         (status = 400, description = "A country code is not two letters, or the reason is blank \
                                       or over 280 characters", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
@@ -196,11 +199,59 @@ where
             Ok([tenant, store]) => (TenantId::new(tenant), StoreId::new(store)),
             Err(refusal) => return refusal,
         };
+    let claimed = match claimed_countries(&request) {
+        Ok(claimed) => claimed,
+        Err(refusal) => return refusal,
+    };
+    let difference =
+        match live_difference(&state.fleet, &state.config_trees, tenant, store, claimed).await {
+            Ok(difference) => difference,
+            Err(refusal) => return refusal,
+        };
+    let acknowledgement = match answered_difference(&difference, &request.reason, state.clock.now())
+    {
+        Ok(acknowledgement) => acknowledgement,
+        Err(refusal) => return refusal,
+    };
+    if let Err(refusal) =
+        record_acknowledgement(&state, &context, tenant, store, &acknowledgement).await
+    {
+        return refusal;
+    }
+    (
+        StatusCode::OK,
+        Json(RegionAcknowledgementView::of(&acknowledgement)),
+    )
+        .into_response()
+}
+
+impl RegionAcknowledgementView {
+    /// The answer as stored: both codes, the reason as typed, and when.
+    fn of(acknowledgement: &RegionAcknowledgement) -> Self {
+        Self {
+            profile_country: acknowledgement.profile_country().as_str().to_owned(),
+            region_country: acknowledgement.region_country().as_str().to_owned(),
+            reason: acknowledgement.reason().to_owned(),
+            acknowledged_at_ms: acknowledgement
+                .acknowledged_at()
+                .as_milliseconds_since_epoch(),
+        }
+    }
+}
+
+/// The two country codes the console showed, which say which difference is being answered.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it is the refusal the caller returns"
+)]
+fn claimed_countries(
+    request: &AcknowledgeRegionRequest,
+) -> Result<(CountryCode, CountryCode), Response> {
     let (Ok(claimed_profile), Ok(claimed_region)) = (
         CountryCode::parse(&request.profile_country),
         CountryCode::parse(&request.region_country),
     ) else {
-        return api_error_with_details(
+        return Err(api_error_with_details(
             ErrorStatus::InvalidArgument,
             "profile_country and region_country must both be ISO 3166-1 alpha-2 codes — the two \
              the console showed you. They say which difference you are answering",
@@ -208,49 +259,59 @@ where
                 ("profile_country", "INVALID_FORMAT"),
                 ("region_country", "INVALID_FORMAT"),
             ],
-        );
+        ));
     };
+    Ok((claimed_profile, claimed_region))
+}
 
-    let difference = match live_difference(
-        &state.fleet,
-        &state.config_trees,
-        tenant,
-        store,
-        (claimed_profile, claimed_region),
-    )
-    .await
-    {
-        Ok(difference) => difference,
-        Err(refusal) => return refusal,
-    };
-
-    let now = state.clock.now();
-    let acknowledgement = match RegionAcknowledgement::new(
+/// The answer to `difference`, once the reason is one sentence of at most 280 characters.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it is the refusal the caller returns"
+)]
+fn answered_difference(
+    difference: &RegionDifference,
+    reason: &str,
+    now: Timestamp,
+) -> Result<RegionAcknowledgement, Response> {
+    RegionAcknowledgement::new(
         difference.profile_country,
         difference.region_country,
-        &request.reason,
+        reason,
         now,
-    ) {
-        Ok(acknowledgement) => acknowledgement,
-        Err(refusal) => {
-            return api_error_with_details(
-                ErrorStatus::InvalidArgument,
-                "reason is required and must be at most 280 characters — one sentence saying why \
-                 this store's data resting outside its own country is correct",
-                &[("reason", refusal.code())],
-            );
-        }
-    };
+    )
+    .map_err(|refusal| {
+        api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "reason is required and must be at most 280 characters — one sentence saying why \
+             this store's data resting outside its own country is correct",
+            &[("reason", refusal.code())],
+        )
+    })
+}
+
+/// Records the answer, then the trail entry carrying it.
+async fn record_acknowledgement<F, A, C, Cfg, Ack>(
+    state: &FleetState<F, A, C, Cfg, Ack>,
+    context: &AdminContext,
+    tenant: TenantId,
+    store: StoreId,
+    acknowledgement: &RegionAcknowledgement,
+) -> Result<(), Response>
+where
+    C: ClockSource,
+    Ack: RegionAcknowledgementStore,
+{
     if let Err(error) = state
         .acknowledgements
-        .record(tenant, store, &acknowledgement)
+        .record(tenant, store, acknowledgement)
         .await
     {
         tracing::error!(%error, "a region acknowledgement could not be recorded");
-        return api_error(
+        return Err(api_error(
             ErrorStatus::Unavailable,
             "the acknowledgement could not be recorded",
-        );
+        ));
     }
     // Unredacted, and deliberately: the two country codes are business metadata, and the reason is
     // operator-supplied free text carried whole because a trail that summarises the reason answers
@@ -258,7 +319,7 @@ where
     audit_action(
         &state.audit,
         &state.clock,
-        &context,
+        context,
         Some(tenant),
         "store.edge_placement.acknowledge",
         "store",
@@ -271,18 +332,7 @@ where
         })),
     )
     .await;
-    (
-        StatusCode::OK,
-        Json(RegionAcknowledgementView {
-            profile_country: acknowledgement.profile_country().as_str().to_owned(),
-            region_country: acknowledgement.region_country().as_str().to_owned(),
-            reason: acknowledgement.reason().to_owned(),
-            acknowledged_at_ms: acknowledgement
-                .acknowledged_at()
-                .as_milliseconds_since_epoch(),
-        }),
-    )
-        .into_response()
+    Ok(())
 }
 
 /// The country a store's published `locale` node names, or `None` when it has never published one

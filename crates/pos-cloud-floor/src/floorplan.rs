@@ -29,7 +29,7 @@ use crate::registry::EntityStatus;
 use crate::version::{UpdateOutcome, Version, Versioned};
 
 /// An area as the console reads it: a named region of one store's floor.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct Area {
     /// The area's id.
     pub area_id: AreaId,
@@ -71,7 +71,7 @@ pub struct AreaUpdate {
 
 /// A table as the console reads it: a table on one store's floor, in an area, optionally placed on the
 /// editor's grid.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct Table {
     /// The table's id.
     pub table_id: TableId,
@@ -86,6 +86,7 @@ pub struct Table {
     /// How many covers it seats (zero means unspecified).
     pub seats: u16,
     /// Where it sits in the floor editor's grid, or `None` if not yet placed.
+    #[schema(required = true)]
     pub position: Option<GridPosition>,
     /// Active or archived.
     pub status: EntityStatus,
@@ -225,7 +226,7 @@ pub trait TableStore {
 
 /// A kitchen station as the console reads it: a station on one store's line, with an optional backup
 /// (the printer failover) and a catch-all `is_default` flag.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct Station {
     /// The station's id.
     pub station_id: StationId,
@@ -236,15 +237,18 @@ pub struct Station {
     /// The name to show ("Oven").
     pub name: String,
     /// The failover target when this station's printer is down, or `None` for no backup.
+    #[schema(required = true)]
     pub backup_station_id: Option<StationId>,
     /// Whether this is the store's catch-all station (a fired line with no matching rule).
     pub is_default: bool,
     /// How long a ticket at this station waits, in seconds, before the kitchen display marks it
     /// late, or `None` for the default the edge reads (ADR-0160 decision 2).
+    #[schema(required = true)]
     pub late_after_seconds: Option<u32>,
     /// The language its kitchen tickets print in, as the `RECEIPT_LANGUAGE_…` token it was saved
     /// with, or `None` for the store's display language (ADR-0160 decision 2). Kept as the token so
     /// the publish carries it as stored.
+    #[schema(required = true)]
     pub ticket_language: Option<String>,
     /// Active or archived.
     pub status: EntityStatus,
@@ -296,7 +300,9 @@ pub struct StationUpdate {
 /// A routing rule's identifier — a ULID minted at creation. Cloud-local (like `pos-cloud`'s
 /// `people::EmployeeId`): a rule is authoring-only and compiles into the
 /// `stations` node's flat routing list, which carries no rule id.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, utoipa::ToSchema,
+)]
 pub struct RoutingRuleId(Ulid);
 
 impl RoutingRuleId {
@@ -321,7 +327,8 @@ impl fmt::Display for RoutingRuleId {
 
 /// An item→station routing rule as the console reads it. Matches a specific item or any line on a
 /// course (the route layer enforces exactly one); `sort` orders rules within their tier.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+#[schema(as = FloorRoutingRule)]
 pub struct RoutingRule {
     /// The rule's id.
     pub rule_id: RoutingRuleId,
@@ -332,8 +339,10 @@ pub struct RoutingRule {
     /// The station a matching line routes to.
     pub station_id: StationId,
     /// The item this rule matches, if any.
+    #[schema(required = true)]
     pub menu_item_id: Option<MenuItemId>,
     /// The course this rule matches, if any.
+    #[schema(required = true)]
     pub course_id: Option<CourseId>,
     /// The author-controlled order within its tier.
     pub sort: u16,

@@ -19,16 +19,36 @@ use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::ConfigTreeStore;
 use crate::http::{Json, read_store_node_as_run};
+use pos_proto::retention::PublishedRetention;
 
 /// A `PUT /admin/config/retention` body: how many days a store's edge keeps a synced event
 /// (ADR-0145).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct PublishRetentionRequest {
     tenant_id: String,
     store_id: String,
     event_log_days: u32,
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/config/retention",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
+        ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, body = Option<PublishedRetention>, description = "The store's `retention` node as the store runs it — how many days its edge keeps a synced event — \
+                                      composed from all four layers, or `null` when it has none (the edge then keeps 90 days)"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config nodes",
+)]
 /// A super-admin reads a store's current `retention` node, or `null` (the edge then keeps 90 days).
 pub(super) async fn admin_read_retention<Cfg, A, C>(
     State(state): State<ConfigChannelsState<Cfg, A, C>>,
@@ -63,6 +83,30 @@ where
     }
 }
 
+#[utoipa::path(
+    put,
+    path = "/admin/config/retention",
+    extensions(("x-permission" = json!("console.config.publish"))),
+    security(("session_cookie" = [])),
+    request_body(
+        content = PublishRetentionRequest, description = "`tenant_id` and `store_id`, then `event_log_days`, how many days the store's edge keeps an event once synced, from 30 to 3650 (ADR-0145)",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = pos_cloud_config::route::PublishedConfig, description = "Published as the store's `retention` node on its Store layer. \
+                                      The body carries `config_version_id`, which the store pulls on \
+                                      its next sync. Audited with the node's value"),
+        (status = 400, description = "tenant_id or store_id is not a ULID, event_log_days is out of range, or a value needs \
+                                      a recorded confirmation first (ADR-0169)", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "Every attempt to write the store's configuration lost a race \
+                                      with another publish: try again", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "The store's configuration would not validate with the node", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config nodes",
+)]
 /// A super-admin publishes how many days a store keeps a synced event, as its `retention` node
 /// (ADR-0145). Outside [`EVENT_LOG_DAYS`] is refused, naming the field: a store whose log would
 /// age out in a week, or never, is a typo rather than a policy.

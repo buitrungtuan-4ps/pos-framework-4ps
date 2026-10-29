@@ -984,6 +984,7 @@ event_catalogue! {
 /// original did after the fee is renamed, as a line's name does (ADR-0129, ADR-0144). No event
 /// carries a translation.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct BillFeeLine {
     /// The fee rule that charged it.
@@ -1028,6 +1029,7 @@ crate::envelope::payload_part!(BillFeeLine {
 /// the rate and the tax, which rounded once on that whole base (ADR-0028), and that tax by component
 /// where the rate has components (ADR-0104, ADR-0168).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct BillTaxLine {
     /// The class.
@@ -1069,6 +1071,7 @@ crate::envelope::payload_part!(BillTaxLine {
 /// ([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 3):
 /// `CGST` at 9 % and the tax it accounts for.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct BillTaxComponent {
     /// The component, as the `tax` node names it.

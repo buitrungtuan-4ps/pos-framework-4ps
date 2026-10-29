@@ -18,8 +18,8 @@
 // * `budget` — the ceiling from `docs/ui-ux.md` §6: two taps for a common action, three for a rare
 //   one. A task at its ceiling is fine; a task that needs one more is a design conversation, not a
 //   number to raise.
-// * `steps` — the taps, in order. `route` is a path in `App.tsx`; `action` is the function the
-//   element's handler calls **and** the value of its `data-step`.
+// * `steps` — the taps, in order. `route` is a screen's path in `src/state/screens.ts`; `action` is
+//   the function the element's handler calls **and** the value of its `data-step`.
 // * `outcome` — where the flow ends: a `route` and the `mark` of a `data-outcome` element that is
 //   visible there once the flow has succeeded. This is what makes an undeclared extra tap fail —
 //   insert a confirmation into a pay flow and the last declared tap no longer reaches `settled`.

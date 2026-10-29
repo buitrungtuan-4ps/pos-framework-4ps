@@ -19,9 +19,10 @@ use super::{
     CreateStoreGroupRequest, MAX_STORE_GROUP_MEMBERS, SetStoreGroupMembersRequest, StoreGroupState,
     StoreGroupView, UpdateStoreGroupRequest, store_group_error_response,
 };
-use crate::auth::admin::AdminStore;
+use crate::auth::admin::{AdminContext, AdminStore};
 use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::ConfigTreeStore;
+use crate::http::people::PermissionsPublishResult;
 use crate::http::people::people_error_response;
 use crate::http::{
     FieldRefusal, RegistryTenantQuery, entity_status_refusal, if_match, not_found,
@@ -30,14 +31,16 @@ use crate::http::{
 };
 use crate::registry::{EntityStatus, RegistryStore, StoreRecord};
 use crate::store_groups::{StoreGroup, StoreGroupId, StoreGroupStore};
-use crate::version::{UpdateOutcome, Versioned};
+use crate::version::{UpdateOutcome, Version, Versioned};
 
 #[utoipa::path(
     get,
     path = "/admin/store-groups",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     params(("tenant_id" = String, Query, description = "The tenant whose cohorts to list (a 26-character ULID)")),
     responses(
-        (status = 200, description = "The tenant's store groups, creation order, each with its \
+        (status = 200, body = [StoreGroupView], description = "The tenant's store groups, creation order, each with its \
                                       membership. Archived groups are included: an operator needs to \
                                       see a retired cohort in order to bring it back"),
         (status = 400, description = "tenant_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
@@ -103,8 +106,11 @@ where
 #[utoipa::path(
     post,
     path = "/admin/store-groups",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.stores.manage"))),
+    request_body(content = CreateStoreGroupRequest, content_type = "application/json"),
     responses(
-        (status = 201, description = "The group, with the ETag to hand back on its first edit. It \
+        (status = 201, body = Versioned<StoreGroup>, description = "The group, with the ETag to hand back on its first edit. It \
                                       holds no stores yet — membership is a second call, so naming \
                                       a cohort is never itself an act with a fleet-wide reach"),
         (status = 400, description = "tenant_id is absent or not a ULID, or name is empty", body = crate::openapi_admin::ErrorResponse),
@@ -183,12 +189,15 @@ where
 #[utoipa::path(
     patch,
     path = "/admin/store-groups/{group_id}",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.stores.manage"))),
     params(
         ("group_id" = String, Path, description = "The group to rename or (un)archive (a 26-character ULID)"),
         ("If-Match" = String, Header, description = "The ETag the group was read at (ADR-0094). Required"),
     ),
+    request_body(content = UpdateStoreGroupRequest, content_type = "application/json"),
     responses(
-        (status = 200, description = "The group as it now stands, with its new ETag"),
+        (status = 200, body = Versioned<StoreGroup>, description = "The group as it now stands, with its new ETag"),
         (status = 400, description = "group_id or tenant_id is not a ULID, name is empty, or status is not active/archived", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
         (status = 403, description = "The role lacks console.stores.manage", body = crate::openapi_admin::ErrorResponse),
@@ -270,12 +279,15 @@ where
 #[utoipa::path(
     put,
     path = "/admin/store-groups/{group_id}/members",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.stores.manage"))),
     params(
         ("group_id" = String, Path, description = "The group whose membership to replace (a 26-character ULID)"),
         ("If-Match" = String, Header, description = "The ETag the group was read at (ADR-0094/0095 shape C). Required"),
     ),
+    request_body(content = SetStoreGroupMembersRequest, content_type = "application/json"),
     responses(
-        (status = 200, description = "The membership as stored, deduplicated, with the group's new ETag, and `stores`: \
+        (status = 200, body = StoreGroupMembership, description = "The membership as stored, deduplicated, with the group's new ETag, and `stores`: \
                                       when an assignment names the group, how the `permissions` publish went at each open store \
                                       that joined or left it (ADR-0158), and empty otherwise"),
         (status = 400, description = "group_id, tenant_id or a store id is not a ULID", body = crate::openapi_admin::ErrorResponse),
@@ -330,15 +342,106 @@ where
             Ok([group_id, tenant_id]) => (StoreGroupId::new(group_id), TenantId::new(tenant_id)),
             Err(refusal) => return refusal,
         };
-    if request.store_ids.len() > MAX_STORE_GROUP_MEMBERS {
-        return unprocessable_violations(&[format!(
+    let members = match requested_members(&request.store_ids) {
+        Ok(members) => members,
+        Err(refusal) => return refusal,
+    };
+    let known = match tenant_stores_holding(&state, tenant_id, &members).await {
+        Ok(known) => known,
+        Err(refusal) => return refusal,
+    };
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    let moved = match staff_moved_by(&state, tenant_id, group_id, &known, &members).await {
+        Ok(moved) => moved,
+        Err(refusal) => return refusal,
+    };
+    let version = match write_members(&state, tenant_id, group_id, &members, &expected).await {
+        Ok(version) => version,
+        Err(refusal) => return refusal,
+    };
+    let membership: Vec<String> = members.iter().map(ToString::to_string).collect();
+    record_membership(&state, &context, tenant_id, group_id, &membership).await;
+    let stores = state
+        .staff
+        .publish_to(&context, tenant_id, group_id, &moved)
+        .await;
+    membership_answer(&version, &membership, &stores)
+}
+
+/// Records the membership a write stored, against its group.
+async fn record_membership<Grp, Reg, Cfg, A, C>(
+    state: &StoreGroupState<Grp, Reg, Cfg, A, C>,
+    context: &AdminContext,
+    tenant_id: TenantId,
+    group_id: StoreGroupId,
+    membership: &[String],
+) where
+    C: ClockSource,
+{
+    audit_action(
+        &state.audit,
+        &state.clock,
+        context,
+        Some(tenant_id),
+        "store_group.members",
+        "store_group",
+        &group_id.to_string(),
+        None,
+        serde_json::to_value(membership).ok(),
+    )
+    .await;
+}
+
+/// What a membership write answers: the members as stored, the group's new version, and how the
+/// `permissions` publish went at each store whose staff it moved.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+pub(super) struct StoreGroupMembership {
+    /// The member stores, each a ULID, in the order first named.
+    store_ids: Vec<String>,
+    /// The group's new version, as the `ETag` header carries it.
+    etag: String,
+    /// One result per store whose staff the change moved.
+    stores: Vec<PermissionsPublishResult>,
+}
+
+/// The membership as stored, with the group's new version in the header and the body, and how the
+/// `permissions` publish went at each store whose staff it moved.
+fn membership_answer(
+    version: &Version,
+    membership: &[String],
+    stores: &[PermissionsPublishResult],
+) -> Response {
+    (
+        StatusCode::OK,
+        [(ETAG, version.as_str().to_owned())],
+        Json(StoreGroupMembership {
+            store_ids: membership.to_vec(),
+            etag: version.as_str().to_owned(),
+            stores: stores.to_vec(),
+        }),
+    )
+        .into_response()
+}
+
+/// The stores a membership write names, at most [`MAX_STORE_GROUP_MEMBERS`], each a ULID, each
+/// once and in the order first named.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it is the refusal the caller returns"
+)]
+fn requested_members(store_ids: &[String]) -> Result<Vec<StoreId>, Response> {
+    if store_ids.len() > MAX_STORE_GROUP_MEMBERS {
+        return Err(unprocessable_violations(&[format!(
             "a store group holds at most {MAX_STORE_GROUP_MEMBERS} stores; split this cohort in two"
-        )]);
+        )]));
     }
-    let mut members: Vec<StoreId> = Vec::with_capacity(request.store_ids.len());
-    for id in &request.store_ids {
+    let mut members: Vec<StoreId> = Vec::with_capacity(store_ids.len());
+    for id in store_ids {
         let Ok([parsed]) = parse_ulid_fields([("store_ids", id)]) else {
-            return ulid_refusal(&["store_ids"]);
+            return Err(ulid_refusal(&["store_ids"]));
         };
         let store_id = StoreId::new(parsed);
         // Deduplicated here rather than left to the table's primary key: the operator's list is what
@@ -348,63 +451,54 @@ where
             members.push(store_id);
         }
     }
-    let known = match state.registry.list_stores(tenant_id).await {
-        Ok(rows) => rows,
-        Err(error) => return registry_error_response(&error),
-    };
+    Ok(members)
+}
+
+/// The tenant's stores, once every member is one of them.
+async fn tenant_stores_holding<Grp, Reg, Cfg, A, C>(
+    state: &StoreGroupState<Grp, Reg, Cfg, A, C>,
+    tenant_id: TenantId,
+    members: &[StoreId],
+) -> Result<Vec<Versioned<StoreRecord>>, Response>
+where
+    Reg: RegistryStore,
+{
+    let known = state
+        .registry
+        .list_stores(tenant_id)
+        .await
+        .map_err(|error| registry_error_response(&error))?;
     if let Some(stranger) = members
         .iter()
         .find(|id| !known.iter().any(|row| row.record.store_id == **id))
     {
-        return unprocessable_violations(&[format!(
+        return Err(unprocessable_violations(&[format!(
             "store {stranger} is not a store of this tenant, so it cannot be in one of its groups"
-        )]);
+        )]));
     }
-    let expected = match if_match(&headers) {
-        Ok(expected) => expected,
-        Err(refusal) => return refusal,
-    };
-    let moved = match staff_moved_by(&state, tenant_id, group_id, &known, &members).await {
-        Ok(moved) => moved,
-        Err(refusal) => return refusal,
-    };
+    Ok(known)
+}
+
+/// Writes the membership at the version the request's `If-Match` named, and answers the new one.
+async fn write_members<Grp, Reg, Cfg, A, C>(
+    state: &StoreGroupState<Grp, Reg, Cfg, A, C>,
+    tenant_id: TenantId,
+    group_id: StoreGroupId,
+    members: &[StoreId],
+    expected: &Version,
+) -> Result<Version, Response>
+where
+    Grp: StoreGroupStore,
+{
     match state
         .groups
-        .set_members(tenant_id, group_id, &members, &expected)
+        .set_members(tenant_id, group_id, members, expected)
         .await
     {
-        Ok(UpdateOutcome::Updated(version)) => {
-            let membership: Vec<String> = members.iter().map(ToString::to_string).collect();
-            audit_action(
-                &state.audit,
-                &state.clock,
-                &context,
-                Some(tenant_id),
-                "store_group.members",
-                "store_group",
-                &group_id.to_string(),
-                None,
-                serde_json::to_value(&membership).ok(),
-            )
-            .await;
-            let stores = state
-                .staff
-                .publish_to(&context, tenant_id, group_id, &moved)
-                .await;
-            (
-                StatusCode::OK,
-                [(ETAG, version.as_str().to_owned())],
-                Json(serde_json::json!({
-                    "store_ids": membership,
-                    "etag": version.as_str(),
-                    "stores": stores,
-                })),
-            )
-                .into_response()
-        }
-        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
-        Ok(UpdateOutcome::NotFound) => not_found("store group"),
-        Err(error) => store_group_error_response(&error),
+        Ok(UpdateOutcome::Updated(version)) => Ok(version),
+        Ok(UpdateOutcome::VersionMismatch) => Err(version_mismatch()),
+        Ok(UpdateOutcome::NotFound) => Err(not_found("store group")),
+        Err(error) => Err(store_group_error_response(&error)),
     }
 }
 
@@ -440,4 +534,28 @@ where
         .map(|row| row.record.store_id)
         .filter(|id| before.contains(id) != members.contains(id))
         .collect())
+}
+
+#[cfg(test)]
+mod answer_tests {
+    //! Each answer serialises to the bytes the `json!` it replaced did.
+
+    use super::StoreGroupMembership;
+
+    #[test]
+    fn a_membership_answers_its_stores_version_and_publishes() {
+        let answer = StoreGroupMembership {
+            store_ids: vec!["01J0000000000000000000000S".to_owned()],
+            etag: "7".to_owned(),
+            stores: Vec::new(),
+        };
+        assert_eq!(
+            serde_json::to_value(answer).expect("json"),
+            serde_json::json!({
+                "store_ids": ["01J0000000000000000000000S"],
+                "etag": "7",
+                "stores": [],
+            })
+        );
+    }
 }

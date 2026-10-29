@@ -24,7 +24,7 @@ use pos_cloud_api::conditional::if_match;
 use pos_cloud_api::refusal::{accepted_tokens, enum_refusal};
 
 /// An operator points an approved device at the terminal that holds its transport, or clears it.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct SetPrintAgentRequest {
     /// The tenant the device belongs to (a 26-character ULID).
     tenant_id: String,
@@ -34,6 +34,37 @@ pub(super) struct SetPrintAgentRequest {
     agent_device_id: Option<String>,
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/devices/proposals/{id}/agent",
+    extensions(("x-permission" = json!("console.devices.manage"))),
+    security(("session_cookie" = [])),
+    params(
+        ("id" = String, Path, description = "The approved printer's 26-character ULID"),
+        ("If-Match" = String, Header, description = "The version the device was read at \
+                                                     (ADR-0094). Required; a wildcard is refused"),
+    ),
+    request_body(
+        content = SetPrintAgentRequest, description = "`tenant_id` and `agent_device_id`, the terminal whose print agent writes this \
+                       printer's bytes (ADR-0112), or `null` for the store's edge to open the \
+                       printer's address itself. Whether the id names a terminal is checked when \
+                       the devices are published, since the terminal may be created after the pick",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 204, description = "Saved, and audited. It reaches the store on the next devices \
+                                      publish"),
+        (status = 400, description = "An id is not a ULID, the device names itself as its agent, or \
+                                      If-Match is absent, malformed, or a wildcard", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.devices.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The tenant has no approved device with that id", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 412, description = "The device changed since you read it: re-read it and try \
+                                      again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The device store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "printers",
+)]
 /// A super-admin picks (or clears) the print agent for an approved device
 /// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
 ///
@@ -108,7 +139,7 @@ where
 }
 
 /// An operator marks an approved printer as having a cash drawer wired to it, or clears the mark.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct SetDrawerRequest {
     /// The tenant the device belongs to (a 26-character ULID).
     tenant_id: String,
@@ -116,6 +147,36 @@ pub(super) struct SetDrawerRequest {
     drawer_attached: bool,
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/devices/proposals/{id}/drawer",
+    extensions(("x-permission" = json!("console.devices.manage"))),
+    security(("session_cookie" = [])),
+    params(
+        ("id" = String, Path, description = "The approved printer's 26-character ULID"),
+        ("If-Match" = String, Header, description = "The version the device was read at \
+                                                     (ADR-0094). Required; a wildcard is refused"),
+    ),
+    request_body(
+        content = SetDrawerRequest, description = "`tenant_id` and `drawer_attached`, whether a cash drawer is wired to the \
+                       printer's kick port (ADR-0165 decision 4). It decides whether the till can \
+                       open a drawer of cash",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 204, description = "Saved, and audited. It reaches the store on the next devices \
+                                      publish"),
+        (status = 400, description = "An id is not a ULID, or If-Match is absent, malformed, or a \
+                                      wildcard", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.devices.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The tenant has no approved device with that id", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 412, description = "The device changed since you read it: re-read it and try \
+                                      again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The device store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "printers",
+)]
 /// A super-admin ticks (or clears) **Cash drawer attached** on an approved printer
 /// ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)
 /// decision 4).
@@ -172,7 +233,7 @@ where
 }
 
 /// An operator says what paper an approved printer takes and whether it cuts it.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct SetPaperRequest {
     /// The tenant the device belongs to (a 26-character ULID).
     tenant_id: String,
@@ -185,13 +246,15 @@ pub(super) struct SetPaperRequest {
 #[utoipa::path(
     post,
     path = "/admin/devices/proposals/{id}/paper",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.devices.manage"))),
     params(
         ("id" = String, Path, description = "The approved printer's 26-character ULID"),
         ("If-Match" = String, Header, description = "The version the printer was read at \
                                                      (ADR-0094). Required; a wildcard is refused"),
     ),
     request_body(
-        description = "`tenant_id`; `paper_width`, one of `PAPER_WIDTH_MILLIMETRES_80` (42 \
+        content = SetPaperRequest, description = "`tenant_id`; `paper_width`, one of `PAPER_WIDTH_MILLIMETRES_80` (42 \
                        characters a line and a 576-dot raster), \
                        `PAPER_WIDTH_MILLIMETRES_80_COLUMNS_48` (48 characters, 576 dots) and \
                        `PAPER_WIDTH_MILLIMETRES_58` (32 characters, 384 dots); and `cuts_paper`, \

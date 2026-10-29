@@ -20,12 +20,14 @@ use crate::http::{CloudApp, Json};
 #[utoipa::path(
     get,
     path = "/admin/stores/{store_id}/devices/admitted",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     params(
         ("store_id" = String, Path, description = "The store whose roster to read (a 26-character ULID)"),
         ("tenant_id" = String, Query, description = "The tenant that store belongs to (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The store's admitted devices, still-admitted first and \
+        (status = 200, body = [pos_cloud_reports::types::AdmittedDevice], description = "The store's admitted devices, still-admitted first and \
                                       newest admission first within each group. Each entry carries \
                                       the edge-minted local device id, when it was admitted, the \
                                       paired device whose signed-in manager minted the code (absent \
@@ -35,7 +37,7 @@ use crate::http::{CloudApp, Json};
                                       whose rollup has not been projected yet"),
         (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
-        (status = 403, description = "The role lacks console.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
         (status = 503, description = "The rollup store is unreachable", body = crate::openapi_admin::ErrorResponse),
     ),
     tag = "devices",

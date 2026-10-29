@@ -23,7 +23,26 @@ use crate::http::{
 };
 use crate::registry::{BrandId, BrandRecord, EntityStatus, RegistryStore};
 use crate::version::UpdateOutcome;
+use crate::version::Versioned;
 
+#[utoipa::path(
+    get,
+    path = "/admin/brands",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The tenant whose brands to list (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, body = [Versioned<BrandRecord>], description = "The tenant's brands, as an array: `brand_id`, `tenant_id`, \
+                                      `name` and `status`, each with its `etag`"),
+        (status = 400, description = "tenant_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The registry store failed", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "registry",
+)]
 /// A super-admin lists a tenant's brands.
 pub(super) async fn admin_list_brands<Rg, A, C>(
     State(state): State<RegistryState<Rg, A, C>>,
@@ -55,6 +74,25 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/brands",
+    extensions(("x-permission" = json!("console.orgs.manage"))),
+    security(("session_cookie" = [])),
+    request_body(
+        content = CreateBrandRequest, description = "The `tenant_id` the brand belongs to and its `name`",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, body = Versioned<BrandRecord>, description = "Created, active, with the id minted here. The body is the \
+                                      record and the ETag carries its version"),
+        (status = 400, description = "tenant_id is not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.orgs.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The registry store or the entropy source is unavailable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "registry",
+)]
 /// A super-admin creates a brand under a tenant.
 pub(super) async fn admin_create_brand<Rg, A, C>(
     State(state): State<RegistryState<Rg, A, C>>,
@@ -113,6 +151,34 @@ where
     }
 }
 
+#[utoipa::path(
+    patch,
+    path = "/admin/brands/{brand_id}",
+    extensions(("x-permission" = json!("console.orgs.manage"))),
+    security(("session_cookie" = [])),
+    params(
+        ("brand_id" = String, Path, description = "The brand (a 26-character ULID)"),
+        ("If-Match" = String, Header, description = "The ETag the record was read at (ADR-0094). \
+                                                     Required; a wildcard is refused"),
+    ),
+    request_body(
+        content = UpdateBrandRequest, description = "The `tenant_id` that owns the brand, and its `name` and `status` (`active` or \
+                       `archived`) as they should now stand",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = Versioned<BrandRecord>, description = "Updated. The body is the record and the ETag carries its new \
+                                      version"),
+        (status = 400, description = "brand_id or tenant_id is not a ULID, status is not `active` or \
+                                      `archived`, or If-Match is absent, malformed, or a wildcard", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.orgs.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no brand with that id", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "The brand changed since you read it: re-read it and try again", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The registry store failed", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "registry",
+)]
 /// A super-admin renames a brand and/or sets its status.
 pub(super) async fn admin_update_brand<Rg, A, C>(
     State(state): State<RegistryState<Rg, A, C>>,

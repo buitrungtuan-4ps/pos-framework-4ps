@@ -18,6 +18,31 @@ use crate::auth::bearer::{authenticate, require_scope, require_store};
 use crate::fleet::OtaReportStore;
 use crate::http::internal_guard;
 
+#[utoipa::path(
+    post,
+    path = "/sync/stores/{store_id}/report",
+    security(("device_credential" = ["read_config"])),
+    params(
+        ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
+    ),
+    request_body(
+        content = StoreReportRequest, description = "`installed`, the release the store now runs, and `self_test_passed` where it has run \
+                       its post-install self-test (ADR-0078)",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 204, description = "Recorded"),
+        (status = 400, description = "store_id is not a ULID, or installed is blank", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No credential, or one the cloud does not accept: one answer for every \
+                                      credential problem", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The credential lacks the `read_config` scope, or belongs to another \
+                                      store", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 429, description = "Too many requests to the store sync surface: `Retry-After` says when \
+                                      to try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The credential store, or the fleet store, is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "updates",
+)]
 /// Records one store's OTA report ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)).
 /// Internal (the reporting partner of `/internal/ingest`), so it is absent from the public OpenAPI
 /// and requires the `X-Pos-Internal-Key` shared secret

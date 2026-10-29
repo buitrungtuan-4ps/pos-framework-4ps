@@ -63,6 +63,14 @@ export function setLocale(next: Locale): void {
   }
 }
 
+/**
+ * The message `key` has in `catalogue`, or the English one when the catalogue lacks it: `en` is the
+ * floor every language falls back to, a key at a time (ADR-0020, docs/languages.md).
+ */
+export function messageIn(catalogue: Record<string, string>, key: MessageKey): string {
+  return catalogue[key] ?? en[key];
+}
+
 // Compiled formatters are cached by locale+key: intl-messageformat parses the ICU pattern once.
 const cache = new Map<string, IntlMessageFormat>();
 
@@ -73,7 +81,7 @@ function formatter(active: Locale, key: MessageKey): IntlMessageFormat {
     return cached;
   }
   // en is the floor: a key missing from the active catalogue resolves to English.
-  const message = CATALOGUES[active][key] ?? en[key];
+  const message = messageIn(CATALOGUES[active], key);
   const compiled = new IntlMessageFormat(message, active);
   cache.set(cacheKey, compiled);
   return compiled;
@@ -81,7 +89,7 @@ function formatter(active: Locale, key: MessageKey): IntlMessageFormat {
 
 export function t(key: MessageKey, args?: Record<string, string | number>): string {
   const active = locale();
-  const message = CATALOGUES[active][key] ?? en[key];
+  const message = messageIn(CATALOGUES[active], key);
   // Fast path: a static string with no interpolation is returned as-is, skipping the
   // IntlMessageFormat parse and format. Two characters disqualify it, and both were measured
   // against the real library rather than assumed: `{` opens an argument, and `''` is ICU's escape

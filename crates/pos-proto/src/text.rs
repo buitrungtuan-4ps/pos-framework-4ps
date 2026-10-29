@@ -40,6 +40,7 @@ use serde::{Deserialize, Serialize};
 /// the moment the line was added — changing or deleting a menu item afterwards must
 /// not alter an open order or a settled bill.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(transparent)]
 pub struct DisplayName(Box<str>);
 
@@ -70,6 +71,7 @@ impl core::fmt::Display for DisplayName {
 /// carrying a language with it — and why kitchen tickets can print in the station's
 /// language while the receipt prints in the guest's.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(transparent)]
 pub struct TranslationKey(Box<str>);
 
@@ -100,6 +102,7 @@ impl core::fmt::Display for TranslationKey {
 /// capability rather than describing anybody. An audit trail for a manager override
 /// needs it (`docs/pos-spec.md` §11).
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(transparent)]
 pub struct PermissionKey(Box<str>);
 
@@ -128,6 +131,7 @@ impl core::fmt::Display for PermissionKey {
 /// Admissible in an event payload: it names a build, not a person. Fleet rollout
 /// events carry it so the dashboard can show which store runs which version.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(transparent)]
 pub struct ReleaseTag(Box<str>);
 
@@ -160,6 +164,7 @@ impl core::fmt::Display for ReleaseTag {
 /// It carries no `NoPii` implementation, so attempting to put one in a payload is a
 /// compile error rather than a review finding.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(transparent)]
 pub struct GuestNote(Box<str>);
 

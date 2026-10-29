@@ -892,55 +892,25 @@ fn fleet_placement(token: Option<&str>) -> StorePlacement {
 }
 
 fn fleet_row(row: FleetStoreRow) -> Result<FleetRow, FleetStoreError> {
-    let last_seen_at = row
-        .last_seen_at_ms
-        .and_then(|ms| Timestamp::from_milliseconds_since_epoch(ms).ok());
-    let last_config_pull_at = row
-        .last_config_pull_at_ms
-        .and_then(|ms| Timestamp::from_milliseconds_since_epoch(ms).ok());
-    let relay_oldest_pending_at = row
-        .oldest_pending_at_ms
-        .and_then(|ms| Timestamp::from_milliseconds_since_epoch(ms).ok());
-    let reported_at = row
-        .reported_at_ms
-        .and_then(|ms| Timestamp::from_milliseconds_since_epoch(ms).ok());
-    let outbox_reported_at = row
-        .outbox_reported_at_ms
-        .and_then(|ms| Timestamp::from_milliseconds_since_epoch(ms).ok());
-    let lease_reported_at = row
-        .lease_reported_at_ms
-        .and_then(|ms| Timestamp::from_milliseconds_since_epoch(ms).ok());
-    let retired_at = row
-        .retired_at
-        .and_then(|ms| Timestamp::from_milliseconds_since_epoch(ms).ok());
     Ok(FleetRow {
         store_id: parse_registry_store(&row.store_id)
             .map_err(|error| FleetStoreError::new(error.to_string()))?,
         name: row.name,
         status: EntityStatus::from_db(&row.status),
-        last_seen_at,
-        last_config_pull_at,
+        last_seen_at: stored_instant(row.last_seen_at_ms),
+        last_config_pull_at: stored_instant(row.last_config_pull_at_ms),
         config_version_held: row.config_version_held,
         config_version_published: row.config_version_published,
         relay_backlog: u64::try_from(row.relay_backlog).unwrap_or(0),
-        relay_oldest_pending_at,
+        relay_oldest_pending_at: stored_instant(row.oldest_pending_at_ms),
         installed_version: row.installed_version,
         self_test_ok: row.self_test_ok,
-        reported_at,
-        // A negative depth cannot come from a store's log; if one somehow reached the column, "did
-        // not say" is a truer answer for the console than a wrapped-around count.
-        outbox_depth: row.outbox_depth.and_then(|depth| u64::try_from(depth).ok()),
-        outbox_reported_at,
-        // Same rule as the depth: a negative generation cannot have been written by this cloud, and
-        // "did not say" is a truer answer for the console than a wrapped-around number that would
-        // read as a store on an ancient lease.
-        lease_generation_held: row
-            .lease_generation_held
-            .and_then(|value| u64::try_from(value).ok()),
-        lease_reported_at,
-        lease_generation_authoritative: row
-            .lease_generation_authoritative
-            .and_then(|value| u64::try_from(value).ok()),
+        reported_at: stored_instant(row.reported_at_ms),
+        outbox_depth: stored_count(row.outbox_depth),
+        outbox_reported_at: stored_instant(row.outbox_reported_at_ms),
+        lease_generation_held: stored_count(row.lease_generation_held),
+        lease_reported_at: stored_instant(row.lease_reported_at_ms),
+        lease_generation_authoritative: stored_count(row.lease_generation_authoritative),
         // Deliberately NOT `stored_edge_placement`'s posture. That decoder serves the *lease* path
         // and refuses an unrecognised token, because a bump that cannot name where it put a store
         // should fail rather than record a lie. This is the *fleet* path: one corrupt row must not
@@ -950,48 +920,66 @@ fn fleet_row(row: FleetStoreRow) -> Result<FleetRow, FleetStoreError> {
         // down", the same as hosted, so a token this binary cannot read pages at the higher
         // severity rather than the lower one.
         edge_placement: fleet_placement(row.edge_placement.as_deref()),
-        // Both columns or neither: the bump writes and clears them together and no statement
-        // touches one alone, so a row holding half a region is a repair somebody made by hand. It
-        // reports as no region rather than as half of one, and `Region::stored` then declines a
-        // country that is not two letters — the same posture as the placement above, for the same
-        // reason: one bad row must not take down the console an operator is holding open.
-        region: match (&row.region_country, &row.region_label) {
-            (Some(country), Some(label)) => Region::stored(country, label),
-            _ => None,
-        },
-        // Same narrowing rule as the generations above: a negative number cannot have been written
-        // by this cloud, and "did not say" is a truer answer for a reader than a wrapped-around one.
-        // Here it also fails in the safe direction — a store whose handover cannot be read reports
-        // no handover, which is the state that shows *less* confidence rather than more.
-        superseded_generation: row
-            .superseded_generation
-            .and_then(|value| u64::try_from(value).ok()),
+        region: stored_region(row.region_country.as_deref(), row.region_label.as_deref()),
+        // Here the narrowing also fails in the safe direction — a store whose handover cannot be
+        // read reports no handover, which is the state that shows *less* confidence rather than more.
+        superseded_generation: stored_count(row.superseded_generation),
         // An unreadable instant drops the retirement rather than inventing one, and that direction
         // is deliberate too: a handover reported as *not* retired is the reading that leaves an
         // operator looking at the machine, which is the safer mistake.
-        retired_at,
+        retired_at: stored_instant(row.retired_at),
         retired_by: row.retired_by,
-        // A list this binary cannot parse is dropped rather than failing the fleet read, the same
-        // posture `edge_placement` takes one field up: one corrupt row must not 503 a console an
-        // operator is holding open during an incident. It degrades to "did not say", which shows
-        // *less* confidence rather than more.
-        print_agents: row
-            .print_agents
-            .as_deref()
-            .and_then(|json| match serde_json::from_str::<Vec<PrintAgentStanding>>(json) {
-                Ok(agents) => Some(agents),
-                Err(error) => {
-                    tracing::warn!(
-                        %error,
-                        "a stored print-agent standing could not be decoded; the fleet row reports none"
-                    );
-                    None
-                }
-            }),
-        print_agents_reported_at: row
-            .print_agents_reported_at_ms
-            .and_then(|ms| Timestamp::from_milliseconds_since_epoch(ms).ok()),
+        print_agents: stored_print_agents(row.print_agents.as_deref()),
+        print_agents_reported_at: stored_instant(row.print_agents_reported_at_ms),
     })
+}
+
+/// A stored instant, or `None` for one no `Timestamp` can hold.
+fn stored_instant(ms: Option<i64>) -> Option<Timestamp> {
+    ms.and_then(|ms| Timestamp::from_milliseconds_since_epoch(ms).ok())
+}
+
+/// A stored depth or generation, or `None` for a negative one.
+///
+/// A negative number cannot come from a store's log or have been written by this cloud; if one
+/// somehow reached the column, "did not say" is a truer answer for the console than a
+/// wrapped-around count — which, for a generation, would read as a store on an ancient lease.
+fn stored_count(value: Option<i64>) -> Option<u64> {
+    value.and_then(|value| u64::try_from(value).ok())
+}
+
+/// A stored region: both columns or neither.
+///
+/// The bump writes and clears them together and no statement touches one alone, so a row holding
+/// half a region is a repair somebody made by hand. It reports as no region rather than as half of
+/// one, and `Region::stored` then declines a country that is not two letters — the same posture as
+/// the placement, for the same reason: one bad row must not take down the console an operator is
+/// holding open.
+fn stored_region(country: Option<&str>, label: Option<&str>) -> Option<Region> {
+    match (country, label) {
+        (Some(country), Some(label)) => Region::stored(country, label),
+        _ => None,
+    }
+}
+
+/// A stored print-agent list, or `None` for one this binary cannot parse.
+///
+/// Dropped rather than failing the fleet read, the posture the placement takes: one corrupt row
+/// must not 503 a console an operator is holding open during an incident. It degrades to "did not
+/// say", which shows *less* confidence rather than more.
+fn stored_print_agents(json: Option<&str>) -> Option<Vec<PrintAgentStanding>> {
+    json.and_then(
+        |json| match serde_json::from_str::<Vec<PrintAgentStanding>>(json) {
+            Ok(agents) => Some(agents),
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "a stored print-agent standing could not be decoded; the fleet row reports none"
+                );
+                None
+            }
+        },
+    )
 }
 
 impl FleetStore for PostgresFleet {
@@ -2135,3 +2123,7 @@ impl AnchorLedger for PostgresAnchors {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "persistence/tests/fleet_row.rs"]
+mod fleet_row_tests;

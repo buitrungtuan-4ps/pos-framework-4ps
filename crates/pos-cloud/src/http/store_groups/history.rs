@@ -40,13 +40,15 @@ pub(super) struct BatchHistoryQuery {
 #[utoipa::path(
     get,
     path = "/admin/store-groups/{group_id}/batches",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     params(
         ("group_id" = String, Path, description = "The cohort whose history to read (a 26-character ULID)"),
         ("tenant_id" = String, Query, description = "The owning tenant (a 26-character ULID)"),
         ("limit" = Option<u32>, Query, description = "How many batches, newest first (default 20, max 200)"),
     ),
     responses(
-        (status = 200, description = "The group's batches, newest first, each with its per-store \
+        (status = 200, body = [super::batch::BatchReport], description = "The group's batches, newest first, each with its per-store \
                                       outcomes. A member whose last batch was not `applied` is a \
                                       store that is not running what its group runs"),
         (status = 400, description = "An id is not a ULID, or limit is out of range", body = crate::openapi_admin::ErrorResponse),
@@ -112,13 +114,15 @@ where
 #[utoipa::path(
     get,
     path = "/admin/store-groups/{group_id}/batches/{batch_id}",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     params(
         ("group_id" = String, Path, description = "The cohort the batch ran against (a 26-character ULID)"),
         ("batch_id" = String, Path, description = "The batch (a 26-character ULID)"),
         ("tenant_id" = String, Query, description = "The owning tenant (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The batch and an outcome for every member it reached"),
+        (status = 200, body = super::batch::BatchReport, description = "The batch and an outcome for every member it reached"),
         (status = 400, description = "An id is not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
         (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),

@@ -44,7 +44,7 @@ struct ConfigInventoryState<Inv, Cfg, A, C> {
 /// A `PUT /admin/config/inventory` body: the `(tenant, store)` to push the tenant's authored inventory
 /// to. Like every other node publish, the ingredients/recipes/suppliers come from what is authored, not
 /// the body.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PublishInventoryRequest {
     tenant_id: String,
     store_id: String,
@@ -118,9 +118,6 @@ where
         })
 }
 
-/// Assembles a tenant's authored inventory into a `PublishedInventory`, writes it as the store's
-/// `inventory` node, and versions it — the same load→merge→publish→version shape as the other node
-/// publishes.
 /// Compiles a tenant's authored inventory into the store's `inventory` node, with a summary.
 ///
 /// Shared with the batch fan-out ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §3):
@@ -154,6 +151,35 @@ where
     Ok((vec![("inventory".to_owned(), inventory_value)], summary))
 }
 
+#[utoipa::path(
+    put,
+    path = "/admin/config/inventory",
+    extensions(("x-permission" = json!("console.config.publish"))),
+    security(("session_cookie" = [])),
+    request_body(
+        content = PublishInventoryRequest, description = "`tenant_id` and `store_id`. The tenant's authored ingredients, recipes and \
+                       suppliers are what is published, never the body",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = PublishedConfig, description = "Compiled into the store's `inventory` node and published on the \
+                                      Store layer, the store's other settings kept. The body carries \
+                                      `config_version_id`. Audited with how many of each kind went in, \
+                                      never the recipe amounts"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID, or a value needs \
+                                      a recorded confirmation first", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 412, description = "Every attempt to publish lost a race with another publish: \
+                                      try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 422, description = "The store's configuration would not validate with the node", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The inventory store or the configuration store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "inventory",
+)]
+/// Assembles a tenant's authored inventory into a `PublishedInventory`, writes it as the store's
+/// `inventory` node, and versions it — the same load→merge→publish→version shape as the other node
+/// publishes.
 async fn admin_publish_inventory<Inv, Cfg, A, C>(
     State(state): State<ConfigInventoryState<Inv, Cfg, A, C>>,
     headers: HeaderMap,

@@ -19,6 +19,11 @@
 //! Development dependencies are excluded on purpose: `proptest` and `insta` are
 //! not shipped, and are governed by `dev-allow` in the allow-list.
 //!
+//! An allow-list entry marked `optional-only` admits a crate only as an optional
+//! dependency that no default feature turns on: `utoipa` in `pos-proto`, behind its
+//! `openapi` feature ([ADR-0177](../../../docs/adr/0177-openapi-is-the-route-map.md)
+//! decision 3). Declaring it unconditionally, or enabling it from `default`, fails.
+//!
 //! # Two data sources, because neither alone is right
 //!
 //! The declared layer reads `cargo metadata`, which is the only place that reports
@@ -49,6 +54,8 @@ use serde::Deserialize;
 
 use super::{Error, repo_root};
 use crate::Finding;
+
+mod optional_only;
 
 /// Crates the rule applies to.
 const BACKBONE: [&str; 3] = ["pos-core", "pos-ports", "pos-proto"];
@@ -113,6 +120,9 @@ pub struct Package {
     pub dependencies: Vec<Dependency>,
     #[serde(default)]
     pub targets: Vec<Target>,
+    /// The manifest's `[features]`, each with what it enables.
+    #[serde(default)]
+    pub features: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -148,6 +158,9 @@ pub struct Dependency {
     pub uses_default_features: Option<bool>,
     #[serde(default)]
     pub features: Vec<String>,
+    /// Whether the dependency is `optional = true`.
+    #[serde(default)]
+    pub optional: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -170,6 +183,15 @@ impl Allowlist {
         // except where FORBIDDEN_EDGES says otherwise.
         BACKBONE.contains(&crate_name) || self.allow.contains_key(crate_name)
     }
+
+    /// Whether `crate_name` is admitted only as an optional dependency no default feature enables.
+    fn optional_only(&self, crate_name: &str) -> bool {
+        self.allow
+            .get(crate_name)
+            .and_then(|entry| entry.get("optional-only"))
+            .and_then(toml::Value::as_bool)
+            == Some(true)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -191,6 +213,9 @@ pub fn check(meta: &Metadata, allow: &Allowlist, closures: &Closures) -> Vec<Fin
         let manifest = manifest_of(pkg);
         for dep in pkg.dependencies.iter().filter(|d| d.kind.is_none()) {
             findings.extend(declared_findings(meta, allow, name, &manifest, dep));
+            if allow.optional_only(&dep.name) {
+                findings.extend(optional_only::findings(pkg, &manifest, dep));
+            }
         }
         findings.extend(linked_findings(meta, allow, closures, pkg, &manifest));
     }
@@ -507,6 +532,7 @@ mod tests {
             [allow]
             serde = { reason = "wire serialization" }
             jiff  = { reason = "zoned datetime arithmetic" }
+            utoipa = { reason = "schemas, behind a feature", optional-only = true }
 
             [forbidden-features]
             jiff = ["tz-system", "tzdb-zoneinfo", "default"]
@@ -523,6 +549,10 @@ mod tests {
         packages: Vec<(String, bool)>,
         /// Resolve-graph edges, by package name.
         edges: Vec<(String, String)>,
+        /// `pos-core`'s optional dependencies, by name.
+        optional: Vec<String>,
+        /// `pos-core`'s `[features]`.
+        features: Vec<(String, Vec<String>)>,
     }
 
     impl Fixture {
@@ -531,7 +561,24 @@ mod tests {
                 declared: Vec::new(),
                 packages: Vec::new(),
                 edges: Vec::new(),
+                optional: Vec::new(),
+                features: Vec::new(),
             }
+        }
+
+        /// Adds an optional dependency to `pos-core`'s manifest, which nothing activates.
+        fn declares_optional(mut self, name: &str) -> Self {
+            self.optional.push(name.to_owned());
+            self.declares(name, true, &[])
+        }
+
+        /// Adds a `[features]` entry to `pos-core`'s manifest.
+        fn feature(mut self, name: &str, enables: &[&str]) -> Self {
+            self.features.push((
+                name.to_owned(),
+                enables.iter().map(|entry| (*entry).to_owned()).collect(),
+            ));
+            self
         }
 
         /// Adds a normal dependency to `pos-core`'s manifest, and the matching edge.
@@ -573,15 +620,24 @@ mod tests {
                         .map(|f| format!("\"{f}\""))
                         .collect::<Vec<_>>()
                         .join(",");
+                    let optional = self.optional.contains(name);
                     format!(
-                        r#"{{"name":"{name}","kind":null,"uses_default_features":{defaults},"features":[{features}]}}"#
+                        r#"{{"name":"{name}","kind":null,"uses_default_features":{defaults},"features":[{features}],"optional":{optional}}}"#
                     )
                 })
                 .collect();
 
+            let features = serde_json::to_string(
+                &self
+                    .features
+                    .iter()
+                    .cloned()
+                    .collect::<BTreeMap<String, Vec<String>>>(),
+            )
+            .expect("fixture features serialize");
             let mut packages = vec![format!(
                 r#"{{"id":"pos-core-id","name":"pos-core","manifest_path":"",
-                     "dependencies":[{}],"targets":[{{"kind":["lib"]}}]}}"#,
+                     "dependencies":[{}],"targets":[{{"kind":["lib"]}}],"features":{features}}}"#,
                 deps.join(",")
             )];
             for (name, is_proc_macro) in &self.packages {
@@ -776,6 +832,7 @@ mod tests {
                 kind: Some(kind.to_owned()),
                 uses_default_features: Some(true),
                 features: Vec::new(),
+                optional: false,
             });
         }
         let findings = check(&meta, &allowlist(), &fixture.all_activated());
@@ -825,6 +882,73 @@ mod tests {
         assert!(
             findings.is_empty(),
             "the walk crossed a procedural-macro boundary: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn an_optional_only_crate_behind_a_feature_is_accepted() {
+        let fixture = Fixture::new()
+            .declares_optional("utoipa")
+            .feature("openapi", &["dep:utoipa"]);
+        let findings = check(
+            &fixture.metadata(),
+            &allowlist(),
+            &fixture.activated_without(&["utoipa"]),
+        );
+        assert!(
+            findings.is_empty(),
+            "an optional-only crate was refused: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn an_optional_only_crate_declared_unconditionally_is_refused() {
+        let fixture = Fixture::new().declares("utoipa", true, &[]);
+        let findings = check(&fixture.metadata(), &allowlist(), &fixture.all_activated());
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.message.contains("unconditionally")),
+            "a required optional-only crate passed: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn an_optional_only_crate_a_default_feature_reaches_is_refused() {
+        // Through a feature `default` enables, and through `crate/feature`, which turns the
+        // dependency on too; a weak `crate?/feature` does not.
+        for (default, openapi) in [
+            (vec!["openapi"], vec!["dep:utoipa"]),
+            (vec!["utoipa/macros"], vec![]),
+            (vec!["dep:utoipa"], vec![]),
+        ] {
+            let fixture = Fixture::new()
+                .declares_optional("utoipa")
+                .feature("default", &default)
+                .feature("openapi", &openapi);
+            let findings = check(
+                &fixture.metadata(),
+                &allowlist(),
+                &fixture.activated_without(&["utoipa"]),
+            );
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f.message.contains("default features enable")),
+                "{default:?} turned it on unseen: {findings:?}"
+            );
+        }
+        let weak = Fixture::new()
+            .declares_optional("utoipa")
+            .feature("default", &["utoipa?/macros"]);
+        let findings = check(
+            &weak.metadata(),
+            &allowlist(),
+            &weak.activated_without(&["utoipa"]),
+        );
+        assert!(
+            findings.is_empty(),
+            "a weak feature was taken to enable: {findings:?}"
         );
     }
 }

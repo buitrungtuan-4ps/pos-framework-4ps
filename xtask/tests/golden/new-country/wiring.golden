@@ -1,0 +1,6 @@
+crates/pos-edge/Cargo.toml: country-xa = ["dep:pos-country-xa"]
+crates/pos-edge/Cargo.toml: pos-country-xa = { path = "../../countries/xa", optional = true }
+crates/pos-edge/src/countries.rs: #[cfg(feature = "country-xa")] pos_country_xa::Xa,
+crates/pos-cloud/Cargo.toml: country-xa = ["dep:pos-country-xa"]
+crates/pos-cloud/Cargo.toml: pos-country-xa = { path = "../../countries/xa", optional = true }
+crates/pos-cloud/src/countries.rs: #[cfg(feature = "country-xa")] pos_country_xa::Xa,

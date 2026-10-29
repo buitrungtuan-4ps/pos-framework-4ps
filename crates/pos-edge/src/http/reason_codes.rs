@@ -46,6 +46,7 @@ use crate::app::Edge;
 /// One entry a picker may offer: the id an event carries, the code a report groups by, the name in
 /// the store's display language, and the actions it may be cited for.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct ReasonCodeResponse {
     reason_code_id: String,
     code: String,
@@ -56,13 +57,32 @@ pub(crate) struct ReasonCodeResponse {
 
 /// The store's managed list, as the in-store UI reads it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct ReasonCodesResponse {
     reasons: Vec<ReasonCodeResponse>,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/reason-codes",
+    security(("till_session" = [])),
+    params(
+        ("If-None-Match" = Option<String>, Header, description = "The ETag of the copy the till holds"),
+    ),
+    responses(
+        (status = 200, body = ReasonCodesResponse, description = "The active entries of the store's managed reason list, each with its id, \
+                                      code, name in the store's display language and the actions it covers. \
+                                      The framework's list until one is published. \
+                                      The ETag tags this body"),
+        (status = 304, description = "If-None-Match names the current ETag: nothing changed, and no body is sent"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+    ),
+    tag = "published configuration",
+))]
 /// `GET /api/reason-codes` — the active entries of the store's managed list, read from the live
 /// session.
-pub(crate) async fn list<S>(State(edge): State<Arc<Edge<S>>>) -> Response
+pub(crate) async fn list_reason_codes<S>(State(edge): State<Arc<Edge<S>>>) -> Response
 where
     S: EventStore + Send + Sync + 'static,
 {
