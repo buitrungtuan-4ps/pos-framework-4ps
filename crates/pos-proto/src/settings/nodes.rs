@@ -576,9 +576,10 @@ pub(super) fn counter_settings() -> Vec<Setting> {
         shape: SettingShape::Choice {
             values: choices::<WalkInChannel>(),
             default: PublishedCounter::default().walk_in_channel().as_wire(),
-            // No store is given another value (ADR-0160 decision 2), so a counter opens its
-            // walk-ins for takeaway, as before, until someone sets it.
-            preset: None,
+            // Confirmed by the owner on 2026-10-29: a new store's counter asks each walk-in guest
+            // whether they eat in or take away. An existing store keeps takeaway until someone
+            // sets it.
+            preset: Some(WalkInChannel::Ask.as_wire()),
         },
         scopes: STORE_WIDE,
         since: NEXT_RELEASE,

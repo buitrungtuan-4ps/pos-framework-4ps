@@ -20,6 +20,7 @@ backup.interval_hours	unit=SETTING_UNIT_HOURS
 counter.walk_in_channel
 counter.walk_in_channel	default=WALK_IN_CHANNEL_TAKEAWAY
 counter.walk_in_channel	kind=SETTING_KIND_CHOICE
+counter.walk_in_channel	preset=WALK_IN_CHANNEL_ASK
 counter.walk_in_channel	scope=SETTING_SCOPE_BRAND
 counter.walk_in_channel	scope=SETTING_SCOPE_STORE
 counter.walk_in_channel	scope=SETTING_SCOPE_STORE_GROUP
