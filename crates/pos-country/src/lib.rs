@@ -46,7 +46,10 @@ use core::fmt;
 use pos_proto::locale::{CountryCode, LocalePack};
 
 pub mod offline;
+mod setting_defaults;
 pub mod tax_class;
+
+pub use setting_defaults::{SettingDefault, SettingDefaultValue};
 
 /// One country's obligations, bundled.
 ///
@@ -89,6 +92,19 @@ pub trait CountryModule: Send + Sync + 'static {
     /// A module with no opinion returns `true`, and the absence of an opinion is then visible in one
     /// place rather than spread across the callers.
     fn is_valid_tax_code(&self, tax_code: &str) -> bool;
+
+    /// The settings a new store in this country starts with, in its units
+    /// ([ADR-0183](../../../docs/adr/0183-a-country-pack-seeds-a-new-stores-settings.md)).
+    ///
+    /// Values only, like the locale pack: no logic and no clock. Applying a new store's values
+    /// takes a setting from here before the register's own preset, and writes it only where the
+    /// store does not set the value already. Each key must be in the register and each value one
+    /// its setting takes, which a test over every compiled-in pack enforces.
+    ///
+    /// Empty by default, so a pack that says nothing changes nothing.
+    fn setting_defaults(&self) -> Vec<SettingDefault> {
+        Vec::new()
+    }
 }
 
 /// Every country compiled into this binary.
@@ -406,6 +422,13 @@ mod tests {
             let module = built.get(code).expect("present");
             assert_eq!(module.locale_pack().country_code, code);
         }
+    }
+
+    #[test]
+    fn a_pack_that_names_no_setting_seeds_none() {
+        // The trait's default, which every pack written before ADR-0183 takes: it changes nothing a
+        // new store is given.
+        assert!(Stub::of(CountryCode::VN).setting_defaults().is_empty());
     }
 
     #[test]

@@ -103,6 +103,12 @@ half-finished country fails CI rather than looking finished.
   `default_language` is also what a new store's receipts print in
   ([ADR-0160](../adr/0160-everything-a-store-runs-differently-is-published-configuration.md)), where
   [`paper_labels.rs`](../../crates/pos-edge-printing/src/paper_labels.rs) has a table for it.
+- **Setting defaults** — `setting_defaults()` lists the settings a new store in the country starts
+  with, in its own units: a threshold counted in money, which no single preset in the register can
+  get right for every currency ([ADR-0183](../adr/0183-a-country-pack-seeds-a-new-stores-settings.md)). Each key must be in the
+  [register](../configuration.md) and each value one its setting takes; a test in `pos-cloud` checks
+  every compiled-in pack. Name a value only when an owner has confirmed the figure — the default is
+  none, and none is guessed. Vietnam's pack is the example.
 - **`Fiscalization`** — if the country has electronic tax invoices, implement the port
   (allocate-range / issue / look-up / reconcile). Its contract suite in `pos-contract-tests` is the
   spec. Invoices key on the **calendar** date, never the business date.

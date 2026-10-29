@@ -13,6 +13,8 @@ use pos_proto::money::CurrencyCode;
 
 use pos_core::business_date::{CutoffHour, StoreTimeZone};
 
+use crate::config_tree::ConfigTreeState;
+
 use super::api_error_with_details;
 use super::config_nodes::locale::{PackedFacts, PublishLocaleRequest, checked_denominations};
 
@@ -146,4 +148,23 @@ pub(super) fn add_country_pack_facts(
             serde_json::Value::String(language.clone()),
         );
     }
+}
+
+/// The country a store's published `locale` node names, or `None` when it has never published one
+/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+///
+/// Reads the store's layers composed, as it runs them ([`ConfigTreeState::effective`]):
+/// `admin_publish_locale` writes the Store layer, and a rollback restores a version onto the Tenant
+/// layer. A value that is not two ASCII letters answers `None` rather than an error: a node written
+/// by a fork, or by a build older than the required-`country_code` change, is a store this console
+/// still has to be able to draw.
+///
+/// Read by the fleet's region warning, a store's cell standing, and the new-store values, which
+/// take the country's own (ADR-0183).
+pub(in crate::http) fn published_country(tree: &ConfigTreeState) -> Option<CountryCode> {
+    tree.effective()
+        .get("locale")?
+        .get("country_code")?
+        .as_str()
+        .and_then(|code| CountryCode::parse(code).ok())
 }

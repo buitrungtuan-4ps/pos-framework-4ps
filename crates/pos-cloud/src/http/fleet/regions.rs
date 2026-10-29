@@ -19,8 +19,9 @@ use serde::Deserialize;
 use super::{FleetState, RegionAcknowledgementView, fleet_error_response};
 use crate::auth::admin::{AdminContext, AdminStore};
 use crate::auth::console_rbac::ConsolePermission;
-use crate::config_tree::{ConfigTreeState, ConfigTreeStore};
+use crate::config_tree::ConfigTreeStore;
 use crate::fleet::FleetStore;
+use crate::http::locale_node::published_country;
 use crate::http::{Json, not_found};
 use crate::lease::{RegionAcknowledgement, RegionAcknowledgementStore};
 
@@ -333,20 +334,4 @@ where
     )
     .await;
     Ok(())
-}
-
-/// The country a store's published `locale` node names, or `None` when it has never published one
-/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
-///
-/// Reads the store's layers composed, as it runs them ([`ConfigTreeState::effective`]):
-/// `admin_publish_locale` writes the Store layer, and a rollback restores a version onto the Tenant
-/// layer. A value that is not two ASCII letters answers `None` rather than an error: a node written
-/// by a fork, or by a build older than the required-`country_code` change, is a store this console
-/// still has to be able to draw.
-pub(super) fn published_country(tree: &ConfigTreeState) -> Option<CountryCode> {
-    tree.effective()
-        .get("locale")?
-        .get("country_code")?
-        .as_str()
-        .and_then(|code| CountryCode::parse(code).ok())
 }

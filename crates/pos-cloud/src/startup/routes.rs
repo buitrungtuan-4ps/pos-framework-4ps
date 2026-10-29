@@ -544,6 +544,7 @@ fn settings_routes(deps: &RouteDeps<'_>) -> Router {
         // group or one store, and every store it reaches republished onto its Tenant layer in the
         // same request. Reads are console.data.read; a write publishes, so console.config.publish.
         .merge(http::settings_router(
+            &countries::registry(),
             store.settings(),
             store.registry(),
             store.store_groups(),

@@ -11,13 +11,13 @@ use pos_cloud_api::response::parse_ulid_fields;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{StoreId, TenantId};
 
-use super::regions::published_country;
 use super::views::FleetStoreView;
 use super::{FleetState, RegionAcknowledgementView, fleet_error_response};
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::ConfigTreeStore;
 use crate::fleet::FleetStore;
+use crate::http::locale_node::published_country;
 use crate::http::{Json, RegistryTenantQuery, not_found};
 use crate::lease::{
     RegionAcknowledgementStore, RegionAgreement, region_agreement, standing_acknowledgement,

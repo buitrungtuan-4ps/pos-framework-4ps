@@ -39,8 +39,9 @@ use crate::audit::{AuditActor, AuditEntry, AuditId, AuditQuery, AuditStore};
 use crate::auth::admin::{AdminContext, AdminStore};
 use crate::auth::console_rbac::ConsolePermission;
 use crate::cell::Cell;
-use crate::config_tree::{ConfigTreeState, ConfigTreeStore};
+use crate::config_tree::ConfigTreeStore;
 use crate::http::Json;
+use crate::http::locale_node::published_country;
 use crate::lease::{REGION_REASON_LIMIT, RegionReasonRefusal};
 
 /// The audit action an acknowledgement is recorded as, and read back by.
@@ -458,17 +459,6 @@ fn acknowledgement_of(entry: &AuditEntry) -> Option<CellAcknowledgementView> {
         reason: after.get("reason")?.as_str()?.to_owned(),
         acknowledged_at_ms: entry.at.as_milliseconds_since_epoch(),
     })
-}
-
-/// The country a store's published `locale` node names, read from its layers composed. The same
-/// reading the region warning makes (`http::fleet::regions`); kept beside its second use rather
-/// than shared until a third needs it.
-fn published_country(tree: &ConfigTreeState) -> Option<CountryCode> {
-    tree.effective()
-        .get("locale")?
-        .get("country_code")?
-        .as_str()
-        .and_then(|code| CountryCode::parse(code).ok())
 }
 
 #[cfg(test)]

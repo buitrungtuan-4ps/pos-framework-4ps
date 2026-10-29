@@ -16,6 +16,13 @@ Everything in `src/lib.rs` is a constant. That is the point:
 | Numbers | `1.234.567,89` |
 | Language | `vi` |
 | Tax code | mã số thuế: ten digits, optionally `-` and three more for a branch |
+| New store | `shift.variance_reason_minor` = 20,000 ₫: a drawer closing over or short by more asks a reason |
+
+The last row is a **setting default** ([ADR-0183](../../docs/adr/0183-a-country-pack-seeds-a-new-stores-settings.md)): a value a new Vietnamese store is given when the
+console applies its new-store values, before the register's own presets, and only where the store
+does not set the value already. The owner confirmed the figure on 2026-10-29. Any store, group,
+brand or tenant can set another value; the pack only removes the empty start, where a drawer closed
+82,450 ₫ short in one tap.
 
 ## The 8 % question
 
