@@ -50,9 +50,10 @@ test.beforeAll(async ({ browser }) => {
   // The run's one sign-in, through the login screen, because a TOTP code is spent when it is
   // accepted (ADR-0034) — a second sign-in inside the same thirty seconds is refused, and rightly.
   // The session it produces is what every test reuses and what writes the fixtures.
-  const context = await browser.newContext();
+  // The console is opened over https (`consoleURL`), whose certificate is the run's own.
+  const context = await browser.newContext({ ignoreHTTPSErrors: true });
   const page = await context.newPage();
-  await page.goto(`${cloud.baseURL}/login`);
+  await page.goto(`${cloud.consoleURL}/login`);
   await page.locator('input[autocomplete="current-password"]').fill(cloud.password);
   await page.locator('input[autocomplete="one-time-code"]').fill(totp(cloud.secret));
   await page.getByRole("button", { name: /sign in/i }).click();
@@ -78,10 +79,10 @@ test.afterAll(async () => {
 
 /** A browser already signed in, opened on the seeded working context (ADR-0120 carries it in the URL). */
 async function openConsole(browser) {
-  const context = await browser.newContext({ storageState: session });
+  const context = await browser.newContext({ storageState: session, ignoreHTTPSErrors: true });
   const page = await context.newPage();
   await page.goto(
-    `${cloud.baseURL}/t/${fixtures.tenant.tenant_id}?store=${fixtures.store.store_id}`,
+    `${cloud.consoleURL}/t/${fixtures.tenant.tenant_id}?store=${fixtures.store.store_id}`,
   );
   await expect(page.locator('[data-nav="stores"]')).toBeAttached();
   return { context, page };

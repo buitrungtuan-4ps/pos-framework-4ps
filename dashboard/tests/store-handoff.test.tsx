@@ -147,6 +147,7 @@ describe("handing a store's files over again", () => {
   });
 
   it("opens the four downloads once the key question is settled", async () => {
+    page.reconfigure({ url: "https://console.example.com/" });
     await openHandoff();
     fireEvent.click(screen.getByRole("button", { name: messages["handoff.issueKey"] }));
     await waitFor(() =>
@@ -166,6 +167,7 @@ describe("handing a store's files over again", () => {
     // The other direction out of the fork, and since ADR-0143 the ordinary one: a box activated
     // with a code syncs with its device credential. It must reach the files, and it must say that
     // they carry no key, because the download itself looks identical either way.
+    page.reconfigure({ url: "https://console.example.com/" });
     await openHandoff();
     fireEvent.click(screen.getByRole("button", { name: messages["wizard.skipKey"] }));
     await waitFor(() =>
@@ -235,14 +237,34 @@ describe("handing a store's files over again", () => {
 
   it("offers no setup file to a console on plain http, and says why", async () => {
     // The edge dials its cloud over https only, loopback included, so a file named from an http
-    // origin would install a box that refuses its own cloud.
+    // origin would install a box that refuses its own cloud. Said once, for every file, by the
+    // drawer's own warning rather than the setup file's.
     await openHandoff();
     fireEvent.click(screen.getByRole("button", { name: messages["wizard.skipKey"] }));
     await waitFor(() =>
-      expect(screen.getByRole("dialog").textContent).toContain(messages["setupFile.needsHttps"]),
+      expect(screen.getByRole("dialog").textContent).toContain(messages["handoff.needsHttps"]),
     );
     expect(screen.queryByRole("link", { name: messages["setupFile.download"] })).toBeNull();
     expect(listHostedRelease).not.toHaveBeenCalled();
+  });
+
+  it("offers none of the four files to a console on plain http, and says why", async () => {
+    // The pilot's F1: each file names this origin as the store's cloud, and the edge dials its
+    // cloud over https only, so a config.toml or installer made here installs a box that refuses
+    // its cloud and trades with an empty roster. The setup file already refused; now all do.
+    await openHandoff();
+    fireEvent.click(screen.getByRole("button", { name: messages["handoff.issueKey"] }));
+    await waitFor(() =>
+      expect(screen.getByRole("dialog").textContent).toContain(messages["handoff.needsHttps"]),
+    );
+    for (const key of [
+      "handoff.downloadWindows",
+      "handoff.downloadLinux",
+      "handoff.downloadConfig",
+      "handoff.downloadEnv",
+    ]) {
+      expect(screen.queryByRole("button", { name: messages[key] })).toBeNull();
+    }
   });
 
   it("says the device credential is gone with the machine", async () => {

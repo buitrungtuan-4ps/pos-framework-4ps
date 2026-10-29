@@ -43,6 +43,19 @@ import {
 import type { InstallerValues } from "../installers.d.mts";
 import type { MessageKey } from "../i18n";
 
+/**
+ * Whether this console is open over https — the condition for handing out any store file at all.
+ *
+ * Every file names the cloud by the origin this browser is looking at, and a store dials its cloud
+ * over https only, loopback included (`CloudHttpClient::new` in `pos-edge` refuses anything else).
+ * A file made from a plain-http console installs a box that refuses its own cloud and trades
+ * LAN-only with an empty roster and menu, which is what the pilot's wizard handed out. So the
+ * screens offer no file from one, and say why.
+ */
+export function consoleIsHttps(): boolean {
+  return window.location.protocol === "https:";
+}
+
 /** One downloadable artifact: the name the browser saves it under, and how to render it. */
 export interface HandoffFile {
   /** The file name. Load-bearing — the installers' own help text names their siblings. */

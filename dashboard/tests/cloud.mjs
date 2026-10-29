@@ -35,7 +35,9 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import { createHmac, randomBytes } from "node:crypto";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:net";
@@ -70,6 +72,51 @@ async function freePort() {
       probe.close(() => resolve(port));
     });
   });
+}
+
+/**
+ * An https front for the cloud, which the browser uses and nothing else.
+ *
+ * The console hands out no store file from a plain-http origin (pilot F1): every file names the
+ * origin as the store's cloud, and a store dials its cloud over https only. `pos_cloud` serves
+ * plain http and sits behind a TLS proxy in production, so this is that proxy, with a certificate
+ * made for the run and accepted by the browser (`ignoreHTTPSErrors`). The harness's own calls keep
+ * going straight to `baseURL`.
+ */
+async function tlsFront(directory, target) {
+  const key = join(directory, "tls.key");
+  const cert = join(directory, "tls.crt");
+  const made = spawnSync(
+    "openssl",
+    ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-keyout", key, "-out", cert]
+      .concat(["-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1"]),
+    { encoding: "utf8" },
+  );
+  if (made.status !== 0) {
+    throw new Error(`openssl could not make the run's certificate: ${made.stderr ?? made.error}`);
+  }
+  const server = createHttpsServer(
+    { key: readFileSync(key), cert: readFileSync(cert) },
+    (incoming, outgoing) => {
+      const upstream = httpRequest(
+        `${target}${incoming.url}`,
+        { method: incoming.method, headers: incoming.headers },
+        (answer) => {
+          outgoing.writeHead(answer.statusCode ?? 502, answer.headers);
+          answer.pipe(outgoing);
+        },
+      );
+      upstream.on("error", () => outgoing.writeHead(502).end());
+      incoming.pipe(upstream);
+    },
+  );
+  const port = await freePort();
+  await new Promise((resolve) => server.listen(port, "127.0.0.1", resolve));
+  const close = () => {
+    server.closeAllConnections();
+    return new Promise((resolve) => server.close(resolve));
+  };
+  return { url: `https://127.0.0.1:${port}`, close };
 }
 
 /** Runs one statement with `psql`, or throws saying what could not be done. */
@@ -187,8 +234,10 @@ export async function startCloud() {
   child.stdout.on("data", collect);
   child.stderr.on("data", collect);
 
+  let front = null;
   const stop = async () => {
     running = null;
+    await front?.close();
     if (child.exitCode === null && child.signalCode === null) {
       child.kill("SIGTERM");
       await new Promise((resolve) => child.once("exit", resolve));
@@ -216,6 +265,13 @@ export async function startCloud() {
       // Not listening yet — the migrations run before the socket opens.
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+
+  try {
+    front = await tlsFront(directory, baseURL);
+  } catch (error) {
+    await stop();
+    throw error;
   }
 
   // First boot, exactly as an operator's does: the token authorises one enrolment and the response
@@ -267,7 +323,17 @@ export async function startCloud() {
     cookie = session;
   };
 
-  running = { baseURL, password: PASSWORD, secret, call, useSession, stop, log: () => output };
+  // `consoleURL` is what the browser opens; `baseURL` is the cloud itself, for the harness's calls.
+  running = {
+    baseURL,
+    consoleURL: front.url,
+    password: PASSWORD,
+    secret,
+    call,
+    useSession,
+    stop,
+    log: () => output,
+  };
   return running;
 }
 

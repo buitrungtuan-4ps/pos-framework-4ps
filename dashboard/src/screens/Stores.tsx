@@ -27,8 +27,6 @@ import { api } from "../api/client";
 import { t } from "../i18n";
 import { useEntityCrud } from "../lib/entity-crud";
 import {
-  downloadHandoff,
-  HANDOFF_FILES,
   RECOVERY,
   type Recovery,
 } from "../lib/handoff";
@@ -55,11 +53,9 @@ import {
   RowActions,
   TechnicalDetails,
 } from "../components/kit";
-import { SetupFile } from "../components/SetupFile";
+import { HandoffFiles } from "../components/HandoffFiles";
 import { toast } from "../components/Toast";
 import { apiMessage, withStaleReload } from "../lib/errors";
-import { DEFAULT_BIND_PORT } from "../installers.mjs";
-import type { InstallerValues } from "../installers.d.mts";
 import type { Brand, CreateApiKeyResponse, Store, Tenant } from "../api/schemas";
 
 export function Stores() {
@@ -194,9 +190,6 @@ export function Stores() {
   // whole feature is a `Drawer` over `src/lib/handoff.ts`.
 
   const [handoffStore, setHandoffStore] = createSignal<Store | null>(null);
-  // A property of the *machine*, not of the store: it shapes the generated config and never reaches
-  // the cloud, so it is asked for here rather than stored on the row. Blank takes the edge's default.
-  const [handoffPort, setHandoffPort] = createSignal("");
   const [handoffKey, setHandoffKey] = createSignal<CreateApiKeyResponse | null>(null);
   // "I know this box already holds its key" — the deliberate way past the key step, so that the
   // files can be downloaded without a write. Distinct from "no key yet", which is the initial state
@@ -207,7 +200,6 @@ export function Stores() {
 
   const openHandoff = (row: Store) => {
     setHandoffStore(row);
-    setHandoffPort("");
     setHandoffKey(null);
     setHandoffKeyless(false);
     setHandoffError("");
@@ -242,31 +234,6 @@ export function Stores() {
     } finally {
       setHandoffBusy(false);
     }
-  };
-
-  /**
-   * The values every generated artifact is rendered from.
-   *
-   * `cloudUrl` and `cloudHost` come from the browser's own location rather than from configuration,
-   * for the same reason the wizard does it: the console is served by `pos_cloud`, so the origin the
-   * operator is looking at *is* the origin the store must dial. A configured value could disagree
-   * with it, and the disagreement would only show up as a box that boots LAN-only.
-   */
-  const handoffValues = (): InstallerValues | null => {
-    const row = handoffStore();
-    if (!row) {
-      return null;
-    }
-    return {
-      storeName: row.name,
-      storeId: row.store_id,
-      tenantLabel: tenant()?.name ?? tenantId(),
-      tenantId: tenantId(),
-      cloudUrl: window.location.origin,
-      cloudHost: window.location.hostname,
-      bindPort: handoffPort(),
-      key: handoffKey()?.token ?? null,
-    };
   };
 
   /** Whether the operator has settled the key question, which is what unlocks the downloads. */
@@ -818,44 +785,11 @@ export function Stores() {
                       produce files rather than for the drawer having opened. */}
                   <section data-outcome="handoff-ready" class="flex flex-col gap-3">
                     <h3 class="text-sm font-semibold text-ink">{t("handoff.filesTitle")}</h3>
-                    <TextField
-                      label={t("wizard.bindPort")}
-                      value={handoffPort()}
-                      onInput={setHandoffPort}
-                      placeholder={DEFAULT_BIND_PORT}
+                    <HandoffFiles
+                      store={row()}
+                      tenantLabel={tenant()?.name ?? tenantId()}
+                      keyToken={handoffKey()?.token ?? null}
                     />
-                    <p class="text-sm text-ink-muted">{t("wizard.bindPortHint")}</p>
-                    <Show when={handoffKey()}>
-                      <Banner tone="danger" message={t("handoff.secretWarning")} />
-                    </Show>
-                    {/* The setup file first: on Windows it is the whole install in one
-                        double-click (ADR-0141), and the four files below stay for what it cannot
-                        cover — a Linux box, a hand-managed host, a technician who wants to read
-                        the script before it runs on a shop's only till. */}
-                    <SetupFile
-                      tenantId={tenantId()}
-                      storeId={row().store_id}
-                      hasKey={handoffKey() !== null}
-                    />
-                    <For each={HANDOFF_FILES}>
-                      {(file) => (
-                        <div class="flex flex-col gap-1">
-                          <Button
-                            data-step="downloadHandoff"
-                            variant="secondary"
-                            onClick={() => {
-                              const values = handoffValues();
-                              if (values) {
-                                downloadHandoff(file, values);
-                              }
-                            }}
-                          >
-                            {t(file.labelKey)}
-                          </Button>
-                          <p class="text-sm text-ink-muted">{t(file.hintKey)}</p>
-                        </div>
-                      )}
-                    </For>
                   </section>
 
                   <section class="flex flex-col gap-2">

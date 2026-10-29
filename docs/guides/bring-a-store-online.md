@@ -94,6 +94,13 @@ Pick the tenant in the top bar, then open the **Stores** screen and choose **Gui
      putting the key on the service's own registry key (Windows has no `env` file). Same warning:
      it contains the store's key.
 
+   **Open the console at its `https` address for this step.** Every file names the address you are
+   looking at as the store's cloud, and a store dials its cloud over `https` only, loopback
+   included. A console opened over plain http therefore offers none of the files, and says why: a
+   `config.toml` with an `http` `cloud_url` installs a box that refuses its cloud, logs one error
+   and runs LAN-only with no staff and no menu. The **Move to a new box** drawer
+   ([Replacing the machine](#replacing-the-machine)) follows the same rule.
+
 > `config.toml` carries no secret, so it can sit beside the binary with ordinary permissions. `env`
 > carries the one secret and must be installed root-owned and mode 0600. Do not merge them, and do not
 > put the key in `config.toml` — the edge would load it, but the file is not protected like the other

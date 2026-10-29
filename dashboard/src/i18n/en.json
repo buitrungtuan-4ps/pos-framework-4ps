@@ -1127,6 +1127,7 @@
   "handoff.keyIssued": "Key issued. It is now baked into the files below and will not be shown again.",
   "handoff.keyTitle": "The store's sync key",
   "handoff.linuxHint": "Run as root with the binary and the unit file. Same layout: update slots, both files below, the systemd unit, the port on a running ufw or firewalld, then the service.",
+  "handoff.needsHttps": "This console is open over plain http, and a store dials its cloud over https only. Files made here would install a store that refuses its cloud and runs with no staff or menu, so none is offered. Open the console at its https address to get the store's files.",
   "handoff.open": "Move to a new box",
   "handoff.recoveryLost": "Not recoverable",
   "handoff.recoveryRegenerated": "Regenerated",
