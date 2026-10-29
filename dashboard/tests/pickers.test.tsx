@@ -155,6 +155,21 @@ describe("the single-choice picker", () => {
     expect(onChange).toHaveBeenCalledWith("i2");
   });
 
+  it("restores focus to the trigger button when closed with Escape or Enter", () => {
+    mount();
+    const btn = trigger();
+    fireEvent.click(btn);
+    const search = screen.getByRole("combobox");
+
+    fireEvent.keyDown(search, { key: "Escape" });
+    expect(document.activeElement).toBe(btn);
+
+    fireEvent.click(btn);
+    const search2 = screen.getByRole("combobox");
+    fireEvent.keyDown(search2, { key: "Enter" });
+    expect(document.activeElement).toBe(btn);
+  });
+
   it("hands filtering to the caller when the list is served, and filters nothing itself", () => {
     // A paged endpoint has already applied the query. Filtering the returned page again would hide
     // rows the server chose to return, and the list would disagree with the count beside it.
