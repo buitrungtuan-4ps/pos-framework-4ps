@@ -23,5 +23,5 @@ workspace = true
 [package.metadata.pos]
 layer = "country"
 purpose = "The country module for Vietnam."
-adrs = [27, 105]
+adrs = [27, 105, 183]
 owners = ["@maintainers-architecture"]

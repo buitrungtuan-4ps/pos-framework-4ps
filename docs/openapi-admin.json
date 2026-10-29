@@ -19766,7 +19766,7 @@
           "settings"
         ],
         "summary": "`POST /admin/settings/presets` — gives a store the values the owner chose for a new store\n(ADR-0160 decision 1), which the console calls when it creates one.",
-        "description": "Only settings the store does not set itself are written, so calling it twice, or on a store an\noperator has already configured, changes nothing the operator chose.",
+        "description": "Each setting's value is the store's country pack's, when the store's published `locale` names a\ncountry and its pack gives one, then the register's preset, then nothing (ADR-0183 decision 3).\nA store that has published no locale is given the presets alone.\n\nOnly settings the store does not set itself are written, so calling it twice, or on a store an\noperator has already configured, changes nothing the operator chose.",
         "operationId": "admin_apply_setting_presets",
         "requestBody": {
           "description": "The tenant and the store to give the new-store values",
@@ -19781,7 +19781,7 @@
         },
         "responses": {
           "200": {
-            "description": "Each setting with a new-store value that the store did not already set is written at the store's own scope, and the store republished. The body lists the settings written and the store's publish outcome",
+            "description": "Each setting with a new-store value that the store did not already set is written at the store's own scope, and the store republished. A setting's value is the store's country pack's, when its published locale names a country whose pack gives one, and otherwise the register's preset. The body lists the settings written and the store's publish outcome",
             "content": {
               "application/json": {
                 "schema": {

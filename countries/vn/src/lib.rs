@@ -19,9 +19,9 @@
 #![forbid(unsafe_code)]
 #![doc(test(attr(deny(warnings))))]
 
-use pos_country::CountryModule;
 use pos_country::offline::OfflineFiscalization;
 use pos_country::tax_class;
+use pos_country::{CountryModule, SettingDefault, SettingDefaultValue};
 use pos_proto::SalesChannel;
 use pos_proto::locale::{CountryCode, LocalePack, NumberFormat, TaxRate, TaxRateTable};
 use pos_proto::money::CurrencyCode;
@@ -41,6 +41,16 @@ const CASH_ROUNDING: i64 = 1_000;
 
 /// The notes a guest hands over, ascending, in đồng.
 const NOTES: [i64; 6] = [10_000, 20_000, 50_000, 100_000, 200_000, 500_000];
+
+/// The over/short past which a drawer close asks a reason, in đồng: the value a new Vietnamese
+/// store starts `shift.variance_reason_minor` at.
+///
+/// Confirmed by the owner on 2026-10-29
+/// ([ADR-0183](../../../docs/adr/0183-a-country-pack-seeds-a-new-stores-settings.md) decision 6).
+/// The register has no preset for it, because a threshold in money is a figure in one currency;
+/// without this a new store opened with the check off, and the pilot closed a drawer 82,450 ₫ short
+/// in one tap. A store, group, brand or tenant may still set any other value.
+const VARIANCE_REASON: i64 = 20_000;
 
 /// Vietnam.
 #[derive(Debug, Clone, Copy, Default)]
@@ -86,6 +96,13 @@ impl CountryModule for Vietnam {
 
     fn is_valid_tax_code(&self, tax_code: &str) -> bool {
         is_valid_mst(tax_code)
+    }
+
+    fn setting_defaults(&self) -> Vec<SettingDefault> {
+        vec![SettingDefault {
+            setting_key: "shift.variance_reason_minor",
+            value: SettingDefaultValue::Int(VARIANCE_REASON),
+        }]
     }
 }
 
@@ -164,6 +181,19 @@ mod tests {
         SalesChannel::Qr,
         SalesChannel::Api,
     ];
+
+    #[test]
+    fn a_new_store_asks_a_reason_past_twenty_thousand_dong_either_way() {
+        // The owner's figure, 2026-10-29 (ADR-0183 decision 6). Whether the register takes it is
+        // checked for every compiled-in pack in `pos-cloud`, which holds them all.
+        assert_eq!(
+            Vietnam.setting_defaults(),
+            vec![pos_country::SettingDefault {
+                setting_key: "shift.variance_reason_minor",
+                value: pos_country::SettingDefaultValue::Int(20_000),
+            }]
+        );
+    }
 
     #[test]
     fn the_pack_names_its_own_country_and_prices_in_dong() {

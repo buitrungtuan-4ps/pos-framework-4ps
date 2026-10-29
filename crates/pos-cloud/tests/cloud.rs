@@ -109,6 +109,8 @@ mod reconcile;
 mod registry;
 #[path = "cloud/settings.rs"]
 mod settings;
+#[path = "cloud/settings_country.rs"]
+mod settings_country;
 #[path = "cloud/settings_nodes.rs"]
 mod settings_nodes;
 #[path = "cloud/store_groups.rs"]
@@ -11586,6 +11588,7 @@ fn settings_app_with(
     );
     let router = http::router(app)
         .merge(http::settings_router(
+            &pos_cloud::countries::registry(),
             FakeSettings::default(),
             registry,
             groups.clone(),

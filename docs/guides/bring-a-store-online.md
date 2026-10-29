@@ -58,6 +58,11 @@ Pick the tenant in the top bar, then open the **Stores** screen and choose **Gui
    open ([ADR-0160](../adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
    If that fails, the store is still created and the wizard says so, with a link to **Shared
    settings** for the store, which gives the values again or publishes the store again.
+   Some new-store values come from the store's **country pack** rather than the register — in
+   Vietnam, asking a reason of a drawer that closes more than 20,000 ₫ over or short ([ADR-0183](../adr/0183-a-country-pack-seeds-a-new-stores-settings.md)).
+   The wizard runs before the store has a country, so once **Store settings** has published its
+   country, give the new-store values again from **Shared settings** for the store: only values the
+   store has not set are written, so this changes nothing anyone chose.
 2. **API key** — **optional**, and **Skip the key** is the usual choice. A box activated with a code
    (Step 3) syncs, relays orders and publishes events with the credential activation gives it
    ([ADR-0143](../adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)), so it

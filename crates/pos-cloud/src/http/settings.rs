@@ -14,10 +14,11 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use catalogue::{admin_list_settings, admin_settings_catalogue};
 use effective::admin_effective_settings;
+use pos_country::CountryRegistry;
 use pos_proto::WireEnum;
 use pos_proto::determinism::ClockSource;
 use pos_proto::settings::SettingScope;
-use presets::admin_apply_setting_presets;
+use presets::{CountrySettingValues, admin_apply_setting_presets, country_setting_values};
 use publish::{SettingPublishResult, admin_publish_settings};
 use values::{admin_clear_setting, admin_put_setting};
 
@@ -51,8 +52,8 @@ pub(crate) use values::{__path_admin_clear_setting, __path_admin_put_setting};
 // --- Settings (`/admin/settings`, ADR-0160 decision 3) -----------------------------------------
 
 /// The collaborators the settings routes need: the values; the registry and the store groups that
-/// say which stores a value reaches; the config trees the resolved values are written onto; and the
-/// admin, clock and audit every route carries.
+/// say which stores a value reaches; the config trees the resolved values are written onto; each
+/// compiled-in country's values for a new store; and the admin, clock and audit every route carries.
 #[derive(Clone)]
 struct SettingsState<St, Rg, Grp, Cfg, A, C> {
     settings: St,
@@ -62,6 +63,9 @@ struct SettingsState<St, Rg, Grp, Cfg, A, C> {
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
+    /// What each country pack gives a new store, computed once from the compiled registry at
+    /// start-up (ADR-0183): the registry does not change while the process runs.
+    country_values: Arc<CountrySettingValues>,
 }
 
 /// Builds the settings sub-router
@@ -73,7 +77,11 @@ struct SettingsState<St, Rg, Grp, Cfg, A, C> {
 /// Tenant layer ([`crate::settings::tenant_layer_nodes`]), so they merge with the nodes the console
 /// publishes on the Store layer. Reads are behind [`ConsolePermission::Read`](crate::auth::console_rbac::ConsolePermission::Read); a write publishes, so
 /// it is behind [`ConsolePermission::PublishConfig`](crate::auth::console_rbac::ConsolePermission::PublishConfig), like every node publish.
+///
+/// `countries` is the compiled registry: a new store's values take its country pack's setting
+/// defaults before the register's presets (ADR-0183).
 pub fn settings_router<St, Rg, Grp, Cfg, A, C>(
+    countries: &CountryRegistry,
     settings: St,
     registry: Rg,
     groups: Grp,
@@ -121,6 +129,7 @@ where
             admin,
             clock,
             audit,
+            country_values: Arc::new(country_setting_values(countries)),
         })
 }
 

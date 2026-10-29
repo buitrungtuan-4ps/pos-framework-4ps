@@ -3,13 +3,18 @@
 
 //! `POST /admin/settings/presets`: a preset's values applied to a store.
 
+use std::collections::BTreeMap;
+
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use pos_cloud_api::console::{audit_action, require_permission};
-use pos_cloud_api::response::parse_ulid_fields;
+use pos_cloud_api::response::{api_error, parse_ulid_fields};
+use pos_country::{CountryRegistry, SettingDefaultValue};
+use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{StoreId, TenantId};
+use pos_proto::locale::CountryCode;
 use pos_proto::settings::SettingScope;
 use pos_proto::wire_enum::Open;
 use serde::Deserialize;
@@ -20,10 +25,40 @@ use super::{SettingsState, settings_store_error_response};
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::ConfigTreeStore;
+use crate::http::locale_node::published_country;
 use crate::http::{Json, not_found};
 use crate::registry::RegistryStore;
 use crate::settings::SettingsStore;
 use crate::store_groups::StoreGroupStore;
+
+/// What each compiled-in country pack gives a new store: per country, each setting key and its value
+/// as the setting's node carries it (ADR-0183).
+pub(super) type CountrySettingValues = BTreeMap<CountryCode, BTreeMap<String, serde_json::Value>>;
+
+/// Reads every compiled-in pack's [`setting_defaults`](pos_country::CountryModule::setting_defaults)
+/// into [`CountrySettingValues`].
+pub(super) fn country_setting_values(countries: &CountryRegistry) -> CountrySettingValues {
+    countries
+        .modules()
+        .map(|module| {
+            let values = module
+                .setting_defaults()
+                .into_iter()
+                .map(|seeded| (seeded.setting_key.to_owned(), as_node_value(seeded.value)))
+                .collect();
+            (module.country_code(), values)
+        })
+        .collect()
+}
+
+/// A pack's value as the JSON a setting's node carries, which is what the register checks.
+fn as_node_value(value: SettingDefaultValue) -> serde_json::Value {
+    match value {
+        SettingDefaultValue::Choice(token) => serde_json::Value::from(token),
+        SettingDefaultValue::Int(number) => serde_json::Value::from(number),
+        SettingDefaultValue::Bool(on) => serde_json::Value::from(on),
+    }
+}
 
 /// A store to publish settings to, or every store of the tenant.
 #[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
@@ -54,8 +89,11 @@ struct PresetsApplied {
     responses(
         (status = 200, body = PresetsApplied, description = "Each setting with a new-store value that the store did not \
                                       already set is written at the store's own scope, and the \
-                                      store republished. The body lists the settings written and \
-                                      the store's publish outcome"),
+                                      store republished. A setting's value is the store's country \
+                                      pack's, when its published locale names a country whose \
+                                      pack gives one, and otherwise the register's preset. The \
+                                      body lists the settings written and the store's publish \
+                                      outcome"),
         (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
         (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
@@ -67,6 +105,10 @@ struct PresetsApplied {
 )]
 /// `POST /admin/settings/presets` — gives a store the values the owner chose for a new store
 /// (ADR-0160 decision 1), which the console calls when it creates one.
+///
+/// Each setting's value is the store's country pack's, when the store's published `locale` names a
+/// country and its pack gives one, then the register's preset, then nothing (ADR-0183 decision 3).
+/// A store that has published no locale is given the presets alone.
 ///
 /// Only settings the store does not set itself are written, so calling it twice, or on a store an
 /// operator has already configured, changes nothing the operator chose.
@@ -109,6 +151,11 @@ where
     if layout.placement(store_id).is_none() {
         return not_found("store");
     }
+    let country = match store_country(&state.config_trees, tenant_id, store_id).await {
+        Ok(country) => country,
+        Err(refusal) => return refusal,
+    };
+    let country_values = country.and_then(|country| state.country_values.get(&country));
     let held = match state.settings.list(tenant_id).await {
         Ok(values) => values,
         Err(error) => return settings_store_error_response(&error),
@@ -116,10 +163,13 @@ where
     let store_scope_id = store_id.to_string();
     let mut applied = Vec::new();
     for setting in pos_proto::settings::register() {
-        let Some(preset) = setting.preset_value() else {
+        let key = setting.key();
+        let Some(preset) = country_values
+            .and_then(|values| values.get(&key).cloned())
+            .or_else(|| setting.preset_value())
+        else {
             continue;
         };
-        let key = setting.key();
         let already = held.iter().any(|value| {
             value.setting_key == key
                 && value.scope.known() == SettingScope::Store
@@ -161,6 +211,65 @@ where
         }),
     )
         .into_response()
+}
+
+/// The country the store's published `locale` names, `None` when it names none, or the `503` to
+/// answer when its configuration cannot be read.
+async fn store_country<Cfg: ConfigTreeStore>(
+    config_trees: &Cfg,
+    tenant_id: TenantId,
+    store_id: StoreId,
+) -> Result<Option<CountryCode>, Response> {
+    match config_trees.load(tenant_id, store_id).await {
+        Ok(tree) => Ok(tree.and_then(|tree| published_country(&tree.record))),
+        Err(error) => {
+            tracing::error!(%error, "a store's country could not be read to give it its new-store values");
+            Err(api_error(
+                ErrorStatus::Unavailable,
+                "the store's configuration could not be read; no value was written",
+            ))
+        }
+    }
+}
+
+#[cfg(test)]
+mod country_tests {
+    //! What the compiled-in country packs give a new store (ADR-0183 decision 2).
+
+    use super::country_setting_values;
+
+    #[test]
+    fn every_compiled_in_packs_values_are_settings_the_register_takes() {
+        // A renamed or tightened setting fails here, in the build, rather than at a store.
+        let register = pos_proto::settings::register();
+        let values = country_setting_values(&crate::countries::registry());
+        for (country, settings) in &values {
+            for (key, value) in settings {
+                let setting = register
+                    .iter()
+                    .find(|setting| setting.key() == *key)
+                    .unwrap_or_else(|| {
+                        panic!("{country}'s pack names {key}, which the register lacks")
+                    });
+                assert_eq!(
+                    setting.check(value),
+                    Ok(()),
+                    "{country}'s pack gives {key} {value}, which it does not take"
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "country-vn")]
+    #[test]
+    fn a_vietnamese_store_starts_asking_a_reason_past_twenty_thousand_dong() {
+        let values = country_setting_values(&crate::countries::registry());
+        assert_eq!(
+            values[&pos_proto::locale::CountryCode::VN].get("shift.variance_reason_minor"),
+            Some(&serde_json::json!(20_000)),
+            "the owner's figure, 2026-10-29"
+        );
+    }
 }
 
 #[cfg(test)]
