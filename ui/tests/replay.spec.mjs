@@ -1654,6 +1654,33 @@ test("a modifier marked sold out cannot be chosen, and the dish still sells with
   }
 });
 
+// A choice that costs more is charged: the picker says "+ 40,000₫", and the line, the check and
+// everything after them carry it (pilot run 2, N2). A table's line is priced by the device from the
+// menu it holds (ADR-0063), so a till that sent the dish's own price alone charged a large pizza at
+// the small one's price.
+test("a chosen modifier's price is charged on the line and the check", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+
+    await page.locator("#menu-search").fill("margherita");
+    await page.locator('[data-step="onItem"]').click();
+    const large = page.locator('[data-step="chooseModifier"]', { hasText: "Size — 30cm" });
+    await expect(large).toContainText("+ 40,000₫");
+    await large.click();
+    await page.locator('[data-step="confirmItem"]').click();
+
+    // 149,000₫ for the pizza and 40,000₫ for the size.
+    const line = page.locator('[data-outcome="line-added"]').first();
+    await expect(line.locator('[data-outcome="line-modifiers"]')).toHaveText("Size — 30cm");
+    await expect(line).toContainText("189,000₫");
+  } finally {
+    await edge.stop();
+  }
+});
+
 // The kitchen marks a dish sold out, every till stops selling it, and the kitchen brings it back.
 //
 // The cook is usually the first to know something has run out. The board's own panel makes the
