@@ -29,7 +29,7 @@
 **Prevention:** Explicitly match octets `a == 192 && b == 0 && c == 0` (`192.0.0.0/24`) and `a == 192 && b == 88 && c == 99` (`192.88.99.0/24`) alongside standard reserved ranges in `classify_v4`.
 
 ## 2026-09-24 - [6over4 Subnet SSRF Bypass]
-**Vulnerability:** Webhook destinations could bypass SSRF IPv6 checks when hostnames/IPs were provided using 6over4 / IPv4-compatible interface identifiers (`0:0:a.b.c.d`) attached to arbitrary 64-bit IPv6 prefixes (such as `2001:1234:5678:9abc::127.0.0.1` or `2606:2800:220:1::169.254.169.254`), allowing embedded private/loopback IPv4 addresses to fall through unclassified as public unicast.
+**Vulnerability:** Webhook destinations could potentially bypass SSRF IPv6 checks when hostnames/IPs were provided using 6over4 / IPv4-compatible interface identifiers (`0:0:a.b.c.d`) attached to arbitrary 64-bit IPv6 prefixes (such as `2001:1234:5678:9abc::127.0.0.1` or `2606:2800:220:1::169.254.169.254`), allowing embedded private/loopback IPv4 addresses to fall through unclassified as public unicast.
 **Learning:** 6over4 / IPv4-compatible interface identifiers embed an IPv4 address in the low 32 bits (`segments[4] == 0 && segments[5] == 0`), regardless of the routing prefix in the upper 64 bits. However, when inspecting non-zero 64-bit prefixes, low-byte zero padding (`a == 0` in `a.b.c.d`) indicates a standard IPv6 host suffix rather than an embedded 6over4 address, and must be skipped to avoid false positives.
 **Prevention:** Inspect interface identifiers with `segments[4] == 0 && segments[5] == 0` across all IPv6 prefixes, evaluating `a.b.c.d` through `classify_v4` when `a != 0` or when `segments[0..4]` is all-zero.
 
@@ -63,7 +63,7 @@
 **Learning:** Special-purpose unicast ranges like AMT (`2001:3::/32`) and AS112 (`2001:4:112::/48`) serve tunneling/anycast infrastructure and must not be allowed as outbound webhook targets.
 **Prevention:** Check `(first == 0x2001 && second == 0x0003)` (`2001:3::/32`) and `(first == 0x2001 && second == 0x0004 && third == 0x0112)` (`2001:4:112::/48`) in `classify_v6` to refuse them. Both ranges are globally reachable anycast: the reason is that they reach network infrastructure, never a webhook receiver, not that they are unroutable.
 
-## 2026-10-22 - [SSRF Bypass via Embedded IPv4 (0.0.0.0/8) in SIIT and IPv4-Mapped Prefixes]
-**Vulnerability:** Webhook SSRF validation failed to refuse IPv4 unspecified/this host (`0.0.0.0/8`) addresses when embedded in SIIT (`<prefix>:ffff:0:a.b.c.d`) or IPv4-mapped (`<prefix>:0/ffff:ffff:a.b.c.d`) IPv6 addresses with non-zero IPv6 prefixes.
-**Learning:** Requiring `a != 0` (where `a` is the first IPv4 octet) to guard calls to `classify_v4` caused any address starting with `0.x.y.z` to bypass `classify_v4` when paired with custom IPv6 prefixes, allowing `0.0.0.0/8` smuggling.
-**Prevention:** Always invoke `classify_v4` directly on embedded IPv4 octets in SIIT and IPv4-mapped structures without assuming `a == 0` means non-IPv4 data, as `classify_v4` already correctly identifies `0.0.0.0/8` as `ForbiddenReason::Unspecified`.
+## 2026-10-22 - [Rejected: Intentional a != 0 Guard in classify_v6]
+**Vulnerability:** Removing the `a != 0` guard in `classify_v6` for embedded IPv4 in IPv6 addresses was proposed to refuse `0.0.0.0/8` addresses under global prefixes.
+**Learning:** The `a != 0` guard in `classify_v6` is deliberate (#504, #510). It prevents false positives on legitimate IPv6 interface IDs ending with zero-octet high bytes (e.g. `<prefix>::ffff:0:0:5`). An embedded `0.0.0.0/8` under a global prefix is not reachable over the internet/network anyway.
+**Prevention:** Preserve the `a != 0` guard when inspecting IPv6 interface identifiers to avoid false-positive Rejections on valid global IPv6 hosts.
