@@ -302,48 +302,24 @@ export function Devices() {
   // Memoized device filters avoid re-filtering `fleet()` on every table render or accessor call.
   const terminals = createMemo(() => (fleet() ?? []).filter((device) => device.kind === "terminal"));
   const printers = createMemo(() => (fleet() ?? []).filter((device) => device.kind === "printer"));
-  // Pre-build O(1) lookup map for terminal names by device ID instead of doing O(N) array finds per printer row.
-  const terminalMap = createMemo(
-    () => new Map(terminals().map((device) => [device.id, device.name])),
-  );
-  // Pre-build O(1) lookup map for printer names by device ID instead of doing O(P) array finds per terminal row.
-  const printerMap = createMemo(
-    () => new Map(printers().map((device) => [device.id, device.name])),
-  );
+  // Pre-build O(1) lookup maps for device names by ID instead of doing O(N) array finds per row.
+  const terminalMap = createMemo(() => new Map(terminals().map((d) => [d.id, d.name])));
+  const printerMap = createMemo(() => new Map(printers().map((d) => [d.id, d.name])));
   // A till's receipts go to a printer that serves the bill, never a station's.
   const receiptPrinters = createMemo(() => printers().filter((device) => device.station_id === null));
 
-  // A printer names its agent by id; the operator reads the terminal's name. A pick that no longer
-  // resolves — the terminal was created in another store, or archived — shows the raw id rather than
-  // claiming there is no agent, because "none" is a different and much quieter state.
-  const agentLabel = (agentId: string | null) => {
-    if (!agentId) {
-      return t("devices.agentNone");
-    }
-    return terminalMap().get(agentId) ?? agentId;
-  };
+  const agentLabel = (id: string | null) => (!id ? t("devices.agentNone") : terminalMap().get(id) ?? id);
 
-  // A till's float as money, the store's when it has none. A float whose currency cannot be read is
-  // shown in minor units, which is what was saved, rather than with decimals guessed.
   const floatLabel = (minor: number | null) => {
-    if (minor === null) {
-      return t("devices.floatStore");
-    }
+    if (minor === null) return t("devices.floatStore");
     const currency = floatCurrency();
     return currency === null
       ? t("settings.unit.minor_units", { count: minor })
       : formatAmount({ amount_minor: minor, currency_code: currency });
   };
 
-  // A till's receipt printer by name. One that no longer resolves shows its raw id, as an agent
-  // does: the store's receipt printer is a different answer, and the publish prints that till at the
-  // store's until somebody chooses again.
-  const receiptPrinterLabel = (printerId: string | null) => {
-    if (!printerId) {
-      return t("devices.receiptPrinterStore");
-    }
-    return printerMap().get(printerId) ?? printerId;
-  };
+  const receiptPrinterLabel = (id: string | null) =>
+    !id ? t("devices.receiptPrinterStore") : printerMap().get(id) ?? id;
 
   const createTerminal = () => {
     const name = terminalName().trim();
