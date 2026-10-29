@@ -24,6 +24,8 @@ import { errorMessage } from "../lib/errors";
 import { printOutcomeKey } from "../lib/print";
 import { can } from "../state/permissions";
 import { createScreenRead } from "../state/screen-read";
+import { SendFirst } from "../components/SendFirst";
+import { counterKey, createSendFirst } from "../state/unsent";
 
 // The table pay screen's guard on the cash snap, kept in step with `Pay.tsx` by hand rather than
 // shared: this is its second use, and `docs/design-principles.md` extracts on the third. `Pay.tsx`
@@ -58,6 +60,7 @@ export function Takeaway() {
   // press, or null before the first.
   const [copy, setCopy] = createSignal<ReprintResponse | null>(null);
   const navigate = useNavigate();
+  const sendFirst = createSendFirst();
   // `?charge=<order>` is how the order screen hands a walk-in over to be paid (ADR-0146): the list
   // loads, and that order's pad opens as if its card had been tapped.
   const [search, setSearch] = useSearchParams<{ charge?: string }>();
@@ -174,6 +177,10 @@ export function Takeaway() {
   // cashier would be stuck looking at an order they cannot charge.
   const charge = async (order: CounterOrder) => {
     setError(null);
+    // Not for food the kitchen has not been sent (pilot U1): that is asked about first.
+    if (sendFirst.ask(counterKey(order.order_id), () => void charge(order))) {
+      return;
+    }
     setChosen(order);
     setTender(null);
     setTyping(false);
@@ -215,26 +222,19 @@ export function Takeaway() {
     ]);
   };
 
-  const payCard = () =>
+  // A card, or a transfer to the store's QR recorded once the cashier has seen it arrive (see
+  // `Pay.tsx`): the exact amount either way, so one shape serves both.
+  const payExact = (method: PaymentRequest["method"]) =>
     void pay([
       {
-        method: "PAYMENT_METHOD_CARD",
+        method,
         tendered: money(currency(), total() + tip()),
         applied_to_bill: money(currency(), total()),
         tip: money(currency(), tip()),
       },
     ]);
-
-  // A transfer to the store's QR, recorded once the cashier has seen it arrive — see `Pay.tsx`.
-  const payQr = () =>
-    void pay([
-      {
-        method: "PAYMENT_METHOD_QR",
-        tendered: money(currency(), total() + tip()),
-        applied_to_bill: money(currency(), total()),
-        tip: money(currency(), tip()),
-      },
-    ]);
+  const payCard = () => payExact("PAYMENT_METHOD_CARD");
+  const payQr = () => payExact("PAYMENT_METHOD_QR");
 
   return (
     // The mark that proves this screen rendered, which is what a counter store's home must show
@@ -285,6 +285,7 @@ export function Takeaway() {
                 </p>
               )}
             </Show>
+            <SendFirst gate={sendFirst} />
             <ReadFailed read={listRead} />
 
             <Show

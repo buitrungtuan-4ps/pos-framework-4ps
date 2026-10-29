@@ -53,6 +53,8 @@ import {
 import { addItem, moveTable, setQuantity, writesPending } from "../state/optimistic";
 import { errorMessage } from "../lib/errors";
 import { printOutcomeKey } from "../lib/print";
+import { SendFirst } from "../components/SendFirst";
+import { createSendFirst, waitingByCourse } from "../state/unsent";
 import { asksApprover, can } from "../state/permissions";
 
 // The action a void of one line cites, so the picker offers what the store holds *for voiding* and
@@ -126,15 +128,9 @@ export function Order() {
 
   // Pre-aggregate waiting line counts per course in a single O(N) pass to avoid O(C * N) filtering
   // during rendering in `<For each={unsentCourses()}>`.
-  const courseWaitingCounts = createMemo(() => {
-    const counts = new Map<string, number>();
-    for (const line of unfired()) {
-      if (line.courseId) {
-        counts.set(line.courseId, (counts.get(line.courseId) ?? 0) + 1);
-      }
-    }
-    return counts;
-  });
+  const courseWaitingCounts = createMemo(() => waitingByCourse(unfired()));
+  // Payment asks to send the unsent lines first (pilot U1, `../state/unsent`).
+  const sendFirst = createSendFirst();
 
   // The courses with food still waiting, in the store's service order. Empty on a store with courses
   // off, which is what keeps the row off those tills entirely rather than drawing an empty heading.
@@ -209,6 +205,9 @@ export function Order() {
   // order's bill there, so a bill is never left open on an order nobody went on to pay.
   const takePayment = () =>
     guard(async () => {
+      if (sendFirst.ask(key(), () => void takePayment())) {
+        return;
+      }
       if (walkIn()) {
         navigate(`/counter?charge=${params.id}`);
         return;
@@ -1354,6 +1353,7 @@ export function Order() {
                   {t("order.take_payment")}
                 </button>
                 <WritesPendingNote />
+                <SendFirst gate={sendFirst} />
                 </Show>
               }
             >
