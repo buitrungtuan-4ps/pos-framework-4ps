@@ -35,7 +35,7 @@ function mountNextSteps(store = STORE, applied?: readonly string[]) {
 
 /** What a store given a drawer for each till needs before it takes cash (ADR-0167). */
 const DRAWERS =
-  "This store keeps a drawer for each till. Before it takes cash, give each terminal its receipt printer with its cash drawer marked, under Devices, and bind each till to its terminal on the till's Devices screen.";
+  "This store keeps a drawer for each till, so a device takes cash only once it is bound to a terminal. Create a terminal for each till under Devices → Terminals and publish to the store, then on each till open Devices → This device and bind it to its terminal. For its cash drawer to open, mark the drawer on the terminal's receipt printer under Devices.";
 
 afterEach(cleanup);
 
@@ -79,9 +79,18 @@ describe("the wizard's closing step", () => {
     expect(screen.getByText(DRAWERS)).toBeTruthy();
   });
 
+  // Pilot run 2, N5: a new store has no terminal, and cash waits for one. The step is a link to the
+  // store's Devices screen, where terminals are created, as the other two steps are links.
+  it("links to the store's devices to create a terminal for each till where it needs them", () => {
+    mountNextSteps(STORE, ["shift.drawer_model"]);
+    const link = screen.getByRole("link", { name: "Create a terminal for each till, and publish" });
+    expect(link.getAttribute("href")).toBe(`/t/${TENANT}/devices?store=${STORE}`);
+  });
+
   it("says nothing about drawers where the new-store values gave none", () => {
     mountNextSteps(STORE, ["shift.no_shift_selling"]);
     expect(screen.queryByText(DRAWERS)).toBeNull();
+    expect(screen.getAllByRole("link")).toHaveLength(2);
     cleanup();
     mountNextSteps();
     expect(screen.queryByText(DRAWERS)).toBeNull();

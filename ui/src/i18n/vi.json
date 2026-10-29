@@ -413,7 +413,7 @@
   "shift.expected": "Dự kiến",
   "shift.expected_now": "Ngăn kéo cần có {amount}.",
   "shift.float_label": "Tiền đầu ca ({currency})",
-  "shift.not_a_till": "Máy này chưa được gắn với máy POS nào của cửa hàng nên không có két riêng: tiền mặt chỉ nhận tại máy POS. Quản lý gắn máy ở màn hình Thiết bị.",
+  "shift.not_a_till": "Máy này chưa được gắn với máy POS nào của cửa hàng nên không có két riêng: tiền mặt chỉ nhận tại máy POS. Quản lý gắn máy ở màn hình Thiết bị, mục Máy này. Nếu cửa hàng chưa có máy POS nào, hãy tạo trên console ở Thiết bị → Máy POS rồi công bố xuống cửa hàng.",
   "shift.open": "Mở ca",
   "shift.open_drawer": "Mở két",
   "shift.open_drawer_manager": "Quản lý nhập mã và PIN, rồi chọn lý do.",

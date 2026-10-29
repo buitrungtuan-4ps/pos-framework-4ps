@@ -129,6 +129,26 @@ export function PresetsNote(props: { presets: Presets; tenant: string; store: st
 }
 
 /**
+ * The step a store with a drawer for each till needs before it takes cash: a terminal for each till
+ * (pilot run 2, N5). A device takes cash only once it is bound to one, and a new store has none, so
+ * the step is a link, as the other two are, and not the one an operator misses. Devices is
+ * tenant-scoped, so `screenHref` carries no store; its Terminals card follows the store in context,
+ * which this makes the new one, as Shared settings' link does.
+ */
+function TerminalsStep(props: { tenant: string; store: string }) {
+  return (
+    <li>
+      <a
+        class="text-accent underline"
+        href={`${screenHref("devices", props.tenant, "")}?${STORE_PARAM}=${encodeURIComponent(props.store)}`}
+      >
+        {t("wizard.nextTerminals")}
+      </a>
+    </li>
+  );
+}
+
+/**
  * The two steps that remain once the wizard has finished, as links rather than as two screen names
  * in prose — and, where the new-store values gave the store a drawer for each till (`applied`, the
  * settings they wrote), what its devices need before it takes cash: a device bound to no till takes
@@ -173,6 +193,9 @@ export function NextSteps(props: {
             {t("wizard.nextConfig")}
           </a>
         </li>
+        <Show when={props.applied?.includes(DRAWER_MODEL)}>
+          <TerminalsStep tenant={props.tenant} store={props.store} />
+        </Show>
       </ul>
       {/* The order matters and nothing else says it: a menu published over a missing tax node boots
           a store that cannot close a bill (ADR-0122 §7). */}
