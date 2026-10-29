@@ -1,0 +1,8 @@
+dashboard/src/state/screens.ts:   stockCount: { path: "/stock", key: "nav.stockCount", scope: "store", tenantScoped: true, icon: "package" },
+dashboard/src/state/screens.ts:   { key: "nav.group.overview", items: ["storeHub", "reports", "alerts", "stockCount"] },
+dashboard/src/App.tsx: const StockCount = lazy(() =>
+dashboard/src/App.tsx:   import("./screens/StockCount").then((module) => ({ default: module.StockCount })),
+dashboard/src/App.tsx: );
+dashboard/src/App.tsx:   stockCount: StockCount,
+dashboard/src/i18n/en.json:   "nav.stockCount": "Stock count"
+dashboard/src/i18n/vi.json:   "nav.stockCount": "Kiểm kho"

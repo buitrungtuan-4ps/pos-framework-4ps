@@ -4,7 +4,7 @@
 //! The `/ws` endpoint: one socket per device, fed by the fan-out.
 //!
 //! A device opens one WebSocket and receives a typed event stream; it never polls
-//! ([ADR-0018](../../../docs/adr/0018-http-websocket-stack.md)). Each socket subscribes to the
+//! ([ADR-0018](../../../../docs/adr/0018-http-websocket-stack.md)). Each socket subscribes to the
 //! shared [`Fanout`](crate::fanout::Fanout) and forwards every frame. A device that falls behind is
 //! told to reload ([`ServerMessage::Resync`]) rather than being sent stale frames or making the
 //! server buffer on its behalf.
@@ -90,12 +90,29 @@ impl Start {
     }
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/ws",
+    security(("till_session" = [])),
+    params(
+        ("stream_id" = Option<String>, Query, description = "The stream the device's last applied frame is on, to resume after it"),
+        ("after_sequence" = Option<String>, Query, description = "The sequence of that frame. Sent with stream_id or not at all"),
+        ("Sec-WebSocket-Protocol" = Option<String>, Header, description = "`pos-edge.v1` and, from a browser, the device token, which cannot travel in Authorization on an upgrade"),
+    ),
+    responses(
+        (status = 101, description = "Upgraded: the device receives the store's live frames, resumed after the named \
+                                      position where the fan-out can"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "The request comes from an origin the edge does not permit"),
+    ),
+    tag = "status",
+))]
 /// Upgrades `GET /ws` to a WebSocket and pumps the fan-out into it.
 ///
 /// Reached only through the paired-device gate: an unpaired host on the store LAN is refused `401`
 /// before this runs. Until S0c that gate was absent and this endpoint served the whole
 /// committed-event stream — orders, bills, settlements — to anyone who could route to the box.
-pub(crate) async fn handler(
+pub(crate) async fn fan_out(
     upgrade: WebSocketUpgrade,
     State(state): State<AppState>,
     query: Result<Query<ResumeQuery>, QueryRejection>,

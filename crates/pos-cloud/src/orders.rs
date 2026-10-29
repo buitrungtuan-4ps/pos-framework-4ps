@@ -103,6 +103,7 @@ pub(crate) struct OrderResponse {
     order_id: String,
     created: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     queue_number: Option<u32>,
     total: MoneyDto,
     repriced: bool,
@@ -200,7 +201,7 @@ where
     post,
     path = "/v1/orders",
     request_body = OrderRequest,
-    security(("api_key" = [])),
+    security(("api_key" = ["place_orders"])),
     responses(
         (status = 201, description = "The order was created", body = OrderResponse),
         (status = 200, description = "An idempotent repeat of an already-submitted order", body = OrderResponse),
@@ -378,7 +379,7 @@ pub(crate) fn order_response(acceptance: &OrderAcceptance) -> Response {
         ("sales_channel" = String, Query, description = "The channel wire token, e.g. SALES_CHANNEL_QR"),
         ("external_reference" = String, Query, description = "The caller's idempotency reference"),
     ),
-    security(("api_key" = [])),
+    security(("api_key" = ["place_orders"])),
     responses(
         (status = 200, description = "The order as the store confirmed it", body = OrderResponse),
         (status = 400, description = "A query parameter is missing or malformed"),

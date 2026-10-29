@@ -6,29 +6,41 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
-use pos_cloud::audit::NoopAuditRecorder;
+use pos_cloud::audit::{AuditRecorder, AuditSink, NoopAuditRecorder};
+use pos_cloud::auth::admin::AdminRole;
 use pos_cloud::fees::InMemoryFeeRules;
 use pos_cloud::{Cloud, http};
 use pos_fakes::FakeStore;
 use tower::ServiceExt;
 
 use crate::{
-    FakeAdmin, FakeCatalog, FakeConfigTrees, FakeKeys, FakeRegistry, FakeRollups, FakeTaxRates,
-    FakeWebhooks, admin_cookie, app_all, author_a_menu, clock, get_with_cookie, json_body,
-    post_with_cookie, provisioned_admin, put_with_cookie, ulid_text,
+    FakeAdmin, FakeAudit, FakeCatalog, FakeConfigTrees, FakeKeys, FakeRegistry, FakeRollups,
+    FakeTaxRates, FakeWebhooks, admin_cookie, app_all, author_a_menu, clock, get_with_cookie,
+    json_body, post_json, post_with_cookie, provisioned_admin, put_with_cookie,
+    role_session_cookie, ulid_text,
 };
 
 /// The main router (for login + the effective-config read), the catalog CRUD router, and the publish
 /// router — all sharing one admin, one catalog, and one config-tree store, as production merges them.
 ///
 /// The tax and locale publish routers ride along because a menu publish now requires both nodes
-/// ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §7, finding **F7**):
+/// ([ADR-0122](../../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §7, finding **F7**):
 /// without them a test would have to seed the tree behind the routes to reach the path it is
 /// testing, which is exactly the shortcut that let the rule be built and never exercised end to end.
 fn catalog_publish_app(
     admin: FakeAdmin,
     catalog: FakeCatalog,
     config_trees: FakeConfigTrees,
+) -> axum::Router {
+    catalog_publish_app_with(admin, catalog, config_trees, Arc::new(NoopAuditRecorder))
+}
+
+/// [`catalog_publish_app`], with the publish route recording to `audit`.
+fn catalog_publish_app_with(
+    admin: FakeAdmin,
+    catalog: FakeCatalog,
+    config_trees: FakeConfigTrees,
+    audit: Arc<dyn AuditRecorder>,
 ) -> axum::Router {
     let app = app_all(
         Cloud::new(FakeStore::new()),
@@ -66,7 +78,7 @@ fn catalog_publish_app(
             config_trees,
             admin,
             clock(),
-            Arc::new(NoopAuditRecorder),
+            audit,
         ))
 }
 
@@ -273,7 +285,7 @@ async fn publishing_a_menu_writes_the_compiled_book_onto_the_store_config() {
     assert_eq!(entry["display_name"], "Margherita");
 }
 
-/// The half [ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md) named as
+/// The half [ADR-0130](../../../../docs/adr/0130-a-course-is-something-the-catalog-names.md) named as
 /// missing when the course entity landed: an operator could author a course and put an item on it,
 /// and the compiled `menu` node carried neither, so a store received a price book with no courses in
 /// it and every `course_id` on the wire still pointed at nothing a till could name.
@@ -552,4 +564,107 @@ async fn publishing_also_writes_the_compiled_layout_onto_the_store_config() {
     assert_eq!(category["name"], "Pizza");
     assert_eq!(category["buttons"][0]["label"], "Margherita");
     assert_eq!(category["buttons"][0]["menu_item_id"], item);
+}
+
+/// What a publish answers and records, pinned before the handler is split (ADR-0170 decision 7):
+/// the version it produced, the fees outcome for a store the registry does not hold, and one audit
+/// entry naming the store, the menu and the version.
+#[tokio::test]
+async fn a_publish_answers_its_version_and_fees_and_records_one_audit_entry() {
+    let audit = FakeAudit::default();
+    let router = catalog_publish_app_with(
+        provisioned_admin(),
+        FakeCatalog::default(),
+        FakeConfigTrees::default(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let cookie = admin_cookie(&router).await;
+    let (tenant, store) = (ulid_text(1), ulid_text(2));
+    let menu_id = author_a_menu(&router, &cookie, &tenant).await;
+    publish_menu_prerequisites(&router, &cookie, &tenant, &store).await;
+
+    let published = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/publish",
+            &serde_json::json!({ "tenant_id": tenant, "store_id": store, "menu_id": menu_id }),
+            &cookie,
+        ))
+        .await
+        .expect("route publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    let body = json_body(published).await;
+    let version = body["config_version_id"]
+        .as_str()
+        .expect("a version id")
+        .to_owned();
+    // The store is in no registry the publish can read, so the fees half answers that it failed,
+    // with no version of its own, while the menu half still wrote.
+    assert_eq!(
+        body["fees"],
+        serde_json::json!({ "store_id": store, "outcome": "FEE_PUBLISH_FAILED" })
+    );
+
+    let entries = audit.entries.lock().expect("lock").clone();
+    let [entry] = entries.as_slice() else {
+        panic!("one audit entry: {entries:?}");
+    };
+    assert_eq!(entry.action, "catalog.publish");
+    assert_eq!(entry.entity_type, "store");
+    assert_eq!(entry.entity_id, store);
+    assert_eq!(
+        entry
+            .tenant_id
+            .map(|tenant_id| tenant_id.as_ulid().to_string()),
+        Some(tenant)
+    );
+    assert_eq!(entry.before, None);
+    assert_eq!(
+        entry.after,
+        Some(serde_json::json!({ "menu_id": menu_id, "config_version_id": version }))
+    );
+}
+
+/// The refusals a publish answers before it reads anything: no session, a role that may not
+/// publish, and an id that is not a ULID.
+#[tokio::test]
+async fn a_publish_refuses_no_session_a_role_that_may_not_publish_and_a_bad_id() {
+    let admin = provisioned_admin();
+    let router = catalog_publish_app(
+        admin.clone(),
+        FakeCatalog::default(),
+        FakeConfigTrees::default(),
+    );
+    // The owner logs in first: the login names no email, so it is the only admin when it does.
+    let cookie = admin_cookie(&router).await;
+    let body = serde_json::json!({ "tenant_id": ulid_text(1), "store_id": ulid_text(2), "menu_id": ulid_text(10) });
+
+    let anonymous = router
+        .clone()
+        .oneshot(post_json("/admin/catalog/publish", &body))
+        .await
+        .expect("route publish");
+    assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
+
+    let viewer = role_session_cookie(&admin, AdminRole::Viewer, "viewer-token").await;
+    let by_viewer = router
+        .clone()
+        .oneshot(post_with_cookie("/admin/catalog/publish", &body, &viewer))
+        .await
+        .expect("route publish");
+    assert_eq!(by_viewer.status(), StatusCode::FORBIDDEN);
+
+    let bad = router
+        .oneshot(post_with_cookie(
+            "/admin/catalog/publish",
+            &serde_json::json!({ "tenant_id": ulid_text(1), "store_id": "not-a-ulid", "menu_id": ulid_text(10) }),
+            &cookie,
+        ))
+        .await
+        .expect("route publish");
+    assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(bad).await["error"]["details"][0]["field"],
+        "store_id"
+    );
 }

@@ -10,7 +10,7 @@
 // English is better than nothing, and the entry can be added without a change on the edge.
 
 import { ApiError } from "../api/client";
-import type { ShiftResponse } from "../api/types";
+import type { ShiftResponse } from "../api/schemas";
 import { type MessageKey, t } from "../i18n";
 
 // Token → catalogue key. Several tokens share a sentence where the operator's next step is the same.

@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use axum::http::StatusCode;
 use pos_cloud::audit::{AuditRecorder, AuditSink, AuditStore, NoopAuditRecorder};
+use pos_cloud::auth::admin::AdminRole;
 use pos_cloud::catalog::{CatalogStore, Course};
 use pos_cloud::floorplan::{NewTable, TableStore, TableUpdate};
 use pos_cloud::qr::TableTokenSecret;
@@ -21,7 +22,8 @@ use tower::ServiceExt;
 use crate::{
     FakeAdmin, FakeAudit, FakeCatalog, FakeConfigTrees, FakeFloor, FakeKeys, FakeRollups,
     FakeWebhooks, admin_cookie, app_all, clock, delete_with_cookie, etag_of, get_with_cookie,
-    json_body, patch_with_etag, post_with_cookie, provisioned_admin, store_id, tenant,
+    json_body, patch_with_etag, post_with_cookie, provisioned_admin, role_session_cookie, store_id,
+    tenant,
 };
 
 /// The main app merged with the floor & kitchen router, wired to a caller-supplied audit recorder
@@ -246,7 +248,7 @@ async fn floor_routes_crud_lifecycle_audited() {
 }
 
 /// A routing rule may only match a course the tenant actually carries
-/// ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md) decision 6).
+/// ([ADR-0130](../../../../docs/adr/0130-a-course-is-something-the-catalog-names.md) decision 6).
 ///
 /// This was the sharpest form of the course having no entity behind it: the write checked only that
 /// `menu_item_id` and `course_id` were not both set, because there was nowhere to look. An operator
@@ -503,7 +505,7 @@ async fn floor_publish_compiles_and_writes_the_floor_and_stations_nodes() {
 }
 
 /// Each kitchen station says when its tickets are late
-/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 /// decision 2): a threshold outside a minute to an hour is refused naming the field, a write holds to
 /// the version it read and is audited with the threshold, and the publish carries a station's
 /// threshold and leaves it off a station that sets none, so the edge reads its ten minutes there.
@@ -686,7 +688,7 @@ async fn a_stations_late_threshold_is_checked_guarded_audited_and_published() {
 }
 
 /// Each kitchen station says which language its tickets print in
-/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+/// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 /// decision 2), from the receipt language's own tokens: one this release does not know, or
 /// `RECEIPT_LANGUAGE_UNSPECIFIED`, is refused `400 INVALID_ENUM_VALUE` naming the field; a write holds
 /// to the version it read and is audited with the language; and the publish carries a station's
@@ -946,4 +948,157 @@ async fn table_qr_mints_a_signed_token_per_active_table() {
     let table_ref = pos_cloud::qr::verify_table_token(&secret, token).expect("verifies");
     assert_eq!(table_ref.table_id, active);
     assert_eq!(table_ref.store_id, store);
+}
+
+// --- pinned before `admin_create_routing` is split (ADR-0170 decision 7) -------------------------
+
+/// A routing rule body for the test store and a station, with `target` merged over it.
+fn routing_body(target: &serde_json::Value) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "tenant_id": tenant().as_ulid().to_string(),
+        "store_id": store_id().as_ulid().to_string(),
+        "station_id": Ulid::from_u128(0x57A).to_string(),
+    });
+    if let (Some(fields), Some(target)) = (body.as_object_mut(), target.as_object()) {
+        for (key, value) in target {
+            fields.insert(key.clone(), value.clone());
+        }
+    }
+    body
+}
+
+/// A routing rule is refused, field by field, before anything is read or written: a role that may
+/// not author the floor, an id that is not a ULID, an item or course id that is not one, and a rule
+/// naming both an item and a course. None of them records anything.
+#[tokio::test]
+async fn a_routing_rule_is_refused_field_by_field_and_records_nothing() {
+    let admin = provisioned_admin();
+    let audit = FakeAudit::default();
+    let router = floor_app_with_audit(
+        admin.clone(),
+        FakeFloor::default(),
+        Arc::new(AuditSink::new(audit.clone())),
+        FakeCatalog::default(),
+    );
+    // The owner logs in first: the login names no email, so it is the only admin when it does.
+    let cookie = admin_cookie(&router).await;
+    let item = Ulid::from_u128(0xB0B).to_string();
+
+    let ops = role_session_cookie(&admin, AdminRole::Ops, "ops-token").await;
+    let by_ops = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/kitchen/routing",
+            &routing_body(&serde_json::json!({ "menu_item_id": item })),
+            &ops,
+        ))
+        .await
+        .expect("route the rule");
+    assert_eq!(by_ops.status(), StatusCode::FORBIDDEN);
+
+    for (target, fields) in [
+        (
+            serde_json::json!({ "station_id": "not-a-ulid", "menu_item_id": "nor-this" }),
+            vec!["station_id"],
+        ),
+        (
+            serde_json::json!({ "menu_item_id": "not-a-ulid", "course_id": "nor-this" }),
+            vec!["menu_item_id"],
+        ),
+        (
+            serde_json::json!({ "course_id": "not-a-ulid" }),
+            vec!["course_id"],
+        ),
+        (
+            serde_json::json!({ "menu_item_id": item, "course_id": Ulid::from_u128(0xC0).to_string() }),
+            vec!["menu_item_id", "course_id"],
+        ),
+    ] {
+        let refused = router
+            .clone()
+            .oneshot(post_with_cookie(
+                "/admin/kitchen/routing",
+                &routing_body(&target),
+                &cookie,
+            ))
+            .await
+            .expect("route the rule");
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{target}");
+        let body = json_body(refused).await;
+        let named: Vec<&str> = body["error"]["details"]
+            .as_array()
+            .expect("details")
+            .iter()
+            .filter_map(|detail| detail["field"].as_str())
+            .collect();
+        assert_eq!(named, fields, "{target}: {body}");
+    }
+    assert!(audit.entries.lock().expect("lock").is_empty());
+}
+
+/// A routing rule is answered with its id and recorded with what it routes: the station, the item
+/// or the course, and its sort.
+#[tokio::test]
+async fn a_routing_rule_is_answered_and_recorded_with_what_it_routes() {
+    let audit = FakeAudit::default();
+    let router = floor_app_with_audit(
+        provisioned_admin(),
+        FakeFloor::default(),
+        Arc::new(AuditSink::new(audit.clone())),
+        FakeCatalog::default(),
+    );
+    let cookie = admin_cookie(&router).await;
+    let item = Ulid::from_u128(0xB0B).to_string();
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/kitchen/routing",
+            &routing_body(&serde_json::json!({ "menu_item_id": item, "sort": 7 })),
+            &cookie,
+        ))
+        .await
+        .expect("route the rule");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let id = json_body(created).await["id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+
+    let entries = audit.entries.lock().expect("lock").clone();
+    let [entry] = entries.as_slice() else {
+        panic!("one audit entry: {entries:?}");
+    };
+    assert_eq!(entry.action, "kitchen.routing.create");
+    assert_eq!(entry.entity_type, "station_routing_rule");
+    assert_eq!(entry.entity_id, id);
+    assert_eq!(entry.tenant_id, Some(tenant()));
+    assert_eq!(entry.before, None);
+    assert_eq!(
+        entry.after,
+        Some(serde_json::json!({
+            "id": id,
+            "station_id": Ulid::from_u128(0x57A).to_string(),
+            "menu_item_id": item,
+            "course_id": null,
+            "sort": 7,
+        }))
+    );
+
+    let listed = json_body(
+        router
+            .oneshot(get_with_cookie(
+                &format!(
+                    "/admin/kitchen/routing?tenant_id={}&store_id={}",
+                    tenant().as_ulid(),
+                    store_id().as_ulid()
+                ),
+                &cookie,
+            ))
+            .await
+            .expect("route the list"),
+    )
+    .await;
+    assert_eq!(listed[0]["rule_id"], id.as_str());
+    assert_eq!(listed[0]["menu_item_id"], item.as_str());
+    assert_eq!(listed[0]["sort"], 7);
 }

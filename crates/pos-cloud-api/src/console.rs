@@ -3,6 +3,7 @@
 
 //! What a console route does around its work.
 
+use core::fmt::Write as _;
 use std::sync::Arc;
 
 use axum::http::HeaderMap;
@@ -123,4 +124,19 @@ pub fn mint_ulid(now_ms: i64) -> Option<Ulid> {
     let ms = u64::try_from(now_ms.max(0)).unwrap_or(0);
     // `Ulid::from_parts` masks the randomness to the low 80 bits the format defines.
     Some(Ulid::from_parts(ms, u128::from_le_bytes(bytes)))
+}
+
+/// 32 CSPRNG bytes (256 bits) as a 64-character lowercase hex string, or `None` if the OS entropy
+/// source is unavailable. Used for both the session token and an API-key secret — both need a long,
+/// unguessable, ASCII-safe value.
+#[must_use]
+pub fn random_hex_32() -> Option<String> {
+    let mut bytes = [0_u8; 32];
+    getrandom::fill(&mut bytes).ok()?;
+    let mut hex = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        // Writing to a String is infallible; the result is ignored deliberately.
+        let _ = write!(hex, "{byte:02x}");
+    }
+    Some(hex)
 }

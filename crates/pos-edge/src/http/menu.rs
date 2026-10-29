@@ -2,11 +2,11 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The menu read route (roadmap-v3 slice E5,
-//! [ADR-0063](../../../docs/adr/0063-store-menu-catalog.md)).
+//! [ADR-0063](../../../../docs/adr/0063-store-menu-catalog.md)).
 //!
 //! `GET /api/menu` serves the store's **own** price book from the live
 //! [`EdgeSession`](crate::app::EdgeSession) the config-pull rebuilds — the same catalogue an inbound
-//! order is repriced against ([ADR-0064](../../../docs/adr/0064-edge-order-in.md)). Until this route
+//! order is repriced against ([ADR-0064](../../../../docs/adr/0064-edge-order-in.md)). Until this route
 //! the in-store UI carried a hardcoded list of six pizzas, so publishing a menu from the console
 //! changed every channel *except* the till in front of the guest.
 //!
@@ -53,7 +53,7 @@
 //!
 //! `tip_percents` and `split_ways_max` are published settings rather than flags, and arrived under
 //! the same rule: the pay screen's tip row and its even split read them in the changes that added them
-//! ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+//! ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
 //! So did `walk_in_channel`, which the counter reads to know which book a walk-in is sold from.
 //!
 //! Empty until the cloud publishes a menu — a store never guesses a price (ADR-0063).
@@ -104,6 +104,7 @@ use crate::http::{bad_request, error_response, parse_ulid};
               cannot be regrouped without removing them — see above"
 )]
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct MenuResponse {
     /// The store's currency — every amount below is in it.
     currency: CurrencyCode,
@@ -142,11 +143,12 @@ pub(crate) struct MenuResponse {
     /// `None` rather than "all seven listed" so the till can tell "no restriction published" from "a
     /// restriction that happens to allow everything" — and so a method added to the enum later is
     /// accepted by an unrestricted store without a config change.
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     accepted_tender: Option<Vec<&'static str>>,
     /// The tip keys the pay screen offers, each a whole percentage of the bill, in the order the
     /// store's `tender_keys` node names them: a key set to `0`, or to a percentage an earlier key
     /// offers, is left out
-    /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+    /// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
     /// decision 2). `[5, 10, 15]` until a store sets its own, and empty when no key is left, which
     /// the till takes as no tip row at all.
     ///
@@ -168,7 +170,7 @@ pub(crate) struct MenuResponse {
     /// channel that edge opens every walk-in on.
     walk_in_channel: &'static str,
     /// Every modifier group any item above attaches, listed once
-    /// ([ADR-0127](../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).
+    /// ([ADR-0127](../../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).
     ///
     /// Empty on a store that has published none, which is every store until the console attaches
     /// one — and the till then asks nothing, exactly as it did before this field existed.
@@ -181,7 +183,7 @@ pub(crate) struct MenuResponse {
     /// will not honour, the same failure `tips_enabled` was added to stop.
     courses_enabled: bool,
     /// The courses any item above goes out on, **in service order**
-    /// ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).
+    /// ([ADR-0130](../../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).
     ///
     /// Joins this response in the change that consumes it, which is the rule this module's header
     /// sets: the course picker that fires "starters away" is in this change, and the compiled book
@@ -198,6 +200,7 @@ pub(crate) struct MenuResponse {
 
 /// One sellable item, priced and taxed as this store sells it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct MenuItemResponse {
     /// The item's identifier, which a line names.
     menu_item_id: MenuItemId,
@@ -209,9 +212,10 @@ pub(crate) struct MenuItemResponse {
     tax_class_id: TaxClassId,
     /// The rate for that class on this channel, or `None` when the store's table has no row —
     /// a configuration error the till surfaces rather than papers over with zero.
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     tax_rate: Option<Ratio>,
     /// The modifier groups the till must ask about before this item is sold
-    /// ([ADR-0127](../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).
+    /// ([ADR-0127](../../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).
     ///
     /// Ids, not copies: the groups themselves are listed once on the response below, because one
     /// "Size" group attached to forty pizzas would otherwise be forty copies of the same rule on
@@ -223,6 +227,7 @@ pub(crate) struct MenuItemResponse {
     /// modifier groups are. The till reads it to group an order into starters, mains and desserts,
     /// and to know which lines a fire-by-course will send.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     course_id: Option<CourseId>,
     /// Whether the item can be sold right now. An item present but 86'd is shown and refused, not
     /// hidden, so staff can see why it cannot be ordered.
@@ -235,11 +240,12 @@ pub(crate) struct MenuItemResponse {
 
 /// One course, as the till offers it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct CourseResponse {
     /// The course's identifier, which an item above names and a fire-by-course sends.
     course_id: CourseId,
     /// The name to show, already in the store's display language — the same resolution the item's
-    /// and the group's names get ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md)).
+    /// and the group's names get ([ADR-0074](../../../../docs/adr/0074-localization-and-tax.md)).
     display_name: DisplayName,
     /// Where it falls in the service sequence, ascending.
     ///
@@ -251,11 +257,12 @@ pub(crate) struct CourseResponse {
 
 /// One modifier group, as the till asks it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct ModifierGroupResponse {
     /// The group's identifier, which an item above names.
     modifier_group_id: ModifierGroupId,
     /// The name to show, already in the store's display language — the same resolution the item's
-    /// own name gets ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md)).
+    /// own name gets ([ADR-0074](../../../../docs/adr/0074-localization-and-tax.md)).
     display_name: DisplayName,
     /// How many choices a guest must make. **Zero means optional**; the till has no separate
     /// `required` flag to disagree with this number, and neither does the book.
@@ -326,8 +333,28 @@ pub(crate) struct MenuQuery {
     channel: Option<String>,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/menu",
+    security(("till_session" = [])),
+    params(
+        ("If-None-Match" = Option<String>, Header, description = "The ETag of the copy the till holds"),
+        ("channel" = Option<String>, Query, description = "A sales channel's wire token. Absent means the store's own channel"),
+    ),
+    responses(
+        (status = 200, body = MenuResponse, description = "The published price book for the channel: its currency, and each item with \
+                                      its price, tax and whether it is sold out. \
+                                      The ETag tags this body"),
+        (status = 304, description = "If-None-Match names the current ETag: nothing changed, and no body is sent"),
+        (status = 400, description = "channel is not a sales channel this edge knows, or the query is not one \
+                                      this route reads"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+    ),
+    tag = "published configuration",
+))]
 /// `GET /api/menu` — the store's published price book, read from the live session.
-pub(crate) async fn catalog<S>(
+pub(crate) async fn menu_catalog<S>(
     State(edge): State<Arc<Edge<S>>>,
     query: Result<Query<MenuQuery>, QueryRejection>,
 ) -> Response
@@ -397,17 +424,41 @@ where
 
 /// What marking an item sold out, or restoring it, answers: the item, and whether it is now sold out.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct SoldOutResponse {
     menu_item_id: MenuItemId,
     sold_out: bool,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/menu/{id}/sold-out",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("sales.item.mark_unavailable"))),
+    params(
+        ("id" = String, Path, description = "The menu item's id, a ULID"),
+    ),
+    responses(
+        (status = 200, body = SoldOutResponse, description = "Sold out at this store: the `menu_item_id`, and `sold_out` true. \
+                                      Marking an item already sold out writes nothing"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \
+                                      was superseded by a replacement that holds the store's lease \
+                                      (`SUPERSEDED`)"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, and nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "menu",
+))]
 /// `POST /api/menu/{id}/sold-out` — staff mark an item sold out at this store (86), so every device
 /// greys it out and the edge refuses a line for it until it is restored.
 ///
 /// [`Edge::mark_item_sold_out`] carries the rules: `sales.item.mark_unavailable`, no PIN, and a
 /// second tap on an item already sold out writes nothing.
-pub(crate) async fn sold_out<S>(
+pub(crate) async fn mark_sold_out<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     Path(id): Path<String>,
@@ -418,8 +469,30 @@ where
     set_sold_out(&edge, actor, &id, true).await
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/menu/{id}/restore",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("sales.item.mark_unavailable"))),
+    params(
+        ("id" = String, Path, description = "The menu item's id, a ULID"),
+    ),
+    responses(
+        (status = 200, body = SoldOutResponse, description = "Back on sale: the `menu_item_id`, and `sold_out` false"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \
+                                      was superseded by a replacement that holds the store's lease \
+                                      (`SUPERSEDED`)"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, and nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "menu",
+))]
 /// `POST /api/menu/{id}/restore` — staff bring an item they marked sold out back.
-pub(crate) async fn restore<S>(
+pub(crate) async fn restore_item<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     Path(id): Path<String>,

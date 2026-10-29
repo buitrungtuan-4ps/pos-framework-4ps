@@ -6,7 +6,7 @@
 
 import { createSignal } from "solid-js";
 
-import type { AdminIdentity } from "../api/types";
+import type { AdminIdentity } from "../api/schemas";
 
 const TENANT_KEY = "pos.dashboard.tenant";
 const STORE_KEY = "pos.dashboard.store";

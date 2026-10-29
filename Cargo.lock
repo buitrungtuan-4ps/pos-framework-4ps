@@ -231,7 +231,7 @@ dependencies = [
  "jiff",
  "pos-contract-tests",
  "pos-ports",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "tokio",
 ]
 
@@ -400,7 +400,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "url",
- "webpki-roots 1.0.9",
+ "webpki-roots 1.0.11",
 ]
 
 [[package]]
@@ -541,9 +541,9 @@ dependencies = [
 
 [[package]]
 name = "ctutils"
-version = "0.4.2"
+version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d5515a3834141de9eafb9717ad39eea8247b5674e6066c404e8c4b365d2a29e"
+checksum = "12218662ccac37d9714f2191252553d67585b97df8c839cbe49e0bde278dc865"
 dependencies = [
  "cmov",
 ]
@@ -747,7 +747,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "url",
- "webpki-roots 1.0.9",
+ "webpki-roots 1.0.11",
 ]
 
 [[package]]
@@ -830,9 +830,9 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "font-types"
-version = "0.12.5"
+version = "0.12.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8eb065f3251655b3c90e22e5e363f310fc5332fb3402e37bbc94752283248f6"
+checksum = "6c92d9081c7ab3bd83ef1eecdfad090f3d966e3ce74106779664114cfe1a6274"
 dependencies = [
  "bytemuck",
 ]
@@ -948,13 +948,12 @@ dependencies = [
 
 [[package]]
 name = "harfrust"
-version = "0.13.3"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "948d0741125ba89cd3e1c23e5642415b6ade7e1d29d67ba25fb925b533e989d6"
+checksum = "86aa776d6d32b072119e1f1650f4db843ff4382a4aaa6a2c9c4e35703cd377cb"
 dependencies = [
  "bitflags 2.13.2",
  "bytemuck",
- "once_cell",
  "read-fonts",
  "smallvec",
 ]
@@ -1767,6 +1766,12 @@ dependencies = [
  "link-nats",
  "metrics-vm",
  "pos-cloud-api",
+ "pos-cloud-catalog",
+ "pos-cloud-config",
+ "pos-cloud-devices",
+ "pos-cloud-floor",
+ "pos-cloud-inventory",
+ "pos-cloud-people",
  "pos-cloud-reports",
  "pos-contract-tests",
  "pos-core",
@@ -1783,7 +1788,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1 0.11.0",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "shipping-ahamove",
  "shipping-grabexpress",
  "store-postgres",
@@ -1795,9 +1800,10 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "updater-minisign",
  "url",
  "utoipa",
- "webpki-roots 1.0.9",
+ "webpki-roots 1.0.11",
  "zeroize",
 ]
 
@@ -1816,7 +1822,125 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1 0.11.0",
- "sha2 0.11.0",
+ "sha2 0.11.1",
+ "store-postgres",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "utoipa",
+]
+
+[[package]]
+name = "pos-cloud-catalog"
+version = "0.0.0"
+dependencies = [
+ "axum",
+ "csv",
+ "image",
+ "pos-cloud-api",
+ "pos-cloud-config",
+ "pos-cloud-reports",
+ "pos-core",
+ "pos-proto",
+ "serde",
+ "serde_json",
+ "store-postgres",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "utoipa",
+]
+
+[[package]]
+name = "pos-cloud-config"
+version = "0.0.0"
+dependencies = [
+ "axum",
+ "pos-cloud-api",
+ "pos-core",
+ "pos-fakes",
+ "pos-ports",
+ "pos-proto",
+ "serde",
+ "serde_json",
+ "store-postgres",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "utoipa",
+]
+
+[[package]]
+name = "pos-cloud-devices"
+version = "0.0.0"
+dependencies = [
+ "axum",
+ "getrandom 0.4.3",
+ "pos-cloud-api",
+ "pos-cloud-config",
+ "pos-core",
+ "pos-proto",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "store-postgres",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "utoipa",
+]
+
+[[package]]
+name = "pos-cloud-floor"
+version = "0.0.0"
+dependencies = [
+ "axum",
+ "hmac",
+ "pos-cloud-api",
+ "pos-cloud-catalog",
+ "pos-cloud-config",
+ "pos-core",
+ "pos-proto",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "store-postgres",
+ "thiserror",
+ "tracing",
+ "utoipa",
+]
+
+[[package]]
+name = "pos-cloud-inventory"
+version = "0.0.0"
+dependencies = [
+ "axum",
+ "pos-cloud-api",
+ "pos-cloud-config",
+ "pos-proto",
+ "serde",
+ "serde_json",
+ "store-postgres",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "utoipa",
+]
+
+[[package]]
+name = "pos-cloud-people"
+version = "0.0.0"
+dependencies = [
+ "axum",
+ "getrandom 0.4.3",
+ "pos-cloud-api",
+ "pos-cloud-catalog",
+ "pos-cloud-config",
+ "pos-core",
+ "pos-ports",
+ "pos-proto",
+ "serde",
+ "serde_json",
  "store-postgres",
  "thiserror",
  "tokio",
@@ -1848,6 +1972,7 @@ dependencies = [
 name = "pos-contract-tests"
 version = "0.1.0"
 dependencies = [
+ "pos-core",
  "pos-ports",
  "pos-proto",
  "serde",
@@ -1940,6 +2065,9 @@ dependencies = [
  "pos-country-jp",
  "pos-country-vn",
  "pos-country-zz",
+ "pos-edge",
+ "pos-edge-app",
+ "pos-edge-printing",
  "pos-fakes",
  "pos-ports",
  "pos-proto",
@@ -1948,7 +2076,7 @@ dependencies = [
  "rust-embed",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "store-sqlite",
  "tempfile",
  "thiserror",
@@ -1962,10 +2090,45 @@ dependencies = [
  "tracing-subscriber",
  "updater-minisign",
  "url",
- "webpki-roots 1.0.9",
+ "utoipa",
+ "webpki-roots 1.0.11",
  "windows-protect",
  "windows-service",
  "zeroize",
+]
+
+[[package]]
+name = "pos-edge-app"
+version = "0.0.0"
+dependencies = [
+ "argon2",
+ "getrandom 0.4.3",
+ "pos-core",
+ "pos-fakes",
+ "pos-ports",
+ "pos-proto",
+ "serde",
+ "serde_json",
+ "store-sqlite",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "pos-edge-printing"
+version = "0.0.0"
+dependencies = [
+ "pos-core",
+ "pos-edge-app",
+ "pos-ports",
+ "pos-proto",
+ "pos-render",
+ "printer-escpos",
+ "serde_json",
+ "store-sqlite",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1976,16 +2139,18 @@ dependencies = [
  "pos-ports",
  "pos-proto",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
 ]
 
 [[package]]
 name = "pos-ports"
 version = "0.1.0"
 dependencies = [
+ "pos-ports",
  "pos-proto",
  "serde",
  "serde_json",
+ "utoipa",
 ]
 
 [[package]]
@@ -2009,7 +2174,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
- "webpki-roots 1.0.9",
+ "webpki-roots 1.0.11",
 ]
 
 [[package]]
@@ -2017,10 +2182,12 @@ name = "pos-proto"
 version = "0.1.0"
 dependencies = [
  "jiff",
+ "pos-proto",
  "proptest",
  "serde",
  "serde_json",
  "thiserror",
+ "utoipa",
 ]
 
 [[package]]
@@ -2062,7 +2229,7 @@ dependencies = [
  "md-5",
  "memchr",
  "rand 0.10.2",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "stringprep",
 ]
 
@@ -2269,13 +2436,14 @@ dependencies = [
 
 [[package]]
 name = "read-fonts"
-version = "0.43.3"
+version = "0.45.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "005c8acf251756c478b0bf402885bfd88a1476020c4c7e6060edc1aa68da38ea"
+checksum = "8a5b7bed3d16ab428d8fa533640ab805ff50e7ad8a4d00649de1259e70023282"
 dependencies = [
  "bytemuck",
  "font-types",
  "once_cell",
+ "yoke",
 ]
 
 [[package]]
@@ -2387,7 +2555,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d84e8ba78bd384263e5922f084cbe1b081c3b7e69add59c8fb097b879ba968a"
 dependencies = [
  "mime_guess",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "walkdir",
 ]
 
@@ -2451,9 +2619,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.15"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -2582,9 +2750,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.152"
+version = "1.0.154"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1741ab7a6cc54a03a89b5d563ed60075c277d9e3cfa73ad0c1f23f23974703c6"
+checksum = "e7e9cc8b1b85264074fbcc02a88680c4096b1e47df8f739dceb03bf482f04bd6"
 dependencies = [
  "itoa",
  "memchr",
@@ -2680,9 +2848,9 @@ dependencies = [
 
 [[package]]
 name = "sha2"
-version = "0.11.0"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
+checksum = "47d7069beb7d6ac7b9acd1039986e73443f24234f41074da099d6f994ac9ad19"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.1",
@@ -2716,7 +2884,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "url",
- "webpki-roots 1.0.9",
+ "webpki-roots 1.0.11",
 ]
 
 [[package]]
@@ -2737,7 +2905,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "url",
- "webpki-roots 1.0.9",
+ "webpki-roots 1.0.11",
 ]
 
 [[package]]
@@ -2792,9 +2960,9 @@ checksum = "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
 
 [[package]]
 name = "skrifa"
-version = "0.46.2"
+version = "0.48.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4febebda507fb889c545a37a135517769d1391941013561292897961d1887d6"
+checksum = "a5213b4825bac3587046330052d61bfac7bd3bd0d203c758d7c2ef726fcea034"
 dependencies = [
  "bytemuck",
  "read-fonts",
@@ -2873,7 +3041,7 @@ dependencies = [
  "pos-proto",
  "rusqlite",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "tempfile",
  "tokio",
 ]
@@ -3033,9 +3201,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.53.2"
+version = "1.54.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e95f91fcc7a621e8b030f6aa23c71fe9838ae2fb4d8118b75602a328f5144044"
+checksum = "b52fd3255258d26fac7264ab5a76b53c13367136dc011d3d6ad4f8ed070396a3"
 dependencies = [
  "bytes",
  "libc",
@@ -3641,14 +3809,14 @@ version = "0.26.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
 dependencies = [
- "webpki-roots 1.0.9",
+ "webpki-roots 1.0.11",
 ]
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.9"
+version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
+checksum = "f5f280bbb2b287bc8e7de7e3852945a0ff50d1bbcb5ed42b6c7a568c546df171"
 dependencies = [
  "rustls-pki-types",
 ]

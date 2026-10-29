@@ -2,8 +2,8 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The edge stamps its release — and, since
-//! [ADR-0123](../../docs/adr/0123-a-superseded-box-opens-nothing-new.md), its lease standing — on
-//! every `/api/*` answer ([ADR-0111](../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+//! [ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md), its lease standing — on
+//! every `/api/*` answer ([ADR-0111](../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
 //!
 //! Version drift between an app and the edge it talks to shows up **after** pairing — an OTA ring
 //! moves the edge on a Tuesday, or a shell updates itself overnight — so a value read once at

@@ -4,8 +4,8 @@
 //! Serving the operator UI.
 //!
 //! By default the `ui/dist` build is compiled into the binary with `rust-embed`, so the store is one
-//! static file ([ADR-0018](../../../docs/adr/0018-http-websocket-stack.md),
-//! [ADR-0002](../../../docs/adr/0002-one-binary-per-tier.md)). Under the `dev-ui` feature the same
+//! static file ([ADR-0018](../../../../docs/adr/0018-http-websocket-stack.md),
+//! [ADR-0002](../../../../docs/adr/0002-one-binary-per-tier.md)). Under the `dev-ui` feature the same
 //! paths are read from disk instead, so a UI change is a browser refresh rather than a Rust rebuild.
 
 use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri, header};

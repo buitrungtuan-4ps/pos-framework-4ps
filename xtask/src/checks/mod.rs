@@ -8,15 +8,20 @@
 //! one broken rule does not hide the next.
 
 pub mod actions_pinned;
+pub mod api_types;
 pub mod changelog;
 pub mod countries;
 pub mod crates;
 pub mod deps_rule;
+pub mod guides;
+pub mod hand_types;
+pub mod i18n;
 pub mod links;
 pub mod lint_config;
 pub mod migrations;
 pub mod mirrored_files;
 pub mod print_agent_deps;
+pub mod repo_map;
 pub mod snapshot;
 pub mod tls_modes;
 pub mod vendor_neutral_core;

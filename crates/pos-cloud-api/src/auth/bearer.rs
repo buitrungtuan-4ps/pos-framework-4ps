@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! Bearer authentication for the public `/v1` surface: turn an `Authorization: Bearer pos_…` header
-//! into a verified [`Grant`], or a refusal that leaks nothing ([ADR-0037](../../../docs/adr/0037-api-keys.md)).
+//! into a verified [`Grant`], or a refusal that leaks nothing ([ADR-0037](../../../../docs/adr/0037-api-keys.md)).
 //!
 //! This is the seam between the HTTP edge and the pure [`apikey`](super::apikey) engine. It reads the
 //! header, looks the key up by its public id, and [`verify`]s it against the clock's `now`. Two

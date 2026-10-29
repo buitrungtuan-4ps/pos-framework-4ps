@@ -39,11 +39,14 @@
 //!
 //! Two things can rot. The document can drift from the code, which
 //! [`the_committed_admin_openapi_matches_the_code`] catches the way `/v1`'s snapshot does. And a
-//! route can be added without being documented, which [`every_admin_route_is_documented_or_listed`]
+//! route can be added without being documented, which [`every_admin_route_is_documented`]
 //! catches: it reads this crate's own router source, extracts every registered `/admin` path, and
-//! requires each to be either in the document or named in [`UNDOCUMENTED`]. That list is the
-//! coverage debt, in the repository, shrinking — and a route added tomorrow lands in neither and
-//! fails the build.
+//! requires each to be in the document. The coverage debt list it once also accepted reached empty
+//! with the inventory routes and was deleted (ADR-0177), so a route added tomorrow without an
+//! annotation fails the build.
+//!
+//! Who may call each operation, `security` and `x-permission`, is held to the handlers by
+//! [`crate::openapi_security`] (ADR-0177 decision 5).
 
 use utoipa::openapi::security::{ApiKey, ApiKeyValue, SecurityScheme};
 use utoipa::{Modify, OpenApi};
@@ -72,6 +75,43 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::admin_reenrol_totp,
         crate::http::admin_generate_recovery_codes,
         crate::http::admin_recovery_codes_status,
+        crate::http::admin::admin_list_sessions,
+        crate::http::admin::admin_revoke_session,
+        crate::http::admin::admin_revoke_other_sessions,
+        crate::http::admin::admin_list_admins,
+        crate::http::admin::admin_set_admin_role,
+        crate::http::admin::admin_set_admin_status,
+        crate::http::admin::admin_invite_admin,
+        crate::http::admin::admin_list_invites,
+        crate::http::admin::admin_revoke_invite,
+        crate::http::admin::admin_accept_invite,
+        crate::http::admin::admin_create_api_key,
+        crate::http::admin::admin_list_api_keys,
+        crate::http::admin::admin_revoke_api_key,
+        crate::http::integrations::admin_register_webhook,
+        crate::http::integrations::admin_list_webhooks,
+        crate::http::integrations::admin_delete_webhook,
+        crate::http::integrations::admin_enable_webhook,
+        crate::http::fleet::admin_list_fleet,
+        crate::http::fleet::admin_fleet_store,
+        crate::http::alerts::admin_list_alerts,
+        crate::http::alerts::admin_ack_alert,
+        crate::http::alerts::admin_resolve_alert,
+        crate::http::health::admin_task_health,
+        crate::http::reconcile::admin_reconcile_runs,
+        crate::http::admin::admin_list_audit,
+        crate::http::subjects::admin_lookup_subject,
+        crate::http::subjects::admin_export_subject,
+        crate::http::subjects::admin_erase_subject,
+        crate::http::registry::admin_list_tenants,
+        crate::http::registry::admin_create_tenant,
+        crate::http::registry::admin_update_tenant,
+        crate::http::registry::admin_list_brands,
+        crate::http::registry::admin_create_brand,
+        crate::http::registry::admin_update_brand,
+        crate::http::registry::admin_list_stores,
+        crate::http::registry::admin_create_store,
+        crate::http::registry::admin_update_store,
         crate::http::admin_acknowledge_region,
         crate::http::admin_chain_findings,
         crate::http::admin_list_providers,
@@ -92,8 +132,94 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::admin_set_printer_paper,
         crate::http::admin_set_terminal_receipt,
         crate::http::admin_set_terminal_float,
+        pos_cloud_devices::routes::list_pending_devices,
+        pos_cloud_devices::routes::approve_device,
+        pos_cloud_devices::routes::reject_device,
+        pos_cloud_devices::routes::create_terminal,
+        pos_cloud_devices::routes::set_print_agent,
+        pos_cloud_devices::routes::set_drawer_attached,
+        pos_cloud_devices::routes::admin_publish_devices,
+        crate::http::registry::admin_list_devices,
+        crate::http::registry::admin_create_device,
+        crate::http::registry::admin_update_device,
+        pos_cloud_devices::routes::admin_issue_activation_code,
+        pos_cloud_devices::routes::admin_revoke_activation_codes,
+        pos_cloud_devices::routes::admin_bind_claim,
         pos_cloud_reports::revenue::admin_export_revenue_fees,
         pos_cloud_reports::revenue::admin_export_revenue_tax,
+        pos_cloud_reports::rollups::admin_daily_rollups,
+        pos_cloud_reports::rollups::admin_export_rollups,
+        pos_cloud_reports::rollups::admin_rollups_reset,
+        pos_cloud_reports::revenue::admin_revenue_daily,
+        pos_cloud_reports::revenue::admin_export_revenue,
+        pos_cloud_reports::xz::admin_xz_report,
+        crate::http::campaigns::admin_list_campaigns,
+        crate::http::campaigns::admin_create_campaign,
+        crate::http::campaigns::admin_get_campaign,
+        crate::http::campaigns::admin_update_campaign,
+        crate::http::campaigns::admin_delete_campaign,
+        crate::http::campaigns::admin_list_vouchers,
+        crate::http::campaigns::admin_generate_vouchers,
+        crate::http::cell::admin_get_cell,
+        crate::cell::hq::admin_hq_rollups,
+        crate::http::cell_standing::admin_cell_standing,
+        crate::http::cell_standing::admin_acknowledge_cell,
+        crate::http::countries::admin_list_countries,
+        crate::http::countries::admin_list_locales,
+        pos_cloud_catalog::routes::catalog::admin_list_display_categories,
+        pos_cloud_catalog::routes::catalog::admin_create_display_category,
+        pos_cloud_catalog::routes::catalog::admin_update_display_category,
+        pos_cloud_catalog::routes::catalog::admin_list_display_subcategories,
+        pos_cloud_catalog::routes::catalog::admin_create_display_subcategory,
+        pos_cloud_catalog::routes::catalog::admin_update_display_subcategory,
+        pos_cloud_catalog::routes::catalog::admin_list_item_categories,
+        pos_cloud_catalog::routes::catalog::admin_create_item_category,
+        pos_cloud_catalog::routes::catalog::admin_update_item_category,
+        pos_cloud_catalog::routes::catalog::admin_list_item_subcategories,
+        pos_cloud_catalog::routes::catalog::admin_create_item_subcategory,
+        pos_cloud_catalog::routes::catalog::admin_update_item_subcategory,
+        pos_cloud_catalog::routes::catalog::admin_list_courses,
+        pos_cloud_catalog::routes::catalog::admin_create_course,
+        pos_cloud_catalog::routes::catalog::admin_update_course,
+        pos_cloud_catalog::routes::catalog::admin_list_items,
+        pos_cloud_catalog::routes::catalog::admin_create_item,
+        pos_cloud_catalog::routes::catalog::admin_update_item,
+        pos_cloud_catalog::routes::catalog::admin_export_items,
+        pos_cloud_catalog::routes::catalog::admin_import_items_dry_run,
+        pos_cloud_catalog::routes::catalog::admin_import_items_apply,
+        pos_cloud_catalog::routes::catalog::admin_list_menus,
+        pos_cloud_catalog::routes::catalog::admin_create_menu,
+        pos_cloud_catalog::routes::catalog::admin_update_menu,
+        pos_cloud_catalog::routes::catalog::admin_list_menu_sections,
+        pos_cloud_catalog::routes::catalog::admin_create_menu_section,
+        pos_cloud_catalog::routes::catalog::admin_update_menu_section,
+        pos_cloud_catalog::routes::catalog::admin_list_placements,
+        pos_cloud_catalog::routes::catalog::admin_create_placement,
+        pos_cloud_catalog::routes::catalog::admin_update_placement,
+        pos_cloud_catalog::routes::catalog::admin_remove_placement,
+        pos_cloud_catalog::routes::catalog::admin_list_layout_buttons,
+        pos_cloud_catalog::routes::catalog::admin_create_layout_button,
+        pos_cloud_catalog::routes::catalog::admin_update_layout_button,
+        pos_cloud_catalog::routes::catalog::admin_remove_layout_button,
+        pos_cloud_catalog::routes::catalog::admin_list_modifier_groups,
+        pos_cloud_catalog::routes::catalog::admin_create_modifier_group,
+        pos_cloud_catalog::routes::catalog::admin_update_modifier_group,
+        pos_cloud_catalog::routes::catalog::admin_list_tax_classes,
+        pos_cloud_catalog::routes::catalog::admin_create_tax_class,
+        pos_cloud_catalog::routes::catalog::admin_update_tax_class,
+        pos_cloud_catalog::routes::catalog::admin_publish_menu,
+        pos_cloud_catalog::routes::tax_rates::admin_list_tax_rates,
+        pos_cloud_catalog::routes::tax_rates::admin_set_tax_rates,
+        pos_cloud_catalog::routes::media::admin_list_media,
+        pos_cloud_catalog::routes::media::admin_upload_media,
+        pos_cloud_catalog::routes::media::admin_get_media_thumbnail,
+        pos_cloud_catalog::routes::media::admin_get_media_detail,
+        pos_cloud_catalog::routes::media::admin_delete_media,
+        pos_cloud_catalog::routes::translations::get_translations,
+        pos_cloud_catalog::routes::translations::put_translations,
+        pos_cloud_catalog::routes::translations::export_translations,
+        pos_cloud_catalog::routes::translations::import_translations_dry_run,
+        pos_cloud_catalog::routes::translations::import_translations_apply,
         crate::http::admin_list_store_groups,
         crate::http::admin_create_store_group,
         crate::http::admin_update_store_group,
@@ -103,6 +229,81 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::admin_read_store_group_batch,
         crate::http::admin_list_store_archives,
         crate::http::admin_config_nodes,
+        crate::http::config_publish::admin_config_effective,
+        crate::http::config_publish::admin_config_publish,
+        crate::http::config_publish::admin_config_versions,
+        crate::http::config_publish::admin_config_version_effective,
+        crate::http::config_publish::admin_config_rollback,
+        crate::http::config_nodes::admin_read_channels,
+        crate::http::config_nodes::admin_publish_channels,
+        crate::http::config_nodes::admin_read_tender,
+        crate::http::config_nodes::admin_publish_tender,
+        crate::http::config_nodes::admin_read_origins,
+        crate::http::config_nodes::admin_publish_origins,
+        crate::http::config_nodes::admin_read_qr,
+        crate::http::config_nodes::admin_publish_qr,
+        crate::http::config_nodes::admin_read_retention,
+        crate::http::config_nodes::admin_publish_retention,
+        crate::http::config_nodes::admin_read_vendors,
+        crate::http::config_nodes::admin_publish_vendors,
+        crate::http::config_nodes::admin_publish_locale,
+        crate::http::config_nodes::admin_publish_store_profile,
+        crate::http::config_nodes::admin_publish_tax,
+        crate::http::config_publish::admin_preview_config_node,
+        pos_cloud_people::routes::admin_list_capabilities,
+        pos_cloud_people::routes::admin_publish_capabilities,
+        crate::http::ota_rollout::admin_get_lease,
+        crate::http::ota_rollout::admin_bump_lease,
+        crate::http::ota_rollout::admin_settle_handover,
+        crate::http::ota_rollout::admin_retire_handover,
+        crate::http::ota_rollout::admin_publish_rollout,
+        crate::http::ota_rollout::admin_halt_rollout,
+        crate::http::ota_rollout::admin_get_rollout,
+        crate::http::ota_rollout::admin_publish_placement,
+        crate::http::ota_rollout::admin_get_placement,
+        crate::http::ota::admin_upload_ota_release,
+        crate::http::ota::admin_list_ota_release,
+        crate::http::ota::admin_download_installer,
+        crate::http::ota::admin_fetch_ota_release,
+        crate::http::campaigns::admin_publish_campaigns,
+        crate::http::campaigns::preview_publish_campaigns,
+        crate::http::campaigns::admin_schedule_campaigns,
+        crate::http::campaigns::admin_list_scheduled,
+        crate::http::campaigns::admin_cancel_scheduled,
+        admin_openapi,
+        pos_cloud_floor::routes::admin_list_areas,
+        pos_cloud_floor::routes::admin_create_area,
+        pos_cloud_floor::routes::admin_get_area,
+        pos_cloud_floor::routes::admin_update_area,
+        pos_cloud_floor::routes::admin_list_tables,
+        pos_cloud_floor::routes::admin_create_table,
+        pos_cloud_floor::routes::admin_get_table,
+        pos_cloud_floor::routes::admin_update_table,
+        pos_cloud_floor::routes::admin_publish_floor,
+        pos_cloud_floor::routes::admin_list_table_qr,
+        pos_cloud_floor::routes::admin_list_stations,
+        pos_cloud_floor::routes::admin_create_station,
+        pos_cloud_floor::routes::admin_get_station,
+        pos_cloud_floor::routes::admin_update_station,
+        pos_cloud_floor::routes::admin_list_routing,
+        pos_cloud_floor::routes::admin_create_routing,
+        pos_cloud_floor::routes::admin_remove_routing,
+        pos_cloud_inventory::routes::admin_list_ingredients,
+        pos_cloud_inventory::routes::admin_create_ingredient,
+        pos_cloud_inventory::routes::admin_get_ingredient,
+        pos_cloud_inventory::routes::admin_update_ingredient,
+        pos_cloud_inventory::routes::admin_delete_ingredient,
+        pos_cloud_inventory::routes::admin_list_recipes,
+        pos_cloud_inventory::routes::admin_create_recipe,
+        pos_cloud_inventory::routes::admin_get_recipe,
+        pos_cloud_inventory::routes::admin_update_recipe,
+        pos_cloud_inventory::routes::admin_delete_recipe,
+        pos_cloud_inventory::routes::admin_list_suppliers,
+        pos_cloud_inventory::routes::admin_create_supplier,
+        pos_cloud_inventory::routes::admin_get_supplier,
+        pos_cloud_inventory::routes::admin_update_supplier,
+        pos_cloud_inventory::routes::admin_delete_supplier,
+        pos_cloud_inventory::routes::admin_publish_inventory,
         crate::http::admin_settings_catalogue,
         crate::http::admin_list_settings,
         crate::http::admin_put_setting,
@@ -110,7 +311,21 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::admin_effective_settings,
         crate::http::admin_apply_setting_presets,
         crate::http::admin_publish_settings,
-        crate::http::admin_permissions_readiness,
+        pos_cloud_people::routes::admin_permissions_readiness,
+        pos_cloud_people::routes::admin_list_permissions,
+        pos_cloud_people::routes::admin_list_employees,
+        pos_cloud_people::routes::admin_create_employee,
+        pos_cloud_people::routes::admin_get_employee,
+        pos_cloud_people::routes::admin_update_employee,
+        pos_cloud_people::routes::admin_set_employee_pin,
+        pos_cloud_people::routes::admin_list_roles,
+        pos_cloud_people::routes::admin_create_role,
+        pos_cloud_people::routes::admin_get_role,
+        pos_cloud_people::routes::admin_update_role,
+        pos_cloud_people::routes::admin_list_assignments,
+        pos_cloud_people::routes::admin_create_assignment,
+        pos_cloud_people::routes::admin_remove_assignment,
+        pos_cloud_people::routes::admin_publish_permissions,
         crate::http::admin_list_fees,
         crate::http::admin_create_fee,
         crate::http::admin_put_fee,
@@ -130,8 +345,12 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         (
             name = "auth",
             description = "Two-factor sign-in, the session it issues, and the second-factor levers \
-                           (ADR-0034, ADR-0060). Everything else on this surface stands behind the \
-                           session these routes establish."
+                           (ADR-0034, ADR-0060); an administrator's own sessions, listed and \
+                           revoked; and who administers the console, by invitation, role and status \
+                           (ADR-0067). An invitation's token and an enrolment's TOTP secret are each \
+                           returned once and stored only as a hash or not at all. The last active \
+                           owner cannot be demoted or suspended. Everything else on this surface \
+                           stands behind the session these routes establish."
         ),
         (
             name = "config releases",
@@ -150,6 +369,16 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
                            and the store's sync path are untouched. Membership is replaced wholesale \
                            under the group's own ETag, because a cohort is a set and a delta API \
                            merges two admins' concurrent edits into one neither of them chose."
+        ),
+        (
+            name = "integrator access",
+            description = "The credentials and destinations of the `/v1` integrator surface: a \
+                           tenant's scoped API keys (ADR-0037) and the webhook endpoints a store's \
+                           events are sent to (ADR-0032). A key's token and an endpoint's signing \
+                           secret are each returned once, when it is made; no read returns either. \
+                           A webhook URL is checked before it is stored, so it can never point into \
+                           the cloud's own network. Revoking a key and deleting an endpoint are \
+                           idempotent and say nothing about whether one existed."
         ),
         (
             name = "integrations",
@@ -180,33 +409,196 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
                            `/admin/stores/{store_id}/devices`."
         ),
         (
+            name = "box activation",
+            description = "The device slots a store has, and how a box earns the credential for \
+                           one (ADR-0050, ADR-0065, ADR-0148). An administrator registers a slot, \
+                           then either issues a one-time activation code for its setup sheet or \
+                           binds the code a box with no store shows on its screen. Either way the \
+                           box receives its credential once, and only a hash of it is kept. An \
+                           activation code is returned exactly once and can be cancelled until it \
+                           is spent."
+        ),
+        (
+            name = "device onboarding",
+            description = "How a store's printers, kitchen displays and tills come into service \
+                           (ADR-0041, ADR-0100, ADR-0112). A store proposes each device it \
+                           discovers; an administrator approves it, stating how it is attached and \
+                           which station it serves, or rejects it. A till is never discovered, so \
+                           an administrator creates it directly. Nothing reaches a store until its \
+                           approved devices are published as its `devices` node."
+        ),
+        (
             name = "printers",
             description = "What paper each approved printer takes and whether it cuts it \
                            (ADR-0160 decision 2), which printer a till's receipts go to and the \
                            languages they print in (decision 4), and the float a till's drawer \
-                           opens with (ADR-0167 decision 4). The rest of the device-onboarding \
-                           surface is still coverage debt; these writes are documented because a \
-                           route new to this surface is, and because a fork's own console needs \
-                           to know that a printer nobody has set prints as 80 mm paper with a \
+                           opens with (ADR-0167 decision 4), the terminal whose print agent \
+                           drives a printer (ADR-0112), and whether a cash drawer is wired to it \
+                           (ADR-0165). A fork's own console needs to know that a printer nobody has set prints as 80 mm paper with a \
                            cutter, that a till nobody has set prints and opens its drawer as the \
                            store does, and that nothing reaches a store until its devices are \
                            published."
         ),
         (
+            name = "media",
+            description = "A tenant's image library (ADR-0042, ADR-0075): an upload is re-encoded \
+                           into a bounded thumbnail and detail JPEG, the upload itself is never \
+                           stored, and an item names an image by its id. A rendition never \
+                           changes, so it is served with a long private cache."
+        ),
+        (
+            name = "translations",
+            description = "A tenant's translation grid (ADR-0020, ADR-0043): each content key to its \
+                           strings by locale, every key carrying `en`, the fallback a till shows when \
+                           a locale has none. The grid is one entity, replaced wholesale and \
+                           conditionally from the grid screen, or merged row by row from a CSV after \
+                           a dry run."
+        ),
+        (
+            name = "till layout",
+            description = "The buttons a till shows on each sales channel (ADR-0066): one per item \
+                           per channel, under a display category, in a fixed grid slot or flowing \
+                           by sort order. A publish compiles them into the store's layout, apart \
+                           from its prices, so moving a button reprices nothing."
+        ),
+        (
+            name = "modifiers",
+            description = "The choices offered with an item (ADR-0066, ADR-0127): a modifier group \
+                           offers some items on others, with how many a guest must and may pick. \
+                           A group is tenant-wide; a publish keeps the groups a menu's channels \
+                           can offer."
+        ),
+        (
+            name = "tax",
+            description = "What tax an item is charged (ADR-0074, ADR-0104): each item names a tax \
+                           class, and the tenant's rate table gives each class a rate on each sales \
+                           channel, in basis points, optionally broken into named components an \
+                           invoice prints. The table is one entity, replaced wholesale and \
+                           conditionally. A class that active items still use cannot be archived, \
+                           and a store refuses to price an item on a channel its class has no rate \
+                           for."
+        ),
+        (
+            name = "menus",
+            description = "Where a tenant's items are sold and for how much (ADR-0066): menus, \
+                           which may inherit from a parent menu; their sections; and placements, \
+                           an item on a menu with its price on each sales channel and whether it \
+                           is available. Prices are integers in the currency's minor units, and \
+                           they are T2, so reading placements needs `console.reports.revenue`. A \
+                           placement's prices are the price-change journal: every change is \
+                           audited with them. Nothing reaches a store until a menu is published \
+                           to it, which compiles the menu with the menus it inherits from into the \
+                           store's price book and till layout."
+        ),
+        (
+            name = "catalog items",
+            description = "A tenant's item master (ADR-0066, ADR-0075): each item's name and \
+                           per-locale names, tax class, categories, course and photo. An item \
+                           carries no price; a price belongs to its placement on a menu. Item ids \
+                           are minted by the server and are what an order names an item by. The \
+                           master round-trips as a CSV: export it, edit it in a spreadsheet, check \
+                           the file with a dry run, then apply it. A file can update or create \
+                           items but never mint an id. Nothing reaches a store until its catalog is \
+                           published."
+        ),
+        (
+            name = "catalog taxonomy",
+            description = "How a tenant's catalog is sorted (ADR-0066, ADR-0130): item categories \
+                           and their sub-categories, which reporting groups an item under; display \
+                           categories and their sub-categories, which a till's layout shows; and \
+                           courses, the order a table's dishes are served in. Ids are minted by the \
+                           server, records are archived rather than deleted, and every edit is \
+                           conditional on the version it was read at. An item category or \
+                           sub-category that active items still use cannot be archived. Nothing \
+                           reaches a store until its catalog is published."
+        ),
+        (
+            name = "cell",
+            description = "Which cell this cloud is (ADR-0179): its cell id, country alias, home \
+                           country, base URL and the country its servers run in, from the \
+                           `[cell]` section of `cloud.toml`. Read-only, and fixed when the server \
+                           starts; a cloud with no `[cell]` section is the one default cell. It also says which \
+                           signed cell directory the cell answers from, if any."
+        ),
+        (
+            name = "countries",
+            description = "The read-only master data a console picks a store's country and \
+                           locale from (ADR-0074, ADR-0105): the country modules this build \
+                           carries, with the currency, number format, retention and till facts \
+                           each fixes, and the content locales the platform serves. Fixed when the \
+                           server starts."
+        ),
+        (
+            name = "campaigns",
+            description = "The promotions a tenant authors for its stores' pricing engine \
+                           (ADR-0077): item, combo, bill, voucher and manual campaigns, and the \
+                           codes a voucher campaign redeems. Ids are minted by the server and every \
+                           edit is conditional on the version it was read at. Nothing reaches a \
+                           store until its campaigns are published. A voucher code carries \
+                           redeemable value, so even listing codes needs \
+                           `console.campaigns.manage`, and no audit entry records a code or a \
+                           discount's terms."
+        ),
+        (
             name = "reports",
-            description = "A store's takings over a window of its trading days, read from the \
-                           materialised rollup (ADR-0036, ADR-0081). Prices are T2, so every route \
-                           here needs `console.reports.revenue`. The daily reads and the revenue \
-                           export are still coverage debt; the exports of fees by code (ADR-0159) \
-                           and of tax by component (ADR-0168) are documented because a route new \
-                           to this surface is."
+            description = "What a store did over a window of its trading days, read from the \
+                           materialised rollup and never from the event log (ADR-0036, ADR-0081): \
+                           its activity counts, its takings, fees by code (ADR-0159) and tax by \
+                           component (ADR-0168), each as a read or a CSV download, and the X or Z \
+                           report for one day. Prices are T2, so every read or export of an amount \
+                           needs `console.reports.revenue`; the activity counts need only \
+                           `console.data.read`. An export is audited by how many rows it held, never \
+                           what they held. Resetting a store's rollup has the projector rebuild it \
+                           from the event log."
         ),
         (
             name = "fleet",
             description = "Where each store runs and how it is standing (ADR-0068, ADR-0110, \
-                           ADR-0114). The reads themselves are still coverage debt; the one write \
-                           here is documented because it is the only one on this surface a person \
-                           answers a compliance warning with."
+                           ADR-0114): its last contact and whether it is online, the configuration \
+                           and binary it runs, what it holds unsent, and whether the country its \
+                           data rests in agrees with the one it is registered in. Online and \
+                           current are derived when read, never stored. The one write answers a \
+                           region difference, the compliance warning the single-store read shows."
+        ),
+        (
+            name = "operations",
+            description = "Whether the cloud and the fleet are working (ADR-0068, ADR-0073, \
+                           ADR-0078): the alerts the evaluator keeps, fleet-wide, with their \
+                           acknowledgement and resolution; the health of each background loop; \
+                           and the reconciliation runs that show no store's events were lost."
+        ),
+        (
+            name = "registry",
+            description = "The organisation a console administers (ADR-0065): its tenants, the \
+                           brands a tenant trades under, and its stores. Every record is created \
+                           active with an id minted by the server and leaves service by being \
+                           archived rather than deleted; every edit is conditional on the version \
+                           it was read at. A new tenant is given its six starting roles (ADR-0158). \
+                           A store's devices, configuration and reports are separate surfaces \
+                           under the store's path."
+        ),
+        (
+            name = "subject requests",
+            description = "The instrument the Data Protection contact uses to carry out one data \
+                           subject's access, portability or erasure request under Vietnam's PDPD \
+                           (Decree 13/2023) or the GDPR (ADR-0076). It assists that process and \
+                           records it; it does not decide it. Before any of these routes is used, a \
+                           person confirms the lawful basis and the subject's identity, and confirms \
+                           consent, retention and, for customer analytics, a DPIA. A request from an \
+                           EU resident is escalated to the Data Protection contact rather than \
+                           actioned here, and moving an export across a border needs a DTA or \
+                           explicit consent first. Each route acts on one subject of one tenant: \
+                           there is no list, no bulk export and no cross-tenant read, because a bulk \
+                           export is an escalation, not a feature. Only an owner holds \
+                           `console.subjects.manage`, and every call is audited with ids and counts, \
+                           never a personal value."
+        ),
+        (
+            name = "audit",
+            description = "Every console write, who made it and when (ADR-0069), read by any \
+                           console role. An entry records ids, codes and statuses, never a \
+                           person's name or a secret; an employee's staff code is shown only to a \
+                           role that may read the roster (ADR-0158 decision 9)."
         ),
         (
             name = "settings",
@@ -219,11 +611,17 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         ),
         (
             name = "people",
-            description = "Who may do what at a store (ADR-0070, ADR-0158). The staff, role and \
-                           assignment routes are still coverage debt; the readiness read is \
-                           documented because it is new to this surface, and because a fork's own \
-                           console needs it before a store enforces each person's own permissions. \
-                           It names roles and counts people, and names no person."
+            description = "Who may do what at a store (ADR-0070, ADR-0158): the people a tenant \
+                           employs, the roles that say what each may do, the assignments that give \
+                           a person a role at one store, a store group or every store, and the \
+                           publish that compiles them into a store's `permissions` node. Staff \
+                           records name people, so reading them needs `console.people.read`; the \
+                           permission catalogue and the roles name nobody. A write is audited with \
+                           ids, codes and statuses, never a name or a PIN. Archiving a person or a \
+                           role, removing an assignment, and assigning to a group or every store \
+                           publish to every store the change reaches before they answer, and report \
+                           each store's outcome. The readiness read names roles and counts people, \
+                           and names no person."
         ),
         (
             name = "fees",
@@ -238,17 +636,123 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
                            its list."
         ),
         (
+            name = "lease",
+            description = "Which machine is the store (ADR-0108, ADR-0110, ADR-0114): the store's \
+                           lease generation, issued only by the server and only by a bump, which \
+                           is the act of making a different machine the store and may move where \
+                           it runs and where its data rests. A bump will not abandon a previous \
+                           machine that still holds events unless a person acknowledges it by \
+                           generation. A handover ends when the old machine drains, or when a person \
+                           settles it by attestation; retiring the old machine afterwards is a \
+                           separate decision. Every one of these is audited with who made it."
+        ),
+        (
+            name = "ota rollout",
+            description = "Which release a store installs, and when (ADR-0052, ADR-0078): the \
+                           rollout names a hosted release, the lowest eligible ring and how much of \
+                           the fleet ring may take it, and the key it is signed by; the placement \
+                           puts the store in a ring and fixes its place in the ramp. Both are \
+                           configuration-tree nodes the store pulls, validated by the rules the \
+                           store itself applies. The kill switch halts or resumes a rollout without \
+                           restating it. Writes are audited."
+        ),
+        (
+            name = "release hosting",
+            description = "The signed releases the cloud hands its stores (ADR-0088, ADR-0141). An \
+                           operator uploads a release executable with its minisign signature, or \
+                           has the cloud fetch them from the published release. The cloud stores \
+                           the bytes and never signs them or checks the signature: each store \
+                           verifies it itself. A release, once hosted for a target, keeps its bytes. \
+                           A Windows store's one-file installer is a hosted executable named for \
+                           that store. Served only where the cloud is configured to host \
+                           artifacts."
+        ),
+        (
+            name = "scheduled publishes",
+            description = "Publishes waiting for their time (ADR-0077): a store's pending ones, \
+                           listed, and one cancelled before it is applied. Each names the node it \
+                           will publish and its instant, and the scheduler publishes it then. A \
+                           cancel is audited."
+        ),
+        (
+            name = "floor",
+            description = "A store's floor (ADR-0072): its areas and the tables in them, each with a \
+                           label, seats and a place on the editor's grid, archived rather than \
+                           deleted, and every edit conditional on the version it was read at. \
+                           Nothing reaches the store until its floor and kitchen are published \
+                           together. The printable QR sheet mints each active table's signed \
+                           token, which carries no personal data."
+        ),
+        (
+            name = "kitchen",
+            description = "A store's kitchen (ADR-0072): its stations, each with a backup, a late \
+                           threshold and the language its tickets print in, and the rules that \
+                           route a menu item or a course to a station. A rule matches exactly one \
+                           of the two, and only a course the tenant carries. Stations are archived \
+                           rather than deleted and edited conditionally; a rule is removed. Nothing \
+                           reaches the store until its floor and kitchen are published together."
+        ),
+        (
+            name = "inventory",
+            description = "A tenant's inventory (ADR-0079): its ingredients, each in a unit of \
+                           measure; its suppliers; and a recipe for each menu item or modifier \
+                           that consumes them, with an auto-86 threshold. Ingredients and \
+                           suppliers get ids minted here; a recipe is keyed by the item it makes. \
+                           Every edit is conditional on the version it was read at. A recipe's \
+                           amounts are proprietary, so no audit entry records them. Nothing \
+                           reaches a store until its inventory is published."
+        ),
+        (
+            name = "openapi",
+            description = "This document (ADR-0019), served without a session: it describes routes \
+                           and carries no tenant data."
+        ),
+        (
+            name = "config nodes",
+            description = "The per-store configuration a console reads and writes one node at a \
+                           time (ADR-0057, ADR-0080, ADR-0111, ADR-0145): the sales channels a \
+                           store takes orders on, the payment methods it accepts, the second origins \
+                           its edge answers, its QR ordering guardrails, how long it keeps a synced \
+                           event, its delivery-marketplace policies, its locale, its legal identity, \
+                           its tax table and its capability flags, and a preview of any node's \
+                           publish. A read gives the node as the store runs it, composed from all four layers; a publish writes it on the \
+                           store's own layer as a new configuration version, which the store pulls \
+                           on its next sync."
+        ),
+        (
             name = "config",
-            description = "A store's published configuration (ADR-0033). The authoring routes are \
-                           still coverage debt; the per-node read here is documented because it is \
-                           what a fork's own console needs to answer the operator's actual \
-                           question — which node is stale — and because it carries no \
-                           configuration values at all, only which nodes exist and when each was \
-                           last published."
+            description = "A store's configuration tree (ADR-0033): four layers — tenant, brand, \
+                           store and device — composed and validated into the document the store \
+                           runs, with an append-only history of versions. A layer is replaced \
+                           whole, conditional on the version it was read at; a rollback restores a \
+                           past version as a new one. The effective document is redacted for its \
+                           reader, and the per-node read carries no values at all, only which \
+                           nodes exist and when each was last published. A store pulls a new \
+                           version on its next sync."
         ),
     )
 )]
 pub(crate) struct AdminApiDoc;
+
+#[utoipa::path(
+    get,
+    path = "/admin/openapi.json",
+    security(),
+    extensions(("x-public-reason" = json!("nothing: it describes routes and carries no tenant data"))),
+    responses(
+        (status = 200, body = pos_cloud_api::body_schema::FreeFormJson, description = "This document, as JSON. No session is needed"),
+    ),
+    tag = "openapi",
+)]
+/// Serves the generated `/admin` console API document (roadmap v3 B5).
+///
+/// Unauthenticated, like `/v1/openapi.json`: it describes routes and carries no tenant data, and
+/// the console SPA this server already ships publicly names every one of these paths in its own
+/// JavaScript — so a session guard here would withhold nothing an unauthenticated caller cannot
+/// already read, while blocking the fork developer the document exists for.
+pub(crate) async fn admin_openapi() -> axum::Json<utoipa::openapi::OpenApi> {
+    axum::Json(AdminApiDoc::openapi())
+}
 
 /// Declares the host-only session cookie the `/admin` routes authenticate with
 /// ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)), so the document tells a client how to
@@ -270,221 +774,6 @@ impl Modify for SessionCookie {
         }
     }
 }
-
-/// The `/admin` routes this document does not yet describe — the coverage debt, and the reason
-/// [`every_admin_route_is_documented_or_listed`] can pass while coverage is partial.
-///
-/// Every entry is a path a fork's client can call and will find no documentation for. The list only
-/// shrinks: a route added without an entry and without an annotation fails that test, so new
-/// surface cannot join the debt silently. When it reaches empty, delete it and the test becomes
-/// "every route is documented" with nothing further to do.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the coverage debt is documentation that ships with the crate — the tests are what \
-                  read it, but deleting it from a release build would delete the record"
-    )
-)]
-const UNDOCUMENTED: &[&str] = &[
-    // --- sessions and administrator management (G1, ADR-0067) ---
-    "/admin/sessions",
-    "/admin/sessions/revoke-others",
-    "/admin/sessions/{id}",
-    "/admin/admins",
-    "/admin/admins/{id}/role",
-    "/admin/admins/{id}/status",
-    "/admin/invites",
-    "/admin/invites/accept",
-    "/admin/invites/{id}",
-    // --- the tenant / brand / store registry (WS-C) ---
-    "/admin/tenants",
-    "/admin/tenants/{tenant_id}",
-    "/admin/brands",
-    "/admin/brands/{brand_id}",
-    "/admin/stores",
-    "/admin/stores/{store_id}",
-    "/admin/stores/{store_id}/config",
-    "/admin/stores/{store_id}/config/rollback",
-    "/admin/stores/{store_id}/config/versions",
-    "/admin/stores/{store_id}/config/versions/{version_id}",
-    "/admin/stores/{store_id}/config/{level}",
-    "/admin/stores/{store_id}/devices",
-    "/admin/stores/{store_id}/devices/{device_id}",
-    "/admin/stores/{store_id}/reports/xz",
-    "/admin/stores/{store_id}/revenue/daily",
-    "/admin/stores/{store_id}/revenue/export",
-    "/admin/stores/{store_id}/rollups/daily",
-    "/admin/stores/{store_id}/rollups/export",
-    "/admin/stores/{store_id}/rollups/reset",
-    // --- scoped integrator keys, webhook destinations, device onboarding ---
-    "/admin/api-keys",
-    "/admin/api-keys/{id}",
-    "/admin/webhooks",
-    "/admin/webhooks/{id}",
-    "/admin/webhooks/{id}/enable",
-    "/admin/devices/proposals",
-    "/admin/devices/proposals/{id}/approve",
-    "/admin/devices/proposals/{id}/reject",
-    // The print-agent pair (ADR-0112). Undocumented for the same reason as the three above and
-    // `/admin/devices/publish` below, not a new decision: this whole device surface is deferred
-    // together, and documenting two routes in the middle of it would leave a fork's client reading
-    // half a story. They join the debt when the device surface does.
-    "/admin/devices/proposals/{id}/agent",
-    // The drawer mark (ADR-0165) joins the same deferred device surface, for the same reason.
-    "/admin/devices/proposals/{id}/drawer",
-    "/admin/devices/terminals",
-    "/admin/activation-codes",
-    "/admin/activation-codes/revoke",
-    "/admin/claims/bind",
-    // --- the four-level configuration tree and its publishes (ADR-0033) ---
-    "/admin/config/campaigns",
-    "/admin/config/campaigns/preview",
-    "/admin/config/campaigns/schedule",
-    "/admin/config/capabilities",
-    "/admin/config/channels",
-    "/admin/config/inventory",
-    // The store's lease (ADR-0108). `GET` reads the authoritative generation; `POST …/bump` issues
-    // the next one, which is the act of making a different machine the store. There is no `PUT`,
-    // deliberately: the node is derived from the counter, never authored.
-    "/admin/config/lease",
-    "/admin/config/lease/bump",
-    "/admin/config/lease/retire",
-    "/admin/config/lease/settle",
-    "/admin/config/locale",
-    "/admin/config/ota",
-    "/admin/config/ota/halt",
-    "/admin/config/ota/placement",
-    // Which other origins a store's edge answers (ADR-0111). Enumerated here rather than annotated,
-    // at the fidelity B5 chose: the auth surface is documented, the console surface is enumerated.
-    "/admin/config/origins",
-    // The generic publish preview (F11): what publishing one node to one store would change,
-    // computed and discarded. Enumerated with the rest of the console's config surface for the same
-    // reason they are — and it writes nothing, so a fork reading only this list is not missing a way
-    // to change anything.
-    "/admin/config/preview",
-    "/admin/config/store-profile",
-    // --- release hosting (R2, ADR-0088) ---
-    // The upload's shape cannot be guessed — a raw executable body with minisign's signature line in
-    // `X-Pos-Minisig` — so `docs/release-runbook.md` step 5 carries the exact `curl`, which is a
-    // better home for it than a document that stops short of response schemas anyway. Listed here
-    // rather than annotated to stay inside the fidelity B5 chose: the auth surface is documented, the
-    // console surface is enumerated.
-    "/admin/ota/releases",
-    "/admin/ota/releases/{release}",
-    // A hosted release's Windows executable, served under a store's one-file installer name
-    // (ADR-0141). Its response is a binary download and its three query parameters are the whole
-    // contract, which the ADR and `docs/guides/bring-a-store-online.md` state; enumerated with its
-    // siblings at the same fidelity.
-    "/admin/ota/releases/{release}/installer",
-    // The other door (Amendment 4): a `{ "release": "1.2.3" }` body, and the cloud goes and gets the
-    // pair from the release the workflow published. Enumerated beside its siblings for the same
-    // reason, and the runbook step that carries the upload's `curl` carries this one's too.
-    "/admin/ota/releases/fetch",
-    "/admin/config/qr",
-    // How long a store's edge keeps a synced event (ADR-0145): one bounded number, enumerated with
-    // the rest of the console's settings surface at the same fidelity.
-    "/admin/config/retention",
-    "/admin/config/scheduled",
-    "/admin/config/scheduled/{id}",
-    "/admin/config/tax",
-    "/admin/config/tender",
-    "/admin/config/vendors",
-    "/admin/capabilities",
-    // --- the catalog: item master, menus, taxonomies, layout (F3, ADR-0066/0082) ---
-    "/admin/catalog/display-categories",
-    "/admin/catalog/display-categories/{display_category_id}",
-    "/admin/catalog/display-subcategories",
-    "/admin/catalog/display-subcategories/{display_subcategory_id}",
-    "/admin/catalog/export/items",
-    // The item-master CSV import (F15), beside the export it round-trips with. Enumerated rather
-    // than annotated, at B5's chosen fidelity; the body is a CSV upload whose columns are the
-    // export's, which `docs/guides` describes better than a schema stub would.
-    "/admin/catalog/import/items/apply",
-    "/admin/catalog/import/items/dry-run",
-    "/admin/catalog/item-categories",
-    "/admin/catalog/item-categories/{item_category_id}",
-    "/admin/catalog/item-subcategories",
-    "/admin/catalog/item-subcategories/{item_subcategory_id}",
-    "/admin/catalog/items",
-    "/admin/catalog/courses",
-    "/admin/catalog/courses/{course_id}",
-    "/admin/catalog/items/{menu_item_id}",
-    "/admin/catalog/layout-buttons",
-    "/admin/catalog/layout-buttons/{sales_channel}/{menu_item_id}",
-    "/admin/catalog/menus",
-    "/admin/catalog/menus/{menu_id}",
-    "/admin/catalog/menus/{menu_id}/placements",
-    "/admin/catalog/menus/{menu_id}/placements/{menu_item_id}",
-    "/admin/catalog/menus/{menu_id}/sections",
-    "/admin/catalog/menus/{menu_id}/sections/{menu_section_id}",
-    "/admin/catalog/modifier-groups",
-    "/admin/catalog/modifier-groups/{modifier_group_id}",
-    "/admin/catalog/publish",
-    "/admin/catalog/tax-classes",
-    "/admin/catalog/tax-classes/{tax_class_id}",
-    "/admin/catalog/tax-rates",
-    // --- people and access (M1, ADR-0070) ---
-    "/admin/employees",
-    "/admin/employees/{employee_id}",
-    "/admin/employees/{employee_id}/pin",
-    "/admin/people/permissions",
-    "/admin/people/publish",
-    "/admin/roles",
-    "/admin/roles/{role_id}",
-    "/admin/assignments",
-    "/admin/assignments/{assignment_id}",
-    // --- ingredients, recipes, suppliers (M6, ADR-0079) ---
-    "/admin/inventory/ingredients",
-    "/admin/inventory/ingredients/{ingredient_id}",
-    "/admin/inventory/recipes",
-    "/admin/inventory/recipes/{item_id}",
-    "/admin/inventory/suppliers",
-    "/admin/inventory/suppliers/{supplier_id}",
-    // --- approved printers and kitchen displays (C2, ADR-0100) ---
-    "/admin/devices/publish",
-    // --- floor plan and kitchen stations (M2, ADR-0072) ---
-    "/admin/floor/areas",
-    "/admin/floor/areas/{area_id}",
-    "/admin/floor/publish",
-    "/admin/floor/qr",
-    "/admin/floor/tables",
-    "/admin/floor/tables/{table_id}",
-    "/admin/kitchen/routing",
-    "/admin/kitchen/routing/{rule_id}",
-    "/admin/kitchen/stations",
-    "/admin/kitchen/stations/{station_id}",
-    // --- campaigns and vouchers (M3, ADR-0077) ---
-    "/admin/campaigns",
-    "/admin/campaigns/{campaign_id}",
-    "/admin/campaigns/{campaign_id}/vouchers",
-    // --- media library and the translation grid (M5, M4) ---
-    "/admin/media",
-    "/admin/media/{media_id}",
-    "/admin/media/{media_id}/detail",
-    "/admin/media/{media_id}/thumbnail",
-    "/admin/translations",
-    "/admin/translations/export",
-    "/admin/translations/import/apply",
-    "/admin/translations/import/dry-run",
-    "/admin/countries",
-    "/admin/locales",
-    // --- operations: liveness, alerts, task health, OTA, reconciliation (O1-O3) ---
-    "/admin/fleet",
-    "/admin/fleet/{store_id}",
-    "/admin/alerts",
-    "/admin/alerts/{id}/ack",
-    "/admin/alerts/{id}/resolve",
-    "/admin/health/tasks",
-    "/admin/reconcile",
-    "/admin/audit",
-    // --- PDPD subject-request tooling (ADR-0076) ---
-    "/admin/subjects/{subject_id}",
-    "/admin/subjects/{subject_id}/erase",
-    "/admin/subjects/{subject_id}/export",
-    // --- this document's own route ---
-    "/admin/openapi.json",
-];
 
 /// Every `/admin` path the router registers, read out of this crate's own router source.
 ///
@@ -514,16 +803,33 @@ fn registered_admin_paths() -> std::collections::BTreeSet<String> {
     paths
 }
 
-/// The router sources: `http.rs` and every module under `http/`, where each business area's routes
-/// are declared. Every `/admin` route is registered in one of them; the other route-carrying modules
-/// (`orders`, `qr_http`, `relay`) serve `/v1` and the relay surface only.
+/// The business-area crates whose routes `pos-cloud`'s router mounts, each declaring them in its own
+/// `src/routes.rs` and `src/routes/` (ADR-0170 decision 4).
+#[cfg(test)]
+const ROUTE_CRATES: [&str; 5] = [
+    "pos-cloud-catalog",
+    "pos-cloud-devices",
+    "pos-cloud-floor",
+    "pos-cloud-inventory",
+    "pos-cloud-people",
+];
+
+/// The router sources: `http.rs` and every module under `http/` and `cell/`, where each business
+/// area's routes are declared, and the routes of each crate in [`ROUTE_CRATES`]. Every `/admin`
+/// route is registered in one of them; the other route-carrying modules (`orders`, `qr_http`,
+/// `relay`) serve `/v1` and the relay surface only.
 ///
 /// Read from the tree when the test runs, so a route that moves into a new module is still found.
 #[cfg(test)]
 pub(crate) fn router_sources() -> Vec<String> {
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut files = vec![source.join("http.rs")];
-    let mut directories = vec![source.join("http")];
+    let mut directories = vec![source.join("http"), source.join("cell")];
+    for route_crate in ROUTE_CRATES {
+        let crate_source = source.join("../..").join(route_crate).join("src");
+        files.push(crate_source.join("routes.rs"));
+        directories.push(crate_source.join("routes"));
+    }
     while let Some(directory) = directories.pop() {
         for entry in std::fs::read_dir(&directory)
             .into_iter()
@@ -549,7 +855,7 @@ pub(crate) fn router_sources() -> Vec<String> {
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::{AdminApiDoc, UNDOCUMENTED, registered_admin_paths};
+    use super::{AdminApiDoc, registered_admin_paths};
     use utoipa::OpenApi as _;
 
     /// Where the generated document is committed, relative to the repository root.
@@ -631,14 +937,13 @@ mod tests {
         }
     }
 
-    /// Every registered `/admin` route is either documented or named as coverage debt.
+    /// Every registered `/admin` route is documented.
     ///
     /// This is the half a snapshot cannot see: the snapshot proves the document matches the
-    /// annotations, not that the annotations cover the router. Adding a route without either an
-    /// annotation or an `UNDOCUMENTED` entry fails here, so the surface cannot grow undocumented
-    /// without someone writing it down.
+    /// annotations, not that the annotations cover the router. Adding a route without an
+    /// annotation fails here, so the surface cannot grow undocumented.
     #[test]
-    fn every_admin_route_is_documented_or_listed() {
+    fn every_admin_route_is_documented() {
         let registered = registered_admin_paths();
         assert!(
             registered.len() > 100,
@@ -647,17 +952,14 @@ mod tests {
             registered.len(),
         );
         let documented = documented_paths();
-        let listed: BTreeSet<String> = UNDOCUMENTED.iter().map(|path| (*path).to_owned()).collect();
-
         let missing: Vec<&String> = registered
             .iter()
-            .filter(|path| !documented.contains(*path) && !listed.contains(*path))
+            .filter(|path| !documented.contains(*path))
             .collect();
         assert!(
             missing.is_empty(),
-            "these registered /admin routes are neither documented nor listed as coverage debt in \
-             UNDOCUMENTED — annotate the handler with #[utoipa::path] or add the path to that \
-             list:\n{missing:#?}",
+            "these registered /admin routes are not documented — annotate the handler with \
+             #[utoipa::path] and name it in AdminApiDoc's paths:\n{missing:#?}",
         );
     }
 
@@ -677,33 +979,6 @@ mod tests {
             phantom.is_empty(),
             "these paths are documented but not registered in the router — the annotation's \
              `path = ` disagrees with its `.route(` :\n{phantom:#?}",
-        );
-    }
-
-    /// `UNDOCUMENTED` holds nothing that is documented, and nothing the router does not serve.
-    ///
-    /// Without this the list would rot in both directions: an entry for a route since annotated
-    /// would hide it from the coverage count, and an entry for a route since deleted would sit
-    /// there forever looking like debt.
-    #[test]
-    fn the_coverage_debt_list_holds_only_real_undocumented_routes() {
-        let documented = documented_paths();
-        let registered = registered_admin_paths();
-        for path in UNDOCUMENTED {
-            assert!(
-                !documented.contains(*path),
-                "{path} is documented — remove it from UNDOCUMENTED",
-            );
-            assert!(
-                registered.contains(*path),
-                "{path} is in UNDOCUMENTED but the router does not serve it — remove the entry",
-            );
-        }
-        let unique: BTreeSet<&&str> = UNDOCUMENTED.iter().collect();
-        assert_eq!(
-            unique.len(),
-            UNDOCUMENTED.len(),
-            "UNDOCUMENTED lists a path twice",
         );
     }
 }

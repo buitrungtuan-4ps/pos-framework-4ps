@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The [`ShippingDispatch`] adapter over a [`CourierTransport`]
-//! ([ADR-0058](../../../docs/adr/0058-shipping-adapters.md)).
+//! ([ADR-0058](../../../../docs/adr/0058-shipping-adapters.md)).
 //!
 //! The same shape as the Ahamove adapter — the port's contract is the same, so the status mapping is
 //! the same load-bearing part: a cancel of a finished job is

@@ -15,8 +15,9 @@ and serves to every device in the store. See [`README.md`](README.md).
 - The design tokens and the `wcag-contrast`, `i18n-lint`, `i18n-parity` and ESLint-baseline
   scripts live once, in [`packages/shared`](../packages/shared/README.md). Never copy one here
   (`xtask mirrored-files`).
-- `src/api/types.ts` is copied by hand from the Rust views, and nothing checks it against Rust.
-  Read the handler before changing a type.
+- Every wire type is an alias in `src/api/schemas.ts` of a schema in `src/api/generated/edge.d.ts`,
+  which `pnpm gen:api` writes from `docs/openapi-edge.json`. Never write one by hand: change the
+  handler's type, regenerate, and alias it (`xtask hand-types` holds the till at none).
 - A new flow, or a new route a screen calls, gets a flow in `tests/replay.spec.mjs`. Wait for the
   real precondition, never a sleep.
 - Naming: components `PascalCase.tsx`, modules `kebab-case.ts`, hooks `useX`
@@ -24,7 +25,7 @@ and serves to every device in the store. See [`README.md`](README.md).
 
 ## Most often touched
 
-`tests/replay.spec.mjs` · `src/i18n/en.json` and `vi.json` · `src/api/types.ts` and `client.ts` ·
+`tests/replay.spec.mjs` · `src/i18n/en.json` and `vi.json` · `src/api/schemas.ts` and `client.ts` ·
 `src/state/store.ts` · `src/screens/<Screen>.tsx`
 
 ## Gates

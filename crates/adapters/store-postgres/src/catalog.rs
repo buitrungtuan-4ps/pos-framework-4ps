@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The cloud catalog authoring model over PostgreSQL (Phase 2a, [ADR-0066](../../../docs/adr/0066-cloud-catalog.md)).
+//! The cloud catalog authoring model over PostgreSQL (Phase 2a, [ADR-0066](../../../../docs/adr/0066-cloud-catalog.md)).
 //!
 //! Items, menus (with an inheritance edge) and menu placements (an item in a menu with its per-channel
 //! prices). This adapter keeps only the SQL and returns plain rows; `pos-cloud` implements its
@@ -39,14 +39,14 @@ pub struct CatalogItemRow {
     /// The operational sub-category id (a ULID string), or `None`.
     pub item_subcategory_id: Option<String>,
     /// The course this item goes out on (a ULID string), or `None` for an item on no course
-    /// ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).
+    /// ([ADR-0130](../../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).
     pub course_id: Option<String>,
     /// The item's image (a media id ULID string), or `None` (ADR-0075).
     pub image_ref: Option<String>,
     /// `active` or `archived`.
     pub status: String,
     /// The version the row was read at, for a conditional write
-    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// ([ADR-0094](../../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
     /// `xmin::text`, and nothing above this crate may assume that.
     pub version: String,
 }
@@ -66,7 +66,7 @@ pub struct CatalogTaxonomyRow {
     /// `active` or `archived`.
     pub status: String,
     /// The version the row was read at, for a conditional write
-    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// ([ADR-0094](../../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
     /// `xmin::text`, and nothing above this crate may assume that.
     pub version: String,
 }
@@ -83,7 +83,7 @@ pub struct CatalogTaxClassRow {
     /// `active` or `archived`.
     pub status: String,
     /// The version the row was read at, for a conditional write
-    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// ([ADR-0094](../../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
     /// `xmin::text`, and nothing above this crate may assume that.
     pub version: String,
 }
@@ -110,7 +110,7 @@ pub struct CatalogLayoutButtonRow {
     /// The display order within its group.
     pub sort: i32,
     /// The version the row was read at, for a conditional write
-    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// ([ADR-0094](../../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
     /// `xmin::text`, and nothing above this crate may assume that.
     pub version: String,
 }
@@ -135,7 +135,7 @@ pub struct CatalogModifierGroupRow {
     /// `active` or `archived`.
     pub status: String,
     /// The version the row was read at, for a conditional write
-    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// ([ADR-0094](../../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
     /// `xmin::text`, and nothing above this crate may assume that.
     pub version: String,
 }
@@ -154,7 +154,7 @@ pub struct CatalogMenuRow {
     /// `active` or `archived`.
     pub status: String,
     /// The version the row was read at, for a conditional write
-    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// ([ADR-0094](../../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
     /// `xmin::text`, and nothing above this crate may assume that.
     pub version: String,
 }
@@ -175,7 +175,7 @@ pub struct CatalogMenuSectionRow {
     /// `active` or `archived`.
     pub status: String,
     /// The version the row was read at, for a conditional write
-    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// ([ADR-0094](../../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
     /// `xmin::text`, and nothing above this crate may assume that.
     pub version: String,
 }
@@ -196,7 +196,7 @@ pub struct CatalogPlacementRow {
     /// Whether the item is for sale in this menu right now (the published-availability floor).
     pub available: bool,
     /// The version the row was read at, for a conditional write
-    /// ([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
+    /// ([ADR-0094](../../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
     /// `xmin::text`, and nothing above this crate may assume that.
     pub version: String,
 }
@@ -209,7 +209,7 @@ pub struct PostgresCatalog {
 }
 
 /// A course as listed — identity, name, its place in the service sequence, and status
-/// ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).
+/// ([ADR-0130](../../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).
 #[derive(Clone, Debug)]
 pub struct CatalogCourseRow {
     /// The course id (a ULID string).
@@ -1215,7 +1215,7 @@ impl PostgresCatalog {
         Ok(row.get(0))
     }
 
-    /// Inserts a course ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).
+    /// Inserts a course ([ADR-0130](../../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).
     ///
     /// # Errors
     ///

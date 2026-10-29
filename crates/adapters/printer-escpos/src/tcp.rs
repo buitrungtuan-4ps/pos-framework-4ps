@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The raw-TCP transport: ESC/POS bytes at port 9100
-//! ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md)).
+//! ([ADR-0100](../../../../docs/adr/0100-receipt-and-ticket-printing.md)).
 //!
 //! Port 9100 is the whole protocol — a socket, and whatever you write comes out of the printer.
 //! There is no handshake, no acknowledgement and, most importantly, **no authentication**, which is

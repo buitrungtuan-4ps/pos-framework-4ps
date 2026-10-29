@@ -4,7 +4,7 @@
 //! A sliding-window rate limiter, shared by every surface that needs one.
 //!
 //! It began as the interactive sign-in's
-//! ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 5): online password/TOTP
+//! ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md) slice 5): online password/TOTP
 //! guessing is throttled before the expensive Argon2id verify even runs, so a flood of attempts
 //! costs the attacker a `429` rather than the server a hashing storm. The window is *sliding* (a
 //! deque of recent attempt instants per key, pruned to the window on each check) rather than fixed,

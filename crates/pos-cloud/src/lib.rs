@@ -54,71 +54,67 @@
 
 #![forbid(unsafe_code)]
 
-pub mod activation;
 // Moved to pos-cloud-api (ADR-0170 decision 4); re-exported so their paths still work.
-pub use pos_cloud_api::{audit, auth, paging};
+pub use pos_cloud_api::{audit, auth, health, paging, version};
+// Moved to pos-cloud-config (ADR-0170 decision 4); re-exported so their paths still work.
+// Moved to pos-cloud-inventory (ADR-0170 decision 4); re-exported so its path still works.
+pub use pos_cloud_config::{
+    config_tree, confirmed_values, data_migrations, qr_ordering, registry, settings, store_groups,
+};
+pub use pos_cloud_inventory::inventory;
+// Moved to pos-cloud-devices (ADR-0170 decision 4); re-exported so their paths still work.
+pub use pos_cloud_devices::{activation, claim, devices};
+// Moved to pos-cloud-catalog (ADR-0170 decision 4, ADR-0175); re-exported so their paths still work.
+pub use pos_cloud_catalog::{
+    catalog, catalog_compiler, export, fees, images, import, media, tax, translations,
+};
+// Moved to pos-cloud-floor (ADR-0170 decision 4); re-exported so their paths still work.
+pub use pos_cloud_floor::{floor_compiler, floorplan, qr};
+// Moved to pos-cloud-people (ADR-0170 decision 4); re-exported so their paths still work.
+pub use pos_cloud_people::{people, people_compiler, people_readiness, people_republish};
 pub mod alerts;
 pub mod anchor;
 pub mod archive;
 pub mod archive_retention;
 pub mod assets;
 pub mod campaigns;
-pub mod catalog;
-pub mod catalog_compiler;
+pub mod cell;
 pub mod chain_audit;
-pub mod claim;
 pub mod clock;
 pub mod cloud;
 pub mod config;
-pub mod config_tree;
-pub mod confirmed_values;
 pub mod connections;
 pub mod countries;
 pub mod cursor;
 pub mod dashboard;
-pub mod data_migrations;
-pub mod devices;
-pub mod export;
-pub mod fees;
 pub mod fleet;
-pub mod floor_compiler;
-pub mod floorplan;
-pub mod health;
 pub mod http;
-pub mod images;
-pub mod import;
-pub mod inventory;
 pub mod lease;
-pub mod media;
 pub mod metrics;
 mod openapi;
 mod openapi_admin;
+#[cfg(test)]
+mod openapi_bodies;
+mod openapi_device;
+#[cfg(test)]
+mod openapi_required;
+#[cfg(test)]
+mod openapi_security;
 pub mod orders;
 pub mod ota;
-pub mod people;
-pub mod people_compiler;
-pub mod people_readiness;
-pub mod people_republish;
+mod outbound;
 mod persistence;
 pub mod providers;
-pub mod qr;
 pub mod qr_http;
-pub mod qr_ordering;
 pub mod reason_codes;
 pub mod reconcile;
-pub mod registry;
 pub mod relay;
 pub mod release_source;
 pub mod releases;
 pub mod retention;
 pub mod scheduling;
-pub mod settings;
 pub mod starting_roles;
-pub mod store_groups;
-pub mod tax;
 mod till_names;
-pub mod translations;
-pub mod version;
 pub mod vouchers;
 pub mod wake;
 pub mod webhook;

@@ -1,0 +1,186 @@
+// Copyright (c) 2026 Pizza 4P's. All rights reserved.
+// Proprietary and confidential. Internal use only. See LICENSE.
+
+//! {{purpose}}
+//!
+//! The shape every printer adapter here has ([ADR-0176](../../../../docs/adr/0176-the-adapter-and-country-standard.md)):
+//!
+//! - **A transport seam.** [`Transport`] is the only thing that touches the device: it writes bytes
+//!   and reads the paper and cover sensors. A real adapter puts a USB, serial or network connection
+//!   behind it; the contract test puts a recorder behind it.
+//! - **A pure core.** [`SandboxPrinter`] implements `PrinterDriver` over any transport: it keeps the
+//!   port's rules (idempotent by job, a drawer only over USB, unreachable is `unavailable` so the
+//!   caller re-queues, out of paper is `failed_precondition`) and encodes the document with
+//!   [`encode`]. A real adapter replaces [`encode`] with its device's command language.
+//!
+//! The port's futures are always ready: the transport is synchronous, so a dispatcher that owns a
+//! blocking thread can drive them without a runtime.
+
+use std::collections::HashSet;
+use std::sync::Mutex;
+
+use pos_ports::printer::{PrintBlock, PrintJob, PrinterCapabilities, PrinterDriver, PrinterStatus};
+use pos_ports::{PortError, PortName};
+use pos_proto::ids::EventId;
+
+/// What every encoded ticket starts with, so a recorder can count tickets.
+pub const TICKET: &[u8] = b"TICKET\n";
+
+/// The bytes that pulse the cash drawer.
+pub const DRAWER_KICK: &[u8] = b"DRAWER\n";
+
+/// The device, as the adapter sees it.
+pub trait Transport: Send + Sync {
+    /// Sends raw bytes to the printer.
+    ///
+    /// # Errors
+    ///
+    /// [`Unreachable`] if the printer cannot be reached.
+    fn write(&self, bytes: &[u8]) -> Result<(), Unreachable>;
+
+    /// Reads the printer's paper and cover sensors.
+    ///
+    /// # Errors
+    ///
+    /// [`Unreachable`] if the printer cannot be reached.
+    fn probe(&self) -> Result<TransportStatus, Unreachable>;
+}
+
+/// The printer could not be reached.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Unreachable;
+
+/// What the sensors say. `None` is a sensor the model does not have, which is not a fault.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TransportStatus {
+    /// Whether paper is loaded.
+    pub has_paper: Option<bool>,
+    /// Whether the cover is closed.
+    pub cover_closed: Option<bool>,
+}
+
+/// A `PrinterDriver` over a [`Transport`].
+#[derive(Debug)]
+pub struct SandboxPrinter<T> {
+    capabilities: PrinterCapabilities,
+    transport: T,
+    printed: Mutex<HashSet<EventId>>,
+}
+
+impl<T: Transport> SandboxPrinter<T> {
+    /// A printer with `capabilities`, reached through `transport`.
+    pub fn new(capabilities: PrinterCapabilities, transport: T) -> Self {
+        Self {
+            capabilities,
+            transport,
+            printed: Mutex::new(HashSet::new()),
+        }
+    }
+
+    /// The transport, for a harness to inspect or fault-inject.
+    pub const fn transport(&self) -> &T {
+        &self.transport
+    }
+
+    fn print_now(&self, job: &PrintJob) -> Result<(), PortError> {
+        if self
+            .printed
+            .lock()
+            .map_err(|_| poisoned())?
+            .contains(&job.job_id)
+        {
+            return Ok(());
+        }
+        let bitmap = |block: &PrintBlock| matches!(block, PrintBlock::Bitmap { .. });
+        if !self.capabilities.prints_bitmaps && job.document.blocks.iter().any(bitmap) {
+            return Err(PortError::invalid_argument(
+                PortName::PrinterDriver,
+                "this printer cannot print bitmaps",
+            ));
+        }
+        let status = self.transport.probe().map_err(|_| unreachable())?;
+        if matches!(status.has_paper, Some(false)) || matches!(status.cover_closed, Some(false)) {
+            return Err(PortError::failed_precondition(
+                PortName::PrinterDriver,
+                "the printer is out of paper or its cover is open",
+            ));
+        }
+        self.transport
+            .write(&encode(job))
+            .map_err(|_| unreachable())?;
+        self.printed
+            .lock()
+            .map_err(|_| poisoned())?
+            .insert(job.job_id);
+        Ok(())
+    }
+}
+
+impl<T: Transport> PrinterDriver for SandboxPrinter<T> {
+    fn capabilities(&self) -> PrinterCapabilities {
+        self.capabilities.clone()
+    }
+
+    async fn print(&self, job: &PrintJob) -> Result<(), PortError> {
+        self.print_now(job)
+    }
+
+    async fn status(&self) -> Result<PrinterStatus, PortError> {
+        let status = self.transport.probe().map_err(|_| unreachable())?;
+        Ok(PrinterStatus {
+            online: true,
+            has_paper: status.has_paper,
+            cover_closed: status.cover_closed,
+            // The caller owns the queue; this adapter holds nothing.
+            queue_depth: 0,
+        })
+    }
+
+    async fn open_drawer(&self) -> Result<(), PortError> {
+        // The channel decides before the device does: a drawer never opens over the network.
+        if !self.capabilities.may_open_a_drawer() {
+            return Err(PortError::failed_precondition(
+                PortName::PrinterDriver,
+                "a drawer opens only over USB and only when one is attached",
+            ));
+        }
+        self.transport.write(DRAWER_KICK).map_err(|_| unreachable())
+    }
+}
+
+/// The sandbox's command language: [`TICKET`], then each text line, then a line per feed.
+#[must_use]
+pub fn encode(job: &PrintJob) -> Vec<u8> {
+    let mut bytes = TICKET.to_vec();
+    for block in &job.document.blocks {
+        match block {
+            PrintBlock::Text { line, .. } => {
+                bytes.extend_from_slice(line.as_bytes());
+                bytes.push(b'\n');
+            }
+            PrintBlock::Feed { lines } => {
+                bytes.extend(core::iter::repeat_n(b'\n', usize::from(*lines)));
+            }
+            // The sandbox prints text only. A kick is never part of a document's bytes, and a block
+            // added to the port later prints nothing here until the adapter learns it.
+            PrintBlock::Bitmap { .. }
+            | PrintBlock::Barcode { .. }
+            | PrintBlock::QrCode { .. }
+            | PrintBlock::Cut
+            | PrintBlock::OpenDrawer
+            | _ => {}
+        }
+    }
+    bytes
+}
+
+fn unreachable() -> PortError {
+    PortError::unavailable(PortName::PrinterDriver, "the printer could not be reached")
+}
+
+fn poisoned() -> PortError {
+    PortError::internal(
+        PortName::PrinterDriver,
+        "the printer's job lock was poisoned",
+    )
+}

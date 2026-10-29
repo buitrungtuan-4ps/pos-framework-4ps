@@ -136,6 +136,13 @@ fn v6_loopback_ula_and_mapped_v4_are_refused() {
         ))
     );
     assert_eq!(
+        classify_ip(ip("fec0::1")),
+        Err(SsrfRejection::ForbiddenAddress(
+            ip("fec0::1"),
+            ForbiddenReason::Private
+        ))
+    );
+    assert_eq!(
         classify_ip(ip("fe80::1")),
         Err(SsrfRejection::ForbiddenAddress(
             ip("fe80::1"),

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The per-(tax class × sales channel) tax rate table over PostgreSQL (Track M4, [ADR-0074](../../../docs/adr/0074-localization-and-tax.md)).
+//! The per-(tax class × sales channel) tax rate table over PostgreSQL (Track M4, [ADR-0074](../../../../docs/adr/0074-localization-and-tax.md)).
 //!
 //! One row per `(tenant, tax_class, sales_channel)` with the rate in basis points (`catalog_tax_rates`,
 //! migration 0028). This adapter keeps only the SQL and returns plain rows; `pos-cloud` implements its

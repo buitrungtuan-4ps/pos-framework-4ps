@@ -9,23 +9,25 @@ The store binary, `pos_edge`, and its library. It owns the async runtime, the HT
 ## Owns
 
 - The `/api/*` routes the till calls, and their permission table
-- The application layer: load, decide, apply, publish (`Edge`)
-- Device pairing, sign-in sessions and the idle window
-- Printing, the print queue, OTA, backups, and the cloud clients
+- The composition of the application layer, `Edge`, which lives in `pos-edge-app` and is
+  re-exported here under its old paths (`pos_edge::app`, `pos_edge::auth`, …)
+- Device pairing
+- OTA, backups, and the cloud clients; printing lives in `pos-edge-printing` and is re-exported
+  here under its old paths (`pos_edge::printing`, `pos_edge::print_agent`, …)
 
 ## Depends on / used by
 
-- **Depends on** (workspace crates): `cloud-sync-http`, `key-vault-keyring`, `link-nats`, `pos-core`, `pos-country`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-ports`, `pos-proto`, `pos-render`, `printer-escpos`, `store-sqlite`, `updater-minisign`, `windows-protect`; in tests, `pos-contract-tests`, `pos-fakes`.
-- **Used by** (workspace crates): `minimal-edge`.
+- **Depends on** (workspace crates): `cloud-sync-http`, `key-vault-keyring`, `link-nats`, `pos-core`, `pos-country`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-edge-app`, `pos-edge-printing`, `pos-ports`, `pos-proto`, `pos-render`, `printer-escpos`, `store-sqlite`, `updater-minisign`, `windows-protect`; in tests, `pos-contract-tests`, `pos-edge`, `pos-fakes`.
+- **Used by** (workspace crates): `minimal-edge`; in tests, `pos-edge`.
 
 ## Entry points
 
 - `src/main.rs`: the binary; deliberately tiny
 - `src/server.rs`: `serve` and `compose`: wires the adapters and binds the listener
-- `src/app.rs`: `Edge`, every command
+- `src/lib.rs`: re-exports `pos-edge-app`'s modules (`app`, `auth`, `fanout`, …) under their old
+  paths; `Edge`, its commands and sign-in live in `crates/pos-edge-app/`
 - `src/http/mod.rs`: `router`, every route; one file per area beside it
 - `src/http/route_permissions.rs`: what each state-changing route needs
-- `src/auth.rs`: `Sessions`, sign-in and idle
 
 ## Rules
 

@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! Time-based one-time passwords (RFC 6238), the mandatory second factor for the super-admin
-//! ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)).
+//! ([ADR-0034](../../../../docs/adr/0034-super-admin-auth.md)).
 //!
 //! TOTP over HMAC-**SHA1**, the 30-second time step, dynamically truncated to a 6-digit code. RFC
 //! 6238 permits SHA1/SHA256/SHA512, and this picks SHA1 — the algorithm every authenticator app

@@ -5,7 +5,7 @@
 // `state/money.ts` is the one place that binds it to a currency.
 
 import { locale } from "../i18n";
-import type { Money } from "../api/types";
+import type { Money } from "../api/schemas";
 
 /** A count, grouped for the active locale (e.g. `1,234`). */
 export function formatCount(value: number): string {

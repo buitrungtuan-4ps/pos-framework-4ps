@@ -25,8 +25,9 @@ import type {
   MenuResponse,
   ReasonCodesResponse,
   ShiftResponse,
-} from "../api/types";
+} from "../api/schemas";
 import { configApplied, load, loadAll, register, type Entry } from "./engine";
+import { readLiveOrders, type LiveOrdersRead } from "./live-orders-read";
 import { takeSession } from "./session";
 import {
   DINE_IN,
@@ -39,9 +40,7 @@ import {
   applyMenu,
   applyReasonCodes,
   applyShift,
-  readLiveOrders,
   setWalkInBook,
-  type LiveOrdersRead,
   walkInChannel,
 } from "./store";
 

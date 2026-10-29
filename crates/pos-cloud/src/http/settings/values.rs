@@ -14,6 +14,7 @@ use pos_proto::ids::TenantId;
 use pos_proto::wire_enum::Open;
 use serde::Deserialize;
 
+use super::publish::SettingPublishResult;
 use super::publish::{TenantLayout, publish_settings_to};
 use super::{
     SettingsState, parse_setting_scope, publish_results_response, setting_audit_id,
@@ -25,8 +26,10 @@ use crate::config_tree::ConfigTreeStore;
 use crate::http::setting_refusal::setting_refusal_response;
 use crate::http::{not_found, settings_confirm};
 use crate::registry::RegistryStore;
+use crate::settings::SettingValueSchema;
 use crate::settings::SettingsStore;
 use crate::store_groups::StoreGroupStore;
+use pos_cloud_api::response::StoresPublished;
 
 /// The tenant a settings read is for.
 #[derive(Debug, Clone, Deserialize)]
@@ -35,7 +38,7 @@ pub(super) struct SettingsTenantQuery {
 }
 
 /// A `PUT /admin/settings` body: one value, at one scope.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct PutSettingRequest {
     tenant_id: String,
     setting_key: String,
@@ -43,6 +46,7 @@ pub(super) struct PutSettingRequest {
     scope: String,
     /// The tenant, brand, store group or store the value is for.
     scope_id: String,
+    #[schema(value_type = SettingValueSchema)]
     value: serde_json::Value,
     /// Whether the person confirmed the notice of a value that needs it (ADR-0169 decision 2).
     #[serde(default)]
@@ -52,15 +56,17 @@ pub(super) struct PutSettingRequest {
 #[utoipa::path(
     put,
     path = "/admin/settings",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.config.publish"))),
     request_body(
-        description = "The tenant, the setting's key, the scope (SETTING_SCOPE_TENANT, _BRAND, \
+        content = PutSettingRequest, description = "The tenant, the setting's key, the scope (SETTING_SCOPE_TENANT, _BRAND, \
                        _STORE_GROUP or _STORE), the id it is for, the value, and \
                        notice_confirmed (default false), true when the person confirmed the \
                        notice of a value its catalogue entry's confirm names",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Written, and every store it reaches republished. The body \
+        (status = 200, body = StoresPublished<SettingPublishResult>, description = "Written, and every store it reaches republished. The body \
                                       lists each store with SETTING_PUBLISH_APPLIED and the new \
                                       config version, SETTING_PUBLISH_UNCHANGED, or \
                                       SETTING_PUBLISH_FAILED"),
@@ -181,6 +187,8 @@ pub(super) struct ClearSettingQuery {
 #[utoipa::path(
     delete,
     path = "/admin/settings",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.config.publish"))),
     params(
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
         ("setting_key" = String, Query, description = "The setting's key, node.field"),
@@ -188,7 +196,7 @@ pub(super) struct ClearSettingQuery {
         ("scope_id" = String, Query, description = "The tenant, brand, store group or store the value was written for"),
     ),
     responses(
-        (status = 200, description = "Cleared, and every store it reached republished, with the \
+        (status = 200, body = StoresPublished<SettingPublishResult>, description = "Cleared, and every store it reached republished, with the \
                                       same per-store outcomes as a write"),
         (status = 400, description = "An id is not a ULID or the scope is not a scope", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),

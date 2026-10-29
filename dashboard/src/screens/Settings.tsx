@@ -58,16 +58,7 @@
 import { createEffect, createMemo, createSignal, For, Match, on, Show, Switch } from "solid-js";
 
 import { ApiError, api } from "../api/client";
-import type {
-  EffectiveSetting,
-  Json,
-  SettingDefinition,
-  SettingPresetsReport,
-  SettingPublishOutcome,
-  SettingPublishReport,
-  SettingPublishResult,
-  SettingScope,
-} from "../api/types";
+import type { Json, SettingPublishOutcome, SettingScope } from "../api/types";
 import { type MessageKey, t, tFromServer } from "../i18n";
 import { useEntityCrud } from "../lib/entity-crud";
 import { formatCount, formatInstant } from "../lib/format";
@@ -97,6 +88,13 @@ import {
 } from "../components/SettingConfirmation";
 import { PermissionsReadinessPanel } from "../components/PermissionsReadiness";
 import { toast } from "../components/Toast";
+import type {
+  EffectiveSetting,
+  SettingDefinition,
+  SettingPresetsReport,
+  SettingPublishReport,
+  SettingPublishResult,
+} from "../api/schemas";
 
 const TENANT: SettingScope = "SETTING_SCOPE_TENANT";
 const BRAND: SettingScope = "SETTING_SCOPE_BRAND";

@@ -1,0 +1,16 @@
+{
+  "cells": {
+    "jp1": "https://jp1.example.com",
+    "vn1": "https://vn1.example.com"
+  },
+  "countries": {
+    "*": "vn1",
+    "JP": "jp1",
+    "VN": "vn1"
+  },
+  "directory_version": 3,
+  "tenants": {
+    "pho-hanoi": "vn1",
+    "ramen-osaka": "jp1"
+  }
+}

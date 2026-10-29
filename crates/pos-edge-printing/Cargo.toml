@@ -1,0 +1,60 @@
+[package]
+name        = "pos-edge-printing"
+version     = "0.0.0"
+description = "The store's printing: receipts, tickets, reports and the cash drawer, to a printer directly or through a print agent."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+# Moved out of pos-edge (ADR-0170 decision 4, ADR-0175), with the same dependencies at the same
+# versions: this crate adds edges to crates already in the lockfile, and nothing new.
+[dependencies]
+# `Edge`, the queue-number and lease authorities, the clock and line notes the print paths read.
+pos-edge-app = { path = "../pos-edge-app" }
+pos-core     = { path = "../pos-core" }
+pos-ports    = { path = "../pos-ports" }
+pos-proto    = { path = "../pos-proto" }
+# The print-agent registry and the print queue are implemented for the SQLite event store here,
+# since a trait can be implemented for another crate's type only where the trait is defined.
+store-sqlite = { path = "../adapters/store-sqlite" }
+# The printer a receipt or a kitchen ticket is handed to (ADR-0100), and the faces it is set in.
+printer-escpos = { path = "../adapters/printer-escpos" }
+pos-render     = { path = "../pos-render" }
+
+tokio      = { version = "1", features = ["rt", "sync", "time"] }
+tracing    = "0.1"
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+# The same lint table as pos-edge, which this code came from.
+[lints.rust]
+unsafe_code                   = "deny"
+missing_docs                  = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub               = "warn"
+unused_qualifications         = "warn"
+
+[lints.clippy]
+all      = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+float_arithmetic    = "deny"
+lossy_float_literal = "deny"
+cast_precision_loss = "deny"
+
+print_stdout = "deny"
+print_stderr = "deny"
+dbg_macro    = "deny"
+
+allow_attributes                = "deny"
+allow_attributes_without_reason = "deny"
+
+[package.metadata.pos]
+layer = "app"
+purpose = "The store's printing: which device prints what, the receipt, ticket and report documents, the cash drawer, and the print-agent lane with its queue."
+adrs = [100, 103, 112, 160, 170, 175]
+owners = ["@maintainers-architecture"]

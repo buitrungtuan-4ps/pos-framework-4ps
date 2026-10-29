@@ -3,7 +3,7 @@
 
 //! The axum router.
 //!
-//! Two routers compose the surface ([ADR-0018](../../../docs/adr/0018-http-websocket-stack.md)): an
+//! Two routers compose the surface ([ADR-0018](../../../../docs/adr/0018-http-websocket-stack.md)): an
 //! infrastructure [`router`] over [`AppState`] (health, the WebSocket fan-out, pairing, and the
 //! embedded UI), and a [`domain_router`] over the application [`Edge`] carrying the floor, order,
 //! bill and shift routes. Each domain route is a thin shell: parse the path, call the synchronous
@@ -17,9 +17,11 @@
 pub mod assets;
 pub mod auth;
 pub mod bills;
+mod cash_movements;
 pub mod check;
 mod counter;
 pub mod floor;
+mod guarded;
 pub mod health;
 mod integrations;
 pub mod kds;
@@ -28,6 +30,10 @@ pub mod lines;
 mod live;
 pub mod locale;
 pub mod menu;
+#[cfg(feature = "openapi")]
+mod openapi;
+#[cfg(all(test, feature = "openapi"))]
+mod openapi_required;
 pub mod pair;
 mod print_agent;
 mod print_jobs;
@@ -70,7 +76,7 @@ use crate::pairing::Pairing;
 use crate::state::AppState;
 
 /// The header every `/api/*` response carries: the edge's release version
-/// ([ADR-0111](../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+/// ([ADR-0111](../../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
 ///
 /// Named here rather than in [`crate::version`] because it is an HTTP concern; `crate::origins`
 /// reads it too, to expose it across an origin.
@@ -78,7 +84,7 @@ pub(crate) const EDGE_VERSION_HEADER: HeaderName = HeaderName::from_static("pos-
 
 /// The header every `/api/*` response carries beside the version: whether a replacement machine
 /// has taken this store
-/// ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
+/// ([ADR-0123](../../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
 ///
 /// One of `active`, `superseded` or `invalid`. `crate::origins` exposes it across an origin for the
 /// same reason it exposes the version: a cross-origin page cannot read a header nobody listed.
@@ -86,7 +92,7 @@ pub(crate) const LEASE_STANDING_HEADER: HeaderName = HeaderName::from_static("po
 
 /// The header a refused or failed domain command carries beside its plain-text reason: a stable,
 /// `UPPER_SNAKE_CASE` token naming *which* refusal it was
-/// ([ADR-0137](../../../docs/adr/0137-a-deep-outbox-warns-and-never-refuses.md)).
+/// ([ADR-0137](../../../../docs/adr/0137-a-deep-outbox-warns-and-never-refuses.md)).
 ///
 /// The body stays the English sentence it always was, so nothing that reads it changes. The token is
 /// what a till translates: an operator working in Vietnamese was shown *"the store is unavailable"*
@@ -152,7 +158,7 @@ pub fn router(state: AppState) -> Router {
     // B6.1; the 2026-09-02 tree audit ruled it a live hole rather than a deferral. The read-only
     // *scope* and the per-event-type filter still belong to B6.1.
     let live = Router::new()
-        .route("/ws", get(ws::handler))
+        .route("/ws", get(ws::fan_out))
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&state.pairing),
             auth::require_paired_device_ws,
@@ -199,7 +205,7 @@ pub fn router(state: AppState) -> Router {
         .merge(
             Router::new()
                 .route("/api/pair/this_device", get(pair::this_device))
-                .route("/api/pair/devices", get(pair::devices))
+                .route("/api/pair/devices", get(pair::paired_devices))
                 .layer(axum::middleware::from_fn_with_state(
                     Arc::clone(&state_for_devices.pairing),
                     auth::require_paired_device,
@@ -276,7 +282,7 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// socket and a task **indefinitely** — the probe gave up after five seconds rather than the server
 /// doing so. With this, the same connection is answered `408 Request Timeout` at the budget. That is
 /// the whole of what it is for: a store's till has no business holding a connection open forever for
-/// anyone, least of all on a shop network a guest's phone can reach ([ADR-0111](../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+/// anyone, least of all on a shop network a guest's phone can reach ([ADR-0111](../../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
 ///
 /// **It does not touch the fan-out.** A `/ws` upgrade produces its `101` at once and the socket
 /// lives on outside the request this layer is timing, so a kitchen display connected all service is
@@ -308,7 +314,7 @@ pub fn time_out_for(app: Router, budget: Duration) -> Router {
 pub const COMPRESS_ABOVE: u64 = 1024;
 
 /// Gzips a response for a client that asks, when it is large enough to be worth it
-/// ([ADR-0138](../../../docs/adr/0138-the-edge-compresses-what-it-sends.md)).
+/// ([ADR-0138](../../../../docs/adr/0138-the-edge-compresses-what-it-sends.md)).
 ///
 /// The menu, the floor and the live orders are re-read on every reload, wake and `resync`, and on
 /// a large store they are about half a megabyte a time uncompressed, over the shop's own Wi-Fi. gzip
@@ -338,8 +344,8 @@ pub fn compress(app: Router) -> Router {
 /// routes bare — which is every route a till actually sells through.
 ///
 /// That made both banners the header feeds read as "nothing to say". The version-drift banner
-/// ([ADR-0111](../../docs/adr/0111-a-second-origin-may-address-the-edge.md)) and the superseded
-/// banner ([ADR-0123](../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)) are both
+/// ([ADR-0111](../../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)) and the superseded
+/// banner ([ADR-0123](../../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)) are both
 /// fail-silent by design: a missing header leaves the previous value, so absence is indistinguishable
 /// from agreement. A gap here is quiet rather than loud, which is why it needs saying out loud.
 ///
@@ -374,11 +380,6 @@ pub fn stamp_version(app: Router, standing: Arc<CurrentStanding>) -> Router {
 /// manager's approval PIN counts against the same person the sign-in screen counts. It stays in
 /// memory, since it is a rate limiter and a restart clearing it is the safe direction (it forgets
 /// failures, never successes).
-#[expect(
-    clippy::too_many_lines,
-    reason = "the store's route table: one line per route, and splitting it would scatter the one \
-              list a reader checks for what the edge serves"
-)]
 pub fn domain_router<S, Q, A, J, W>(
     edge: Arc<Edge<S>>,
     queue: Q,
@@ -396,200 +397,29 @@ where
     J: crate::print_queue::PrintQueue + 'static,
     W: crate::print_wake::PrintWake + 'static,
 {
-    let lockout = edge.pin_lockout();
-    // Cloned before `edge` and `sessions` move into the routers below.
-    let counter_edge = Arc::clone(&edge);
-    let agent_edge = Arc::clone(&edge);
-    let jobs_edge = Arc::clone(&edge);
-    let codes_edge = Arc::clone(&edge);
-    let sessions_for_counter = Arc::clone(&sessions);
-    let sessions_for_agents = Arc::clone(&sessions);
-    let sessions_for_codes = Arc::clone(&sessions);
-
     // Guarded: a paired, signed-in device. The signed-in gate is layered here (inner); the paired
     // gate is layered on the merged router below (outer), so it runs first and leaves the `DeviceId`
     // the signed-in gate reads.
-    let guarded = Router::new()
-        // The store's published floor plan + kitchen stations, for the UI to render real tables and
-        // route fires (ADR-0072).
-        .route("/api/floor", revalidated(get(floor::plan::<S>)))
-        // The store's published price book, so the till prices from what the console published
-        // rather than from a list compiled into the app (roadmap-v3 E5, ADR-0063).
-        .route("/api/menu", revalidated(get(menu::catalog::<S>)))
-        // Staff mark an item sold out, and bring it back (86). The events have been in the schema
-        // since it was written; this is the first thing to emit them.
-        .route("/api/menu/{id}/sold-out", post(menu::sold_out::<S>))
-        .route("/api/menu/{id}/restore", post(menu::restore::<S>))
-        // How the till groups and orders those items, from the `layout` node the same publish writes
-        // (ADR-0066, production-readiness C4). A separate node, so a separate route: a price change
-        // relays no buttons and a button moving reprices nothing.
-        .route("/api/layout", revalidated(get(layout::plan::<S>)))
-        // The money facts the pay pad needs — currency, the notes a guest carries, what the total
-        // rounds to in cash. A country's coinage, published rather than compiled in (ADR-0105).
-        .route("/api/locale", revalidated(get(locale::settings::<S>)))
-        // The store's managed reason list, so a picker offers what the store actually holds
-        // (ADR-0115). One read for every picker: each entry carries the actions it covers, and the
-        // till filters by the act in hand.
-        .route(
-            "/api/reason-codes",
-            revalidated(get(reason_codes::list::<S>)),
-        )
-        // The floor: seat, clean, move the guests to another table, read.
-        .route("/api/tables/{id}/seat", post(tables::seat::<S>))
-        .route("/api/tables/{id}/clean", post(tables::clean::<S>))
-        .route("/api/tables/{id}/release", post(tables::release::<S>))
-        .route("/api/tables/{id}/transfer", post(tables::transfer::<S>))
-        .route("/api/tables/{id}", get(tables::get::<S>))
-        // What the table owes right now, assembled by the edge — the till displays the figure it is
-        // going to settle against rather than computing one of its own (roadmap-v3 E5).
-        .route("/api/tables/{id}/check", get(check::read::<S>))
-        // The same figures on paper, before payment: a pre-bill, one per open part once a table is
-        // split, and unnumbered because nothing has been settled (roadmap-v3 B2.1).
-        .route(
-            "/api/tables/{id}/check/print",
-            post(check::print_for_table::<S>),
-        )
-        // The same read keyed on the order, for a counter order that sits on no table (ADR-0093).
-        .route("/api/orders/{id}/check", get(check::read_for_order::<S>))
-        .route(
-            "/api/orders/{id}/check/print",
-            post(check::print_for_order::<S>),
-        )
-        // What is open right now, with the line ids to act on it. A device learns lines from the
-        // fan-out, which carries what happens next — so without this read a till that reloads and a
-        // kitchen display switched on mid-service both draw an empty screen over live food.
-        .route("/api/orders/live", get(live::read::<S>))
-        .route("/api/orders/kitchen", get(live::kitchen::<S>))
-        // The order: add a line to a table, fire a line to the kitchen.
-        .route("/api/tables/{id}/lines", post(lines::add::<S>))
-        .route("/api/lines/{id}/fire", post(lines::fire::<S>))
-        // How many, while the line is still editable. The till could only ever add one of a thing,
-        // so "three beers" was three lines.
-        .route("/api/lines/{id}/quantity", post(lines::set_quantity::<S>))
-        // And the whole order in one tap. Firing line by line cost an operator one tap per line and
-        // left half an order with the kitchen when one of them failed; this commits them together.
-        .route("/api/orders/{id}/fire", post(lines::fire_order::<S>))
-        // And one course of it, which is what `courses_enabled` gates (ADR-0130). The narrowing of
-        // the act above, not a different one: same transaction boundary, same routing, same gate.
-        .route(
-            "/api/orders/{id}/fire/{course_id}",
-            post(lines::fire_course::<S>),
-        )
-        // The staff-confirmation queue (ADR-0116). A guest's tabled QR order cannot be fired until
-        // one of these two decisions lands, which is the guardrail ADR-0012 promised.
-        .route("/api/orders/awaiting-confirmation", get(qr::awaiting::<S>))
-        .route("/api/orders/{id}/confirm", post(qr::confirm::<S>))
-        .route("/api/orders/{id}/reject", post(qr::reject::<S>))
-        // The kitchen display: bump a ticket (mark lines prepared), durable and fanned out.
-        .route("/api/kds/bump", post(kds::bump::<S>))
-        // The bill: open on a table, open on an order, settle. The order-keyed route is what makes
-        // a takeaway order chargeable — it has no table to open a bill against (ADR-0093).
-        .route("/api/tables/{id}/bill", post(bills::open::<S>))
-        .route("/api/orders/{id}/bill", post(bills::open_for_order::<S>))
-        .route("/api/bills/{id}/settle", post(bills::settle::<S>))
-        .route("/api/bills/{id}/receipt/reprint", post(bills::reprint::<S>))
-        // What one bill owes and the lines it covers — the read a split needs, because once a
-        // table's bill is split each guest at the till is asking about their own part (ADR-0128).
-        .route("/api/bills/{id}/check", get(check::read_for_bill::<S>))
-        .route(
-            "/api/bills/{id}/check/print",
-            post(check::print_for_bill::<S>),
-        )
-        // The void pair (ADR-0115, roadmap B2.2). A fired line and any bill need a manager's
-        // PIN with the request, which is the first thing in the tree to read the permission
-        // registry's `pin: true`.
-        .route("/api/lines/{id}/void", post(lines::void::<S>))
-        .route("/api/bills/{id}/void", post(bills::void::<S>))
-        .route("/api/bills/{id}/discount", post(bills::discount::<S>))
-        // Waiving one of the bill's fees (ADR-0159 decision 5): `billing.fee.waive`, PIN-flagged,
-        // so the approver rides with the request as it does for a void.
-        .route(
-            "/api/bills/{id}/fees/{fee_id}/waive",
-            post(bills::waive_fee::<S>),
-        )
-        // Split and merge (ADR-0128). Both need `billing.bill.split` (ADR-0158) and neither asks
-        // for a PIN: both move amounts that are already captured, and a prompt here would be paid
-        // for on every table.
-        .route("/api/bills/{id}/split", post(bills::split::<S>))
-        .route("/api/bills/{id}/merge", post(bills::merge::<S>))
-        // The cash shift: open, blind count, close — and the one that is open, so a device that
-        // reloads mid-shift can still count and close it rather than offering to open another.
-        .route("/api/shifts/current", get(shifts::current::<S>))
-        // Every drawer the store keeps, one per till where it keeps one per till (ADR-0167).
-        .route(
-            "/api/shifts",
-            get(shifts::drawers::<S>).post(shifts::open::<S>),
-        )
-        .route("/api/shifts/{id}/count", post(shifts::count::<S>))
-        .route("/api/shifts/{id}/close", post(shifts::close::<S>))
-        // Several counted drawers closed at once, a custom method on the collection (ADR-0167).
-        .route("/api/shifts:batch_close", post(shifts::batch_close::<S>))
-        .route("/api/shifts/{id}/paid-in", post(shifts::paid_in::<S>))
-        .route("/api/shifts/{id}/paid-out", post(shifts::paid_out::<S>))
-        .route("/api/drawer/open", post(shifts::open_drawer::<S>))
-        // The cloud link and the outbox, for the status bar (ADR-0137): "Offline — selling
-        // normally" and how many events are waiting.
-        .route("/api/sync", get(sync::read::<S>))
-        // What the store has taken today, for the Today screen's tile (ADR-0160 decision 2), to a
-        // person whose own role grants `reports.takings.view`, checked in the handler.
-        .route("/api/reports/takings", get(reports::takings::<S>))
-        // The published printers, and a manager's test page on one — how a new store learns a
-        // printer is wired before a guest's receipt tells it.
-        // The vendor connections the cloud published to this store (ADR-0153): which e-invoice
-        // provider, card terminal or courier it is set up for. Names only, never a setting.
-        .route("/api/integrations", get(integrations::list::<S>))
-        .route("/api/printers", get(printers::list::<S>))
-        .route("/api/printers/{id}/test", post(printers::test::<S>))
-        .layer(axum::middleware::from_fn_with_state(
-            Arc::clone(&sessions),
-            auth::require_signed_in,
-        ))
+    let guarded = signed_in(guarded::guarded_routes::<S>(), Arc::clone(&sessions))
         .with_state(Arc::clone(&edge));
-
-    // Session: a paired device signs a person in and out here, so these sit behind the paired gate but
-    // not the signed-in one.
-    let session = Router::new()
-        .route("/api/session", get(auth::current::<S>))
-        .route("/api/session/sign-in", post(auth::sign_in::<S>))
-        .route("/api/session/sign-out", post(auth::sign_out::<S>))
-        .with_state(auth::SignInDeps {
-            edge,
-            sessions,
-            lockout,
-        });
-
-    // Every domain route requires a paired device (ADR-0084). The check runs once here, over the
-    // pairing state, so it guards reads, writes and the session routes alike before any handler; the
-    // middleware carries its own `Arc<Pairing>` state, independent of the routes' own state.
-    // The counter's order list, in its own sub-router because it needs the queue-number authority
-    // beside the edge and `QueueNumberAuthority` is not dyn-compatible (ADR-0093). Behind the same
-    // signed-in gate as the rest of the domain surface, and the paired gate below.
-    let counter = counter::router(counter_edge, queue).layer(axum::middleware::from_fn_with_state(
-        Arc::clone(&sessions_for_counter),
-        auth::require_signed_in,
-    ));
-    // Binding a terminal's print agent, in its own sub-router for the same reason and behind the
-    // same two gates: `PrintAgents` is not dyn-compatible either, and ADR-0112 puts these two writes
-    // behind a *manager*, with the read the till's binding screen draws them from — the permission
-    // is checked in the handler, over the published roster.
-    let binding = print_agent::router(agent_edge, agents.clone()).layer(
-        axum::middleware::from_fn_with_state(sessions_for_agents, auth::require_signed_in),
-    );
-    // Minting the pairing code for the next device (ADR-0118) and retiring one (ADR-0158 decision
-    // 8): their own sub-router for the same reason — they read the published roster off the
-    // application `Edge`, which is generic over the store — and behind the same two gates. A paired
-    // device *and* a signed-in manager, because issuing a credential and taking one back are both
-    // stronger acts than holding a token.
-    let codes = pair::manager_routes(codes_edge, Arc::clone(&pairing)).layer(
-        axum::middleware::from_fn_with_state(sessions_for_codes, auth::require_signed_in),
+    let counter = counter_routes(Arc::clone(&edge), queue, Arc::clone(&sessions));
+    let binding = binding_routes(Arc::clone(&edge), agents.clone(), Arc::clone(&sessions));
+    let codes = code_routes(
+        Arc::clone(&edge),
+        Arc::clone(&pairing),
+        Arc::clone(&sessions),
     );
     // And the agent's own two routes, which carry the paired gate **and no second one**: an agent is
     // an unattended process, so requiring a sign-in would mean a manager's PIN before every kitchen
     // ticket (ADR-0112). They join the five paired-only routes the edge already serves rather than
     // inventing a sixth kind of gate. The binding is what says which terminal the caller answers
     // for; nothing in the request gets to claim it.
-    let jobs = print_jobs::router(jobs_edge, agents, jobs, wake);
+    let jobs = print_jobs::router(Arc::clone(&edge), agents, jobs, wake);
+    let session = session_routes(edge, sessions);
 
+    // Every domain route requires a paired device (ADR-0084). The check runs once here, over the
+    // pairing state, so it guards reads, writes and the session routes alike before any handler; the
+    // middleware carries its own `Arc<Pairing>` state, independent of the routes' own state.
     guarded
         .merge(session)
         .merge(counter)
@@ -605,6 +435,70 @@ where
         // inside the gate would answer every preflight `401` and every cross-origin call would fail
         // — reading to an operator as "pairing is broken" (ADR-0111).
         .layer(crate::origins::cors_layer(origins))
+}
+
+/// The signed-in gate over `router`: a person signed in on the paired device.
+fn signed_in<T>(router: Router<T>, sessions: Arc<Sessions>) -> Router<T>
+where
+    T: Clone + Send + Sync + 'static,
+{
+    router.layer(axum::middleware::from_fn_with_state(
+        sessions,
+        auth::require_signed_in,
+    ))
+}
+
+/// Session: a paired device signs a person in and out here, so these sit behind the paired gate but
+/// not the signed-in one.
+fn session_routes<S>(edge: Arc<Edge<S>>, sessions: Arc<Sessions>) -> Router
+where
+    S: EventStore + SubjectStore + Send + Sync + 'static,
+{
+    let lockout = edge.pin_lockout();
+    Router::new()
+        .route("/api/session", get(auth::current_session::<S>))
+        .route("/api/session/sign-in", post(auth::sign_in::<S>))
+        .route("/api/session/sign-out", post(auth::sign_out::<S>))
+        .with_state(auth::SignInDeps {
+            edge,
+            sessions,
+            lockout,
+        })
+}
+
+/// The counter's order list, in its own sub-router because it needs the queue-number authority
+/// beside the edge and `QueueNumberAuthority` is not dyn-compatible (ADR-0093). Behind the same
+/// signed-in gate as the rest of the domain surface, and the paired gate over it.
+fn counter_routes<S, Q>(edge: Arc<Edge<S>>, queue: Q, sessions: Arc<Sessions>) -> Router
+where
+    S: EventStore + Send + Sync + 'static,
+    Q: crate::queue::QueueNumberAuthority + 'static,
+{
+    signed_in(counter::router(edge, queue), sessions)
+}
+
+/// Binding a terminal's print agent, in its own sub-router for the same reason and behind the
+/// same two gates: `PrintAgents` is not dyn-compatible either, and ADR-0112 puts these two writes
+/// behind a *manager*, with the read the till's binding screen draws them from — the permission
+/// is checked in the handler, over the published roster.
+fn binding_routes<S, A>(edge: Arc<Edge<S>>, agents: A, sessions: Arc<Sessions>) -> Router
+where
+    S: EventStore + Send + Sync + 'static,
+    A: crate::print_agent::PrintAgents + 'static,
+{
+    signed_in(print_agent::router(edge, agents), sessions)
+}
+
+/// Minting the pairing code for the next device (ADR-0118) and retiring one (ADR-0158 decision
+/// 8): their own sub-router for the same reason — they read the published roster off the
+/// application `Edge`, which is generic over the store — and behind the same two gates. A paired
+/// device *and* a signed-in manager, because issuing a credential and taking one back are both
+/// stronger acts than holding a token.
+fn code_routes<S>(edge: Arc<Edge<S>>, pairing: Arc<Pairing>, sessions: Arc<Sessions>) -> Router
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    signed_in(pair::manager_routes(edge, pairing), sessions)
 }
 
 /// Parses a ULID from a path segment. `None` if it is not a ULID, which every handler turns into a

@@ -188,6 +188,111 @@ pub fn functions(source: &str) -> Vec<FunctionSpan> {
         .collect()
 }
 
+/// What `#[cfg(test)]` gates in one file: the lines of each gated item, and the out-of-line
+/// modules it gates, whose files are test code in their own right.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct TestGated {
+    /// Each gated item's lines, 1-based and both included: from the attribute to the item's end.
+    /// A `#![cfg(test)]` at the top gates the whole file.
+    pub lines: Vec<(usize, usize)>,
+    /// Each gated `mod name;`: its name, and the file a `#[path = "…"]` on it names.
+    pub module_files: Vec<(String, Option<String>)>,
+}
+
+impl TestGated {
+    /// Whether `line` (1-based) is inside a gated item.
+    pub fn covers(&self, line: usize) -> bool {
+        self.lines
+            .iter()
+            .any(|(first, last)| (*first..=*last).contains(&line))
+    }
+}
+
+/// What each `#[cfg(test)]` in `source` gates: the one item directly under it, which is a whole
+/// module when that item is a `mod`. A `#[cfg(test)] use …` gates that `use` and nothing else, so
+/// it never makes the code after it test code.
+pub fn test_gated(source: &str) -> TestGated {
+    let code = blank_literals(source);
+    let newlines: Vec<usize> = code
+        .iter()
+        .enumerate()
+        .filter_map(|(index, byte)| (*byte == b'\n').then_some(index))
+        .collect();
+    let mut gated = TestGated::default();
+    if find_text(&code, 0, b"#![cfg(test)]").is_some() {
+        gated.lines.push((1, newlines.len() + 1));
+        return gated;
+    }
+    let attribute = b"#[cfg(test)]";
+    let mut at = 0;
+    while let Some(offset) = find_text(&code, at, attribute) {
+        at = offset + attribute.len();
+        let (item, path) = skip_attributes(source, &code, at);
+        let end = item_end(&code, item);
+        gated
+            .lines
+            .push((line_of(&newlines, offset), line_of(&newlines, end)));
+        if code.get(end) == Some(&b';')
+            && let Some(name) = module_name(&code[item..end])
+        {
+            gated.module_files.push((name, path));
+        }
+    }
+    gated
+}
+
+/// The next occurrence of `text` at or after `from`.
+fn find_text(code: &[u8], from: usize, text: &[u8]) -> Option<usize> {
+    code.get(from..)?
+        .windows(text.len())
+        .position(|window| window == text)
+        .map(|offset| from + offset)
+}
+
+/// Past any further attributes from `from`: where the item starts, and the file a `#[path = "…"]`
+/// among them names (read from `source`, since `code` has its strings blanked).
+fn skip_attributes(source: &str, code: &[u8], from: usize) -> (usize, Option<String>) {
+    let mut index = skip_space(code, from);
+    let mut path = None;
+    while code.get(index) == Some(&b'#') && code.get(index + 1) == Some(&b'[') {
+        let Some(close) = matching(code, index + 1, b'[', b']') else {
+            break;
+        };
+        let text = source.get(index..=close).unwrap_or_default();
+        if let Some(rest) = text.strip_prefix("#[path") {
+            path = rest.split('"').nth(1).map(str::to_owned);
+        }
+        index = skip_space(code, close + 1);
+    }
+    (index, path)
+}
+
+/// Where the item starting at `from` ends: its closing brace, or the `;` that ends it first.
+fn item_end(code: &[u8], from: usize) -> usize {
+    let mut depth = 0i32;
+    for (index, byte) in code.iter().enumerate().skip(from) {
+        match byte {
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => depth -= 1,
+            b'{' if depth == 0 => return matching(code, index, b'{', b'}').unwrap_or(code.len()),
+            b';' if depth == 0 => return index,
+            _ => {}
+        }
+    }
+    code.len().saturating_sub(1)
+}
+
+/// `name` for an item that reads `mod name` or `pub(…) mod name`.
+fn module_name(item: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(item);
+    let mut words = text.split_whitespace();
+    let mut word = words.next()?;
+    if word.starts_with("pub") {
+        word = words.next()?;
+    }
+    (word == "mod").then(|| words.next().map(str::to_owned))?
+}
+
 /// Every `impl`, `trait` and inline `mod` block: where it starts and ends, and its label.
 fn scopes(code: &[u8]) -> Vec<(usize, usize, String)> {
     let mut scopes = Vec::new();
@@ -423,7 +528,7 @@ fn line_of(newlines: &[usize], offset: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{FunctionSpan, functions};
+    use super::{FunctionSpan, TestGated, functions, test_gated};
 
     fn spans(source: &str) -> Vec<(String, usize, usize, usize)> {
         functions(source)
@@ -488,6 +593,67 @@ mod tests {
                 "free",
             ]
         );
+    }
+
+    #[test]
+    fn a_gated_use_gates_only_itself_not_the_code_below_it() {
+        // The loophole this rule closes: a `#[cfg(test)] use` near the top once made every
+        // function below it test code, and so exempt from the size limits.
+        let source = "#[cfg(test)]\nuse crate::helper;\n\nfn production() {\n    work();\n}\n";
+        let gated = test_gated(source);
+        assert_eq!(gated.lines, [(1, 2)]);
+        assert!(
+            !gated.covers(4),
+            "the function below the gated use is production code"
+        );
+        assert!(gated.module_files.is_empty());
+    }
+
+    #[test]
+    fn a_gated_inline_module_is_test_code_to_its_closing_brace() {
+        let source = "fn production() {}\n\n#[cfg(test)]\nmod tests {\n    fn helper() {}\n\n    #[test]\n    fn case() {}\n}\n\nfn after() {}\n";
+        let gated = test_gated(source);
+        assert_eq!(gated.lines, [(3, 9)]);
+        assert!(!gated.covers(1));
+        assert!(gated.covers(5) && gated.covers(8));
+        assert!(
+            !gated.covers(11),
+            "a function after the module is production code"
+        );
+    }
+
+    #[test]
+    fn a_gated_function_is_test_code_and_the_next_one_is_not() {
+        let source = "#[cfg(test)]\n#[allow(dead_code)]\nfn only_for_tests() {\n    let s = \"}\";\n}\nfn production() {}\n";
+        let gated = test_gated(source);
+        assert_eq!(gated.lines, [(1, 5)]);
+        assert!(!gated.covers(6));
+    }
+
+    #[test]
+    fn a_gated_module_file_is_named_with_its_path_attribute() {
+        let source = "#[cfg(test)]\nmod tests;\n\n#[cfg(test)]\n#[path = \"cloud/extra.rs\"]\npub(crate) mod extra;\nfn production() {}\n";
+        let gated = test_gated(source);
+        assert_eq!(
+            gated.module_files,
+            [
+                ("tests".to_owned(), None),
+                ("extra".to_owned(), Some("cloud/extra.rs".to_owned())),
+            ]
+        );
+        assert!(!gated.covers(7));
+    }
+
+    #[test]
+    fn an_inner_cfg_test_gates_the_whole_file() {
+        let source = "#![cfg(test)]\n\nfn helper() {}\n";
+        assert!(test_gated(source).covers(3));
+    }
+
+    #[test]
+    fn a_cfg_test_inside_a_string_or_comment_gates_nothing() {
+        let source = "// #[cfg(test)]\nfn production() { let s = \"#[cfg(test)]\"; }\n";
+        assert_eq!(test_gated(source), TestGated::default());
     }
 
     #[test]

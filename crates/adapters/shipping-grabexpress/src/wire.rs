@@ -2,15 +2,15 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The HTTP transport seam and its production TLS implementation
-//! ([ADR-0058](../../../docs/adr/0058-shipping-adapters.md)).
+//! ([ADR-0058](../../../../docs/adr/0058-shipping-adapters.md)).
 //!
 //! [`CourierTransport`] is the one thing that touches a socket; [`TlsCourierTransport`] is the
 //! concrete sender, on the rustls/hyper stack already in the tree
-//! ([ADR-0038](../../../docs/adr/0038-webhook-tls-sender.md)). A courier's API base URL is operator
+//! ([ADR-0038](../../../../docs/adr/0038-webhook-tls-sender.md)). A courier's API base URL is operator
 //! configuration — one fixed, trusted host — so this dials the ordinary way; there is no SSRF surface
 //! to defend.
 //!
-//! This is the same seam shape the Ahamove adapter uses ([ADR-0058](../../../docs/adr/0058-shipping-adapters.md)):
+//! This is the same seam shape the Ahamove adapter uses ([ADR-0058](../../../../docs/adr/0058-shipping-adapters.md)):
 //! a courier job is a REST resource, created (`POST`), read (`GET`), and cancelled (`POST` to a
 //! sub-path), so the seam carries a [`Method`]. The near-identical transport across the two courier
 //! adapters (and the ERP adapter, ADR-0059) is the `templates/adapter-template` this crate was built

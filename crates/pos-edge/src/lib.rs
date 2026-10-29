@@ -35,12 +35,9 @@
 pub mod activation;
 pub mod active_config;
 pub mod admission_events;
-pub mod app;
-pub mod auth;
 pub mod backup;
 pub mod backup_client;
 pub mod claim;
-pub mod clock;
 pub mod cloud_http;
 pub mod config;
 pub mod config_changes;
@@ -51,41 +48,36 @@ pub mod demo;
 pub mod device_revocations;
 pub mod discovery;
 pub mod drain_status;
-pub mod durable_auth;
 pub mod error;
 pub mod event_publish;
-pub mod fanout;
 pub mod heartbeat_client;
 pub mod http;
-pub mod idgen;
 pub mod installer;
-pub mod lease_state;
-pub mod line_notes;
 pub mod order_in;
 pub mod origins;
 pub mod ota;
 pub mod ota_client;
 pub mod ota_state;
 pub mod pairing;
-pub mod paper_labels;
-pub mod print_agent;
-pub mod print_queue;
-pub mod print_wake;
-pub mod printing;
-pub mod queue;
-pub mod receipt;
 pub mod relay_client;
 pub mod retention;
 pub mod server;
 pub mod setup;
-pub mod sntp;
 pub mod state;
 pub mod state_access;
-pub mod sync_status;
 pub mod telemetry;
 pub mod trusted_keys;
 mod vault;
 pub mod version;
+
+// Moved into pos-edge-app (ADR-0170 decision 4); re-exported under their old paths, so
+// `crate::app`, `pos_edge::auth` and the rest resolve as before.
+pub use pos_edge_app::{
+    app, auth, clock, durable_auth, fanout, idgen, lease_state, line_notes, queue, receipt, sntp,
+    sync_status,
+};
+// Moved into pos-edge-printing, and re-exported the same way.
+pub use pos_edge_printing::{paper_labels, print_agent, print_queue, print_wake, printing};
 
 pub use activation::{activation_router, boot_standing};
 pub use active_config::{ActiveConfig, ConfigRejected};

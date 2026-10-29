@@ -31,6 +31,7 @@ use serde::{Deserialize, Serialize};
 /// No `deny_unknown_fields`, for the same reason as every other published node: a store running an
 /// older build must apply a profile carrying a field it does not understand rather than refusing it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct StoreProfile {
     /// The registered name — what the law wants on the paper.

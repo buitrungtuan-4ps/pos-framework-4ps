@@ -313,3 +313,202 @@ async fn a_store_set_to_round_tax_down_keeps_its_country_and_is_shown_the_tax_it
     assert_eq!(effective["locale"]["timezone"], "Asia/Ho_Chi_Minh");
     assert_eq!(sampled(&router, &cookie, first).await, down);
 }
+
+// --- pinned before `admin_preview_fees` is split (ADR-0170 decision 7) ---------------------------
+
+/// A preview body for the brand's first store: `extra` is merged over one sample line and no rules.
+fn preview_body(extra: &serde_json::Value) -> serde_json::Value {
+    let [first, _, _] = fees_stores();
+    let mut body = serde_json::json!({
+        "tenant_id": tenant_scope_id(),
+        "store_id": first.to_string(),
+        "rules": [],
+        "lines": [{ "menu_item_id": fee_item(1).to_string(), "quantity": 2 }],
+    });
+    if let (Some(fields), Some(extra)) = (body.as_object_mut(), extra.as_object()) {
+        for (key, value) in extra {
+            fields.insert(key.clone(), value.clone());
+        }
+    }
+    body
+}
+
+/// The status and the first detail's field of a preview of `body`.
+async fn previewed(
+    router: &axum::Router,
+    cookie: &str,
+    body: &serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let response = router
+        .clone()
+        .oneshot(post_with_cookie("/admin/fees/preview", body, cookie))
+        .await
+        .expect("route the preview");
+    let status = response.status();
+    (status, json_body(response).await)
+}
+
+fn tenant_rule(rule: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({ "scope": "FEE_SCOPE_TENANT", "scope_id": tenant_scope_id(), "rule": rule })
+}
+
+#[tokio::test]
+async fn a_preview_refuses_its_request_field_by_field_in_the_order_it_reads_them() {
+    let (router, _, _, _) = fees_app();
+    let cookie = admin_cookie(&router).await;
+    let too_many = serde_json::Value::Array(vec![tenant_rule(&percent_fee("SERVICE", 5)); 21]);
+    for (extra, status, field) in [
+        (
+            serde_json::json!({ "tenant_id": "not-a-ulid", "sales_channel": "SALES_CHANNEL_UNSPECIFIED" }),
+            StatusCode::BAD_REQUEST,
+            "tenant_id",
+        ),
+        (
+            serde_json::json!({ "sales_channel": "SALES_CHANNEL_UNSPECIFIED", "rules": too_many, "lines": [] }),
+            StatusCode::BAD_REQUEST,
+            "sales_channel",
+        ),
+        (
+            serde_json::json!({ "rules": too_many, "lines": [] }),
+            StatusCode::BAD_REQUEST,
+            "rules",
+        ),
+        (
+            serde_json::json!({ "lines": [] }),
+            StatusCode::BAD_REQUEST,
+            "lines",
+        ),
+    ] {
+        let (got, body) = previewed(&router, &cookie, &preview_body(&extra)).await;
+        assert_eq!(got, status, "{extra}: {body}");
+        assert_eq!(
+            body["error"]["details"][0]["field"], field,
+            "{extra}: {body}"
+        );
+    }
+
+    let (got, _) = previewed(
+        &router,
+        &cookie,
+        &preview_body(&serde_json::json!({ "store_id": StoreId::new(pos_proto::ulid::Ulid::from_u128(0x7B99)).to_string() })),
+    )
+    .await;
+    assert_eq!(
+        got,
+        StatusCode::NOT_FOUND,
+        "a store the tenant does not have"
+    );
+
+    let (got, _) = previewed(
+        &router,
+        &cookie,
+        &preview_body(&serde_json::json!({ "rules": [{ "scope": "FEE_SCOPE_GALAXY", "scope_id": tenant_scope_id(), "rule": percent_fee("SERVICE", 5) }] })),
+    )
+    .await;
+    assert_eq!(got, StatusCode::BAD_REQUEST, "a rule a write would refuse");
+}
+
+#[tokio::test]
+async fn a_preview_prices_on_the_channel_it_names() {
+    let (router, _, _, _) = fees_app();
+    let cookie = admin_cookie(&router).await;
+    let (got, body) = previewed(
+        &router,
+        &cookie,
+        &preview_body(&serde_json::json!({ "sales_channel": "SALES_CHANNEL_DINE_IN" })),
+    )
+    .await;
+    assert_eq!(got, StatusCode::OK);
+    assert_eq!(body["sales_channel"], "SALES_CHANNEL_DINE_IN");
+
+    // The store's menu sells nothing for takeaway, so the same line is not on it there.
+    let (got, body) = previewed(
+        &router,
+        &cookie,
+        &preview_body(&serde_json::json!({ "sales_channel": "SALES_CHANNEL_TAKEAWAY" })),
+    )
+    .await;
+    assert_eq!(got, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["error"]["details"][0]["reason"], "NOT_ON_MENU");
+}
+
+#[tokio::test]
+async fn a_previewed_rule_takes_the_place_of_the_written_rule_at_its_slot() {
+    let (router, _, _, _) = fees_app();
+    let cookie = admin_cookie(&router).await;
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/fees",
+            &serde_json::json!({
+                "tenant_id": tenant_scope_id(),
+                "scope": "FEE_SCOPE_TENANT",
+                "scope_id": tenant_scope_id(),
+                "rule": percent_fee("SERVICE", 10),
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the write");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let fee_id = json_body(created).await["fee_id"]
+        .as_str()
+        .expect("a fee id")
+        .to_owned();
+    let amounts = |body: &serde_json::Value| -> Vec<Option<i64>> {
+        body["fee_lines"]
+            .as_array()
+            .expect("fee lines")
+            .iter()
+            .map(|line| line["amount"]["amount_minor"].as_i64())
+            .collect()
+    };
+
+    // What is written applies: 10 % of 190,000.
+    let (got, written) = previewed(&router, &cookie, &preview_body(&serde_json::json!({}))).await;
+    assert_eq!(got, StatusCode::OK);
+    assert_eq!(amounts(&written), [Some(19_000)]);
+
+    // The same fee at 5 % replaces it rather than joining it.
+    let mut five = percent_fee("SERVICE", 5);
+    if let Some(fields) = five.as_object_mut() {
+        fields.insert("fee_id".to_owned(), serde_json::json!(fee_id));
+    }
+    let (got, replaced) = previewed(
+        &router,
+        &cookie,
+        &preview_body(&serde_json::json!({ "rules": [tenant_rule(&five)] })),
+    )
+    .await;
+    assert_eq!(got, StatusCode::OK);
+    assert_eq!(amounts(&replaced), [Some(9_500)]);
+}
+
+#[tokio::test]
+async fn a_rule_the_store_cannot_apply_is_refused_with_its_fault() {
+    let (router, _, _, _) = fees_app();
+    let cookie = admin_cookie(&router).await;
+    let yen = serde_json::json!({
+        "code": "DELIVERY",
+        "display_name": "Delivery",
+        "kind": "FEE_KIND_AMOUNT_PER_BILL",
+        "amount": { "currency_code": "JPY", "amount_minor": 300 },
+    });
+    let (got, body) = previewed(
+        &router,
+        &cookie,
+        &preview_body(&serde_json::json!({ "rules": [tenant_rule(&yen)] })),
+    )
+    .await;
+    assert_eq!(got, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        body["error"]["details"],
+        serde_json::json!([{ "field": "rules", "reason": "CURRENCY_MISMATCH" }])
+    );
+    let message = body["error"]["message"].as_str().expect("a message");
+    assert!(
+        message.starts_with("fee ")
+            && message.ends_with(" cannot apply at the store: CURRENCY_MISMATCH"),
+        "{message}"
+    );
+}

@@ -20,13 +20,13 @@ describe("the ReorderList component", () => {
         itemKey={(item) => item.id}
         renderItem={(item) => <span>{item.name}</span>}
         onReorder={onReorder}
-        upLabel="Move item up"
-        downLabel="Move item down"
+        upLabel={(item) => `Move ${item.name} up`}
+        downLabel={(item) => `Move ${item.name} down`}
       />
     ));
 
-    const upButtons = screen.getAllByRole("button", { name: "Move item up" });
-    const downButtons = screen.getAllByRole("button", { name: "Move item down" });
+    const upButtons = screen.getAllByRole("button", { name: /^Move .* up$/ });
+    const downButtons = screen.getAllByRole("button", { name: /^Move .* down$/ });
 
     expect(upButtons.length).toBe(3);
     expect(downButtons.length).toBe(3);
@@ -44,6 +44,23 @@ describe("the ReorderList component", () => {
     expect((downButtons[2] as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it("names each row's item in its up and down labels", () => {
+    const onReorder = vi.fn();
+    render(() => (
+      <ReorderList
+        items={items}
+        itemKey={(item) => item.id}
+        renderItem={(item) => <span>{item.name}</span>}
+        onReorder={onReorder}
+        upLabel={(item) => `Move ${item.name} up`}
+        downLabel={(item) => `Move ${item.name} down`}
+      />
+    ));
+
+    expect(screen.getByRole("button", { name: "Move Item Two up" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Move Item Two down" })).toBeDefined();
+  });
+
   it("calls onReorder with correct indices when buttons are clicked", () => {
     const onReorder = vi.fn();
     render(() => (
@@ -52,13 +69,13 @@ describe("the ReorderList component", () => {
         itemKey={(item) => item.id}
         renderItem={(item) => <span>{item.name}</span>}
         onReorder={onReorder}
-        upLabel="Move item up"
-        downLabel="Move item down"
+        upLabel={(item) => `Move ${item.name} up`}
+        downLabel={(item) => `Move ${item.name} down`}
       />
     ));
 
-    const upButtons = screen.getAllByRole("button", { name: "Move item up" });
-    const downButtons = screen.getAllByRole("button", { name: "Move item down" });
+    const upButtons = screen.getAllByRole("button", { name: /^Move .* up$/ });
+    const downButtons = screen.getAllByRole("button", { name: /^Move .* down$/ });
 
     // Click move down on first item
     fireEvent.click(downButtons[0]!);

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The floor & kitchen read route (Track M2, [ADR-0072](../../../docs/adr/0072-floor-and-kitchen.md)).
+//! The floor & kitchen read route (Track M2, [ADR-0072](../../../../docs/adr/0072-floor-and-kitchen.md)).
 //!
 //! `GET /api/floor` serves the store's published floor plan and kitchen stations from the live
 //! [`EdgeSession`](crate::app::EdgeSession) the config-pull rebuilds — so the in-store UI renders the
@@ -26,6 +26,7 @@ use crate::app::Edge;
 
 /// The store's floor and kitchen plans, as the in-store UI reads them.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct FloorResponse {
     /// The areas and their tables.
     floor: FloorPlan,
@@ -58,9 +59,27 @@ pub(crate) struct FloorResponse {
     seated_times: BTreeMap<String, Timestamp>,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/floor",
+    security(("till_session" = [])),
+    params(
+        ("If-None-Match" = Option<String>, Header, description = "The ETag of the copy the till holds"),
+    ),
+    responses(
+        (status = 200, body = FloorResponse, description = "`floor`, the published areas and tables; `stations`, the kitchen stations and \
+                                      routing, each station with the threshold its board marks a ticket late \
+                                      after; and each table's live state. Empty until a floor is published. \
+                                      The ETag tags this body"),
+        (status = 304, description = "If-None-Match names the current ETag: nothing changed, and no body is sent"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+    ),
+    tag = "published configuration",
+))]
 /// `GET /api/floor` — the store's published floor plan and kitchen stations, read from the live
 /// session (ADR-0072).
-pub(crate) async fn plan<S>(State(edge): State<Arc<Edge<S>>>) -> Response
+pub(crate) async fn floor_plan<S>(State(edge): State<Arc<Edge<S>>>) -> Response
 where
     S: EventStore + Send + Sync + 'static,
 {

@@ -1,5 +1,5 @@
 //! Windows' own protection for a store box's state
-//! ([ADR-0174](../../../docs/adr/0174-a-windows-store-keeps-its-state-to-its-own-service.md)).
+//! ([ADR-0174](../../../../docs/adr/0174-a-windows-store-keeps-its-state-to-its-own-service.md)).
 //!
 //! **DPAPI, in machine scope.** [`protect_for_machine`] encrypts bytes so that only this machine
 //! can decrypt them, and [`unprotect`] decrypts them again. The edge's vault key is kept this way

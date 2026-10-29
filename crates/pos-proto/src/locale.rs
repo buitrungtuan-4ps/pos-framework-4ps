@@ -149,6 +149,7 @@ impl<'de> Deserialize<'de> for CountryCode {
 /// `0.09999999` on a legal document is a conversation with an auditor. 10% is `1000`, Japan's
 /// reduced 8% is `800`, and a tenth of a percent is expressible.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(transparent)]
 pub struct TaxRate {
     basis_points: u32,
@@ -224,6 +225,7 @@ impl fmt::Debug for TaxRate {
 /// packs exist to avoid. It is text on the wire, and a sound table names each component with a
 /// [`TaxComponentName`] token, which [`TaxRateTable::rows_with_untokened_components`] checks.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct TaxComponent {
     /// What the invoice calls it — `CGST`, `SGST`, `IGST`, `TVA`: a [`TaxComponentName`] in a
@@ -257,6 +259,7 @@ impl TaxComponent {
 /// eight characters with no space, `@` or lower case cannot carry a person's name, an e-mail or a
 /// phone number. It comes from the `tax` node an operator authors, never from a till's input.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(transparent)]
 pub struct TaxComponentName(Box<str>);
 
@@ -322,6 +325,7 @@ impl<'de> Deserialize<'de> for TaxComponentName {
 /// configuration tree, and because `docs/adr/0010-naming-standard.md` wants a shape a person can
 /// read in a diff. A map keyed by a composite would serialise as a stringified tuple.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct TaxRateRow {
     /// Which class of item.
@@ -348,6 +352,7 @@ pub struct TaxRateRow {
 /// one rate, which is a *special case* of this table rather than a different model — and having both
 /// dimensions from day one is what avoids a migration across every order line ever written.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(transparent)]
 pub struct TaxRateTable {
     rows: Vec<TaxRateRow>,
@@ -516,6 +521,7 @@ impl TaxRateTable {
 /// India's 2-2-3 lakh grouping is expressible later by widening this field rather than by replacing
 /// the type.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct NumberFormat {
     /// Between the integer and fractional parts. `.` in Vietnam and Japan, `,` in much of Europe.
@@ -547,6 +553,7 @@ impl Default for NumberFormat {
 /// than refusing it, because a store that will not accept configuration is a store that has stopped
 /// being manageable.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct LocalePack {
     /// Which country.
@@ -682,6 +689,7 @@ impl TaxRounding {
 /// applies. An absent optional field stays off the wire; `prices_include_tax` and
 /// `cash_denominations` are written as they read, as the cloud writes them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct PublishedLocale {
     /// The store's currency, as an ISO 4217 code: a string, narrowed to a [`CurrencyCode`] where it
     /// is applied, so a code that does not parse costs the currency alone.
@@ -735,6 +743,7 @@ pub struct PublishedLocale {
 /// currency and its timezone because somebody published a two-character group separator is a worse
 /// outcome than one that keeps the format it had.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct PublishedNumberFormat {
     /// Between the integer and fractional parts, as [`NumberFormat::decimal_separator`].
     pub decimal_separator: String,
@@ -778,6 +787,7 @@ impl PublishedNumberFormat {
 /// Every default is what the edge did before the field existed, so a node without a field runs a
 /// store as it ran before.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct LocaleSettings {
     /// How the store rounds each tax amount and each fee. Read it through

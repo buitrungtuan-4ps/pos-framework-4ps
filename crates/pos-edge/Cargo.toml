@@ -32,7 +32,7 @@ dev-ui  = []
 # (`.github/workflows/release.yml`), so a store's binary compiles none of it; a
 # `--workspace` build does turn it on, because the example in the same workspace asks
 # for it, exactly as `country-zz` behaves.
-demo-fixtures = []
+demo-fixtures = ["pos-edge-app/demo-fixtures"]
 # Country modules are selected per binary as a Cargo feature (ADR-0027): a cell
 # serves one country, so a fork enables one line and compiles nothing else.
 # `country-zz` is the reference module; the rest are real markets (ADR-0105).
@@ -43,6 +43,12 @@ country-zz = ["dep:pos-country-zz"]
 country-vn = ["dep:pos-country-vn"]
 country-jp = ["dep:pos-country-jp"]
 country-in = ["dep:pos-country-in"]
+# The till's OpenAPI document, `docs/openapi-edge.json` (ADR-0177 decision 2). Off by default, so a
+# store's binary compiles none of it: only this crate's own dev-dependency on itself turns it on,
+# and `cargo test` builds the document and checks it. It also gives the wire types their schemas
+# (`pos-proto/openapi`, decision 3), and the port types a route serves theirs (`pos-ports/openapi`,
+# ADR-0180 D-T2).
+openapi = ["dep:utoipa", "pos-proto/openapi", "pos-ports/openapi"]
 
 [dependencies]
 # The backbone this binary composes. Paths, not versions: resolved by the workspace.
@@ -50,10 +56,16 @@ pos-core    = { path = "../pos-core" }
 pos-ports   = { path = "../pos-ports" }
 pos-proto   = { path = "../pos-proto" }
 pos-country = { path = "../pos-country" }
+# The application layer: `Edge`, its commands, sign-in and the authorities (ADR-0170 decision 4).
+pos-edge-app = { path = "../pos-edge-app" }
+# Printing: receipts, tickets, the drawer and the print-agent lane (ADR-0170 decision 4).
+pos-edge-printing = { path = "../pos-edge-printing" }
 
 # Country modules, selected per binary as features (ADR-0027). Optional, so a fork
 # compiles only the ones it enables; `pos-country-zz` is the reference module.
 pos-country-zz = { path = "../../countries/zz", optional = true }
+# Only behind the `openapi` feature above (ADR-0177 decision 2).
+utoipa = { version = "6", optional = true }
 pos-country-vn = { path = "../../countries/vn", optional = true }
 pos-country-jp = { path = "../../countries/jp", optional = true }
 pos-country-in = { path = "../../countries/in", optional = true }
@@ -169,6 +181,9 @@ windows-service = "0.8"
 windows-protect = { path = "../adapters/windows-protect" }
 
 [dev-dependencies]
+# This crate, with its `openapi` feature: what turns the till's document on for `cargo test` and for
+# nothing else (ADR-0177 decision 2).
+pos-edge = { path = ".", features = ["openapi"] }
 # Exercise the router without a socket: build the Router and drive it with
 # ServiceExt::oneshot.
 tower = { version = "0.5", features = ["util"] }

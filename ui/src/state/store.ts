@@ -9,31 +9,19 @@ import { api } from "../api/client";
 import { adoptStoreLanguage } from "../i18n";
 import { load, reload } from "./engine";
 import { ownOverride } from "./drawer-access";
+import { keptShift, shiftInfo } from "./shift-info";
+import { noteWalkInOpened, walkInsOpenedSince, type LiveOrdersRead } from "./live-orders-read";
 import type { LinkStatus, ServerEvent } from "../api/live";
 import type {
   ApproverRequest,
-  BillCheckResponse,
   BillResponse,
-  BuyerRequest,
-  CheckResponse,
-  CourseResponse,
-  DiscountResponse,
-  LayoutCategory,
-  MenuItemResponse,
   MenuResponse,
-  ModifierGroup,
-  PaymentRequest,
   DrawerOutcome,
   DrawersResponse,
-  FloorResponse,
-  LiveOrder,
-  LayoutResponse,
   LocaleResponse,
-  ReasonCodeEntry,
-  ReasonCodesResponse,
   ShiftResponse,
   SyncResponse,
-} from "../api/types";
+} from "../api/schemas";
 import {
   FALLBACK_NUMBER_FORMAT,
   fallbackExponent,
@@ -44,6 +32,10 @@ import {
   type MoneyStyle,
   type NumberFormat,
 } from "../lib/money";
+import type { BillCheckResponse, BuyerRequest, CheckResponse, CourseResponse } from "../api/schemas";
+import type { DiscountResponse, FloorResponse, LayoutCategory, LayoutResponse } from "../api/schemas";
+import type { MenuItemResponse, ModifierGroup, PaymentRequest } from "../api/schemas";
+import type { ReasonCodeEntry, ReasonCodesResponse } from "../api/schemas";
 
 export interface OrderLine {
   // The edge's id, or a provisional one beginning `PENDING` while the edge has not answered.
@@ -900,11 +892,16 @@ export function fold(event: ServerEvent): void {
     //
     // Where the store keeps a drawer per till, the shift a device shows is its own till's, so an
     // event about another till's drawer changes only the list of drawers (ADR-0167).
+    //
+    // An event about the shift already held moves only its state: the device that opened or counted
+    // it may already hold the edge's answer, whose figures the event does not carry, and the event
+    // can reach the live link after that answer. A shift not yet held is replaced and read back for
+    // its figures.
     case "cash.shift.opened": {
       const shiftId = str(payload, "opened_shift_id");
       const own = ownDrawer(str(payload, "terminal_device_id"));
       if (shiftId !== null && own === true) {
-        replaceShift({ shiftId, state: "SHIFT_STATE_OPEN" });
+        heardShift(shiftId, "SHIFT_STATE_OPEN");
       } else if (own === null) {
         void loadShift();
       }
@@ -919,7 +916,7 @@ export function fold(event: ServerEvent): void {
       if (shiftId !== null) {
         const oneDrawer = state.drawers?.drawer_model === "DRAWER_MODEL_PER_STORE";
         if (oneDrawer || state.shift?.shiftId === shiftId) {
-          replaceShift({ shiftId, state: "SHIFT_STATE_COUNTED", counted: counted ?? undefined });
+          heardShift(shiftId, "SHIFT_STATE_COUNTED", counted ?? undefined);
         } else if (state.drawers === null) {
           void loadShift();
         }
@@ -1312,6 +1309,7 @@ export async function startWalkIn(channel?: string): Promise<string> {
   holdWalkIn(opened.order_id);
   if (channel !== undefined) {
     setState("walkInChannels", opened.order_id, channel);
+    noteWalkInOpened(opened.order_id);
   }
   return opened.order_id;
 }
@@ -1630,22 +1628,14 @@ export function loadLiveOrders(): Promise<void> {
   return load("live_orders");
 }
 
-// The live orders, and what the kitchen still has to make: the live orders again, plus each paid
-// order with no table whose food no station has bumped (ADR-0161). An edge that predates the
-// kitchen route answers 404, and the board then works from the live orders alone, as it always did.
-export interface LiveOrdersRead {
-  orders: LiveOrder[];
-  kitchen: LiveOrder[] | null;
-}
-
-export async function readLiveOrders(): Promise<LiveOrdersRead> {
-  const orders = await api.liveOrders();
-  const kitchen = await api.kitchenOrders().catch(() => null);
-  return { orders, kitchen };
-}
-
-export function applyLiveOrders({ orders, kitchen }: LiveOrdersRead): void {
+// Applies the live orders read (`./live-orders-read`).
+export function applyLiveOrders(read: LiveOrdersRead): void {
+  const { orders, kitchen } = read;
   const live = new Set(orders.map((order) => order.order_id));
+  const opened = walkInsOpenedSince(read).flatMap((orderId) => {
+    const channel = state.walkInChannels[orderId];
+    return channel === undefined ? [] : [[orderId, channel] as const];
+  });
   const waiting = (kitchen ?? []).filter((order) => !live.has(order.order_id));
   setState(
     produce((draft) => {
@@ -1653,14 +1643,16 @@ export function applyLiveOrders({ orders, kitchen }: LiveOrdersRead): void {
       // an order this device thought open and the edge no longer lists has been settled.
       draft.liveOrders = Object.fromEntries(orders.map((order) => [order.order_id, true]));
       // The channel of each walk-in the edge names one for, replacing the set held for the same
-      // reason: a walk-in that is no longer live needs no book.
-      draft.walkInChannels = Object.fromEntries(
-        orders.flatMap((order) =>
+      // reason: a walk-in that is no longer live needs no book. One opened since the read began
+      // keeps the guest's answer the till holds.
+      draft.walkInChannels = Object.fromEntries([
+        ...orders.flatMap((order) =>
           order.table_id === undefined && order.sales_channel !== undefined
             ? [[order.order_id, order.sales_channel] as const]
             : [],
         ),
-      );
+        ...opened,
+      ]);
       // The same for the kitchen's own set, when the edge answered: a paid order it no longer
       // lists has been bumped, or its day has ended.
       if (kitchen !== null) {
@@ -1728,20 +1720,13 @@ export function applyShift(response: ShiftResponse | null): void {
   replaceShift(response === null ? null : shiftInfo(response));
 }
 
-// A shift as the edge answered it, every field named.
-function shiftInfo(response: ShiftResponse): ShiftInfo {
-  return {
-    shiftId: response.shift_id,
-    state: response.state,
-    expected: response.expected_amount,
-    counted: response.counted_amount,
-    variance: response.variance,
-    reportPrint: response.shift_report_print,
-    paidIn: response.paid_in_amount,
-    paidOut: response.paid_out_amount,
-    dayEnded: response.day_ended === true,
-    assignee: response.assigned_employee_id,
-  };
+// Applies a shift event about this device's drawer. The shift already held keeps every figure the
+// edge answered (the expectation, what was paid in and out) and takes the event's state, and its
+// count where the event carries one; any other shift replaces it, and is read back for its figures.
+function heardShift(shiftId: string, shiftState: string, counted?: Money): void {
+  const kept = keptShift(state.shift, shiftId, shiftState, counted);
+  replaceShift(kept ?? { shiftId, state: shiftState, counted });
+  if (kept === null) void loadShift();
 }
 
 // Sets the shift outright. A store *merges* an object set at a path, so setting an open shift over a

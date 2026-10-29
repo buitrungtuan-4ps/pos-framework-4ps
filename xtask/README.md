@@ -10,7 +10,12 @@ The repository's own checks, run as `cargo run -q -p xtask -- <name>`, which is 
 
 - The `rules` CI job's checks: deps-rule, lint-config, actions-pinned, links, countries, crates, mirrored-files, vendor-neutral-core, print-agent-deps, tls-modes, snapshot, migrations
 - `changelog`: checks and folds `changes/`
-- `code-stats`: measures file, function and parameter sizes
+- `code-stats`: measures file, function and parameter sizes. Test code has the looser test limits. Test code is:
+  - a file under a `tests/` or `benches/` directory;
+  - the file of a module a `#[cfg(test)]` gates;
+  - the one item a `#[cfg(test)]` gates, which is the whole module when that item is a `mod`.
+
+  A gated `use` or a single gated function makes nothing else test code.
 
 ## Depends on / used by
 

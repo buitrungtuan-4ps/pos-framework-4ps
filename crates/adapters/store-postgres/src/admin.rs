@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The super-admin credential and session tables over PostgreSQL (P7, [ADR-0034](../../../docs/adr/0034-super-admin-auth.md)).
+//! The super-admin credential and session tables over PostgreSQL (P7, [ADR-0034](../../../../docs/adr/0034-super-admin-auth.md)).
 //!
 //! There is exactly one super-admin, so [`fetch_credential`](PostgresAdmin::fetch_credential) reads a
 //! single row and [`advance_totp_step`](PostgresAdmin::advance_totp_step) updates it in place, only
@@ -32,7 +32,7 @@ pub struct AdminCredentialRow {
 }
 
 /// One console admin's identity *and* their own credential — the per-admin sign-in read
-/// ([ADR-0119](../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
+/// ([ADR-0119](../../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
 ///
 /// [`AdminCredentialRow`] is the single `super_admin` row that login used to authenticate against;
 /// this is the `admin_users` row it authenticates against now, so the session can be bound to the
@@ -119,7 +119,7 @@ impl PostgresAdmin {
     }
 
     /// Provisions the single super-admin credential if none exists yet — the first-boot enrolment
-    /// ([ADR-0045](../../../docs/adr/0045-first-boot-admin-enrolment.md)). `ON CONFLICT (id) DO
+    /// ([ADR-0045](../../../../docs/adr/0045-first-boot-admin-enrolment.md)). `ON CONFLICT (id) DO
     /// NOTHING` makes it first-writer-wins on the single-row table, so a second call writes nothing;
     /// `last_used_totp_step` starts `NULL`, marking a credential that has never signed in.
     ///
@@ -228,7 +228,7 @@ impl PostgresAdmin {
 
     /// The `admin_id` of a live session (`token_hash`, not expired as of `now_ms`), *sliding* its idle
     /// TTL as a side effect — the guard behind every real `/admin` action
-    /// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 4).
+    /// ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md) slice 4).
     ///
     /// A single `UPDATE … RETURNING` validates and slides atomically: for a modern session (both
     /// `absolute_expires_at` and `idle_ttl_ms` set) it advances `expires_at` to
@@ -451,7 +451,7 @@ impl PostgresAdmin {
 
     /// Fetches one console admin's identity *and* credential by email, compared case-insensitively,
     /// or `None` — the per-admin sign-in read
-    /// ([ADR-0119](../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
+    /// ([ADR-0119](../../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
     ///
     /// The same row [`fetch_admin_user_by_email`](Self::fetch_admin_user_by_email) reads, plus the
     /// three credential columns migration 0018 has always carried and nothing has ever read. Kept a
@@ -488,7 +488,7 @@ impl PostgresAdmin {
 
     /// Records `step` as the newest TOTP step `admin_id` has spent, advancing only forward — the
     /// per-admin form of [`advance_totp_step`](Self::advance_totp_step)
-    /// ([ADR-0119](../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
+    /// ([ADR-0119](../../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
     ///
     /// Scoping the row to one admin is what makes a shared 30-second window safe: the single-row
     /// version burns a step for *everybody*, so a second admin presenting a valid code in the same
@@ -518,7 +518,7 @@ impl PostgresAdmin {
     /// Replaces `admin_id`'s TOTP secret and resets their last-used step to `NULL`, so a freshly
     /// enrolled authenticator's codes verify from step zero — the per-admin form of
     /// [`rotate_totp_secret`](Self::rotate_totp_secret)
-    /// ([ADR-0119](../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
+    /// ([ADR-0119](../../../../docs/adr/0119-each-admin-signs-in-as-themselves.md)).
     ///
     /// # Errors
     ///
@@ -816,7 +816,7 @@ impl PostgresAdmin {
     }
 }
 
-/// A console admin as listed — identity and role, no credential (P7, [ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)).
+/// A console admin as listed — identity and role, no credential (P7, [ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md)).
 ///
 /// `pos-cloud` converts this into its `AdminUser`: `role` and `status` are the stored tokens
 /// (`owner`/`admin`/`ops`/`viewer`, `active`/`suspended`) it maps to its enums.
@@ -845,7 +845,7 @@ fn row_to_admin_user(row: &tokio_postgres::Row) -> AdminUserRow {
     }
 }
 
-/// An invitation as listed — no token (only its hash is stored) (P7, [ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)).
+/// An invitation as listed — no token (only its hash is stored) (P7, [ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md)).
 ///
 /// `pos-cloud` converts this into its `AdminInvite`: `role` is the stored token, `accepted` reflects
 /// whether `accepted_at` is set.
@@ -866,7 +866,7 @@ pub struct AdminInviteRow {
 }
 
 /// One of an admin's own live sessions, as listed — no token (only its hash is stored), no expiry
-/// policy internals (P7, [ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 4).
+/// policy internals (P7, [ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md) slice 4).
 ///
 /// `pos-cloud` converts this into its `SessionSummary`: `token_hash` is the opaque revocation handle
 /// (`SHA-256(token)`, never reversible to the token), and `created_at_ms`/`expires_at_ms` are Unix

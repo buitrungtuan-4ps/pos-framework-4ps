@@ -15,17 +15,7 @@ import { useSearchParams } from "@solidjs/router";
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
-import type {
-  Assignment,
-  AssignmentTarget,
-  Employee,
-  Page,
-  PermissionInfo,
-  PermissionsPublishReport,
-  RoleTemplate,
-  StoreGroup,
-  WrittenSetting,
-} from "../api/types";
+import type { AssignmentTarget, Page } from "../api/types";
 import { t } from "../i18n";
 import { useEntityCrud } from "../lib/entity-crud";
 import {
@@ -63,6 +53,15 @@ import {
 } from "../components/kit";
 import { toast } from "../components/Toast";
 import { apiMessage, isStale } from "../lib/errors";
+import type {
+  Assignment,
+  Employee,
+  PermissionInfo,
+  PermissionsPublishReport,
+  RoleTemplate,
+  StoreGroup,
+  WrittenSetting,
+} from "../api/schemas";
 
 /** The most digits a PIN may have, and the fewest while the tenant asks for no more (ADR-0160). */
 const PIN_MOST_DIGITS = 8;

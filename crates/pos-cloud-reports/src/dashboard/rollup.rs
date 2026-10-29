@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The one fold that turns events into a per-trading-day rollup
-//! ([ADR-0036](../../../docs/adr/0036-materialised-rollups.md)).
+//! ([ADR-0036](../../../../docs/adr/0036-materialised-rollups.md)).
 //!
 //! Both the from-log computation ([`super::from_log`], behind
 //! `pos_cloud::cloud::Cloud::daily_rollups`) and the incrementally-**materialised** projection
@@ -25,7 +25,7 @@ use crate::types::{
 };
 
 /// Folds one event into a store's **admitted-device roster**, keyed by the edge-minted local device
-/// id ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4).
+/// id ([ADR-0118](../../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4).
 ///
 /// The reader ADR-0118 §4 requires in the same slice as the two events, so they are not an event
 /// with no reader — the state the tree already had one of.
@@ -186,7 +186,7 @@ pub fn fold_revenue(
 }
 
 /// Folds one settled bill's `fee_lines` into its day's fees by code
-/// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4): what each code
+/// ([ADR-0159](../../../../docs/adr/0159-a-fee-is-configuration.md) decision 4): what each code
 /// charged, the tax on it, and one more bill for each code the bill charged.
 ///
 /// A bill from an edge that predates fee lines records none and adds nothing here, while its
@@ -214,7 +214,7 @@ fn fold_fees(by_fee: &mut BTreeMap<String, FeeTotal>, lines: &[BillFeeLine]) {
 }
 
 /// Folds one settled bill's tax lines' `components` into its day's tax by component
-/// ([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 5):
+/// ([ADR-0168](../../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 5):
 /// each component's tax to the entry of its name and rate, which stay in order of name and then
 /// rate.
 ///

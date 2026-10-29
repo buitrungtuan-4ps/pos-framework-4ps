@@ -43,6 +43,7 @@ wire_enum! {
 /// Each guardrail is `None` where the node does not carry it, or carries something other than its
 /// JSON type, and each is left off the wire while absent.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct PublishedQr {
     /// What a guest's order does at a table that already has an open order. Read it through
@@ -58,6 +59,7 @@ pub struct PublishedQr {
         deserialize_with = "flag",
         skip_serializing_if = "Option::is_none"
     )]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub enabled: Option<bool>,
     /// Whether a table-bearing guest order waits for a member of staff before the kitchen sees it.
     /// Absent is `true` to both readers (ADR-0057): a store that never said holds guest orders.
@@ -66,6 +68,7 @@ pub struct PublishedQr {
         deserialize_with = "flag",
         skip_serializing_if = "Option::is_none"
     )]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub staff_confirmation_required: Option<bool>,
     /// How many guest orders one table may submit within the rate window. Absent is the guest
     /// intake's default.
@@ -74,6 +77,7 @@ pub struct PublishedQr {
         deserialize_with = "count",
         skip_serializing_if = "Option::is_none"
     )]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub per_table_limit: Option<u32>,
     /// The rate window, in seconds. Absent is the guest intake's default.
     #[serde(
@@ -81,6 +85,7 @@ pub struct PublishedQr {
         deserialize_with = "seconds",
         skip_serializing_if = "Option::is_none"
     )]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub rate_window_secs: Option<u64>,
     /// The hours the store takes QR orders. Absent, or without a whole open and close hour, is
     /// always open.
@@ -89,6 +94,7 @@ pub struct PublishedQr {
         deserialize_with = "hours",
         skip_serializing_if = "Option::is_none"
     )]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub business_hours: Option<QrBusinessHours>,
 }
 
@@ -99,6 +105,7 @@ pub struct PublishedQr {
 /// that is not a whole number reads as absent. The guest intake reads an hour past 23 as no hours
 /// too, as the console refuses to write one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct QrBusinessHours {
     /// The hour orders open, in the store's offset from UTC.
@@ -108,6 +115,7 @@ pub struct QrBusinessHours {
     pub close_hour: u8,
     /// The store's offset from UTC, in minutes. Absent reads as UTC.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub tz_offset_minutes: Option<i64>,
 }
 

@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The reason-code authoring table over PostgreSQL
-//! ([ADR-0115](../../../docs/adr/0115-reason-codes-are-a-managed-list.md), roadmap B2.2).
+//! ([ADR-0115](../../../../docs/adr/0115-reason-codes-are-a-managed-list.md), roadmap B2.2).
 //!
 //! One row per `(tenant, entity_id)`; the `doc` column is the whole authored record (a wire
 //! `PublishedReasonCode`, `active` and `applies_to` included) held as `jsonb` (`reason_codes`,

@@ -5,7 +5,7 @@
 //!
 //! The contract runs in process against a capturing transport, because the port's contract is this
 //! adapter's queueing and back-pressure — not `VictoriaMetrics`' storage
-//! ([ADR-0031](../../../docs/adr/0031-cloud-adapter-transports.md)). A second test drives the real
+//! ([ADR-0031](../../../../docs/adr/0031-cloud-adapter-transports.md)). A second test drives the real
 //! [`HttpTransport`](metrics_vm::HttpTransport) against an in-process TCP mock and asserts the
 //! exact bytes it emits, so the wire format is pinned without a live `VictoriaMetrics`.
 

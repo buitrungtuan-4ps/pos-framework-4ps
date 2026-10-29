@@ -12,9 +12,10 @@
 
 import { For, Match, Show, Switch } from "solid-js";
 
-import type { ProviderField, SettingValue } from "../api/types";
+import type { SettingValue } from "../api/types";
 import { t, tFromServer } from "../i18n";
 import { CheckboxField, NumberField, SelectField, TextField } from "./ui";
+import type { ProviderField } from "../api/schemas";
 
 /** A field's label: its translation if this console ships one, else its key, marked if required. */
 function labelOf(field: ProviderField): string {

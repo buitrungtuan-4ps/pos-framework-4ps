@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! An edge `/api/*` route, once published, is not removed or renamed
-//! ([ADR-0111](../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+//! ([ADR-0111](../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
 //!
 //! # Why this file exists
 //!

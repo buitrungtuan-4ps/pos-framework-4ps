@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The [`ShippingDispatch`] adapter over a [`CourierTransport`]
-//! ([ADR-0058](../../../docs/adr/0058-shipping-adapters.md)).
+//! ([ADR-0058](../../../../docs/adr/0058-shipping-adapters.md)).
 //!
 //! Everything here is pure but for the one `await` on the transport: build the request body, map the
 //! courier's status vocabulary to a [`ShipmentStatus`], and map the courier's HTTP status to the right

@@ -1,0 +1,98 @@
+// Copyright (c) 2026 Pizza 4P's. All rights reserved.
+// Proprietary and confidential. Internal use only. See LICENSE.
+
+//! `{{name}}` against the shared `ShippingDispatch` contract suite.
+//!
+//! The harness puts an in-memory courier behind the adapter's transport. It keeps jobs by shipment,
+//! as an idempotency key does, and can move a job to completed. The adapter's futures never
+//! suspend, so the suite runs under `run_ready`, a one-poll executor.
+
+#![allow(
+    clippy::expect_used,
+    reason = "test scaffolding: a poisoned lock in the courier is an unrecoverable test fault"
+)]
+
+use std::sync::Mutex;
+
+use {{crate_ident}}::{Job, SandboxCourier, Transport, Unreachable};
+use pos_contract_tests::harness::{Setup, ShippingDispatchHarness};
+use pos_fakes::executor::run_ready;
+use pos_ports::{CourierJobRef, DeliveryRequest};
+use pos_proto::{ShipmentStatus, StoreId, Timestamp, Ulid};
+
+/// An in-memory courier.
+#[derive(Debug, Default)]
+struct Courier {
+    jobs: Mutex<Vec<Job>>,
+}
+
+impl Courier {
+    fn jobs(&self) -> std::sync::MutexGuard<'_, Vec<Job>> {
+        self.jobs.lock().expect("courier lock")
+    }
+}
+
+impl Transport for Courier {
+    fn book(&self, request: &DeliveryRequest) -> Result<Job, Unreachable> {
+        let mut jobs = self.jobs();
+        if let Some(first) = jobs
+            .iter()
+            .find(|job| job.shipment_id == request.shipment_id)
+        {
+            return Ok(first.clone());
+        }
+        let job = Job {
+            shipment_id: request.shipment_id,
+            job_ref: format!("sandbox-{}", request.shipment_id),
+            status: ShipmentStatus::Accepted,
+            fee: request.quoted_fee,
+            at: Timestamp::EPOCH,
+        };
+        jobs.push(job.clone());
+        Ok(job)
+    }
+
+    fn track(&self, job_ref: &str) -> Result<Option<Job>, Unreachable> {
+        Ok(self
+            .jobs()
+            .iter()
+            .find(|job| job.job_ref == job_ref)
+            .cloned())
+    }
+
+    fn cancel(&self, job_ref: &str) -> Result<Option<Job>, Unreachable> {
+        let mut jobs = self.jobs();
+        let job = jobs.iter_mut().find(|job| job.job_ref == job_ref);
+        Ok(job.map(|job| {
+            job.status = ShipmentStatus::Cancelled;
+            job.clone()
+        }))
+    }
+}
+
+struct Harness;
+
+impl ShippingDispatchHarness for Harness {
+    type Courier = SandboxCourier<Courier>;
+
+    async fn fresh(&self) -> Setup<Self::Courier> {
+        Ok(SandboxCourier::new(Courier::default()))
+    }
+
+    async fn complete(&self, courier: &Self::Courier, job: &CourierJobRef) -> Setup<()> {
+        let mut jobs = courier.transport().jobs();
+        if let Some(found) = jobs.iter_mut().find(|found| found.job_ref == job.as_str()) {
+            found.status = ShipmentStatus::Completed;
+        }
+        Ok(())
+    }
+
+    fn store_id(&self) -> StoreId {
+        StoreId::new(Ulid::from_u128(1))
+    }
+}
+
+mod shipping_dispatch {
+    use super::{Harness, run_ready};
+    pos_contract_tests::shipping_dispatch_suite!(Harness, run_ready);
+}

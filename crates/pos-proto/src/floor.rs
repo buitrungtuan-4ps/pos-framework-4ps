@@ -30,6 +30,7 @@ use crate::wire_enum::{Open, is_absent};
 /// One table on a floor plan: its identity, the label a host reads, how many it seats, and where it
 /// sits in the visual editor's grid.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct FloorTable {
     /// The table's identity — the id a `sales.order.opened` event carries and a QR token binds.
@@ -45,11 +46,13 @@ pub struct FloorTable {
     /// and can be seated, it just has no pinned position. Omitted from the wire when absent, the same
     /// optional-field shape [`crate::display::DisplayButton`] uses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub position: Option<GridPosition>,
 }
 
 /// A named region of the floor — a terrace, the main hall — with the tables it contains, in order.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct FloorArea {
     /// The area's identity.
@@ -66,6 +69,7 @@ pub struct FloorArea {
 /// An empty plan is a store whose floor has not been published yet — the edge keeps whatever it holds
 /// rather than blanking the room (the never-blank config contract, ADR-0072).
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct FloorPlan {
     #[serde(default)]
@@ -128,6 +132,7 @@ pub const DEFAULT_LATE_AFTER_SECONDS: u32 = 600;
 
 /// One kitchen station a fired line can route to.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct KitchenStation {
     /// The station's identity — the `station_id` a `sales.order_line.fired` event carries and a
@@ -139,12 +144,14 @@ pub struct KitchenStation {
     /// target a dispatcher consults. `None` means no failover: a ticket for this station stays here.
     /// A backup must name a *different* station in the same plan (enforced by `pos_core::floor`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub backup_station_id: Option<StationId>,
     /// How long a ticket at this station waits, in seconds, before the kitchen display marks it
     /// late. Read it through [`KitchenStation::late_after_seconds`], which reads an absent value, or
     /// one outside [`LATE_AFTER_SECONDS`], as [`DEFAULT_LATE_AFTER_SECONDS`]. Left off the wire
     /// while absent, so a station that sets none is written as before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub late_after_seconds: Option<u32>,
     /// The language this station's kitchen tickets print in: their fixed labels, and each item's and
     /// modifier's name where the menu translates it. The same choices as a receipt's. Read it through
@@ -194,15 +201,18 @@ impl KitchenStation {
 /// match (`pos_core::floor::route_station`). A rule that names neither is meaningless — the validator
 /// rejects it rather than let it sit as a silent no-op.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct RoutingRule {
     /// The station a matching line routes to.
     pub station_id: StationId,
     /// Match a specific item. Takes precedence over a course match.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub menu_item_id: Option<MenuItemId>,
     /// Match any line on a course.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub course_id: Option<CourseId>,
 }
 
@@ -211,6 +221,7 @@ pub struct RoutingRule {
 ///
 /// An empty plan is a store whose kitchen has not been published — the edge keeps whatever it holds.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct StationPlan {
     #[serde(default)]
@@ -220,6 +231,7 @@ pub struct StationPlan {
     /// The station a fired line falls to when no routing rule matches. `None` means the store has no
     /// catch-all — a line with no matching rule routes nowhere and the caller keeps its own fallback.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     default_station_id: Option<StationId>,
 }
 

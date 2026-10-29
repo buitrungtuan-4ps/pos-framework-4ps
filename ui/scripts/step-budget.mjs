@@ -6,7 +6,8 @@
 // at a time.
 //
 // Each task in `step-tasks.mjs` declares the taps it takes, and every declared tap is **resolved
-// against the source**: the route must exist in App.tsx, its screen must exist, the named action
+// against the source**: the route must exist in the screen table (`src/state/screens.ts`, joined
+// to its component in App.tsx), its screen must exist, the named action
 // must actually be invoked by an interactive element on that screen, and that element must carry
 // `data-step="<action>"`. The task's outcome is resolved the same way — its screen must carry a
 // `data-outcome="<mark>"` element for the browser gate to wait on. So the declaration cannot drift
@@ -66,44 +67,72 @@ function parseError(source) {
   return ts.flattenDiagnosticMessageText(first.messageText, " ");
 }
 
-/** `path` → `component` for every `<Route path=… component=…>` in App.tsx. */
-function routeTable() {
-  const path = `${SRC}/App.tsx`;
+/** A parsed source file, or the process ends saying which file could not be read or parsed. */
+function parsedOrExit(path, label) {
   const text = read(path);
   if (text === null) {
-    console.error("step-budget: cannot read src/App.tsx, so no route can be resolved");
+    console.error(`step-budget: cannot read ${label}, so no route can be resolved`);
     process.exit(1);
   }
   const source = parse(path, text);
   const broken = parseError(source);
   if (broken !== null) {
-    console.error(`step-budget: src/App.tsx does not parse (${broken}), so no route can be resolved`);
+    console.error(`step-budget: ${label} does not parse (${broken}), so no route can be resolved`);
     process.exit(1);
   }
-  const routes = new Map();
+  return source;
+}
+
+/** The object literal `const <name> = { … }` holds, through any `as` or `satisfies`. */
+function objectNamed(source, name) {
+  let found = null;
   const walk = (node) => {
-    if (ts.isJsxSelfClosingElement(node) && node.tagName.getText() === "Route") {
-      let route = null;
-      let component = null;
-      for (const attribute of node.attributes.properties) {
-        if (!ts.isJsxAttribute(attribute) || attribute.initializer === undefined) {
-          continue;
-        }
-        const name = attribute.name.getText();
-        if (name === "path" && ts.isStringLiteral(attribute.initializer)) {
-          route = attribute.initializer.text;
-        }
-        if (name === "component" && ts.isJsxExpression(attribute.initializer)) {
-          component = attribute.initializer.expression?.getText() ?? null;
-        }
+    if (ts.isVariableDeclaration(node) && node.name.getText() === name && node.initializer) {
+      let value = node.initializer;
+      while (ts.isAsExpression(value) || ts.isSatisfiesExpression(value)) {
+        value = value.expression;
       }
-      if (route !== null && component !== null) {
-        routes.set(route, component);
+      if (ts.isObjectLiteralExpression(value)) {
+        found = value;
       }
     }
     ts.forEachChild(node, walk);
   };
   walk(source);
+  return found;
+}
+
+/**
+ * `path` → `component` for every screen the till routes: the path from `SCREENS` in
+ * `src/state/screens.ts`, and the component from `COMPONENTS` in `App.tsx`, joined by screen id.
+ */
+function routeTable() {
+  const table = parsedOrExit(`${SRC}/state/screens.ts`, "src/state/screens.ts");
+  const screens = objectNamed(table, "SCREENS");
+  const components = objectNamed(parsedOrExit(`${SRC}/App.tsx`, "src/App.tsx"), "COMPONENTS");
+  if (screens === null || components === null) {
+    console.error("step-budget: no SCREENS table or no COMPONENTS map, so no route can be resolved");
+    process.exit(1);
+  }
+  const componentOf = new Map();
+  for (const property of components.properties) {
+    if (ts.isPropertyAssignment(property)) {
+      componentOf.set(property.name.getText(), property.initializer.getText());
+    }
+  }
+  const routes = new Map();
+  for (const property of screens.properties) {
+    if (!ts.isPropertyAssignment(property) || !ts.isObjectLiteralExpression(property.initializer)) {
+      continue;
+    }
+    const path = property.initializer.properties.find(
+      (field) => ts.isPropertyAssignment(field) && field.name.getText() === "path",
+    );
+    const component = componentOf.get(property.name.getText());
+    if (path !== undefined && ts.isStringLiteral(path.initializer) && component !== undefined) {
+      routes.set(path.initializer.text, component);
+    }
+  }
   return routes;
 }
 
@@ -188,7 +217,7 @@ function actionsForRoute(route) {
   }
   const component = routes.get(route);
   if (component === undefined) {
-    const resolved = { error: `no <Route path="${route}"> in App.tsx` };
+    const resolved = { error: `no screen with path "${route}" in src/state/screens.ts` };
     screenCache.set(route, resolved);
     return resolved;
   }

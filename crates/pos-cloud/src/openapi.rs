@@ -121,4 +121,27 @@ mod tests {
     fn the_rendering_is_deterministic() {
         assert_eq!(render(), render());
     }
+
+    /// Every `/v1` operation requires `api_key` with the one scope it checks as the requirement's
+    /// role, and that scope is one the cloud knows (ADR-0177 decision 5).
+    #[test]
+    fn every_v1_operation_names_the_scope_it_needs() {
+        let json = serde_json::to_value(ApiDoc::openapi()).expect("serialize the document");
+        for (path, item) in json["paths"].as_object().into_iter().flatten() {
+            for (method, operation) in item.as_object().into_iter().flatten() {
+                let route = format!("{} {path}", method.to_uppercase());
+                let roles = operation["security"][0]["api_key"]
+                    .as_array()
+                    .unwrap_or_else(|| panic!("{route} should require api_key"));
+                let [role] = roles.as_slice() else {
+                    panic!("{route} should name the one scope it checks");
+                };
+                let scope = role.as_str().unwrap_or_default();
+                assert!(
+                    crate::auth::apikey::Scope::from_wire(scope).is_some(),
+                    "{route} names {scope}, which is not a scope"
+                );
+            }
+        }
+    }
 }

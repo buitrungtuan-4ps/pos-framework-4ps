@@ -18,6 +18,7 @@ use serde::Serialize;
 
 /// Whether the store's state is closed to other local accounts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub enum StateAccess {
     /// Only the store server, and on Windows SYSTEM and Administrators, can read it.
     #[serde(rename = "STATE_ACCESS_OK")]

@@ -1,9 +1,10 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! Cash-shift routes: open with a float, pay cash in and out, enter the blind count, close (P5,
-//! §6/§11.1), and open the drawer outside a sale
-//! ([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).
+//! Cash-shift routes: open with a float, enter the blind count, close (P5, §6/§11.1). Cash paid in
+//! and out of a shift's drawer, and the drawer opened outside a sale
+//! ([ADR-0165](../../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)),
+//! are [`super::cash_movements`]'s.
 //!
 //! The count is **blind** — the count request carries only the physical amount, and the response to
 //! counting reveals no expectation or variance. Only the close response does. `expected_amount` and
@@ -11,11 +12,11 @@
 //! in every response, because the cashier entered it: it tells them nothing the close keeps blind.
 //!
 //! A store that turns `shift.blind_close` off
-//! ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+//! ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 //! decision 2) is sent `expected_amount` in every response, so the Shift screen can show it beside
 //! the count. `variance` is still the close's alone.
 //!
-//! A store that keeps a drawer per till ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)) runs a shift
+//! A store that keeps a drawer per till ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)) runs a shift
 //! on each. The till a device is comes from its print-agent binding, read only then; a request may
 //! name another till's drawer, which also needs `cash.shift.manage_other_till`, and `GET
 //! /api/shifts` lists every drawer. A paid in, a paid out and a no-sale opening are made at a till,
@@ -56,16 +57,14 @@ use pos_proto::shift::{DrawerAccess, DrawerModel};
 use pos_proto::text::DisplayName;
 use pos_proto::time::Timestamp;
 
-use crate::app::{
-    AppError, Approval, CashMovement, DrawersView, Edge, EdgeSession, ShiftView, TillScope,
-};
+use crate::app::{AppError, Approval, DrawersView, Edge, EdgeSession, ShiftView, TillScope};
 use crate::http::counter::wall_clock;
 use crate::http::{ERROR_REASON_HEADER, bad_request, error_response, parse_ulid};
-use crate::printing::{DrawerOutcome, PrintOutcome, Printers, TillPrinting, published_terminals};
+use crate::printing::{PrintOutcome, Printers, TillPrinting, published_terminals};
 
 /// The code and PIN of somebody approving an act the person acting holds only with approval: both
 /// halves, or no approval at all.
-fn approval(code: Option<&String>, pin: Option<&String>) -> Option<Approval> {
+pub(super) fn approval(code: Option<&String>, pin: Option<&String>) -> Option<Approval> {
     Some(Approval {
         code: code?.clone(),
         pin: pin?.clone(),
@@ -76,6 +75,7 @@ fn approval(code: Option<&String>, pin: Option<&String>) -> Option<Approval> {
 /// Another till's also takes an approver where the person holds that only with approval
 /// (ADR-0167 decision 3).
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct OpenRequest {
     opening_float: Money,
     /// Another till's drawer to open, where the store keeps one per till. Absent is the device's
@@ -98,6 +98,7 @@ pub(crate) struct OpenRequest {
 
 /// The blind count: the physical cash counted, in minor units. Nothing about what was expected.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct CountRequest {
     counted_minor: i64,
     #[serde(default)]
@@ -109,6 +110,7 @@ pub(crate) struct CountRequest {
 /// A close's optional body: the approver for another till's drawer, and the reason for an over or
 /// short the store asks one of (ADR-0167 decision 12).
 #[derive(Debug, Default, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct CloseRequest {
     #[serde(default)]
     approver_code: Option<String>,
@@ -122,6 +124,7 @@ struct CloseRequest {
 /// tills' (ADR-0167 decision 10), and a reason for each drawer whose over or short the store asks
 /// one of (decision 12).
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct BatchCloseRequest {
     shift_ids: Vec<ShiftId>,
     #[serde(default)]
@@ -134,6 +137,7 @@ pub(crate) struct BatchCloseRequest {
 
 /// The reason for one drawer's over or short, in a batch close.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct VarianceReason {
     shift_id: ShiftId,
     reason_code_id: ReasonCodeId,
@@ -165,67 +169,40 @@ pub(crate) fn variance_reasons_required(
 /// What a batch close answers: each drawer closed, and what came of the one slip for all of them
 /// where the store combines its close report.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct BatchCloseResponse {
     shifts: Vec<ShiftResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     shift_report_print: Option<String>,
-}
-
-/// A paid in or a paid out: how much, in minor units, and why (ADR-0165 decision 1), and the
-/// approver for a drawer assigned to somebody else.
-#[derive(Debug, Deserialize)]
-pub(crate) struct MovementRequest {
-    amount_minor: i64,
-    reason_code_id: ReasonCodeId,
-    #[serde(default)]
-    approver_code: Option<String>,
-    #[serde(default)]
-    approver_pin: Option<String>,
-}
-
-/// Opening the drawer outside a sale: why, and the manager whose PIN allows it (ADR-0165 decision 3).
-#[derive(Debug, Deserialize)]
-pub(crate) struct OpenDrawerRequest {
-    reason_code_id: ReasonCodeId,
-    #[serde(default)]
-    approver_code: Option<String>,
-    #[serde(default)]
-    approver_pin: Option<String>,
-}
-
-impl OpenDrawerRequest {
-    fn approval(&self) -> Option<Approval> {
-        approval(self.approver_code.as_ref(), self.approver_pin.as_ref())
-    }
-}
-
-/// What a no-sale opening reports: the opening is recorded, and this is whether the drawer sprang.
-#[derive(Debug, Serialize)]
-struct OpenDrawerResponse {
-    /// `OPENED`, `NO_DRAWER` or `DRAWER_UNAVAILABLE`.
-    drawer_open: &'static str,
 }
 
 /// A shift as returned to a device after a command.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct ShiftResponse {
     shift_id: String,
     /// The till whose drawer it is, absent for the store's one drawer (ADR-0167).
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     terminal_device_id: Option<String>,
     /// The person the drawer is assigned to for this session, where the store assigns drawers:
     /// an id, never a name. Absent where drawers are shared.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     assigned_employee_id: Option<String>,
     /// The shift's state (`SHIFT_STATE_OPEN`, `SHIFT_STATE_COUNTED`, `SHIFT_STATE_CLOSED`).
     state: String,
     /// Revealed at close (§11.1), and before it only where the store's count is not blind.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     expected_amount: Option<Money>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     counted_amount: Option<Money>,
     /// Revealed only at close. Negative means short.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     variance: Option<Money>,
     /// Cash paid into the drawer outside a sale so far (ADR-0165).
     paid_in_amount: Money,
@@ -235,11 +212,13 @@ pub(crate) struct ShiftResponse {
     /// What came of printing the shift report, on the close that asked for one — the same wire
     /// tokens a settle reports its receipt with. Absent on every other command.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     shift_report_print: Option<String>,
     /// What came of opening the drawer, on a paid in or a paid out: `OPENED`, `NO_DRAWER` or
     /// `DRAWER_UNAVAILABLE`. Absent on every other command.
     #[serde(skip_serializing_if = "Option::is_none")]
-    drawer_open: Option<String>,
+    #[cfg_attr(feature = "openapi", schema(nullable = false, value_type = Option<super::cash_movements::DrawerOutcomeSchema>))]
+    pub(super) drawer_open: Option<String>,
     /// `true` while the shift is still open past the business day it opened on, which a till and
     /// the console flag (ADR-0167 decision 11). Absent otherwise.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -266,9 +245,36 @@ impl From<ShiftView> for ShiftResponse {
     }
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/shifts",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!(["cash.shift.open", "cash.shift.manage_other_till"]))),
+    request_body(
+        content = OpenRequest, description = "`opening_float`, with optional `terminal_device_id` for another till's drawer, \
+                       `assigned_employee_id` or `assigned_staff_code` for whom it is for, and \
+                       `approver_code` and `approver_pin`. Both are secrets and are never logged",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = ShiftResponse, description = "Opened: its id, till, assignee where the store assigns drawers, \
+                                      `state`, what was paid in and out, and the expectation only where the \
+                                      count is not blind"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; another \
+                                      till's drawer needs an approval that was missing or refused, or the \
+                                      approver is locked out; or this box was superseded by a replacement"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, or the till this device is could not be \
+                                      read; nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "shifts",
+))]
 /// `POST /api/shifts` — open a shift with a starting float, on the device's own till's drawer or
 /// the one the request names.
-pub(crate) async fn open<S>(
+pub(crate) async fn open_shift<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     printers: Option<Extension<Arc<Printers>>>,
@@ -308,11 +314,25 @@ where
     )
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/shifts",
+    security(("till_session" = [])),
+    responses(
+        (status = 200, body = DrawersResponse, description = "Every drawer the store keeps, each with its till, default float and \
+                                      open shift; the drawer model the edge runs and any the store has \
+                                      published while shifts are open; and the till this device is"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+        (status = 503, description = "The till this device is could not be read"),
+    ),
+    tag = "shifts",
+))]
 /// `GET /api/shifts` — every drawer the store keeps: its till, its default float, and its shift
 /// while one is open, as blind as the shift's own read; and the model, with the one the store has
 /// published while open shifts keep the edge on the other (ADR-0167 decisions 3 and 8). Another
 /// till's expectation shows only to a person whose own role grants `cash.shift.manage_other_till`.
-pub(crate) async fn drawers<S>(
+pub(crate) async fn list_drawers<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     printers: Option<Extension<Arc<Printers>>>,
@@ -332,39 +352,49 @@ where
 
 /// What `GET /api/shifts` answers.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct DrawersResponse {
     /// The model the edge runs: `DRAWER_MODEL_PER_STORE` or `DRAWER_MODEL_PER_TERMINAL`.
     drawer_model: &'static str,
     /// The model the store has published, while open shifts keep the edge on the other.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     waiting_drawer_model: Option<&'static str>,
     /// The till this device is, whose drawer is its own, where the store keeps a drawer per till.
     /// Absent for a device that is no till, and where the store keeps one drawer.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     terminal_device_id: Option<String>,
     drawers: Vec<DrawerResponse>,
     /// `DRAWER_ACCESS_ASSIGNED` where each drawer is one person's for its session (ADR-0167
     /// decision 9), so the till asks whom another till's drawer is for and tells a person's own
     /// drawer by `assigned_employee_id`. Absent where drawers are shared, as before.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     drawer_access: Option<&'static str>,
 }
 
 /// One drawer: absent `terminal_device_id` and `name` for the store's one drawer.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct DrawerResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     terminal_device_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     name: Option<DisplayName>,
     default_float: Money,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     opened_time: Option<Timestamp>,
     /// The shop's wall clock when its shift opened, `HH:MM` in the store's timezone, for the till to
     /// show as it is: a till's own clock may keep another zone. Absent while the drawer is closed.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     opened_clock: Option<String>,
     /// Its shift, `null` while the drawer is closed.
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     shift: Option<ShiftResponse>,
 }
 
@@ -424,6 +454,20 @@ where
     Ok(TillScope { own, named })
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/shifts/current",
+    security(("till_session" = [])),
+    responses(
+        (status = 200, body = Option<ShiftResponse>, description = "The shift trading now on this device's drawer, or `null` when none is \
+                                      open. Blind: no expectation or variance, unless the store turned the \
+                                      blind count off"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+        (status = 503, description = "The till this device is could not be read"),
+    ),
+    tag = "shifts",
+))]
 /// `GET /api/shifts/current` — the shift trading now, or `null` when none is open.
 ///
 /// Until this read existed a shift lived in the browser that opened it: a reload, a second till or a
@@ -436,7 +480,7 @@ where
 ///
 /// Where the store keeps a drawer per till, the drawer is the device's own till's, and a device that
 /// is no till has none.
-pub(crate) async fn current<S>(
+pub(crate) async fn current_shift<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     printers: Option<Extension<Arc<Printers>>>,
@@ -450,8 +494,38 @@ where
     }
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/shifts/{id}/count",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!(["cash.shift.close", "cash.shift.manage_other_till", "cash.drawer.override_assignment"]))),
+    params(
+        ("id" = String, Path, description = "The shift's id, a ULID"),
+    ),
+    request_body(
+        content = CountRequest, description = "`counted_minor`, the cash counted in minor units, with `approver_code` and \
+                       `approver_pin` for another till's drawer. Both are secrets and are never logged",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = ShiftResponse, description = "Counted: its id, till, assignee where the store assigns drawers, \
+                                      `state`, what was paid in and out, and the expectation only where the \
+                                      count is not blind"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; another \
+                                      till's drawer needs an approval that was missing or refused, or the \
+                                      approver is locked out; or this box was superseded by a replacement"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, or the till this device is could not be \
+                                      read; nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "shifts",
+))]
 /// `POST /api/shifts/{id}/count` — enter the blind count.
-pub(crate) async fn count<S>(
+pub(crate) async fn count_shift<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     printers: Option<Extension<Arc<Printers>>>,
@@ -484,142 +558,43 @@ where
     )
 }
 
-/// `POST /api/shifts/{id}/paid-in` — cash put into the drawer outside a sale (ADR-0165).
-pub(crate) async fn paid_in<S>(
-    State(edge): State<Arc<Edge<S>>>,
-    Extension(actor): Extension<Actor>,
-    printers: Option<Extension<Arc<Printers>>>,
-    Path(id): Path<String>,
-    Json(request): Json<MovementRequest>,
-) -> Response
-where
-    S: EventStore + Send + Sync + 'static,
-{
-    movement(&edge, actor, printers, &id, CashMovement::PaidIn, request).await
-}
-
-/// `POST /api/shifts/{id}/paid-out` — cash taken out of the drawer outside a sale (ADR-0165).
-pub(crate) async fn paid_out<S>(
-    State(edge): State<Arc<Edge<S>>>,
-    Extension(actor): Extension<Actor>,
-    printers: Option<Extension<Arc<Printers>>>,
-    Path(id): Path<String>,
-    Json(request): Json<MovementRequest>,
-) -> Response
-where
-    S: EventStore + Send + Sync + 'static,
-{
-    movement(&edge, actor, printers, &id, CashMovement::PaidOut, request).await
-}
-
-/// Records a paid in or a paid out, then opens the drawer for the cash to go in or come out.
-///
-/// The drawer after the commit, never before, for the reason a receipt prints after one: a movement
-/// that failed must never have sprung a drawer full of cash.
-async fn movement<S>(
-    edge: &Arc<Edge<S>>,
-    actor: Actor,
-    printers: Option<Extension<Arc<Printers>>>,
-    id: &str,
-    movement: CashMovement,
-    request: MovementRequest,
-) -> Response
-where
-    S: EventStore + Send + Sync + 'static,
-{
-    let Some(shift_id) = parse_ulid(id).map(ShiftId::new) else {
-        return bad_request("a shift id is a ULID");
-    };
-    if request.amount_minor <= 0 {
-        return bad_request("an amount paid in or out is greater than zero");
-    }
-    let amount = Money::new(edge.session().currency, request.amount_minor);
-    let scope = match till_scope(edge, printers.as_deref(), actor, None).await {
-        Ok(scope) => scope,
-        Err(error) => return error_response(&error),
-    };
-    let approval = approval(
-        request.approver_code.as_ref(),
-        request.approver_pin.as_ref(),
-    );
-    let view = match edge
-        .record_cash_movement_at(
-            actor,
-            scope,
-            shift_id,
-            movement,
-            amount,
-            request.reason_code_id,
-            approval.as_ref(),
-        )
-        .await
-    {
-        Ok(view) => view,
-        Err(error) => return error_response(&error),
-    };
-    let opened = open_drawer_through(printers.as_deref(), edge, view.till).await;
-    let mut response = ShiftResponse::from(view);
-    response.drawer_open = Some(opened.as_wire().to_owned());
-    Json(response).into_response()
-}
-
-/// `POST /api/drawer/open` — open the drawer outside a sale, with a manager's PIN and a reason
-/// (ADR-0165 decision 3). The opening is recorded first, and the drawer opens after.
-pub(crate) async fn open_drawer<S>(
-    State(edge): State<Arc<Edge<S>>>,
-    Extension(actor): Extension<Actor>,
-    printers: Option<Extension<Arc<Printers>>>,
-    Json(request): Json<OpenDrawerRequest>,
-) -> Response
-where
-    S: EventStore + Send + Sync + 'static,
-{
-    let approval = request.approval();
-    let scope = match till_scope(&edge, printers.as_deref(), actor, None).await {
-        Ok(scope) => scope,
-        Err(error) => return error_response(&error),
-    };
-    let till = match edge
-        .open_drawer_no_sale_at(actor, scope, request.reason_code_id, approval.as_ref())
-        .await
-    {
-        Ok(till) => till,
-        Err(error) => return error_response(&error),
-    };
-    let opened = open_drawer_through(printers.as_deref(), &edge, till).await;
-    Json(OpenDrawerResponse {
-        drawer_open: opened.as_wire(),
-    })
-    .into_response()
-}
-
-/// Opens `till`'s drawer, or the store's one drawer for `None`, through the composition's
-/// dispatcher. A composition with none layered in — the fakes-backed example, a route test that
-/// does not care — has no drawer to open, and says so.
-pub(crate) async fn open_drawer_through<S>(
-    printers: Option<&Arc<Printers>>,
-    edge: &Arc<Edge<S>>,
-    till: Option<DeviceId>,
-) -> DrawerOutcome
-where
-    S: EventStore + Send + Sync + 'static,
-{
-    match printers {
-        Some(printers) => {
-            printers
-                .open_drawer(&edge.session(), edge.store_id(), edge.print_job_id(), till)
-                .await
-        }
-        None => DrawerOutcome::NoDrawer,
-    }
-}
-
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/shifts/{id}/close",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!(["cash.shift.close", "cash.shift.manage_other_till", "cash.drawer.override_assignment"]))),
+    params(
+        ("id" = String, Path, description = "The shift's id, a ULID"),
+    ),
+    request_body(
+        content = CloseRequest, description = "Optional: `approver_code` and `approver_pin` for another till's drawer, and \
+                       `reason_code_id` for an over or short the store asks a reason for. The body may be \
+                       empty",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = ShiftResponse, description = "Closed: the shift with its expectation, count and variance, and \
+                                      `shift_report_print` where a report was printed"),
+        (status = 400, description = "The id is not a ULID, or the body is not an approver and a reason"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; another \
+                                      till's drawer needs an approval that was missing or refused, or the \
+                                      approver is locked out; or this box was superseded by a replacement"),
+        (status = 409, description = "Refused, with the reason in `pos-error-reason`. For \
+                                      `VARIANCE_REASON_REQUIRED` the body is JSON: the `message`, and the \
+                                      `shifts` still owed a reason"),
+        (status = 503, description = "The store is unavailable, or the till this device is could not be \
+                                      read; nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "shifts",
+))]
 /// `POST /api/shifts/{id}/close` — close a counted shift, revealing the variance, and print the
 /// shift report when the domain asks for one.
 ///
 /// The report prints after the commit, never before, for the reason a receipt does: a printer that
 /// is down must not reopen a shift, and a close that failed must never have printed.
-pub(crate) async fn close<S>(
+pub(crate) async fn close_shift<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     printers: Option<Extension<Arc<Printers>>>,
@@ -671,10 +646,38 @@ where
     Json(response).into_response()
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/shifts:batch_close",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!(["cash.shift.close", "cash.shift.manage_other_till", "cash.drawer.override_assignment"]))),
+    request_body(
+        content = BatchCloseRequest, description = "`shift_ids` to close, every one or none, with optional `variance_reasons` (each a \
+                       `shift_id` and `reason_code_id`) and one `approver_code` and `approver_pin` for the \
+                       other tills' drawers. Both are secrets and are never logged",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = BatchCloseResponse, description = "Closed: each shift as its own close answers, and `shift_report_print` \
+                                      where the store prints one slip for them all"),
+        (status = 400, description = "No shift is named"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; other \
+                                      tills' drawers need an approval that was missing or refused, or the \
+                                      approver is locked out; or this box was superseded by a replacement"),
+        (status = 409, description = "Refused, with the reason in `pos-error-reason`. For \
+                                      `VARIANCE_REASON_REQUIRED` the body is JSON: the `message`, and the \
+                                      `shifts` still owed a reason"),
+        (status = 503, description = "The store is unavailable, or the till this device is could not be \
+                                      read; nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "shifts",
+))]
 /// `POST /api/shifts:batch_close` — close several counted drawers in one act, every one or none,
 /// and print what the store's `shift.close_report` asks for: one slip for them all, each drawer's
 /// report, or nothing (ADR-0167 decision 10). One approver covers every other till's drawer named.
-pub(crate) async fn batch_close<S>(
+pub(crate) async fn batch_close_shifts<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     printers: Option<Extension<Arc<Printers>>>,

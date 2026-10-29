@@ -3,13 +3,13 @@
 
 //! The cloud [`BlobStore`](pos_ports::blob_store::BlobStore) over Garage / S3 (P7).
 //!
-//! Deliberately thin. [ADR-0007](../../../docs/adr/0007-in-house-vs-dependency.md) first gave object
+//! Deliberately thin. [ADR-0007](../../../../docs/adr/0007-in-house-vs-dependency.md) first gave object
 //! storage one job, Litestream's WAL shipping, and scheduled this port for removal once that was
 //! in-house. `pos-cloud` now also keeps OTA release artifacts here
-//! ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md), Correction 1), so the port stays.
+//! ([ADR-0088](../../../../docs/adr/0088-ota-artifact-hosting.md), Correction 1), so the port stays.
 //! It is still four methods over a handful of objects, so rather than carry an S3 SDK — dozens of
 //! crates — the adapter hand-rolls `SigV4` request signing and `HTTP/1.1` over `tokio`
-//! ([ADR-0031](../../../docs/adr/0031-cloud-adapter-transports.md)).
+//! ([ADR-0031](../../../../docs/adr/0031-cloud-adapter-transports.md)).
 //!
 //! "Hand-rolled" does not mean "unverified". The one part that must be exactly right — the `SigV4`
 //! signature — is checked in [`sign`]'s unit test against AWS's published vector, with no server;

@@ -10,7 +10,7 @@
 //!
 //! It is a pure read of [`Edge::check_totals`](crate::app::Edge::check_totals), which runs the same
 //! `billing::assemble` the settle path runs, over the same projection and the same session. One
-//! calculation, in one place, with the domain as its home ([ADR-0028](../../../docs/adr/0028-settlement-and-payment-invariant.md)):
+//! calculation, in one place, with the domain as its home ([ADR-0028](../../../../docs/adr/0028-settlement-and-payment-invariant.md)):
 //! the till displays, it does not decide.
 
 use std::sync::Arc;
@@ -36,6 +36,7 @@ use crate::printing::{PrintOutcome, Printers, TillPrinting, short_reference};
 
 /// What a table owes, as the till shows it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct CheckResponse {
     /// The sum of the order's live line totals, before tax.
     subtotal: Money,
@@ -49,7 +50,7 @@ pub(crate) struct CheckResponse {
     tax_total: Money,
     /// What the guest owes — the figure the bill will settle against.
     total_due: Money,
-    /// Each fee charged ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4),
+    /// Each fee charged ([ADR-0159](../../../../docs/adr/0159-a-fee-is-configuration.md) decision 4),
     /// in rule order: the rule, its code and its name, what it charged and the tax on it, as the
     /// settle records them, except that the name is the store's display language where the
     /// current rule translates it. Part by part for a table whose bill is split, as each part
@@ -61,11 +62,12 @@ pub(crate) struct CheckResponse {
 
 /// One fee as the till shows it: the line the settle records, and whether staff may waive it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct CheckFeeLine {
     #[serde(flatten)]
     line: BillFeeLine,
     /// Whether the fee's rule, as the bill froze it, lets staff waive it on one bill
-    /// ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 5). The till offers
+    /// ([ADR-0159](../../../../docs/adr/0159-a-fee-is-configuration.md) decision 5). The till offers
     /// **Waive** only on an open bill's waivable fee, and the edge refuses any other.
     waivable: bool,
 }
@@ -103,11 +105,12 @@ impl CheckResponse {
 
 /// What one bill owes, where it has got to, and which lines it covers.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct BillCheckResponse {
     /// `BILL_STATE_OPEN` while it still owes. A settled, voided, split or merged bill owes nothing
     /// more, and the figures are then what its lines came to rather than a sum to collect.
     state: String,
-    /// The order lines it covers ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)
+    /// The order lines it covers ([ADR-0128](../../../../docs/adr/0128-a-bill-splits-and-merges.md)
     /// decision 1), so a till can show a guest what their part of a split table is for.
     order_line_ids: Vec<String>,
     /// The same figures and fee lines the table and order reads answer with, so a till draws all
@@ -116,8 +119,27 @@ pub(crate) struct BillCheckResponse {
     totals: CheckResponse,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/tables/{id}/check",
+    security(("till_session" = [])),
+    params(
+        ("id" = String, Path, description = "The table's id, a ULID"),
+    ),
+    responses(
+        (status = 200, body = CheckResponse, description = "What the table owes, in the shape `GET /api/orders/{id}/check` answers \
+                                      with, read through its open bills where it has any. Zero for a free \
+                                      table"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+        (status = 409, description = "The figures cannot be assembled, for instance a line whose tax class \
+                                      the store has published no rate for. `pos-error-reason` names why"),
+    ),
+    tag = "floor",
+))]
 /// `GET /api/tables/{id}/check` — the running check, assembled by the edge.
-pub(crate) async fn read<S>(
+pub(crate) async fn table_check<S>(
     State(edge): State<Arc<Edge<S>>>,
     Path(table_id): Path<String>,
 ) -> Response
@@ -139,14 +161,33 @@ where
     }
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/orders/{id}/check",
+    security(("till_session" = [])),
+    params(
+        ("id" = String, Path, description = "The order's id, a ULID"),
+    ),
+    responses(
+        (status = 200, body = CheckResponse, description = "What the order owes: subtotal, discount and comp totals, tax, \
+                                      `total_due`, and each fee charged. Zero for an order with nothing on \
+                                      it"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+        (status = 409, description = "The figures cannot be assembled, for instance a line whose tax class \
+                                      the store has published no rate for. `pos-error-reason` names why"),
+    ),
+    tag = "orders",
+))]
 /// `GET /api/orders/{id}/check` — the running check for one order, table or no table.
 ///
 /// The counter's read. A takeaway order sits on no table
-/// ([ADR-0093](../../../docs/adr/0093-bill-keyed-on-order.md)), so the table-keyed route above
+/// ([ADR-0093](../../../../docs/adr/0093-bill-keyed-on-order.md)), so the table-keyed route above
 /// cannot answer for it, and the cashier needs the figure before taking money as much on a counter
 /// order as on a floor one. Same [`Edge::order_totals`](crate::app::Edge::order_totals) the settle
 /// path assembles from.
-pub(crate) async fn read_for_order<S>(
+pub(crate) async fn order_check<S>(
     State(edge): State<Arc<Edge<S>>>,
     Path(order_id): Path<String>,
 ) -> Response
@@ -166,13 +207,31 @@ where
     }
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/bills/{id}/check",
+    security(("till_session" = [])),
+    params(
+        ("id" = String, Path, description = "The bill's id, a ULID"),
+    ),
+    responses(
+        (status = 200, body = BillCheckResponse, description = "What one bill owes, in the shape `GET /api/orders/{id}/check` answers \
+                                      with, plus its `state` and the `order_line_ids` it covers"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+        (status = 409, description = "The edge knows no such bill (`UNKNOWN_BILL`), or its figures cannot be \
+                                      assembled. `pos-error-reason` names why"),
+    ),
+    tag = "bills",
+))]
 /// `GET /api/bills/{id}/check` — what one bill owes, where it has got to, and the lines it covers.
 ///
-/// The read a split needs ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)). Once a
+/// The read a split needs ([ADR-0128](../../../../docs/adr/0128-a-bill-splits-and-merges.md)). Once a
 /// table's bill is split, the table read answers for every part still open, and the guest at the
 /// till is asking about **theirs** — so the till reads the part it is about to settle, by its id.
 /// Same [`Edge::bill_totals`](crate::app::Edge::bill_totals) the settle path assembles from.
-pub(crate) async fn read_for_bill<S>(
+pub(crate) async fn bill_check<S>(
     State(edge): State<Arc<Edge<S>>>,
     Path(bill_id): Path<String>,
 ) -> Response
@@ -205,16 +264,36 @@ where
 /// A list because a split table prints one pre-bill per open part, and a printer can take the first
 /// and jam on the second; the till says which.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct PrintResponse {
     prints: Vec<String>,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/tables/{id}/check/print",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("billing.bill.open"))),
+    params(
+        ("id" = String, Path, description = "The table's id, a ULID"),
+    ),
+    responses(
+        (status = 200, body = PrintResponse, description = "`prints`: what came of printing each pre-bill, one per open part of a \
+                                      split table, in the order they were sent"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+        (status = 409, description = "Refused: the person lacks the permission to open a bill, or there is \
+                                      nothing to print (`NOTHING_TO_PRINT`). `pos-error-reason` names which"),
+    ),
+    tag = "floor",
+))]
 /// `POST /api/tables/{id}/check/print` — print the table's pre-bill (roadmap-v3 B2.1): one per open
 /// part once its bill is split.
 ///
 /// Printing a pre-bill is presenting the bill, so it needs `billing.bill.open`, as opening one does
 /// (ADR-0158), on all three print routes.
-pub(crate) async fn print_for_table<S>(
+pub(crate) async fn print_table_check<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     printers: Option<Extension<Arc<Printers>>>,
@@ -243,9 +322,28 @@ where
     .await
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/orders/{id}/check/print",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("billing.bill.open"))),
+    params(
+        ("id" = String, Path, description = "The order's id, a ULID"),
+    ),
+    responses(
+        (status = 200, body = PrintResponse, description = "`prints`: what came of printing each pre-bill, in the order they were \
+                                      sent"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+        (status = 409, description = "Refused: the person lacks the permission to open a bill, or there is \
+                                      nothing to print (`NOTHING_TO_PRINT`). `pos-error-reason` names which"),
+    ),
+    tag = "orders",
+))]
 /// `POST /api/orders/{id}/check/print` — the same for an order, table or no table: a counter order
 /// the guest wants to see priced before paying.
-pub(crate) async fn print_for_order<S>(
+pub(crate) async fn print_order_check<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     printers: Option<Extension<Arc<Printers>>>,
@@ -271,9 +369,28 @@ where
     .await
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/bills/{id}/check/print",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("billing.bill.open"))),
+    params(
+        ("id" = String, Path, description = "The bill's id, a ULID"),
+    ),
+    responses(
+        (status = 200, body = PrintResponse, description = "`prints`: what came of printing the bill's pre-bill, one outcome"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+        (status = 409, description = "Refused: the person lacks the permission to open a bill, the edge \
+                                      knows no such bill, or there is nothing to print (`NOTHING_TO_PRINT`). \
+                                      `pos-error-reason` names which"),
+    ),
+    tag = "bills",
+))]
 /// `POST /api/bills/{id}/check/print` — one open bill's pre-bill, for the guest paying that part of
 /// a split table.
-pub(crate) async fn print_for_bill<S>(
+pub(crate) async fn print_bill_check<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     printers: Option<Extension<Arc<Printers>>>,

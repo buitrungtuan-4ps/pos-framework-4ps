@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The OTA release registry over PostgreSQL ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md),
+//! The OTA release registry over PostgreSQL ([ADR-0088](../../../../docs/adr/0088-ota-artifact-hosting.md),
 //! roadmap-v3 slice R2).
 //!
 //! Rows only. The artifact bytes live in the object store — a 30 MB binary per release per target in

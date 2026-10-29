@@ -7,13 +7,10 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 ## Cited nowhere
 
 - [ADR-0009](../adr/0009-licence.md) Licence: proprietary, internal use
-- [ADR-0023](../adr/0023-tenant-hostname-and-slug.md) Tenant hostnames: flat per-tenant subdomains, DNS as the uniqueness ledger
 - [ADR-0126](../adr/0126-when-an-agent-may-merge.md) When an agent may press merge
 - [ADR-0152](../adr/0152-a-receipt-number-belongs-to-a-series-and-each-country-sets-its-rules.md) A receipt number belongs to a series, and each country sets the series' rules
-- [ADR-0154](../adr/0154-a-card-is-taken-through-the-stores-terminal.md) A card is taken through the store's terminal, and an unknown answer parks the bill
 - [ADR-0155](../adr/0155-a-qr-payment-is-confirmed-by-its-gateway-through-the-cloud.md) A QR payment is confirmed by its gateway through the cloud, and by hand when it cannot be
-- [ADR-0156](../adr/0156-a-store-issues-its-e-invoice-and-the-cloud-submits-it.md) A store issues its e-invoice from a range, and the cloud submits it
-- [ADR-0162](../adr/0162-a-bill-is-taxed-at-the-rates-of-one-stated-moment.md) A bill is taxed at the rates of one stated moment, and the country says which
+- [ADR-0182](../adr/0182-a-signed-cell-moved-config-node.md) A signed "cell moved" config node
 
 ## Citations of ADRs that do not exist
 

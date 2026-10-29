@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The SAP [`ErpSink`](pos_ports::erp::ErpSink) adapter, over HTTPS
-//! ([ADR-0059](../../../docs/adr/0059-erp-adapter.md)).
+//! ([ADR-0059](../../../../docs/adr/0059-erp-adapter.md)).
 //!
 //! `docs/architecture.md` §6.1 puts ERP posting behind the `ErpSink` port: a nightly, whole-day
 //! posting of revenue and consumption, keyed by the **trading** day. This crate maps the port's two
@@ -15,12 +15,12 @@
 //! to the right [`PortError`](pos_ports::PortError) are pure. That is what lets the shared `ErpSink`
 //! contract suite run in the fast pull-request gate against a stateful stub ERP, while the real TLS
 //! path ([`TlsErpTransport`]) is exercised in the gated integration lane and the soak — the split
-//! [ADR-0038](../../../docs/adr/0038-webhook-tls-sender.md) drew for the webhook sender and
-//! [ADR-0058](../../../docs/adr/0058-shipping-adapters.md) for the couriers.
+//! [ADR-0038](../../../../docs/adr/0038-webhook-tls-sender.md) drew for the webhook sender and
+//! [ADR-0058](../../../../docs/adr/0058-shipping-adapters.md) for the couriers.
 //!
 //! # Nightly, and off the sales path
 //!
-//! Posting is nightly by design ([ADR-0001](../../../docs/adr/0001-offline-first-store-autonomy.md)):
+//! Posting is nightly by design ([ADR-0001](../../../../docs/adr/0001-offline-first-store-autonomy.md)):
 //! an ERP is a system of record for accounting periods, and putting a finance system on the sales path
 //! is exactly what the store's offline-first autonomy forbids. A batch carries a `revision` so a late
 //! void or a reprocessed day can supersede an earlier posting rather than double-count it.
@@ -43,7 +43,7 @@ pub use wire::{ErpTransport, HttpResponse, Method, TlsErpTransport, TransportErr
 use pos_providers::{Family, ProviderDescriptor, fields};
 
 /// This adapter as the provider catalogue lists it
-/// ([ADR-0153](../../../docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)): the
+/// ([ADR-0153](../../../../docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)): the
 /// SAP ERP a tenant connects to from the console, and what they fill in to do it.
 ///
 /// Only the settings [`HttpSapErp`] and its transport read today — the base URL and a request timeout.

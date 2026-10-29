@@ -1,0 +1,133 @@
+// Copyright (c) 2026 Pizza 4P's. All rights reserved.
+// Proprietary and confidential. Internal use only. See LICENSE.
+
+//! `erp-sandbox` against the shared `ErpSink` contract suite.
+//!
+//! The harness puts an in-memory ERP behind the adapter's transport. It knows a fixed chart of
+//! accounts, remembers every key it has posted, and keeps each trading day's latest revision, so a
+//! later revision supersedes rather than adds. The adapter's futures never suspend, so the suite
+//! runs under `run_ready`, a one-poll executor.
+
+#![allow(
+    clippy::expect_used,
+    reason = "test scaffolding: a poisoned lock in the ERP is an unrecoverable test fault"
+)]
+
+use std::sync::Mutex;
+
+use erp_sandbox::{Answer, SandboxErp, Transport, Unreachable};
+use pos_contract_tests::harness::{ErpSinkHarness, Setup};
+use pos_fakes::executor::run_ready;
+use pos_ports::{AccountCode, ErpBatch, ErpPostingRef};
+use pos_proto::{BusinessDate, StoreId, Ulid};
+
+/// The accounts the in-memory ERP knows.
+const CHART: [&str; 3] = ["511", "3331", "152"];
+
+/// An in-memory ERP.
+#[derive(Debug, Default)]
+struct Ledger {
+    state: Mutex<State>,
+}
+
+#[derive(Debug, Default)]
+struct State {
+    closed: bool,
+    keys: Vec<String>,
+    latest: Vec<(StoreId, BusinessDate, ErpPostingRef)>,
+}
+
+impl Transport for Ledger {
+    fn submit(&self, key: &str, batch: &ErpBatch) -> Result<Answer, Unreachable> {
+        let mut state = self.state.lock().expect("ledger lock");
+        if state.closed {
+            return Ok(Answer::PeriodClosed);
+        }
+        if state.keys.iter().any(|seen| seen == key) {
+            return Ok(Answer::AlreadyPosted);
+        }
+        let known = |line: &pos_ports::ErpLine| CHART.contains(&line.account_code().as_str());
+        if !batch.lines.iter().all(known) {
+            return Ok(Answer::UnknownAccount);
+        }
+        state.keys.push(key.to_owned());
+        let posting = ErpPostingRef {
+            document_ref: format!("sandbox-{key}").into(),
+            revision: batch.revision,
+        };
+        let day = (batch.store_id, batch.business_date);
+        state
+            .latest
+            .retain(|(store, date, _)| (*store, *date) != day);
+        state.latest.push((day.0, day.1, posting.clone()));
+        Ok(Answer::Posted(posting))
+    }
+
+    fn latest(
+        &self,
+        store_id: StoreId,
+        business_date: BusinessDate,
+    ) -> Result<Option<ErpPostingRef>, Unreachable> {
+        let state = self.state.lock().expect("ledger lock");
+        Ok(state
+            .latest
+            .iter()
+            .find(|(store, date, _)| *store == store_id && *date == business_date)
+            .map(|(_, _, posting)| posting.clone()))
+    }
+}
+
+struct Harness;
+
+impl ErpSinkHarness for Harness {
+    type Erp = SandboxErp<Ledger>;
+
+    async fn fresh(&self) -> Setup<Self::Erp> {
+        Ok(SandboxErp::new(Ledger::default()))
+    }
+
+    fn known_account(&self) -> AccountCode {
+        AccountCode::new("511")
+    }
+
+    fn unknown_account(&self) -> AccountCode {
+        AccountCode::new("999")
+    }
+
+    fn store_id(&self) -> StoreId {
+        StoreId::new(Ulid::from_u128(1))
+    }
+}
+
+mod erp_sink {
+    use super::{Harness, run_ready};
+    pos_contract_tests::erp_sink_suite!(Harness, run_ready);
+}
+
+/// The port's closed-period rule, which the shared suite does not reach: a closed period is a
+/// conversation for finance, `failed_precondition`, and nothing posts.
+#[test]
+fn a_closed_period_is_refused_and_posts_nothing() {
+    use pos_ports::{ErpLine, ErpSink, PortName};
+    use pos_proto::error::ErrorStatus;
+    use pos_proto::money::{CurrencyCode, Money};
+
+    let erp = SandboxErp::new(Ledger::default());
+    erp.transport().state.lock().expect("ledger lock").closed = true;
+    let store_id = StoreId::new(Ulid::from_u128(1));
+    let business_date = BusinessDate::from_ymd(2026, 8, 18).expect("a date");
+    let batch = ErpBatch {
+        store_id,
+        business_date,
+        revision: 0,
+        lines: vec![ErpLine::Revenue {
+            account_code: AccountCode::new("511"),
+            amount: Money::new(CurrencyCode::VND, 12_000_000),
+        }],
+    };
+    let refused = run_ready(erp.post(&batch)).expect_err("a closed period");
+    assert_eq!(refused.status(), ErrorStatus::FailedPrecondition);
+    assert_eq!(refused.port(), PortName::ErpSink);
+    let posted = run_ready(erp.posted(store_id, business_date)).expect("the ERP answers");
+    assert!(posted.is_none());
+}

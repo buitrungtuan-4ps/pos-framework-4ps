@@ -2,11 +2,11 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The HTTP transport seam and its production TLS implementation
-//! ([ADR-0058](../../../docs/adr/0058-shipping-adapters.md)).
+//! ([ADR-0058](../../../../docs/adr/0058-shipping-adapters.md)).
 //!
 //! [`CourierTransport`] is the one thing that touches a socket; [`TlsCourierTransport`] is the
 //! concrete sender, on the rustls/hyper stack already in the tree
-//! ([ADR-0038](../../../docs/adr/0038-webhook-tls-sender.md), [ADR-0054](../../../docs/adr/0054-edge-cloud-http-client.md)).
+//! ([ADR-0038](../../../../docs/adr/0038-webhook-tls-sender.md), [ADR-0054](../../../../docs/adr/0054-edge-cloud-http-client.md)).
 //! A courier's API base URL is operator configuration — one fixed, trusted host — so this dials the
 //! ordinary way; there is no SSRF surface to defend, exactly as for the edge->cloud client.
 //!

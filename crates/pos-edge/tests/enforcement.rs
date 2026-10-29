@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! A store that enforces each person's own permissions decides with them
-//! ([ADR-0158](../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decisions 1,
+//! ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decisions 1,
 //! 4 and 5).
 //!
 //! Until a store turns `permissions.enforced` on, every command is decided with a store-wide set

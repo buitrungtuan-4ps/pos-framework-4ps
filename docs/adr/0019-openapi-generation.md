@@ -1,6 +1,6 @@
 # ADR-0019 — OpenAPI is generated from the code, and drift fails CI
 
-**Status** Accepted · **Owner** @maintainers-cloud · **Last reviewed** 2026-08-20
+**Status** Accepted; superseded in part by [ADR-0177](0177-openapi-is-the-route-map.md) (the 2026-09-03 amendment's "success bodies are not documented") · **Owner** @maintainers-cloud · **Last reviewed** 2026-08-20
 **Relates to** [ADR-0016](0016-postgres-access.md) · [ADR-0018](0018-http-websocket-stack.md) · [ADR-0010](0010-naming-standard.md)
 
 **Context.** `pos_cloud` (P7) exposes a public `/v1` API — the surface external integrators build

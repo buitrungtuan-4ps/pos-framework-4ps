@@ -50,6 +50,7 @@ use crate::time::{BusinessDate, Timestamp};
 /// comparison of the JSON — see that type's implementation, which explains why it is not
 /// semantic.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct EventEnvelope<D> {
     /// A ULID, which **doubles as the receiver's idempotency key**.
@@ -214,7 +215,9 @@ impl<D: Serialize> EventEnvelope<D> {
 /// reconcile an event whose payload contains fields it has never heard of. Decoding
 /// eagerly and re-encoding would silently drop them.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(transparent)]
+#[cfg_attr(feature = "openapi", schema(value_type = Object))]
 pub struct RawPayload(Box<RawValue>);
 
 impl PartialEq for RawPayload {

@@ -17,10 +17,10 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "../src/api/client";
-import type { TaxRate } from "../src/api/types";
 import { setLocale, t } from "../src/i18n";
 import { TaxRates } from "../src/screens/TaxRates";
 import { selectTenant, setActingAdmin } from "../src/state/session";
+import type { TaxRate } from "../src/api/schemas";
 
 const TENANT = "01M22190WCY5PS7KCA7ET7H679";
 const FOOD = "01TAXCLASSFOODAAAAAAAAAAAA";
