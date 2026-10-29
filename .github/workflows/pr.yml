@@ -138,6 +138,8 @@ jobs:
           fi
       - name: the files both front ends share live once, in packages/shared
         run: cargo run -q -p xtask -- mirrored-files
+      - name: the front ends mirror no more wire types by hand than the baseline allows (ADR-0177)
+        run: cargo run -q -p xtask -- hand-types
       - name: no vendor brand name in pos-core / pos-proto production code
         run: cargo run -q -p xtask -- vendor-neutral-core
       - name: the print agent links only the three workspace crates ADR-0112 allows
@@ -526,9 +528,22 @@ jobs:
       - run: chmod +x target/debug/minimal-edge
       # Chromium only, and only the browser this project drives. `--with-deps`
       # installs the shared libraries a headless Chromium needs on a bare runner.
+      # The shared libraries come from apt, which can be slow but is not retried: killing it mid-run
+      # leaves dpkg locked. The browser download is the part seen to hang (three stalls in one week
+      # each held a runner until the job's limit), so it gets four minutes per attempt and one retry.
+      - name: install the browser's system libraries
+        working-directory: ui
+        timeout-minutes: 12
+        run: pnpm exec playwright install-deps chromium
       - name: install the browser
         working-directory: ui
-        run: pnpm exec playwright install --with-deps chromium
+        timeout-minutes: 10
+        run: |
+          for attempt in 1 2; do
+            timeout 240 pnpm exec playwright install chromium && exit 0
+            echo "playwright install attempt $attempt did not finish"
+          done
+          exit 1
       # `fullyParallel` in playwright.config.mjs is what lets one spec file split by test.
       - name: replay a third of the declared flows
         working-directory: ui
@@ -645,9 +660,22 @@ jobs:
             "ALTER SYSTEM SET log_min_messages = 'error'" -c "SELECT pg_reload_conf()"
       # Chromium only, and only the browser this project drives. `--with-deps`
       # installs the shared libraries a headless Chromium needs on a bare runner.
+      # The shared libraries come from apt, which can be slow but is not retried: killing it mid-run
+      # leaves dpkg locked. The browser download is the part seen to hang (three stalls in one week
+      # each held a runner until the job's limit), so it gets four minutes per attempt and one retry.
+      - name: install the browser's system libraries
+        working-directory: dashboard
+        timeout-minutes: 12
+        run: pnpm exec playwright install-deps chromium
       - name: install the browser
         working-directory: dashboard
-        run: pnpm exec playwright install --with-deps chromium
+        timeout-minutes: 10
+        run: |
+          for attempt in 1 2; do
+            timeout 240 pnpm exec playwright install chromium && exit 0
+            echo "playwright install attempt $attempt did not finish"
+          done
+          exit 1
       - name: replay every declared console flow
         working-directory: dashboard
         run: pnpm replay

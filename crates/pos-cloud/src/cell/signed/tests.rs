@@ -205,3 +205,31 @@ fn a_tenant_home_carries_its_cell_and_origin() {
     );
     assert_eq!(directory.tenant_home("unknown"), None);
 }
+
+#[test]
+fn the_activation_routes_issue_this_cells_prefix_and_find_other_cells_in_the_directory() {
+    use pos_cloud_devices::routes::ActivationCell as _;
+
+    let single = CellDirectory::single(crate::cell::Cell::single());
+    assert_eq!(
+        single.issuing_cell_id(),
+        None,
+        "a single cell issues no prefix"
+    );
+
+    let directory = trusting();
+    assert_eq!(directory.issuing_cell_id().as_deref(), Some("vn1"));
+    assert!(directory.is_this_cell("vn1"));
+    assert!(!directory.is_this_cell("jp1"));
+    assert_eq!(
+        directory.cell_base_url("jp1"),
+        None,
+        "no directory held yet"
+    );
+    assert!(directory.offer(V3.document, V3.minisig).is_ok());
+    assert_eq!(
+        directory.cell_base_url("jp1").as_deref(),
+        Some("https://jp1.example.com")
+    );
+    assert_eq!(directory.cell_base_url("kr9"), None);
+}

@@ -145,23 +145,28 @@ pub(crate) struct BillResponse {
     state: String,
     /// The gapless receipt number, once settled. Never a legal invoice number.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     receipt_number: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     total_due: Option<Money>,
     /// The state the bill's table moved to, absent for a counter order that has no table
     /// (ADR-0093). The UI already treated this as optional.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     table_state: Option<String>,
     print_receipt: bool,
     /// What came of that print: `PRINTED`, `NO_PRINTER`, `PRINTER_UNAVAILABLE`, `UNPRINTABLE_TEXT`,
     /// or absent when the settle asked for no receipt (ADR-0100). Until this field existed the till
     /// rendered "Printing receipt…" over a store with no printer wired at all.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     receipt_print: Option<String>,
     /// What came of opening the cash drawer on a settle that took cash: `OPENED`, `NO_DRAWER` or
     /// `DRAWER_UNAVAILABLE` ([ADR-0165](../../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)). Absent when no cash was taken, because nothing
     /// was asked of the drawer.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false, value_type = Option<cash_movements::DrawerOutcomeSchema>))]
     drawer_open: Option<String>,
 }
 

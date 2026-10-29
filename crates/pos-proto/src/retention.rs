@@ -35,6 +35,7 @@ pub struct PublishedRetention {
         deserialize_with = "whole_days",
         skip_serializing_if = "Option::is_none"
     )]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub event_log_days: Option<u64>,
 }
 

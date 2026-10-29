@@ -2424,7 +2424,14 @@
         ],
         "responses": {
           "200": {
-            "description": "`jobs`: at most one per printer the agent owns, each with the printer's address, connection and capabilities, when its lease lapses, and the document. Empty when nothing arrived while the request was parked"
+            "description": "`jobs`: at most one per printer the agent owns, each with the printer's address, connection and capabilities, when its lease lapses, and the document. Empty when nothing arrived while the request was parked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeasedJobs"
+                }
+              }
+            }
           },
           "401": {
             "description": "This device is not paired: no token, or one the edge does not accept"
@@ -3876,7 +3883,7 @@
         "properties": {
           "code": {
             "type": "string",
-            "description": "The `XXXX-XXXX-XXXX` code the operator typed, in any casing or spacing."
+            "description": "The `XXXX-XXXX-XXXX` code the operator typed, in any casing or spacing, with or without its\ncell's prefix (`VN1-XXXX-XXXX-XXXX`, ADR-0181)."
           }
         }
       },
@@ -3952,10 +3959,7 @@
         ],
         "properties": {
           "shift_report_print": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "shifts": {
             "type": "array",
@@ -4052,29 +4056,20 @@
             "type": "string"
           },
           "drawer_open": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "$ref": "#/components/schemas/DrawerOutcomeSchema",
             "description": "What came of opening the cash drawer on a settle that took cash: `OPENED`, `NO_DRAWER` or\n`DRAWER_UNAVAILABLE` ([ADR-0165](../../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)). Absent when no cash was taken, because nothing\nwas asked of the drawer."
           },
           "print_receipt": {
             "type": "boolean"
           },
           "receipt_number": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "The gapless receipt number, once settled. Never a legal invoice number.",
             "minimum": 0
           },
           "receipt_print": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "What came of that print: `PRINTED`, `NO_PRINTER`, `PRINTER_UNAVAILABLE`, `UNPRINTABLE_TEXT`,\nor absent when the settle asked for no receipt (ADR-0100). Until this field existed the till\nrendered \"Printing receipt…\" over a store with no printer wired at all."
           },
           "state": {
@@ -4082,21 +4077,11 @@
             "description": "The bill's state (`BILL_STATE_OPEN`, `BILL_STATE_SETTLED`, …)."
           },
           "table_state": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "The state the bill's table moved to, absent for a counter order that has no table\n(ADR-0093). The UI already treated this as optional."
           },
           "total_due": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Money"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/Money"
           }
         }
       },
@@ -4185,10 +4170,7 @@
         ],
         "properties": {
           "column": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int32",
             "description": "The button's zero-based column on a fixed grid, absent for a flowing layout where order alone\nplaces it.",
             "minimum": 0
@@ -4202,10 +4184,7 @@
             "description": "The item this button orders — the id the price book from `GET /api/menu` carries. Layout\nnames the item; the price book prices it; the two meet only here."
           },
           "row": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int32",
             "description": "The button's zero-based row, absent for the same reason as `column`.",
             "minimum": 0
@@ -4459,6 +4438,16 @@
           }
         }
       },
+      "CodePage": {
+        "type": "string",
+        "description": "The character set a printer's firmware can render directly.\n\nAnything outside it becomes a bitmap. The list is short because it only needs to cover\nwhat the fleet actually contains; an unrecognised page is\n[`CodePage::Unsupported`], which forces bitmap rendering for everything and is therefore\nalways safe.",
+        "enum": [
+          "Ascii",
+          "Vietnamese1258",
+          "Japanese932",
+          "Unsupported"
+        ]
+      },
       "CountRequest": {
         "type": "object",
         "description": "The blind count: the physical cash counted, in minor units. Nothing about what was expected.",
@@ -4510,10 +4499,7 @@
         ],
         "properties": {
           "bill_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "A bill already open on this order. The screen settles **this** bill rather than opening a\nsecond one, which the domain refuses."
           },
           "items": {
@@ -4526,10 +4512,7 @@
             "type": "string"
           },
           "queue_number": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "The daily number staff shouted. Absent for an order that was never given one, which is why\nthe route reads the number rather than allocating it.",
             "minimum": 0
@@ -4657,42 +4640,35 @@
         "description": "A `DisplaySubcategoryId`: a ULID, 26 Crockford base-32 characters",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
       },
+      "DrawerOutcomeSchema": {
+        "type": "string",
+        "description": "What came of opening the cash drawer (ADR-0165). `NO_DRAWER` is a store with no drawer marked,\nthe ordinary case; `DRAWER_UNAVAILABLE` is a drawer that should have opened and did not.",
+        "enum": [
+          "OPENED",
+          "NO_DRAWER",
+          "DRAWER_UNAVAILABLE"
+        ]
+      },
       "DrawerResponse": {
         "type": "object",
         "description": "One drawer: absent `terminal_device_id` and `name` for the store's one drawer.",
         "required": [
-          "default_float"
+          "default_float",
+          "shift"
         ],
         "properties": {
           "default_float": {
             "$ref": "#/components/schemas/Money"
           },
           "name": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/DisplayName"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/DisplayName"
           },
           "opened_clock": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "The shop's wall clock when its shift opened, `HH:MM` in the store's timezone, for the till to\nshow as it is: a till's own clock may keep another zone. Absent while the drawer is closed."
           },
           "opened_time": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Timestamp"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/Timestamp"
           },
           "shift": {
             "oneOf": [
@@ -4706,10 +4682,7 @@
             ]
           },
           "terminal_device_id": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           }
         }
       },
@@ -4722,10 +4695,7 @@
         ],
         "properties": {
           "drawer_access": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "`DRAWER_ACCESS_ASSIGNED` where each drawer is one person's for its session (ADR-0167\ndecision 9), so the till asks whom another till's drawer is for and tells a person's own\ndrawer by `assigned_employee_id`. Absent where drawers are shared, as before."
           },
           "drawer_model": {
@@ -4739,17 +4709,11 @@
             }
           },
           "terminal_device_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "The till this device is, whose drawer is its own, where the store keeps a drawer per till.\nAbsent for a device that is no till, and where the store keeps one drawer."
           },
           "waiting_drawer_model": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "The model the store has published, while open shifts keep the edge on the other."
           }
         }
@@ -4757,6 +4721,11 @@
       "EmployeeId": {
         "type": "string",
         "description": "A `EmployeeId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "EventId": {
+        "type": "string",
+        "description": "A `EventId`: a ULID, 26 Crockford base-32 characters",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
       },
       "FeeCode": {
@@ -4874,15 +4843,8 @@
             "description": "The label a host and guest read: \"T1\", \"Bar 3\". Presentation text, carried here so the UI\nnever re-reads anything to draw the floor."
           },
           "position": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/GridPosition",
-                "description": "Where the table sits in the floor editor's grid. `None` for a table not yet placed — it exists\nand can be seated, it just has no pinned position. Omitted from the wire when absent, the same\noptional-field shape [`crate::display::DisplayButton`] uses."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/GridPosition",
+            "description": "Where the table sits in the floor editor's grid. `None` for a table not yet placed — it exists\nand can be seated, it just has no pinned position. Omitted from the wire when absent, the same\noptional-field shape [`crate::display::DisplayButton`] uses."
           },
           "seats": {
             "type": "integer",
@@ -4987,21 +4949,11 @@
         ],
         "properties": {
           "backup_station_id": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/StationId",
-                "description": "The station a ticket falls to when this station's printer is down — the backup-printer failover\ntarget a dispatcher consults. `None` means no failover: a ticket for this station stays here.\nA backup must name a *different* station in the same plan (enforced by `pos_core::floor`)."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/StationId",
+            "description": "The station a ticket falls to when this station's printer is down — the backup-printer failover\ntarget a dispatcher consults. `None` means no failover: a ticket for this station stays here.\nA backup must name a *different* station in the same plan (enforced by `pos_core::floor`)."
           },
           "late_after_seconds": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int32",
             "description": "How long a ticket at this station waits, in seconds, before the kitchen display marks it\nlate. Read it through [`KitchenStation::late_after_seconds`], which reads an absent value, or\none outside [`LATE_AFTER_SECONDS`], as [`DEFAULT_LATE_AFTER_SECONDS`]. Left off the wire\nwhile absent, so a station that sets none is written as before.",
             "minimum": 0
@@ -5033,6 +4985,60 @@
               "$ref": "#/components/schemas/CategoryResponse"
             },
             "description": "The display categories, in the order the console arranged them. Empty when nothing has been\nlaid out, which the till reads as \"draw the flat price book\"."
+          }
+        }
+      },
+      "LeasedJob": {
+        "type": "object",
+        "description": "One leased job, as the agent receives it.",
+        "required": [
+          "printer_device_id",
+          "address",
+          "connection",
+          "capabilities",
+          "claim_expires_at",
+          "job"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "Where to open it: a host and port for a network printer, a device path for a directly\nattached one ([ADR-0103](../../../../docs/adr/0103-directly-attached-printers.md))."
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/PrinterCapabilities",
+            "description": "What the **edge** assumed this printer can do when it prepared the document below."
+          },
+          "claim_expires_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix milliseconds after which this lease lapses and the job returns to the queue. The agent\nhas until then to write the bytes and acknowledge."
+          },
+          "connection": {
+            "$ref": "#/components/schemas/PrinterConnection",
+            "description": "Which of those it is. The agent picks its transport from this and nothing else."
+          },
+          "job": {
+            "$ref": "#/components/schemas/PrintJob",
+            "description": "The finished document. Its `job_id` is what the acknowledgement carries — deliberately not\nrepeated at this level, because two copies of an id are two things that can disagree."
+          },
+          "printer_device_id": {
+            "type": "string",
+            "description": "The printer to open. Not on the job — a [`PrintJob`] names a *station*, and a receipt has\nnone at all."
+          }
+        }
+      },
+      "LeasedJobs": {
+        "type": "object",
+        "description": "What a claim returned. Always present, possibly empty: an empty park is the ordinary answer.",
+        "required": [
+          "jobs"
+        ],
+        "properties": {
+          "jobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LeasedJob"
+            }
           }
         }
       },
@@ -5128,17 +5134,11 @@
             "description": "The line's state (`ORDER_LINE_STATE_ADDED`, `ORDER_LINE_STATE_FIRED`, …)."
           },
           "station_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "The station the published routing sent this fire to, absent on an add (ADR-0072)."
           },
           "ticket_print": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "What came of the kitchen ticket: `PRINTED`, `NO_PRINTER`, `PRINTER_UNAVAILABLE` or\n`UNPRINTABLE_TEXT`. Absent on an add, which prints nothing (ADR-0100)."
           }
         }
@@ -5162,25 +5162,15 @@
             "description": "Whether a station has marked it prepared. Orthogonal to `state`: a fired line is still fired\nonce it is made, and this is what stops a kitchen display re-showing a ticket it has bumped."
           },
           "course_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "The course the line goes out on, absent for a line on none (ADR-0130). Omitted when absent,\nfor the reason `seat` is.\n\nWithout it a till that reloaded mid-service drew every line uncoursed, so the course controls\noffered to send starters the screen no longer knew were starters — the same loss `seat` was\nadded here to stop, one field over."
           },
           "display_name": {
             "type": "string"
           },
           "fired_time": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Timestamp",
-                "description": "When the line went to the kitchen. Absent while it is still on the pad, and omitted from the\nwire when absent, the way every other optional field on this route is.\n\nThe one number a kitchen board is for: which of eight tickets has been waiting longest. Taken\nfrom the firing event's envelope rather than from any clock a screen owns, so a board that\nreloads mid-service still counts from when the food was actually ordered — and two boards\nside by side agree."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "When the line went to the kitchen. Absent while it is still on the pad, and omitted from the\nwire when absent, the way every other optional field on this route is.\n\nThe one number a kitchen board is for: which of eight tickets has been waiting longest. Taken\nfrom the firing event's envelope rather than from any clock a screen owns, so a board that\nreloads mid-service still counts from when the food was actually ordered — and two boards\nside by side agree."
           },
           "line_total": {
             "$ref": "#/components/schemas/Money",
@@ -5194,10 +5184,7 @@
             "description": "The modifiers chosen for the line (ADR-0127), as ids — the caller names them from the price\nbook it already holds. Always present, empty for a line that carries none, so a reader never\nhas to tell \"no modifiers\" apart from \"an older edge that did not say\"."
           },
           "note": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "The guest's note while the edge holds it. Omitted when absent, for the reason `seat` is."
           },
           "note_present": {
@@ -5212,10 +5199,7 @@
             "$ref": "#/components/schemas/Quantity"
           },
           "seat": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int32",
             "description": "The seat the line was ordered for, absent for the table's. Omitted from the wire when absent,\nthe way every other optional field on this route is: a `seat` of zero is not \"no seat\", and a\nnull would be a second spelling of the same nothing.",
             "minimum": 0
@@ -5225,10 +5209,7 @@
             "description": "`ORDER_LINE_STATE_ADDED`, `_FIRED`, `_VOIDED`."
           },
           "station_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "The station the line was fired to, absent while it is still on the pad. Omitted when absent,\nfor the reason `seat` is. What a kitchen board filters on, so a bar screen that reloads shows\nthe bar's tickets and not the grill's."
           }
         }
@@ -5243,10 +5224,7 @@
         ],
         "properties": {
           "bill_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "A bill already open on it, so a device that reloads on the payment screen settles **that**\nbill rather than asking for a second one the domain would refuse."
           },
           "lines": {
@@ -5266,17 +5244,11 @@
             "type": "string"
           },
           "sales_channel": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "The channel it was opened on, a `SALES_CHANNEL_*` token: the counter shows a walk-in the book\nof its channel, and whether the guest eats in or takes away (ADR-0160 decision 2). Absent for\nan order the edge cannot name a channel for."
           },
           "table_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "The table it sits on. Absent for a counter order, which has none."
           }
         }
@@ -5288,6 +5260,7 @@
           "currency_code",
           "currency_exponent",
           "cash_denominations",
+          "cash_rounding_increment",
           "prices_include_tax",
           "number_format"
         ],
@@ -5319,10 +5292,7 @@
             "minimum": 0
           },
           "display_language": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "The store's display language (a BCP 47 tag from the `locale` node), absent when it has set\nnone. A till that has never been told otherwise starts in it, so a Vietnamese shop does not\nopen every reload in English."
           },
           "number_format": {
@@ -5348,6 +5318,7 @@
           "display_name",
           "unit_price",
           "tax_class_id",
+          "tax_rate",
           "modifier_group_ids",
           "available",
           "sold_out"
@@ -5358,15 +5329,8 @@
             "description": "Whether the item can be sold right now. An item present but 86'd is shown and refused, not\nhidden, so staff can see why it cannot be ordered."
           },
           "course_id": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/CourseId",
-                "description": "The course this item goes out on, or absent for an item on none (ADR-0130).\n\nAn id, not a name: the courses are listed once on the response below, for the reason the\nmodifier groups are. The till reads it to group an order into starters, mains and desserts,\nand to know which lines a fire-by-course will send."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/CourseId",
+            "description": "The course this item goes out on, or absent for an item on none (ADR-0130).\n\nAn id, not a name: the courses are listed once on the response below, for the reason the\nmodifier groups are. The till reads it to group an order into starters, mains and desserts,\nand to know which lines a fire-by-course will send."
           },
           "display_name": {
             "$ref": "#/components/schemas/DisplayName",
@@ -5418,6 +5382,7 @@
           "seats_enabled",
           "tables_enabled",
           "kds_enabled",
+          "accepted_tender",
           "tip_percents",
           "split_ways_max",
           "walk_in_channel",
@@ -5699,7 +5664,7 @@
         ],
         "properties": {
           "drawer_open": {
-            "type": "string",
+            "$ref": "#/components/schemas/DrawerOutcomeSchema",
             "description": "`OPENED`, `NO_DRAWER` or `DRAWER_UNAVAILABLE`."
           }
         }
@@ -5976,6 +5941,201 @@
           }
         }
       },
+      "PrintBlock": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A line of text.\n\nThe framework decides between this and [`Self::Bitmap`] using\n[`PrinterCapabilities::needs_bitmap`]; an adapter receiving `Text` sends it as text.",
+            "required": [
+              "Text"
+            ],
+            "properties": {
+              "Text": {
+                "type": "object",
+                "description": "A line of text.\n\nThe framework decides between this and [`Self::Bitmap`] using\n[`PrinterCapabilities::needs_bitmap`]; an adapter receiving `Text` sends it as text.",
+                "required": [
+                  "line",
+                  "style"
+                ],
+                "properties": {
+                  "line": {
+                    "type": "string",
+                    "description": "The line."
+                  },
+                  "style": {
+                    "$ref": "#/components/schemas/TextStyle",
+                    "description": "How to render it."
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A pre-rendered raster image: one bit per pixel, rows padded to whole bytes.\n\nCarries the width so an adapter need not infer it, because inferring it from the\nbyte count requires knowing the height, and getting that wrong shears the image.",
+            "required": [
+              "Bitmap"
+            ],
+            "properties": {
+              "Bitmap": {
+                "type": "object",
+                "description": "A pre-rendered raster image: one bit per pixel, rows padded to whole bytes.\n\nCarries the width so an adapter need not infer it, because inferring it from the\nbyte count requires knowing the height, and getting that wrong shears the image.",
+                "required": [
+                  "width",
+                  "bits"
+                ],
+                "properties": {
+                  "bits": {
+                    "type": "string",
+                    "format": "hex",
+                    "description": "Row-major bits, `width.div_ceil(8)` bytes per row."
+                  },
+                  "width": {
+                    "type": "integer",
+                    "format": "int32",
+                    "description": "Pixels per row.",
+                    "minimum": 1
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A one-dimensional barcode.",
+            "required": [
+              "Barcode"
+            ],
+            "properties": {
+              "Barcode": {
+                "type": "object",
+                "description": "A one-dimensional barcode.",
+                "required": [
+                  "value"
+                ],
+                "properties": {
+                  "value": {
+                    "type": "string",
+                    "description": "The encoded value."
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A QR code — a table link for guest ordering, or an invoice lookup code.",
+            "required": [
+              "QrCode"
+            ],
+            "properties": {
+              "QrCode": {
+                "type": "object",
+                "description": "A QR code — a table link for guest ordering, or an invoice lookup code.",
+                "required": [
+                  "value"
+                ],
+                "properties": {
+                  "value": {
+                    "type": "string",
+                    "description": "The encoded value."
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Blank lines.",
+            "required": [
+              "Feed"
+            ],
+            "properties": {
+              "Feed": {
+                "type": "object",
+                "description": "Blank lines.",
+                "required": [
+                  "lines"
+                ],
+                "properties": {
+                  "lines": {
+                    "type": "integer",
+                    "format": "int32",
+                    "description": "How many.",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "string",
+            "description": "Cut the paper. Ignored by a printer that cannot.",
+            "enum": [
+              "Cut"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "Open the cash drawer wired to this printer: the kick\n([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6).\n\nA kick travels to a print agent as a job of its own, this block alone\n([`PrintDocument::kick`]), and the agent opens the drawer through\n[`PrinterDriver::open_drawer`], under its USB-only rule. It is never encoded into a\ndocument's bytes, so anywhere else it opens nothing. An agent built before it cannot read it,\nwhich is why the edge sends one only to an agent that says it carries a kick.",
+            "enum": [
+              "OpenDrawer"
+            ]
+          }
+        ],
+        "description": "One element of a printed document."
+      },
+      "PrintDocument": {
+        "type": "object",
+        "description": "A document to print.",
+        "required": [
+          "blocks"
+        ],
+        "properties": {
+          "blocks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PrintBlock"
+            },
+            "description": "The blocks, in order."
+          }
+        }
+      },
+      "PrintJob": {
+        "type": "object",
+        "description": "A print job.\n\n`job_id` is the idempotency key. Reprinting is a deliberate act with its own permission\nand its own audit trail (`docs/pos-spec.md` §12 counts reprint rates per employee), so a\nretry after an ambiguous failure must not silently produce a second ticket.",
+        "required": [
+          "job_id",
+          "store_id",
+          "station_id",
+          "document"
+        ],
+        "properties": {
+          "document": {
+            "$ref": "#/components/schemas/PrintDocument",
+            "description": "What to print."
+          },
+          "job_id": {
+            "$ref": "#/components/schemas/EventId",
+            "description": "Idempotency key. A retry reuses it; a reprint mints a new one."
+          },
+          "station_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StationId",
+                "description": "Which station's printer, or `None` for a job that no station made — the guest's receipt,\nwhich comes off the counter's printer when the bill settles\n([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md)).\n\nOptional rather than a nil id: a receipt genuinely has no station, and a placeholder would\nhave to be recognised as \"not really a station\" by everything that reads this."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "store_id": {
+            "$ref": "#/components/schemas/StoreId",
+            "description": "Which store."
+          }
+        }
+      },
       "PrintResponse": {
         "type": "object",
         "description": "What printing pre-bills came to: one outcome per document, in the order they were sent.\n\nA list because a split table prints one pre-bill per open part, and a printer can take the first\nand jam on the second; the till says which.",
@@ -5990,6 +6150,62 @@
             }
           }
         }
+      },
+      "PrinterCapabilities": {
+        "type": "object",
+        "description": "What a printer can do.",
+        "required": [
+          "connection",
+          "code_page",
+          "columns",
+          "dots_per_line",
+          "prints_bitmaps",
+          "cuts_paper",
+          "kicks_drawer"
+        ],
+        "properties": {
+          "code_page": {
+            "$ref": "#/components/schemas/CodePage",
+            "description": "The character set its firmware renders directly."
+          },
+          "columns": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Characters per line in the standard font. Receipt layout is computed from this, so\na wrong value produces wrapped totals.",
+            "minimum": 1
+          },
+          "connection": {
+            "$ref": "#/components/schemas/PrinterConnection",
+            "description": "How it is attached."
+          },
+          "cuts_paper": {
+            "type": "boolean",
+            "description": "Whether it can cut paper."
+          },
+          "dots_per_line": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Printable dots per line — the width of a raster this printer will accept.\n\nSeparate from [`columns`](Self::columns) because the two answer different questions and\nneither derives from the other: `columns` is how much *text* fits, which depends on the\nfirmware's font, while this is how wide a *bitmap* may be, which is a property of the print\nhead. The common values are 384 for 58 mm paper and 576 for 80 mm, both at 203 dpi.\n\nA raster wider than this is not clipped by the printer — the excess wraps onto the next\nline and shears the image — so [ADR-0102](../../../docs/adr/0102-printing-any-script.md)\nmakes the renderer take this as its width rather than guess.",
+            "minimum": 1
+          },
+          "kicks_drawer": {
+            "type": "boolean",
+            "description": "Whether a cash drawer is wired to it."
+          },
+          "prints_bitmaps": {
+            "type": "boolean",
+            "description": "Whether it can print raster images, which is what bitmap fallback needs."
+          }
+        }
+      },
+      "PrinterConnection": {
+        "type": "string",
+        "description": "How a printer is attached.",
+        "enum": [
+          "Usb",
+          "Network",
+          "Serial"
+        ]
       },
       "PrinterResponse": {
         "type": "object",
@@ -6006,10 +6222,7 @@
             "type": "string"
           },
           "station_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "The station it serves, absent for the receipt printer."
           }
         }
@@ -6192,26 +6405,12 @@
         ],
         "properties": {
           "course_id": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/CourseId",
-                "description": "Match any line on a course."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/CourseId",
+            "description": "Match any line on a course."
           },
           "menu_item_id": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/MenuItemId",
-                "description": "Match a specific item. Takes precedence over a course match."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/MenuItemId",
+            "description": "Match a specific item. Takes precedence over a course match."
           },
           "station_id": {
             "$ref": "#/components/schemas/StationId",
@@ -6248,10 +6447,7 @@
         ],
         "properties": {
           "employee_id": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string"
           },
           "idle_lock_seconds": {
             "type": "integer",
@@ -6359,10 +6555,7 @@
             "$ref": "#/components/schemas/OrderId"
           },
           "queue_number": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "minimum": 0
           },
@@ -6372,25 +6565,15 @@
             "minimum": 0
           },
           "settle_clock": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "The shop's wall clock when it settled, `HH:MM` in the store's timezone, for the list to show\nas it is: a till's own clock may keep another zone, and the list is today's, so the date\nwould say nothing. Absent in the one case the calendar cannot read the instant."
           },
           "settle_time": {
             "$ref": "#/components/schemas/Timestamp"
           },
           "table_id": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/TableId",
-                "description": "The table it was paid at, which the till shows by the floor's label. Absent for a counter\norder, which shows its queue number instead."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/TableId",
+            "description": "The table it was paid at, which the till shows by the floor's label. Absent for a counter\norder, which shows its queue number instead."
           },
           "total_due": {
             "$ref": "#/components/schemas/Money"
@@ -6414,43 +6597,23 @@
         ],
         "properties": {
           "assigned_employee_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "The person the drawer is assigned to for this session, where the store assigns drawers:\nan id, never a name. Absent where drawers are shared."
           },
           "counted_amount": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Money"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/Money"
           },
           "day_ended": {
             "type": "boolean",
             "description": "`true` while the shift is still open past the business day it opened on, which a till and\nthe console flag (ADR-0167 decision 11). Absent otherwise."
           },
           "drawer_open": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "$ref": "#/components/schemas/DrawerOutcomeSchema",
             "description": "What came of opening the drawer, on a paid in or a paid out: `OPENED`, `NO_DRAWER` or\n`DRAWER_UNAVAILABLE`. Absent on every other command."
           },
           "expected_amount": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Money",
-                "description": "Revealed at close (§11.1), and before it only where the store's count is not blind."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/Money",
+            "description": "Revealed at close (§11.1), and before it only where the store's count is not blind."
           },
           "paid_in_amount": {
             "$ref": "#/components/schemas/Money",
@@ -6467,10 +6630,7 @@
             "type": "string"
           },
           "shift_report_print": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "What came of printing the shift report, on the close that asked for one — the same wire\ntokens a settle reports its receipt with. Absent on every other command."
           },
           "state": {
@@ -6478,22 +6638,12 @@
             "description": "The shift's state (`SHIFT_STATE_OPEN`, `SHIFT_STATE_COUNTED`, `SHIFT_STATE_CLOSED`)."
           },
           "terminal_device_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "The till whose drawer it is, absent for the store's one drawer (ADR-0167)."
           },
           "variance": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Money",
-                "description": "Revealed only at close. Negative means short."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/Money",
+            "description": "Revealed only at close. Negative means short."
           }
         }
       },
@@ -6586,15 +6736,8 @@
             "description": "`true` once a device credential is in the vault."
           },
           "state_access": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/StateAccess",
-                "description": "Whether the store's state is closed to other local accounts (ADR-0174 decision 5). Absent\nfrom a router that was given no state directory, and from an edge older than the field."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/StateAccess",
+            "description": "Whether the store's state is closed to other local accounts (ADR-0174 decision 5). Absent\nfrom a router that was given no state directory, and from an edge older than the field."
           }
         }
       },
@@ -6617,15 +6760,8 @@
         "description": "The store's kitchen plan: its stations, the routing rules that place a fired line on one, and the\ndefault station a line with no matching rule falls to.\n\nAn empty plan is a store whose kitchen has not been published — the edge keeps whatever it holds.",
         "properties": {
           "default_station_id": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/StationId",
-                "description": "The station a fired line falls to when no routing rule matches. `None` means the store has no\ncatch-all — a line with no matching rule routes nowhere and the caller keeps its own fallback."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/StationId",
+            "description": "The station a fired line falls to when no routing rule matches. `None` means the store has no\ncatch-all — a line with no matching rule routes nowhere and the caller keeps its own fallback."
           },
           "routing": {
             "type": "array",
@@ -6640,6 +6776,11 @@
             }
           }
         }
+      },
+      "StoreId": {
+        "type": "string",
+        "description": "A `StoreId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
       },
       "SubcategoryResponse": {
         "type": "object",
@@ -6687,21 +6828,11 @@
             "minimum": 0
           },
           "clock_measure_time": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Timestamp",
-                "description": "When that was measured, on this box's own clock; absent until measured."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "When that was measured, on this box's own clock; absent until measured."
           },
           "clock_offset_ms": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int64",
             "description": "This box's clock minus the time server's, in milliseconds; absent until measured."
           },
@@ -6710,15 +6841,8 @@
             "description": "`CLOUD_LINK_ONLINE`, `CLOUD_LINK_OFFLINE`, or `CLOUD_LINK_UNSPECIFIED` when nothing has tried."
           },
           "last_sync_time": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Timestamp",
-                "description": "When the outbox drain last reached the cloud; absent if it has not since the edge started."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "When the outbox drain last reached the cloud; absent if it has not since the edge started."
           },
           "outbox_depth": {
             "type": "integer",
@@ -6833,10 +6957,7 @@
             "description": "The published `TERMINAL` entries, in the order the `devices` node lists them."
           },
           "unlisted_agent_device_id": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "The terminal **this** device holds when the `devices` node does not list it, which a release\nnames. Absent when this device holds a listed terminal or none.\n\nA claim does not look the terminal up in the node, so a device can be bound by hand to an id\nthe node does not list. Without this the card says the device is none of the store's tills, a\nbind answers that it is already another, and nothing on a screen can release it. Only ever\nthe caller's own binding: never another device's, and never a person."
           }
         }
@@ -6850,6 +6971,29 @@
         "properties": {
           "print": {
             "type": "string"
+          }
+        }
+      },
+      "TextStyle": {
+        "type": "object",
+        "description": "Text styling. Deliberately minimal — a receipt is a document, not a design.",
+        "required": [
+          "emphasised",
+          "double_size",
+          "centred"
+        ],
+        "properties": {
+          "centred": {
+            "type": "boolean",
+            "description": "Centred rather than left-aligned."
+          },
+          "double_size": {
+            "type": "boolean",
+            "description": "Double height and width, for a total or a queue number."
+          },
+          "emphasised": {
+            "type": "boolean",
+            "description": "Bold."
           }
         }
       },

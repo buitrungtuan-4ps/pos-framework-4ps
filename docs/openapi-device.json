@@ -114,7 +114,7 @@
             }
           },
           "403": {
-            "description": "Refused: a spent, revoked, unknown or raced code, or one issued for another store, all answer the same",
+            "description": "Refused: a spent, revoked, unknown or raced code, or one issued for another store, all answer the same. A code whose cell prefix names another cell says so too: a `code` detail `OTHER_CELL`, with the directory's base URL for that cell in the message, or `UNKNOWN_CELL` when the directory does not list it (ADR-0181)",
             "content": {
               "application/json": {
                 "schema": {
@@ -678,7 +678,14 @@
         ],
         "responses": {
           "200": {
-            "description": "`status`: `up_to_date`, or `update` with the snapshot or collapsed delta that brings the store to the current version (ADR-0039)"
+            "description": "`status`: `up_to_date`, or `update` with the snapshot or collapsed delta that brings the store to the current version (ADR-0039)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigSyncResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "store_id is not a ULID, or held_version is not a ULID",
@@ -1835,6 +1842,157 @@
           }
         }
       },
+      "ConfigDelta": {
+        "type": "object",
+        "description": "A change from one version to the next.\n\n`from_config_version_id` is what makes a delta safe to apply: a store holding a\ndifferent version must reject it rather than apply it out of order, because\nconfiguration is a tree and an out-of-order patch produces a document nobody\nauthored.",
+        "required": [
+          "from_config_version_id",
+          "to_config_version_id",
+          "store_id",
+          "patch"
+        ],
+        "properties": {
+          "from_config_version_id": {
+            "$ref": "#/components/schemas/ConfigVersionId",
+            "description": "The version this delta expects the store to be holding."
+          },
+          "patch": {
+            "$ref": "#/components/schemas/ConfigDocument",
+            "description": "The change, in whatever patch format P7 settles on."
+          },
+          "store_id": {
+            "$ref": "#/components/schemas/StoreId",
+            "description": "The store it applies to."
+          },
+          "to_config_version_id": {
+            "$ref": "#/components/schemas/ConfigVersionId",
+            "description": "The version the store reaches by applying it."
+          }
+        }
+      },
+      "ConfigDocument": {
+        "type": "object",
+        "description": "Free-form JSON: a configuration document, or a patch to one, keyed by config node. The port carries it uninterpreted, so a store keeps keys it does not know. Each node's shape is its `pos-proto` type"
+      },
+      "ConfigSnapshot": {
+        "type": "object",
+        "description": "A complete configuration document at a version.",
+        "required": [
+          "config_version_id",
+          "store_id",
+          "document"
+        ],
+        "properties": {
+          "config_version_id": {
+            "$ref": "#/components/schemas/ConfigVersionId",
+            "description": "Which version this is."
+          },
+          "document": {
+            "$ref": "#/components/schemas/ConfigDocument",
+            "description": "The document."
+          },
+          "store_id": {
+            "$ref": "#/components/schemas/StoreId",
+            "description": "The store it applies to."
+          }
+        }
+      },
+      "ConfigSyncResponse": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "The store already holds the current version; it applies nothing.",
+            "required": [
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "up_to_date"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The store should apply this snapshot or delta.",
+            "required": [
+              "update",
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "update"
+                ]
+              },
+              "update": {
+                "$ref": "#/components/schemas/ConfigUpdate",
+                "description": "The snapshot or collapsed delta to apply ([ADR-0033](../../../docs/adr/0033-config-tree.md))."
+              }
+            }
+          }
+        ],
+        "description": "What a store should do to reach the current configuration — the wire form of a\n[`SyncOutcome`](crate::config_tree::SyncOutcome)."
+      },
+      "ConfigUpdate": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ConfigSnapshot",
+                "description": "Replace everything. Always applicable, whatever version the store holds."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "update_kind"
+                ],
+                "properties": {
+                  "update_kind": {
+                    "type": "string",
+                    "enum": [
+                      "snapshot"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Replace everything. Always applicable, whatever version the store holds."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ConfigDelta",
+                "description": "Patch forward by one version. Applicable only from the stated version."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "update_kind"
+                ],
+                "properties": {
+                  "update_kind": {
+                    "type": "string",
+                    "enum": [
+                      "delta"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Patch forward by one version. Applicable only from the stated version."
+          }
+        ],
+        "description": "What the cloud sent."
+      },
+      "ConfigVersionId": {
+        "type": "string",
+        "description": "A `ConfigVersionId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
       "DeviceId": {
         "type": "string",
         "description": "A `DeviceId`: a ULID, 26 Crockford base-32 characters",
@@ -2150,7 +2308,7 @@
         "properties": {
           "code": {
             "type": "string",
-            "description": "The `XXXX-XXXX-XXXX` code the operator typed, in any casing or spacing."
+            "description": "The `XXXX-XXXX-XXXX` code the operator typed, in any casing or spacing, with or without its\ncell's prefix (`VN1-XXXX-XXXX-XXXX`, ADR-0181). Only its twelve symbols are looked up."
           },
           "store_id": {
             "type": [
