@@ -37,6 +37,7 @@ import { describePublish } from "../lib/publish-copy";
 import { toast } from "../components/Toast";
 import { apiMessage } from "../lib/errors";
 import { countryHint } from "../lib/cell-country";
+import { useCountryPack } from "../lib/country-pack";
 
 /** A short list of common IANA zones offered as suggestions; any valid zone is accepted server-side. */
 const COMMON_TIMEZONES = [
@@ -83,19 +84,6 @@ function businessDatePreview(timezone: string, cutoffHour: number): string | nul
     return null;
   }
 }
-
-/**
- * What each country's paper calls the seller's tax registration — a *suggestion*, overwritable.
- *
- * The values live in the country packs' own documentation; the console cannot read them from the
- * registry because a label is text somebody prints, not a fact the `CountryModule` trait carries. A
- * code with no row here leaves the field blank rather than guessing at a legal caption.
- */
-const REGISTRATION_LABEL: Record<string, string> = {
-  VN: "MST",
-  JP: "登録番号",
-  IN: "GSTIN",
-};
 
 /** One node of the store's effective config tree, or `null` when the tree does not carry it. */
 /** The edge's event retention bounds and default (ADR-0145), as the cloud enforces them. */
@@ -397,29 +385,21 @@ export function StoreSettings() {
       notesText().split(",").filter((part) => part.trim() !== "").length !== noteValues().length,
   );
 
-  // Fill the form from a compiled country pack (ADR-0105). This is the affordance country packs
-  // exist for: the operator picks Japan and every field a Japanese store needs is already right,
-  // rather than being told to remember that Japanese prices include their tax.
-  const applyCountry = (code: string) => {
-    const country = countries().find((candidate) => candidate.code === code);
-    if (!country) {
-      return;
-    }
-    setCurrency(country.currency_code);
-    setDisplayLanguage(country.default_language);
-    setPricesIncludeTax(country.prices_include_tax);
-    setRoundingText(
-      country.cash_rounding_increment === null ? "" : String(country.cash_rounding_increment),
-    );
-    setNotesText(country.cash_denominations.join(", "));
-    setCountry(country.code);
-    // The label the paper uses is the country's, and the operator can overwrite it — a closed set
-    // here would make the fourth country a code change (ADR-0106).
-    if (registrationLabel().trim() === "") {
-      setRegistrationLabel(REGISTRATION_LABEL[country.code] ?? "");
-    }
-    toast.ok(t("storeSettings.filledFrom", { country: country.display_name }));
-  };
+  // Choosing the store's country fills its pack into the fields nobody has set, and says what it
+  // filled and kept (pilot U2/M3); "Start from a country" takes the whole pack (ADR-0105).
+  const pack = useCountryPack({
+    fields: {
+      currency: [currency, setCurrency],
+      displayLanguage: [displayLanguage, setDisplayLanguage],
+      pricesIncludeTax: [pricesIncludeTax, setPricesIncludeTax],
+      rounding: [roundingText, setRoundingText],
+      notes: [notesText, setNotesText],
+      registrationLabel: [registrationLabel, setRegistrationLabel],
+    },
+    countries,
+    localePublished: () => node(read.value()?.effective ?? null, "locale") !== null,
+    setCountry,
+  });
 
   const publishProfile = async () => {
     setError("");
@@ -499,9 +479,10 @@ export function StoreSettings() {
               {/* Which country this store is in (ADR-0114). Required: the publish refuses without
                   it, because it is the value a hosted store's region is compared against — and a
                   store whose country nobody recorded reads as "country not recorded" on the fleet
-                  console rather than silently as agreeing. Distinct from the filler below, which
-                  overwrites six other fields; this one records a fact and touches nothing else, so
-                  an airport store can keep rounding its own way. */}
+                  console rather than silently as agreeing. Choosing it also fills the country
+                  pack into the fields nobody has set, and names what it filled and what it kept,
+                  so an airport store can keep rounding its own way (pilot U2/M3). The filler
+                  below takes the whole pack. */}
               <SelectField
                 label={t("storeSettings.country")}
                 value={country()}
@@ -509,7 +490,7 @@ export function StoreSettings() {
                   value: option.code,
                   label: option.display_name,
                 }))}
-                onChange={setCountry}
+                onChange={pack.choose}
                 placeholder={t("storeSettings.countryNone")}
                 hint={countryHint(country())}
               />
@@ -528,7 +509,7 @@ export function StoreSettings() {
                 }))}
                 onChange={(code) => {
                   setFilledFrom(code);
-                  applyCountry(code);
+                  pack.applyAll(code);
                 }}
                 placeholder={t("storeSettings.fromCountryNone")}
                 hint={t("storeSettings.fromCountryHint")}
