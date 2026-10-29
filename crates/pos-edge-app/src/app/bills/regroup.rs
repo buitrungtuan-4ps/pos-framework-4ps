@@ -110,10 +110,7 @@ impl<S: EventStore> Edge<S> {
                         table_id: bill.table_id,
                         state: BillState::Open,
                         order_line_ids: lines,
-                        // A part starts owing its lines in full. The source's reductions are not
-                        // divided across the parts: a discount was a decision about *that* bill, and
-                        // splitting one is not the arithmetic that says how it should land on two.
-                        // Reducing a part is an ordinary discount on an ordinary bill.
+                        // The source's discount and comp are shared across the parts below.
                         discount: None,
                         comp: None,
                         fee_wholes: billing::fee_wholes(&fee_rules),
@@ -124,6 +121,12 @@ impl<S: EventStore> Edge<S> {
             }
             // As a replay folds the split after the parts' openings (ADR-0159 decisions 5 and 6).
             projection.inherit_fees(bill_id, &part_ids);
+            // A discount a manager approved is not lost to a split: each part takes its share, in
+            // proportion to what its lines come to, and the parts add up to the source's
+            // reductions exactly (`pos-spec.md` §14.3). Derived from the log, as replay derives it.
+            projection
+                .inherit_reductions(bill_id, &part_ids)
+                .map_err(AppError::Domain)?;
             projection.set_bill_state(bill_id, decided.next_state);
         }
         Ok(part_ids)
@@ -198,7 +201,7 @@ impl<S: EventStore> Edge<S> {
 
         let event = BillingBillMerged {
             target_bill_id: bill_id,
-            merged_bill_ids: absorbed,
+            merged_bill_ids: absorbed.clone(),
         };
         self.commit_and_publish(&ctx, &event).await?;
 
@@ -219,6 +222,10 @@ impl<S: EventStore> Edge<S> {
             if let Some(fees) = merged_fees {
                 projection.set_bill_fees(bill_id, fees);
             }
+            // The absorbed bills' discounts and comps go with their lines, as replay folds them.
+            projection
+                .absorb_reductions(bill_id, &absorbed)
+                .map_err(AppError::Domain)?;
         }
         Ok(bill_id)
     }
