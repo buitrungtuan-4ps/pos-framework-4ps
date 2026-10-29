@@ -306,6 +306,10 @@ export function Devices() {
   const terminalMap = createMemo(
     () => new Map(terminals().map((device) => [device.id, device.name])),
   );
+  // Pre-build O(1) lookup map for printer names by device ID instead of doing O(P) array finds per terminal row.
+  const printerMap = createMemo(
+    () => new Map(printers().map((device) => [device.id, device.name])),
+  );
   // A till's receipts go to a printer that serves the bill, never a station's.
   const receiptPrinters = createMemo(() => printers().filter((device) => device.station_id === null));
 
@@ -338,7 +342,7 @@ export function Devices() {
     if (!printerId) {
       return t("devices.receiptPrinterStore");
     }
-    return printers().find((device) => device.id === printerId)?.name ?? printerId;
+    return printerMap().get(printerId) ?? printerId;
   };
 
   const createTerminal = () => {
