@@ -1,3 +1,9 @@
+## 2026-10-26 - Avoid Speculative Micro-Optimizations Without Measured Bottleneck
+
+**Learning:** Reusing `Intl.Collator` in small UI list sorts (such as table groups in `Expo.tsx` where list sizes are tiny) was rejected as a speculative micro-optimization without a measured performance problem. The project prioritizes measurable performance wins over premature/speculative micro-optimizations.
+
+**Action:** Only optimize string comparisons or sort routines when profiling demonstrates an actual performance bottleneck at realistic data sizes.
+
 ## 2026-10-02 - Schwartzian Transform & Collator Reuse in DataTable Client Sorting
 
 **Learning:** In client-side table sorting (`DataTable.sorted`), calling `sortValue(row)` and `localeCompare` inside `Array.prototype.sort()` evaluates `sortValue` and instantiates `localeCompare` collators $O(N \log N)$ times during sorting. Pre-extracting sort keys in an $O(N)$ pass (Schwartzian transform) and reusing a single `Intl.Collator` instance reduces sort key extractions from $O(N \log N)$ to $O(N)$ and eliminates repeated locale collator allocation overhead.
