@@ -542,7 +542,7 @@ fn iana_s_special_purpose_ipv4_anycast_blocks_are_reserved() {
 #[test]
 fn the_rest_of_iana_s_special_purpose_ipv6_blocks_are_reserved() {
     // Direct Delegation AS112 (2620:4f:8000::/48, RFC 7534), LISP EID space (2001:5::/32, RFC 7954),
-    // DRIP Entity Tags (2001:30::/28, RFC 9374) and SRv6 Locator Block (5f00::/16, RFC 8986).
+    // DRIP Entity Tags (2001:30::/28, RFC 9374) and SRv6 SIDs (5f00::/16, RFC 9602).
     for address in [
         "2620:4f:8000::1",
         "2001:5::1",

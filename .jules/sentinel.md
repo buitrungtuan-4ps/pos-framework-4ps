@@ -64,6 +64,6 @@
 **Prevention:** Check `(first == 0x2001 && second == 0x0003)` (`2001:3::/32`) and `(first == 0x2001 && second == 0x0004 && third == 0x0112)` (`2001:4:112::/48`) in `classify_v6` to refuse them. Both ranges are globally reachable anycast: the reason is that they reach network infrastructure, never a webhook receiver, not that they are unroutable.
 
 ## 2026-10-05 - [SSRF IPv6 SRv6 Locator Block Address Bypass]
-**Vulnerability:** Webhook SSRF validation did not check RFC 8986 SRv6 Locator Block (`5f00::/16`), allowing Segment Routing locator addresses to fall through `classify_v6` as ordinary public unicast addresses.
+**Vulnerability:** Webhook SSRF validation did not check RFC 9602 SRv6 SID block (`5f00::/16`), allowing Segment Routing locator addresses to fall through `classify_v6` as ordinary public unicast addresses.
 **Learning:** SRv6 Locators (`5f00::/16`) are special-purpose IPv6 unicast addresses used for Segment Routing network infrastructure, never as webhook receivers.
 **Prevention:** Explicitly check `first == 0x5f00` in `is_special_purpose_v6` within `classify_v6` to refuse addresses in the SRv6 locator block.
