@@ -9,8 +9,9 @@ use pos_core::decision::{Actor, DecisionCtx, Effect, ShiftCommand, decide_shift}
 use pos_core::error::DomainError;
 use pos_core::permission::Permission;
 use pos_ports::event_store::EventStore;
+use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::events::{CashShiftClosed, StoreChainAnchored};
-use pos_proto::ids::{ReasonCodeId, ShiftId};
+use pos_proto::ids::{EmployeeId, ReasonCodeId, ShiftId};
 use pos_proto::money::Money;
 use pos_proto::reason_codes::ReasonAction;
 use pos_proto::shift::CloseReport;
@@ -20,6 +21,7 @@ use crate::app::{
     AppError, Approval, ClosedDrawers, CombinedReport, DrawerFigures, Edge, ShiftRecord,
     ShiftReport, ShiftView, TillScope,
 };
+use crate::fanout::ServerMessage;
 
 impl<S: EventStore> Edge<S> {
     /// Closes a counted shift (`cash.shift.closed`), revealing the expected amount and the variance.
@@ -128,27 +130,9 @@ impl<S: EventStore> Edge<S> {
         reasons: &[(ShiftId, ReasonCodeId)],
     ) -> Result<ClosedDrawers, AppError> {
         let mut ctx = self.decision_ctx(actor)?;
-        let mut named: Vec<(ShiftId, ShiftRecord)> = Vec::with_capacity(shift_ids.len());
-        {
-            let projection = self.lock_projection();
-            for shift_id in shift_ids {
-                if named.iter().all(|(seen, _)| seen != shift_id) {
-                    let record = projection.shift(*shift_id).ok_or(AppError::UnknownShift)?;
-                    named.push((*shift_id, record));
-                }
-            }
-        }
-        let another = named.iter().any(|(_, record)| another_till(scope, record));
-        let approver = self.manage_other_till(&mut ctx, another, approval)?;
-        // One override for every drawer named that is somebody else's, as one approver covers
-        // every other till's (ADR-0167 decision 9).
-        let someone_elses =
-            |record: &ShiftRecord| record.owner.is_some_and(|owner| owner != actor.employee_id);
-        let assigned = named
-            .iter()
-            .map(|(_, record)| record)
-            .find(|record| someone_elses(record));
-        let overrider = self.override_assignment(&mut ctx, assigned, approval)?;
+        let named = self.named_shifts(shift_ids)?;
+        let (approver, overrider) =
+            self.batch_close_approvals(&mut ctx, actor, scope, &named, approval)?;
         let mode = self.session().shift.close_report();
         let mut prepared = Vec::with_capacity(named.len());
         let mut closed = Vec::with_capacity(named.len());
@@ -164,15 +148,9 @@ impl<S: EventStore> Edge<S> {
                 payload.reason_code_id = Some(self.variance_reason(*reason)?);
             }
             prepared.push(self.prepare_on(&ctx, &payload, Some(*shift_id))?);
-            if let Some(approver) = approver.filter(|_| another_till(scope, record)) {
-                let overridden = Self::override_record(Permission::ManageOtherTill, approver, None);
-                prepared.push(self.prepare_on(&ctx, &overridden, Some(*shift_id))?);
-            }
-            if let Some(approver) = overrider.filter(|_| someone_elses(record)) {
-                let overridden =
-                    Self::override_record(Permission::OverrideDrawerAssignment, approver, None);
-                prepared.push(self.prepare_on(&ctx, &overridden, Some(*shift_id))?);
-            }
+            let other_till = approver.filter(|_| another_till(scope, record));
+            let assigned = overrider.filter(|_| someone_elses(actor, record));
+            self.prepare_close_overrides(&ctx, *shift_id, other_till, assigned, &mut prepared)?;
             let print = decision.effects.contains(&Effect::PrintShiftReport)
                 && mode == CloseReport::PerDrawer;
             closed.push(closed_view(record, report, print));
@@ -182,24 +160,7 @@ impl<S: EventStore> Edge<S> {
             return Err(AppError::VarianceReasonRequired(owing));
         }
         let combined = if mode == CloseReport::Combined {
-            let reports: Vec<ShiftReport> = closed
-                .iter()
-                .filter_map(|view| view.report.clone())
-                .collect();
-            let mut tax_components = Vec::new();
-            for component in reports.iter().flat_map(|report| &report.tax_components) {
-                billing::add_component(&mut tax_components, component.clone())?;
-            }
-            by_name_and_rate(&mut tax_components);
-            Some(CombinedReport {
-                totals: DrawerFigures::total(&reports, self.session().currency)?,
-                tax_components,
-                drawers: named
-                    .iter()
-                    .zip(reports)
-                    .map(|((_, record), report)| (self.till_name(record.till), report))
-                    .collect(),
-            })
+            Some(self.combined_report(&named, &closed)?)
         } else {
             None
         };
@@ -212,15 +173,102 @@ impl<S: EventStore> Edge<S> {
         let (envelopes, messages) = prepared.into_iter().unzip();
         self.append_and_publish(envelopes, messages).await?;
         self.anchor_chain(&ctx).await?;
-        {
-            let mut projection = self.lock_projection();
-            for (shift_id, _) in &named {
-                projection.close_shift_record(*shift_id);
-            }
-        }
+        self.close_shift_records(&named);
         Ok(ClosedDrawers {
             shifts: closed,
             combined,
+        })
+    }
+
+    /// Closes every drawer the batch named in the projection, under one guard.
+    fn close_shift_records(&self, named: &[(ShiftId, ShiftRecord)]) {
+        let mut projection = self.lock_projection();
+        for (shift_id, _) in named {
+            projection.close_shift_record(*shift_id);
+        }
+    }
+
+    /// The shifts a batch close names, each once and in the order first named, read in one look at
+    /// the projection.
+    fn named_shifts(&self, shift_ids: &[ShiftId]) -> Result<Vec<(ShiftId, ShiftRecord)>, AppError> {
+        let mut named: Vec<(ShiftId, ShiftRecord)> = Vec::with_capacity(shift_ids.len());
+        let projection = self.lock_projection();
+        for shift_id in shift_ids {
+            if named.iter().all(|(seen, _)| seen != shift_id) {
+                let record = projection.shift(*shift_id).ok_or(AppError::UnknownShift)?;
+                named.push((*shift_id, record));
+            }
+        }
+        Ok(named)
+    }
+
+    /// Who approved a batch close: for another till's drawer, and for one assigned to somebody
+    /// else. One override for every drawer named that is somebody else's, as one approver covers
+    /// every other till's (ADR-0167 decision 9).
+    fn batch_close_approvals(
+        &self,
+        ctx: &mut DecisionCtx,
+        actor: Actor,
+        scope: TillScope,
+        named: &[(ShiftId, ShiftRecord)],
+        approval: Option<&Approval>,
+    ) -> Result<(Option<EmployeeId>, Option<EmployeeId>), AppError> {
+        let another = named.iter().any(|(_, record)| another_till(scope, record));
+        let approver = self.manage_other_till(ctx, another, approval)?;
+        let assigned = named
+            .iter()
+            .map(|(_, record)| record)
+            .find(|record| someone_elses(actor, record));
+        let overrider = self.override_assignment(ctx, assigned, approval)?;
+        Ok((approver, overrider))
+    }
+
+    /// The overrides one drawer's close takes, each stamped with that drawer's shift: another
+    /// till's, and one assigned to somebody else.
+    fn prepare_close_overrides(
+        &self,
+        ctx: &DecisionCtx,
+        shift_id: ShiftId,
+        other_till: Option<EmployeeId>,
+        assigned: Option<EmployeeId>,
+        prepared: &mut Vec<(EventEnvelope<RawPayload>, ServerMessage)>,
+    ) -> Result<(), AppError> {
+        if let Some(approver) = other_till {
+            let overridden = Self::override_record(Permission::ManageOtherTill, approver, None);
+            prepared.push(self.prepare_on(ctx, &overridden, Some(shift_id))?);
+        }
+        if let Some(approver) = assigned {
+            let overridden =
+                Self::override_record(Permission::OverrideDrawerAssignment, approver, None);
+            prepared.push(self.prepare_on(ctx, &overridden, Some(shift_id))?);
+        }
+        Ok(())
+    }
+
+    /// The drawers closed together as one slip: their figures summed, their tax components merged,
+    /// and each drawer's report under its till's name.
+    fn combined_report(
+        &self,
+        named: &[(ShiftId, ShiftRecord)],
+        closed: &[ShiftView],
+    ) -> Result<CombinedReport, AppError> {
+        let reports: Vec<ShiftReport> = closed
+            .iter()
+            .filter_map(|view| view.report.clone())
+            .collect();
+        let mut tax_components = Vec::new();
+        for component in reports.iter().flat_map(|report| &report.tax_components) {
+            billing::add_component(&mut tax_components, component.clone())?;
+        }
+        by_name_and_rate(&mut tax_components);
+        Ok(CombinedReport {
+            totals: DrawerFigures::total(&reports, self.session().currency)?,
+            tax_components,
+            drawers: named
+                .iter()
+                .zip(reports)
+                .map(|((_, record), report)| (self.till_name(record.till), report))
+                .collect(),
         })
     }
 
@@ -355,4 +403,9 @@ impl<S: EventStore> Edge<S> {
         )
         .await
     }
+}
+
+/// Whether `record`'s drawer is assigned to somebody other than `actor`.
+fn someone_elses(actor: Actor, record: &ShiftRecord) -> bool {
+    record.owner.is_some_and(|owner| owner != actor.employee_id)
 }

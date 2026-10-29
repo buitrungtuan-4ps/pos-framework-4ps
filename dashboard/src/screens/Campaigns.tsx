@@ -11,15 +11,12 @@ import { createSignal, For, Show } from "solid-js";
 import { api } from "../api/client";
 import {
   CAMPAIGN_KINDS,
-  SALES_CHANNELS,
   type Campaign,
   type CampaignAction,
   type CampaignConditions,
   type CampaignInput,
   type CampaignKind,
   type ETag,
-  type SalesChannel,
-  type ScheduledPublish,
   type Voucher,
 } from "../api/types";
 import { type MessageKey, t } from "../i18n";
@@ -52,6 +49,8 @@ import {
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";
+import { CHANNEL_LABEL, SALES_CHANNELS } from "../lib/channels";
+import type { ScheduledPublish } from "../api/schemas";
 
 /** The five kinds, mapped to their labels. */
 const KIND_LABEL: Record<CampaignKind, MessageKey> = {
@@ -62,14 +61,6 @@ const KIND_LABEL: Record<CampaignKind, MessageKey> = {
   manual: "campaigns.kind.manual",
 };
 
-/** Per-channel labels, shared with the tax and price editors. */
-const CHANNEL_LABEL: Record<SalesChannel, MessageKey> = {
-  SALES_CHANNEL_DINE_IN: "channel.dineIn",
-  SALES_CHANNEL_TAKEAWAY: "channel.takeaway",
-  SALES_CHANNEL_DELIVERY: "channel.delivery",
-  SALES_CHANNEL_QR: "channel.qr",
-  SALES_CHANNEL_API: "channel.api",
-};
 
 /** Weekday labels, Monday first — index i is bit i of the schedule's 7-bit day mask. */
 const WEEKDAYS: readonly MessageKey[] = [
@@ -158,7 +149,7 @@ export function Campaigns() {
   const [fAmount, setFAmount] = createSignal("");
   const [fCurrency, setFCurrency] = createSignal("VND");
   const [fMinBill, setFMinBill] = createSignal("");
-  const [fChannels, setFChannels] = createSignal<SalesChannel[]>([]);
+  const [fChannels, setFChannels] = createSignal<string[]>([]);
   const [fScheduleOn, setFScheduleOn] = createSignal(false);
   const [fDays, setFDays] = createSignal<boolean[]>([false, false, false, false, false, false, false]);
   const [fStart, setFStart] = createSignal("00:00");

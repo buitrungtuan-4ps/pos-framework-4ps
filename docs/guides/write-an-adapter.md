@@ -1,6 +1,6 @@
 # Write an adapter
 
-**Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-09-29
+**Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-10-20
 
 An adapter connects one external system — a payment terminal, a courier, a marketplace, an ERP — to a
 **port** the core already defines. You never touch `pos-core`; you implement a trait and prove it with
@@ -8,11 +8,75 @@ the port's shared contract suite. If the suite passes, the adapter is swappable-
 
 ## The shape (every adapter is the same three parts)
 
-1. **A transport seam** — the one place that touches the socket, plus a TLS sender on the tree's stack.
+1. **A transport seam** — the one place that touches the device, the store or the socket, plus a TLS
+   sender on the tree's stack for a network provider.
 2. **A pure core** — build the request, map the provider's replies to the port's types and its HTTP
    status to a `PortError`. No I/O here, so it is fully unit-testable.
 3. **A stub-driven contract test** — a fake transport that speaks the provider's wire, driving the
    port's shared suite from `pos-contract-tests` with no network.
+
+## Start from a generator, or from the template
+
+**A printer, storage, card terminal, e-invoice, courier, ERP or delivery adapter** starts from a generated sandbox
+([ADR-0176](../adr/0176-the-adapter-and-country-standard.md)):
+
+```bash
+cargo xtask new adapter --kind printer   # or storage, card, fiscal, courier, erp, delivery
+```
+
+It writes `crates/adapters/<kind>-sandbox` and its `members` line. The crate is a pure core over a
+transport seam, and its `tests/contract.rs` already passes the port's suite. Every kind
+but printer and storage also carries its `<family>.sandbox` descriptor (`card.sandbox`,
+`einvoice.sandbox`, `courier.sandbox`, `erp.sandbox`, `delivery.sandbox`), which the generator
+registers nowhere; step 4 says where it would go. The command names no vendor: rename the crate and the descriptor's id
+when you write a real vendor's adapter from it.
+Then do steps 4 to 7 below; the command has done the first three. It prints the README lines to
+paste, which `cargo xtask crates` also shows.
+
+### Try it with the courier sandbox
+
+Generate a courier, the kind with the most to show: a network transport, a `<family>.sandbox`
+descriptor, and the `ShippingDispatch` contract suite. It names no vendor, no endpoint and no
+credential.
+
+<!-- guide:command -->
+```bash
+cargo xtask new adapter --kind courier
+```
+
+Its descriptor is the sandbox's, serving every country and asking for no settings. This is what the
+generator writes, as its golden file holds it:
+
+<!-- guide:excerpt xtask/tests/golden/new-adapter/courier/lib.rs.golden -->
+```rust
+pub static PROVIDER: ProviderDescriptor = ProviderDescriptor {
+    provider_id: "courier.sandbox",
+    family: Family::Courier,
+    name_key: "provider.courier.sandbox",
+    countries: &[],
+    fields: &[],
+    capabilities: &[],
+    sandbox: true,
+};
+```
+
+Then prove it, with the port's own contract suite:
+
+<!-- guide:verify -->
+```bash
+cargo test -p courier-sandbox
+```
+
+`cargo xtask crates` then lists the README lines to paste into the crates it uses, `pos-ports` and
+`pos-proto` among them, which an owner reviews. The example is not meant to be kept: remove it with
+`rm -r crates/adapters/courier-sandbox` and `git checkout -- Cargo.toml Cargo.lock`. `just guides`
+runs these steps in a scratch worktree ([How a guide stays true](README.md#how-a-guide-stays-true)).
+
+### A port no generator covers yet
+
+It starts from [`templates/adapter-template`](../../templates/adapter-template/README.md), which is
+being retired now that every vendor-facing kind has a generator (ADR-0176 decision 6). Until it is
+removed, do steps 1 to 7.
 
 ## Steps
 
@@ -38,7 +102,11 @@ the port's shared contract suite. If the suite passes, the adapter is swappable-
      Declare only what the adapter reads. A secret is sealed by the cloud on arrival and never
      returned.
    - **The line.** Add the crate to `crates/pos-cloud/Cargo.toml` and to `registry()` in
-     `crates/pos-cloud/src/providers.rs`.
+     `crates/pos-cloud/src/providers.rs`. That registry lists the cloud's providers. A card driver
+     runs on the edge, whose registry waits for
+     [ADR-0154](../adr/0154-a-card-is-taken-through-the-stores-terminal.md). How the cloud submits an
+     e-invoice waits for [ADR-0156](../adr/0156-a-store-issues-its-e-invoice-and-the-cloud-submits-it.md).
+     So a card or e-invoice sandbox is registered nowhere yet.
    - **The words.** Add `provider.<family>.<vendor>`, and a label for any field that is not shared, to
      the console's `en` and `vi` catalogues.
 

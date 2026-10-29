@@ -10,31 +10,18 @@ import { adoptStoreLanguage } from "../i18n";
 import { load, reload } from "./engine";
 import { ownOverride } from "./drawer-access";
 import { keptShift, shiftInfo } from "./shift-info";
+import { noteWalkInOpened, walkInsOpenedSince, type LiveOrdersRead } from "./live-orders-read";
 import type { LinkStatus, ServerEvent } from "../api/live";
 import type {
   ApproverRequest,
-  BillCheckResponse,
   BillResponse,
-  BuyerRequest,
-  CheckResponse,
-  CourseResponse,
-  DiscountResponse,
-  LayoutCategory,
-  MenuItemResponse,
   MenuResponse,
-  ModifierGroup,
-  PaymentRequest,
   DrawerOutcome,
   DrawersResponse,
-  FloorResponse,
-  LiveOrder,
-  LayoutResponse,
   LocaleResponse,
-  ReasonCodeEntry,
-  ReasonCodesResponse,
   ShiftResponse,
   SyncResponse,
-} from "../api/types";
+} from "../api/schemas";
 import {
   FALLBACK_NUMBER_FORMAT,
   fallbackExponent,
@@ -45,6 +32,10 @@ import {
   type MoneyStyle,
   type NumberFormat,
 } from "../lib/money";
+import type { BillCheckResponse, BuyerRequest, CheckResponse, CourseResponse } from "../api/schemas";
+import type { DiscountResponse, FloorResponse, LayoutCategory, LayoutResponse } from "../api/schemas";
+import type { MenuItemResponse, ModifierGroup, PaymentRequest } from "../api/schemas";
+import type { ReasonCodeEntry, ReasonCodesResponse } from "../api/schemas";
 
 export interface OrderLine {
   // The edge's id, or a provisional one beginning `PENDING` while the edge has not answered.
@@ -1318,6 +1309,7 @@ export async function startWalkIn(channel?: string): Promise<string> {
   holdWalkIn(opened.order_id);
   if (channel !== undefined) {
     setState("walkInChannels", opened.order_id, channel);
+    noteWalkInOpened(opened.order_id);
   }
   return opened.order_id;
 }
@@ -1636,22 +1628,14 @@ export function loadLiveOrders(): Promise<void> {
   return load("live_orders");
 }
 
-// The live orders, and what the kitchen still has to make: the live orders again, plus each paid
-// order with no table whose food no station has bumped (ADR-0161). An edge that predates the
-// kitchen route answers 404, and the board then works from the live orders alone, as it always did.
-export interface LiveOrdersRead {
-  orders: LiveOrder[];
-  kitchen: LiveOrder[] | null;
-}
-
-export async function readLiveOrders(): Promise<LiveOrdersRead> {
-  const orders = await api.liveOrders();
-  const kitchen = await api.kitchenOrders().catch(() => null);
-  return { orders, kitchen };
-}
-
-export function applyLiveOrders({ orders, kitchen }: LiveOrdersRead): void {
+// Applies the live orders read (`./live-orders-read`).
+export function applyLiveOrders(read: LiveOrdersRead): void {
+  const { orders, kitchen } = read;
   const live = new Set(orders.map((order) => order.order_id));
+  const opened = walkInsOpenedSince(read).flatMap((orderId) => {
+    const channel = state.walkInChannels[orderId];
+    return channel === undefined ? [] : [[orderId, channel] as const];
+  });
   const waiting = (kitchen ?? []).filter((order) => !live.has(order.order_id));
   setState(
     produce((draft) => {
@@ -1659,14 +1643,16 @@ export function applyLiveOrders({ orders, kitchen }: LiveOrdersRead): void {
       // an order this device thought open and the edge no longer lists has been settled.
       draft.liveOrders = Object.fromEntries(orders.map((order) => [order.order_id, true]));
       // The channel of each walk-in the edge names one for, replacing the set held for the same
-      // reason: a walk-in that is no longer live needs no book.
-      draft.walkInChannels = Object.fromEntries(
-        orders.flatMap((order) =>
+      // reason: a walk-in that is no longer live needs no book. One opened since the read began
+      // keeps the guest's answer the till holds.
+      draft.walkInChannels = Object.fromEntries([
+        ...orders.flatMap((order) =>
           order.table_id === undefined && order.sales_channel !== undefined
             ? [[order.order_id, order.sales_channel] as const]
             : [],
         ),
-      );
+        ...opened,
+      ]);
       // The same for the kitchen's own set, when the edge answered: a paid order it no longer
       // lists has been bumped, or its day has ended.
       if (kitchen !== null) {

@@ -32,8 +32,8 @@ pub(super) use config_releases::{
     ReleaseNodeRequest, ReleaseState, ScheduleReleaseRequest, release_error_response,
 };
 pub(super) use if_match::{if_match_config, if_match_lease};
-pub(super) use preview::preview_config_node;
-pub(super) use redaction::{staff_redacted_for, without_prices};
+pub(super) use preview::{ConfigPreview, preview_config_node};
+pub(super) use redaction::config_redacted_for;
 pub(super) use release_actions::release_report_response;
 // The raw config-tree write and read the main router mounts.
 pub(super) use release_create::{
@@ -45,9 +45,14 @@ pub(super) use versions::{
     admin_config_versions,
 };
 // The handlers the console's OpenAPI document names.
+pub(crate) use preview::__path_admin_preview_config_node;
 pub(crate) use release_actions::{
     __path_admin_cancel_release, __path_admin_list_releases, __path_admin_read_release,
     __path_admin_schedule_release,
 };
 pub(crate) use release_create::__path_admin_create_release;
-pub(crate) use versions::__path_admin_config_nodes;
+pub(crate) use store_config::{__path_admin_config_effective, __path_admin_config_publish};
+pub(crate) use versions::{
+    __path_admin_config_nodes, __path_admin_config_rollback, __path_admin_config_version_effective,
+    __path_admin_config_versions,
+};

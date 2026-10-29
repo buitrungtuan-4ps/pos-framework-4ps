@@ -751,4 +751,24 @@ mod retries {
             assert_eq!(merges(&store).await.len(), 1);
         });
     }
+
+    #[test]
+    fn a_held_submission_retried_before_staff_decide_still_waits_for_them() {
+        run_ready(async {
+            let edge = Arc::new(edge_over(FakeStore::default(), joins_on_confirmation()));
+            a_waiters_order(&edge).await;
+            let intake = intake(&edge);
+            let submission = a_submission("QR-JOIN-4");
+
+            let first = intake.submit(&submission).await.expect("taken");
+            let again = intake.submit(&submission).await.expect("a repeat");
+
+            assert!(first.awaiting_staff_confirmation);
+            assert!(!again.created);
+            assert!(
+                again.awaiting_staff_confirmation,
+                "the repeat answers from the ledger row, which recorded the hold"
+            );
+        });
+    }
 }

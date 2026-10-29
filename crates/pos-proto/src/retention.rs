@@ -25,6 +25,7 @@ pub const EVENT_LOG_DAYS: RangeInclusive<u16> = 30..=3650;
 /// No `deny_unknown_fields`, as for every published node: an edge on an older release applies a node
 /// that carries a field it does not know, rather than refusing the whole document.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct PublishedRetention {
     /// How many days the edge keeps a synced event, as the node carries it: a whole number, and
@@ -34,6 +35,7 @@ pub struct PublishedRetention {
         deserialize_with = "whole_days",
         skip_serializing_if = "Option::is_none"
     )]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub event_log_days: Option<u64>,
 }
 

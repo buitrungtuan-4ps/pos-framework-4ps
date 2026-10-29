@@ -515,13 +515,15 @@ fn known_channels(channels: &[Open<SalesChannel>]) -> impl Iterator<Item = Sales
 
 /// Why a store cannot apply a rule it would be sent. Each one would fail every bill the rule
 /// applies to, so a store with one is not sent its rules at all.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum StoreFault {
     /// An amount in a currency other than the one the store bills in. A bill is one currency, so
     /// adding it fails.
     CurrencyMismatch,
     /// A fee taxed at a class the store has no rate for on a channel the fee applies on, which
     /// fails the bill as an item of that class would.
+    #[serde(rename = "TAX_RATE_NOT_CONFIGURED")]
     TaxClassNotRated,
 }
 

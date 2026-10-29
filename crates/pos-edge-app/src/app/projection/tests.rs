@@ -2,14 +2,16 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The projection's unit tests: the order index agrees with a scan through a whole service, a
-//! settled history does not grow the live set, and a projection rebuilt twice sells each line once.
+//! settled history does not grow the live set, a projection rebuilt twice sells each line once, and
+//! a rebuild keeps a seated table occupied and a line's changed quantity.
 
 use std::sync::Arc;
 
 use pos_fakes::FakeStore;
-use pos_proto::BillState;
 use pos_proto::ids::{OrderId, TableId};
+use pos_proto::quantity::Quantity;
 use pos_proto::ulid::Ulid;
+use pos_proto::{BillState, TableState};
 
 use crate::app::tests::{a_line, actor, cash, edge, identity};
 use crate::app::{Edge, EdgeSession};
@@ -213,6 +215,48 @@ fn a_projection_rebuilt_twice_sells_each_line_once() {
                 .map(|order| order.lines.len()),
             Some(3),
             "no line is indexed twice"
+        );
+    });
+}
+
+/// An edge over `store` that has replayed its log, as a box does when it boots.
+async fn restarted_over(store: FakeStore) -> Edge<FakeStore> {
+    let restarted = Edge::new(
+        store,
+        identity(),
+        EdgeSession::bootstrap(),
+        Arc::new(InMemoryReceipts::new()),
+    )
+    .expect("seeds");
+    restarted.rebuild().await.expect("rebuilds");
+    restarted
+}
+
+#[test]
+fn a_restart_keeps_a_seated_table_occupied_and_a_lines_changed_quantity() {
+    pos_fakes::executor::run_ready(async {
+        let store = FakeStore::default();
+        let live = Edge::new(
+            store.clone(),
+            identity(),
+            EdgeSession::bootstrap(),
+            Arc::new(InMemoryReceipts::new()),
+        )
+        .expect("seeds");
+        let table = TableId::new(Ulid::from_u128(430));
+        live.seat_table(actor(), table, None).await.expect("seats");
+        let added = live.add_line(actor(), table, a_line()).await.expect("adds");
+        let three = Quantity::from_whole(3).expect("three units");
+        live.set_line_quantity(actor(), added.order_line_id, three)
+            .await
+            .expect("changes the quantity");
+
+        let restarted = restarted_over(store).await;
+        assert_eq!(restarted.table_state(table), TableState::Occupied);
+        assert_eq!(
+            restarted.check_totals(table).expect("the check"),
+            live.check_totals(table).expect("the check"),
+            "the check is priced at three, not at the one the line was added with"
         );
     });
 }

@@ -50,9 +50,10 @@ struct TaxRateState<Tax, Cat, A, C> {
 
 /// One authored tax-rate row on the wire: the class id, the channel's wire token, the rate in basis
 /// points (10% is `1000`), and how that rate is broken out on the invoice.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct TaxRateView {
     tax_class_id: String,
+    #[schema(value_type = SalesChannel)]
     sales_channel: String,
     rate_bps: u32,
     /// The named parts the invoice prints, which must sum to `rate_bps`
@@ -73,7 +74,7 @@ struct TaxRateView {
 }
 
 /// One named part of a rate, on the wire.
-#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, Deserialize, utoipa::ToSchema)]
 struct TaxComponentView {
     /// What the invoice calls it — `CGST`, `SGST`, `IGST`.
     name: String,
@@ -82,14 +83,14 @@ struct TaxComponentView {
 }
 
 /// A `PUT /admin/catalog/tax-rates` body: the tenant and its whole rate table (a wholesale replace).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct SetTaxRatesRequest {
     tenant_id: String,
     rates: Vec<TaxRateRowRequest>,
 }
 
 /// One row of a [`SetTaxRatesRequest`].
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct TaxRateRowRequest {
     tax_class_id: String,
     sales_channel: String,
@@ -295,6 +296,28 @@ fn checked_entries(
     Ok(entries)
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/catalog/tax-rates",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, body = Vec<TaxRateView>, description = "The tenant's whole rate table, as an array: for each tax class \
+                                      and sales channel, `rate_bps` in basis points and its \
+                                      `components`, the named parts an invoice prints, which sum to \
+                                      the rate (ADR-0104). The table is one entity: its version is \
+                                      the response's ETag, absent for a tenant that never saved \
+                                      rates"),
+        (status = 400, description = "tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The tax rate store or the catalog store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "tax",
+)]
 /// A super-admin lists a tenant's authored tax rates.
 async fn admin_list_tax_rates<Tax, Cat, A, C>(
     State(state): State<TaxRateState<Tax, Cat, A, C>>,
@@ -338,6 +361,39 @@ where
     }
 }
 
+#[utoipa::path(
+    put,
+    path = "/admin/catalog/tax-rates",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
+    security(("session_cookie" = [])),
+    params(
+        ("If-Match" = String, Header, description = "The ETag the table was read at, or `*` for a \
+                                                     tenant that has never saved rates (ADR-0095)"),
+    ),
+    request_body(
+        content = SetTaxRatesRequest, description = "`tenant_id` and `rates`, the whole table: for each row, a `tax_class_id` the \
+                       tenant has, a `sales_channel` token, `rate_bps` in basis points (at most \
+                       100%), and optionally `components`, each a `name` of two to eight \
+                       upper-case letters and digits starting with a letter and its `rate_bps`, \
+                       summing to the row's rate. A save replaces the table wholesale",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = Vec<TaxRateView>, description = "Replaced. The body is the table as stored and the ETag carries \
+                                      its new version. Audited"),
+        (status = 400, description = "tenant_id or a tax_class_id is not a ULID; a row names a class \
+                                      the tenant does not have or an unknown channel; a rate is over \
+                                      100%; a (class, channel) pair repeats; a component is unnamed, \
+                                      badly named, or the components do not sum to the rate; or \
+                                      If-Match is absent or malformed. Nothing is written", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.catalog.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "If-Match named a version, but the tenant has no table yet", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 412, description = "The table changed since you read it: re-read it and try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The tax rate store or the catalog store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "tax",
+)]
 /// A super-admin replaces a tenant's whole tax-rate table.
 ///
 /// Every row is validated before the write: its class must be one the tenant has authored, its channel

@@ -24,6 +24,7 @@ use crate::app::Edge;
 
 /// One connection, as the Devices screen lists it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct IntegrationResponse {
     connection_id: String,
     /// The family's wire token; `INTEGRATION_FAMILY_UNSPECIFIED` for one this build does not know.
@@ -32,8 +33,20 @@ pub(crate) struct IntegrationResponse {
     display_name: String,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/integrations",
+    security(("till_session" = [])),
+    responses(
+        (status = 200, body = Vec<IntegrationResponse>, description = "The vendor connections that serve this store, most specific first: each \
+                                      one's family, provider and name. No setting is returned"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+    ),
+    tag = "published configuration",
+))]
 /// `GET /api/integrations` — the connections that serve this store, most specific first.
-pub(crate) async fn list<S>(State(edge): State<Arc<Edge<S>>>) -> Response
+pub(crate) async fn list_integrations<S>(State(edge): State<Arc<Edge<S>>>) -> Response
 where
     S: EventStore + Send + Sync + 'static,
 {

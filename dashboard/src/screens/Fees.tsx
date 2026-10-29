@@ -37,19 +37,15 @@ import { createEffect, createMemo, createSignal, For, Index, on, Show } from "so
 
 import { ApiError, api } from "../api/client";
 import {
-  SALES_CHANNELS,
   type EffectiveFee,
   type EffectiveFees,
   type FeeItems,
   type FeeKind,
-  type FeePublishResult,
   type FeeRule,
   type FeeRuleFields,
   type FeeScope,
   type FeeTax,
   type Json,
-  type SalesChannel,
-  type SampleBill,
 } from "../api/types";
 import { LOCALES, type Locale, localeName, type MessageKey, t } from "../i18n";
 import { useEntityCrud } from "../lib/entity-crud";
@@ -101,7 +97,9 @@ import {
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";
-import { CHANNEL_LABEL } from "./catalog/shared";
+import { SALES_CHANNELS, channelLabel, isKnownChannel } from "../lib/channels";
+import type { KnownSalesChannel } from "../lib/channels";
+import type { FeePublishResult, SampleBill } from "../api/schemas";
 
 const TENANT: FeeScope = "FEE_SCOPE_TENANT";
 const BRAND: FeeScope = "FEE_SCOPE_BRAND";
@@ -324,7 +322,7 @@ export function Fees() {
   const [draft, setDraft] = createSignal<FeeDraft>(newDraft(""));
   const patch = (fields: Partial<FeeDraft>) => setDraft((current) => ({ ...current, ...fields }));
   const [previewStore, setPreviewStore] = createSignal("");
-  const [previewChannel, setPreviewChannel] = createSignal<SalesChannel>("SALES_CHANNEL_DINE_IN");
+  const [previewChannel, setPreviewChannel] = createSignal<KnownSalesChannel>("SALES_CHANNEL_DINE_IN");
   const [sampleRows, setSampleRows] = createSignal<readonly SampleRow[]>([]);
   const [storeConfig, setStoreConfig] = createSignal<Panel<Json | null> | null>(null);
   const [bill, setBill] = createSignal<Panel<SampleBill> | null>(null);
@@ -697,13 +695,13 @@ export function Fees() {
   const setRate = (percent: string) => patch({ percent });
   const setAmount = (amountMinor: number | null) => patch({ amountMinor });
   const setCurrency = (currency: string) => patch({ currency });
-  const toggleChannel = (channel: SalesChannel, ticked: boolean) => {
+  const toggleChannel = (channel: KnownSalesChannel, ticked: boolean) => {
     const current = draft().channels;
     const known = SALES_CHANNELS.filter((each) =>
       each === channel ? ticked : current.includes(each),
     );
     // A channel from a newer cloud this console cannot show is kept as it was written.
-    const unknown = current.filter((each) => !SALES_CHANNELS.includes(each));
+    const unknown = current.filter((each) => !isKnownChannel(each));
     patch({ channels: [...known, ...unknown] });
   };
 
@@ -944,8 +942,7 @@ export function Fees() {
     }
     return channels
       .map((channel) => {
-        const key = CHANNEL_LABEL[channel as SalesChannel] as MessageKey | undefined;
-        return key === undefined ? channel : t(key);
+        return channelLabel(channel);
       })
       .join(", ");
   };
@@ -1249,7 +1246,7 @@ export function Fees() {
           value={previewChannel()}
           options={SALES_CHANNELS.map((channel) => ({
             value: channel,
-            label: t(CHANNEL_LABEL[channel]),
+            label: channelLabel(channel),
           }))}
           onChange={(value) =>
             setPreviewChannel(SALES_CHANNELS.find((channel) => channel === value) ?? "SALES_CHANNEL_DINE_IN")
@@ -1752,7 +1749,7 @@ export function Fees() {
                 <For each={SALES_CHANNELS}>
                   {(channel) => (
                     <CheckboxField
-                      label={t(CHANNEL_LABEL[channel])}
+                      label={channelLabel(channel)}
                       checked={draft().channels.includes(channel)}
                       onChange={(ticked) => toggleChannel(channel, ticked)}
                     />

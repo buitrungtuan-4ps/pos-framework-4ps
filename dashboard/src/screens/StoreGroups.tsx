@@ -24,14 +24,7 @@
 import { createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
-import type {
-  BatchOutcome,
-  ConfigBatchReport,
-  Json,
-  Menu,
-  QrGuardrails,
-  StoreGroup,
-} from "../api/types";
+import type { BatchOutcome, Json, QrGuardrails } from "../api/types";
 import { type MessageKey, t } from "../i18n";
 import { apiMessage, withStaleReload } from "../lib/errors";
 import { createAdminResource, failureOf } from "../lib/resource";
@@ -57,6 +50,7 @@ import {
 } from "../components/kit";
 import { useEntityCrud } from "../lib/entity-crud";
 import { toast } from "../components/Toast";
+import type { ConfigBatchReport, Menu, StoreGroup } from "../api/schemas";
 
 /**
  * How a node kind gets its arguments — the shape of the second question the operator is asked.

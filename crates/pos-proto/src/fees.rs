@@ -104,6 +104,7 @@ wire_enum! {
 /// fee it was charged, in its frozen rules (decision 3) and its settled fee lines (decision 4). It
 /// names a charge, as a [`DisplayName`] names a product, and never a person.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(transparent)]
 pub struct FeeCode(Box<str>);
 
@@ -143,6 +144,7 @@ impl core::fmt::Display for FeeCode {
               booleans, which is the confusion this lint guards against"
 )]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct PublishedFee {
     /// Its stable id: the same fee across a rename, and the key ADR-0159 merges a tenant's, a
@@ -168,10 +170,12 @@ pub struct PublishedFee {
     /// `Ratio::percent(5)` and 2.5 % is `Ratio::basis_points(250)`; never a float. Ignored for the
     /// amount kinds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub rate: Option<Ratio>,
     /// For [`FeeKind::AmountPerBill`] and [`FeeKind::AmountPerUnit`]: the charge, an integer in the
     /// currency's minor unit. Ignored for a percentage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub amount: Option<Money>,
     /// The sales channels the fee applies on. Empty, which is what an absent field reads as, means
     /// every channel. Each is wrapped in [`Open`] so a channel from a newer cloud round-trips; one
@@ -203,6 +207,7 @@ pub struct PublishedFee {
     pub tax: Open<FeeTax>,
     /// For [`FeeTax::TaxClass`]: the class the fee is taxed at. Ignored otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub tax_class_id: Option<TaxClassId>,
     /// Whether staff may take the fee off one bill. Absent means `false`, as the owner confirmed.
     /// Waiving is an act on a bill, under its own permission and with a reason
@@ -434,6 +439,7 @@ impl RuleFields<'_> {
 /// bill opened does not change what it prints; its translations stay in the `fees` node, and no
 /// event carries one. Every field is as on [`PublishedFee`], and reads with the same defaults.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct FrozenFee {
     /// As [`PublishedFee::fee_id`].
@@ -595,6 +601,7 @@ pub enum FeeViolation {
 ///
 /// No `deny_unknown_fields`, for the same reason as [`PublishedFee`].
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct PublishedFees {
     /// Every rule, in the order the node lists them, including paused ones and ones of a kind this

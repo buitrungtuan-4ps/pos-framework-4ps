@@ -26,6 +26,7 @@ use crate::http::{
     versioned_created, versioned_ok,
 };
 use crate::reason_codes::ReasonCodeStore;
+use crate::version::Versioned;
 use crate::version::{CreateOutcome, UpdateOutcome};
 
 /// Validates a reason-code request and builds the entry with the given (server-owned) id. Returns
@@ -93,15 +94,17 @@ fn build_reason_code(
 #[utoipa::path(
     get,
     path = "/admin/reason-codes",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     params(("tenant_id" = String, Query, description = "The tenant whose list to read (a 26-character ULID)")),
     responses(
-        (status = 200, description = "The tenant's entries in id order, each with the version it \
+        (status = 200, body = [Versioned<PublishedReasonCode>], description = "The tenant's entries in id order, each with the version it \
                                       was read at. Retired entries are included, because a \
                                       historic event still names them and the console has to show \
                                       what is out of service"),
         (status = 400, description = "tenant_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
-        (status = 403, description = "The role lacks console.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
         (status = 503, description = "The reason code store is unreachable", body = crate::openapi_admin::ErrorResponse),
     ),
     tag = "reason codes",
@@ -140,16 +143,18 @@ where
 #[utoipa::path(
     get,
     path = "/admin/reason-codes/{reason_code_id}",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     params(
         ("reason_code_id" = String, Path, description = "The entry's 26-character ULID"),
         ("tenant_id" = String, Query, description = "The tenant that owns it (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The entry, with an ETag carrying the version it was read at \
+        (status = 200, body = Versioned<PublishedReasonCode>, description = "The entry, with an ETag carrying the version it was read at \
                                       — the token a PUT must send back as If-Match"),
         (status = 400, description = "tenant_id or reason_code_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
-        (status = 403, description = "The role lacks console.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
         (status = 404, description = "The tenant has no entry with that id", body = crate::openapi_admin::ErrorResponse),
         (status = 503, description = "The reason code store is unreachable", body = crate::openapi_admin::ErrorResponse),
     ),
@@ -196,14 +201,16 @@ where
 #[utoipa::path(
     post,
     path = "/admin/reason-codes",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.reason_codes.manage"))),
     request_body(
-        description = "The tenant, the report handle, the name staff read, its per-locale names, \
+        content = ReasonCodeRequest, description = "The tenant, the report handle, the name staff read, its per-locale names, \
                        and the actions it may be cited for. The id is server-minted and must not \
                        be sent; `active` defaults to true",
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Created. The body is the entry as stored, including the id \
+        (status = 201, body = Versioned<PublishedReasonCode>, description = "Created. The body is the entry as stored, including the id \
                                       the server minted, and the ETag carries its first version"),
         (status = 400, description = "code or display_name is blank, applies_to is empty, or it \
                                       names an action this cloud does not know", body = crate::openapi_admin::ErrorResponse),
@@ -277,19 +284,21 @@ where
 #[utoipa::path(
     put,
     path = "/admin/reason-codes/{reason_code_id}",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.reason_codes.manage"))),
     params(
         ("reason_code_id" = String, Path, description = "The entry's 26-character ULID"),
         ("If-Match" = String, Header, description = "The ETag the entry was read at \
                                                      (ADR-0094). Required; a wildcard is refused"),
     ),
     request_body(
-        description = "The entry's fields as they should now stand, including `active` — retiring \
+        content = ReasonCodeRequest, description = "The entry's fields as they should now stand, including `active` — retiring \
                        and restoring are this route, not a lifecycle route of their own, so they \
                        go through the same version check as any other edit",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Updated. The body is the entry as stored and the ETag \
+        (status = 200, body = Versioned<PublishedReasonCode>, description = "Updated. The body is the entry as stored and the ETag \
                                       carries its new version"),
         (status = 400, description = "A field is blank or unknown, or If-Match is absent, \
                                       malformed, or a wildcard", body = crate::openapi_admin::ErrorResponse),
@@ -379,6 +388,8 @@ where
 #[utoipa::path(
     delete,
     path = "/admin/reason-codes/{reason_code_id}",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.reason_codes.manage"))),
     params(
         ("reason_code_id" = String, Path, description = "The entry's 26-character ULID"),
         ("tenant_id" = String, Query, description = "The tenant that owns it (a 26-character ULID)"),

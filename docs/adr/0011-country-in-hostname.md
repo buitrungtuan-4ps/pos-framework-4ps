@@ -1,6 +1,6 @@
 # ADR-0011 — Country lives in the hostname
 
-**Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-08-18
+**Status** Accepted; superseded in part by [ADR-0179](0179-cells-the-directory-and-the-front-door.md) (the hostname label is a cell id, and redirects are 302/307/308, not 301) · **Owner** @maintainers-architecture · **Last reviewed** 2026-08-18
 
 **Context.** Expanding to a second country raises where the country label belongs. A path prefix (`domain.com/jp`) looks tidy, but a hostname resolves to exactly one place, so every Japanese request would land in the home country first and be forwarded.
 

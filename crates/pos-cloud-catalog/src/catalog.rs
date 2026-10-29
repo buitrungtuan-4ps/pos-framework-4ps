@@ -43,7 +43,8 @@ use crate::version::{CreateOutcome, UpdateOutcome, Version, Versioned};
 /// A menu's identifier — a ULID minted at creation. A menu is an authoring concept that never
 /// crosses the wire (the compiled [`pos_proto::MenuBook`] has no menu id), so its id is defined here
 /// beside the seam rather than in [`pos_proto::ids`], the same way a `BrandId` is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, utoipa::ToSchema)]
+#[schema(value_type = String)]
 pub struct MenuId(Ulid);
 
 impl MenuId {
@@ -69,7 +70,8 @@ impl fmt::Display for MenuId {
 /// An item category's identifier — a ULID minted at creation. The operational taxonomy is a
 /// cloud-authoring concept (reporting/tax-default/kitchen grouping); like [`MenuId`], its id is
 /// defined beside the seam rather than in [`pos_proto::ids`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, utoipa::ToSchema)]
+#[schema(value_type = String)]
 pub struct ItemCategoryId(Ulid);
 
 impl ItemCategoryId {
@@ -93,7 +95,8 @@ impl fmt::Display for ItemCategoryId {
 }
 
 /// An item sub-category's identifier — a ULID minted at creation, nested under an [`ItemCategoryId`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, utoipa::ToSchema)]
+#[schema(value_type = String)]
 pub struct ItemSubcategoryId(Ulid);
 
 impl ItemSubcategoryId {
@@ -120,7 +123,7 @@ impl fmt::Display for ItemSubcategoryId {
 /// (ADR-0066 entity 2). This is **not** the presentation taxonomy a screen groups by (that is a
 /// [display category](DisplayCategory-like) delivered in the layout, entity 11); a product-mix report
 /// groups by *this*.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct ItemCategory {
     /// The category id.
     pub item_category_id: ItemCategoryId,
@@ -133,7 +136,7 @@ pub struct ItemCategory {
 }
 
 /// An item sub-category — a refinement of an [`ItemCategory`] (ADR-0066 entity 3).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct ItemSubcategory {
     /// The sub-category id.
     pub item_subcategory_id: ItemSubcategoryId,
@@ -155,7 +158,7 @@ pub struct ItemSubcategory {
 /// operator picks a tax class **by name** when authoring an item, instead of pasting a
 /// [`TaxClassId`] ULID — the same "kill the ULID" move [ADR-0065](../../../docs/adr/0065-cloud-org-registry.md)
 /// made for tenants and stores. Its id is the [`TaxClassId`] an item's `tax_class_id` references.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct TaxClass {
     /// The tax-class id — the [`TaxClassId`] an item references and the rate table is keyed by.
     pub tax_class_id: TaxClassId,
@@ -173,7 +176,7 @@ pub struct TaxClass {
 /// inbound order references: the item authored here is the item priced downstream. This slice carries
 /// the fields a `MenuEntry` needs (name, tax class); its operational category, recipe/BOM link and
 /// the rest arrive with later slices.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct CatalogItem {
     /// The item's id — shared with the compiled menu entry and any inbound order that names it.
     pub menu_item_id: MenuItemId,
@@ -190,8 +193,10 @@ pub struct CatalogItem {
     /// The tax class, which the store's channel-keyed rate table turns into a rate at reprice time.
     pub tax_class_id: TaxClassId,
     /// The operational category this item reports under, or `None` if unclassified (entity 2).
+    #[schema(required = true)]
     pub item_category_id: Option<ItemCategoryId>,
     /// The operational sub-category, refining the category, or `None` (entity 3).
+    #[schema(required = true)]
     pub item_subcategory_id: Option<ItemSubcategoryId>,
     /// The course this item goes out on, or `None` for an item on no course
     /// ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md) decision 3).
@@ -204,9 +209,11 @@ pub struct CatalogItem {
     /// A **per-line override** is deliberately not modelled. The request it would serve — *"bring my
     /// main with the starters"* — is about when the food goes, and firing already answers that;
     /// relabelling a line's course to mean "sooner" would put a timing decision inside a taxonomy.
+    #[schema(required = true)]
     pub course_id: Option<CourseId>,
     /// The item's photo — a [`MediaId`] into the media library (ADR-0075), or `None`. Authoring/display
     /// only; it does not cross to the edge. A dangling ref (the asset was deleted) shows a placeholder.
+    #[schema(required = true)]
     pub image_ref: Option<MediaId>,
     /// Active or archived.
     pub status: EntityStatus,
@@ -217,7 +224,7 @@ pub struct CatalogItem {
 /// Inheritance is how a brand menu overrides a tenant standard and a store special overrides the
 /// brand: the compiler folds a parent's placements under a child's, most-specific-wins. A cycle in
 /// `parent_menu_id` is a configuration error the compiler rejects; the seam only stores the edge.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct Menu {
     /// The menu id.
     pub menu_id: MenuId,
@@ -226,6 +233,7 @@ pub struct Menu {
     /// The human name.
     pub name: String,
     /// The menu this one inherits from, or `None` for a root menu.
+    #[schema(required = true)]
     pub parent_menu_id: Option<MenuId>,
     /// Active or archived.
     pub status: EntityStatus,
@@ -234,7 +242,8 @@ pub struct Menu {
 /// A menu section's identifier — a ULID minted at creation. A section is an authoring grouping within
 /// a menu (ADR-0066 entity 7); like [`MenuId`] it never crosses the wire (the compiled `MenuBook` is a
 /// flat list of entries with no sections), so its id lives beside the seam.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, utoipa::ToSchema)]
+#[schema(value_type = String)]
 pub struct MenuSectionId(Ulid);
 
 impl MenuSectionId {
@@ -266,7 +275,7 @@ impl fmt::Display for MenuSectionId {
 /// the operator sees while authoring, never what the edge is served. A [`ModifierGroup`] held the
 /// same posture until [ADR-0127](../../../docs/adr/0127-modifier-groups-reach-the-edge.md) carried it
 /// down; a section has not moved, because nothing at the till asks which section an item was under.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct MenuSection {
     /// The section id.
     pub menu_section_id: MenuSectionId,
@@ -286,7 +295,7 @@ pub struct MenuSection {
 ///
 /// This is where dine-in ≠ takeaway ≠ delivery pricing is authored; the compiler emits one channel's
 /// prices into that channel's [`pos_proto::MenuCatalog`] within the store's `MenuBook`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ChannelPrice {
     /// The channel this price applies on. `Open`, the same shape [`pos_proto::locale::TaxRateRow`]
     /// uses, so authoring stored under a channel a later build learns still round-trips.
@@ -297,7 +306,7 @@ pub struct ChannelPrice {
 
 /// An item placed in a menu, with its per-channel prices — the row a compiled `MenuEntry` is made
 /// from. Its identity is the pair `(menu_id, menu_item_id)`: an item appears in a menu at most once.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct MenuPlacement {
     /// The owning tenant.
     pub tenant_id: TenantId,
@@ -307,6 +316,7 @@ pub struct MenuPlacement {
     pub menu_item_id: MenuItemId,
     /// The section this placement sits under, or `None` for an unsectioned placement. Authoring-only
     /// (ADR-0066 entity 7): it groups the row for the operator, and does not reach the compiled book.
+    #[schema(required = true)]
     pub menu_section_id: Option<MenuSectionId>,
     /// The item's price per channel in this menu. A channel with no row here falls to the menu's
     /// parent (inheritance) or, failing that, is not sold on that channel.
@@ -339,7 +349,7 @@ pub use pos_proto::ids::ModifierGroupId;
 /// forty pizzas, the till asks the opposite question once per tap — and emits a
 /// [`pos_proto::MenuModifierGroup`] carrying the rule, the name and the members, with no `tenant_id`,
 /// `etag` or `status`. An archived group is simply not published.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct ModifierGroup {
     /// The group id.
     pub modifier_group_id: ModifierGroupId,
@@ -375,7 +385,7 @@ pub struct ModifierGroup {
 /// Its id is [`pos_proto::ids::CourseId`], which has crossed the seam since the schema was written —
 /// it is on `sales.order_line.added` and on a published routing rule. The entity is what was
 /// missing.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct Course {
     /// The course id.
     pub course_id: CourseId,
@@ -398,7 +408,8 @@ pub struct Course {
 /// "Summer specials" tab whose items report under "Pizza". Its id is a [`DisplayCategoryId`] — the
 /// same id the compiled [`pos_proto::DisplayCategory`] carries, the way an item's id crosses into the
 /// compiled `MenuEntry`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+#[schema(as = CatalogDisplayCategory)]
 pub struct DisplayCategory {
     /// The display-category id — carried into the compiled `DisplayPlan`.
     pub display_category_id: DisplayCategoryId,
@@ -411,7 +422,8 @@ pub struct DisplayCategory {
 }
 
 /// A display sub-category — a second grouping level under a [`DisplayCategory`] (ADR-0066 entity 11).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+#[schema(as = CatalogDisplaySubcategory)]
 pub struct DisplaySubcategory {
     /// The display-sub-category id — carried into the compiled plan.
     pub display_subcategory_id: DisplaySubcategoryId,
@@ -433,7 +445,7 @@ pub struct DisplaySubcategory {
 /// [`pos_proto::DisplayPlan`] per channel into a [`pos_proto::LayoutBook`]. Its identity is
 /// `(tenant, sales_channel, menu_item_id)` — an item has at most one button per channel. Presentation
 /// only: it names an item's `menu_item_id` and where its button sits, never a price.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct LayoutButton {
     /// The owning tenant.
     pub tenant_id: TenantId,
@@ -442,12 +454,14 @@ pub struct LayoutButton {
     /// The display category the button sits under.
     pub display_category_id: DisplayCategoryId,
     /// The sub-category within that category, or `None` for a button directly under the category.
+    #[schema(required = true)]
     pub display_subcategory_id: Option<DisplaySubcategoryId>,
     /// The item this button orders — a `menu_item_id` the compiled `MenuBook` prices.
     pub menu_item_id: MenuItemId,
     /// The caption to show (may be shorter than the item's catalog name on a crowded grid).
     pub label: String,
     /// The button's grid slot on a POS terminal, or `None` for a flowing layout (tablet, QR).
+    #[schema(required = true)]
     pub position: Option<GridPosition>,
     /// The display order within its group; lower comes first.
     pub sort: i32,

@@ -79,7 +79,7 @@ pub(super) enum AssignmentListing {
 }
 
 /// Create an employee — identity only; the PIN is set separately.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateEmployeeRequest {
     pub(super) tenant_id: String,
     pub(super) code: String,
@@ -87,7 +87,7 @@ pub(super) struct CreateEmployeeRequest {
 }
 
 /// Rename an employee and/or set their status (`active`/`archived`).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct UpdateEmployeeRequest {
     pub(super) tenant_id: String,
     pub(super) name: String,
@@ -96,14 +96,14 @@ pub(super) struct UpdateEmployeeRequest {
 
 /// Set or reset an employee's sign-in PIN. The digits are hashed here and never stored or logged in
 /// the clear (ADR-0070); the request body is the only place they appear, and it is never audited.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct SetPinRequest {
     pub(super) tenant_id: String,
     pub(super) pin: String,
 }
 
 /// Create a role template — a named subset of the `pos-core` permission catalogue (§9).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateRoleRequest {
     pub(super) tenant_id: String,
     pub(super) name: String,
@@ -128,7 +128,7 @@ pub(super) struct CreateRoleRequest {
 }
 
 /// Update a role template's name, permission sets, ceiling and status.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct UpdateRoleRequest {
     pub(super) tenant_id: String,
     pub(super) name: String,
@@ -149,7 +149,7 @@ pub(super) struct UpdateRoleRequest {
 
 /// Assign an employee with a role, at one store, a store group or every store of the tenant
 /// (ADR-0158 decision 3) — see [`requested_scope`] for how the three fields name one.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateAssignmentRequest {
     pub(super) tenant_id: String,
     pub(super) employee_id: String,

@@ -14,32 +14,42 @@ use crate::registry::EntityStatus;
 /// time — `online` (from `last_seen_at` against [`FLEET_ONLINE_THRESHOLD_MS`]) and `config_current`
 /// (the held version equals the published one). Timestamps are Unix milliseconds, the shape the
 /// dashboard reads; the store id is a string so the console shows a name and hides the ULID.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub(super) struct FleetStoreView {
     store_id: String,
     name: String,
     status: EntityStatus,
     online: bool,
+    #[schema(required = true)]
     last_seen_at_ms: Option<i64>,
+    #[schema(required = true)]
     last_config_pull_at_ms: Option<i64>,
+    #[schema(required = true)]
     config_version_held: Option<String>,
+    #[schema(required = true)]
     config_version_published: Option<String>,
     config_current: bool,
     relay_backlog: u64,
+    #[schema(required = true)]
     relay_oldest_pending_at_ms: Option<i64>,
     /// The binary version the store last reported running (ADR-0078), or `null` if it has never
     /// reported.
+    #[schema(required = true)]
     installed_version: Option<String>,
     /// Whether the store's last post-install self-test passed, or `null`.
+    #[schema(required = true)]
     self_test_ok: Option<bool>,
     /// Unix ms of the store's most recent OTA report, or `null`.
+    #[schema(required = true)]
     reported_at_ms: Option<i64>,
     /// How many events the store had committed and not yet published as of its last heartbeat, or
     /// `null` if it has never reported one. The mirror of `relay_backlog`: that counts orders held
     /// *for* the store, this counts sales held *at* it. `null` is not zero — a store that never said
     /// is not a store that is caught up — so the console renders the two differently.
+    #[schema(required = true)]
     outbox_depth: Option<u64>,
     /// Unix ms of the heartbeat that reported `outbox_depth`, or `null`.
+    #[schema(required = true)]
     outbox_reported_at_ms: Option<i64>,
     /// The print agents the store last reported, or `null` if it never has
     /// ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
@@ -47,17 +57,22 @@ pub(super) struct FleetStoreView {
     /// `null` and `[]` are different answers and the console renders them differently: `null` is a
     /// store that has said nothing about agents — every store whose edge runs in the shop, and every
     /// edge on a binary older than this field — while `[]` is a store that looked and has none.
+    #[schema(required = true)]
     print_agents: Option<Vec<FleetPrintAgent>>,
     /// Unix ms of the heartbeat that reported them, or `null`. A standing is only as current as the
     /// beat that carried it, so the instant travels with the list.
+    #[schema(required = true)]
     print_agents_reported_at_ms: Option<i64>,
     /// The lease generation the box last reported holding
     /// ([ADR-0108](../../../docs/adr/0108-the-lease-generation-is-authority.md)), or `null` if it
     /// has never said.
+    #[schema(required = true)]
     lease_generation_held: Option<u64>,
     /// Unix ms of the heartbeat that reported it, or `null`.
+    #[schema(required = true)]
     lease_reported_at_ms: Option<i64>,
     /// The store's authoritative lease generation, or `null` if the cloud has never issued it one.
+    #[schema(required = true)]
     lease_generation_authoritative: Option<u64>,
     /// Whether this box has been **superseded**: it holds a generation the store has moved past, so
     /// it refuses over-the-air updates and is no longer the machine the store runs on.
@@ -81,6 +96,8 @@ pub(super) struct FleetStoreView {
     /// What the two absences mean for *urgency* is deliberately not on this view, because the
     /// console does not decide it: the alert engine reads the same `FleetRow` and scores an
     /// undecodable token with the hosted case rather than the in-store one.
+    #[schema(required = true)]
+    #[schema(value_type = pos_proto::EdgePlacement)]
     edge_placement: Option<&'static str>,
     /// Where in the world that machine is — its ISO 3166-1 alpha-2 country — or `null`
     /// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
@@ -89,6 +106,7 @@ pub(super) struct FleetStoreView {
     /// is in the shop and has no region), and for a row written before migration `0058`. All three
     /// mean the same thing to a reader — there is nothing to show — which is why this is a plain
     /// `Option` and the placement beside it is not.
+    #[schema(required = true)]
     region_country: Option<String>,
     /// The place a person recognises — `ap-southeast-1`, `Ho Chi Minh City`, `the rack in Sakai` —
     /// or `null`. Present exactly when [`region_country`](Self::region_country) is.
@@ -96,6 +114,7 @@ pub(super) struct FleetStoreView {
     /// Free text an admin typed, carried verbatim and never parsed. It is on this read because the
     /// question it answers ("where has this store been running?") is asked while somebody has the
     /// fleet page open, not afterwards.
+    #[schema(required = true)]
     region_label: Option<String>,
     /// The country this store publishes in its `locale` node
     /// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
@@ -105,6 +124,7 @@ pub(super) struct FleetStoreView {
     /// can tell "not compared here" from "compared, and there is no country". Absence must never
     /// render as agreement.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub(super) profile_country: Option<String>,
     /// Whether the region agrees with that country — `agrees`, `differs`, `country-not-recorded` —
     /// or absent when there is nothing to compare
@@ -117,6 +137,7 @@ pub(super) struct FleetStoreView {
     /// Omitted on the listing, exactly as [`profile_country`](Self::profile_country) is — a
     /// comparison there would be one config-tree load per row.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub(super) region_agreement: Option<&'static str>,
     /// The answer somebody recorded for **this** difference, or absent
     /// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
@@ -128,6 +149,7 @@ pub(super) struct FleetStoreView {
     ///
     /// Omitted on the listing with the two fields above it, for the same reason.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub(super) region_acknowledgement: Option<RegionAcknowledgementView>,
     /// The generation the last bump displaced and nothing has yet proved drained, or `null`
     /// ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
@@ -135,6 +157,7 @@ pub(super) struct FleetStoreView {
     /// Shown beside [`handover`](Self::handover) rather than in place of it: the state says *what*
     /// is happening and this says *which machine* it is about, which is the number an operator needs
     /// to type into a settle.
+    #[schema(required = true)]
     lease_superseded_generation: Option<u64>,
     /// Which state this store's handover is in — `taking-over`, `settled`, `retired` — or `null`
     /// when it has never had one
@@ -147,13 +170,16 @@ pub(super) struct FleetStoreView {
     /// `null` is a real answer and the commonest one: a store on generation `0` has never been
     /// replaced, and a store with no lease row has never been issued one. Neither is a handover in
     /// any state, so the console renders no badge rather than a reassuring one.
+    #[schema(required = true)]
     handover: Option<&'static str>,
     /// When a person decided this handover's outgoing machine is no longer needed, or `null`.
+    #[schema(required = true)]
     retired_at_ms: Option<i64>,
     /// The deciding admin's id, or `null`.
     ///
     /// An id, and the console resolves it to a name through the admin roster if it wants one. The
     /// email lives in the audit trail, which is read under a permission this view is not behind.
+    #[schema(required = true)]
     retired_by: Option<String>,
 }
 

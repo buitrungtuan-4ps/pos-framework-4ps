@@ -12,7 +12,7 @@ import type {
   FeeLine,
   PaymentRequest,
   ReprintResponse,
-} from "../api/types";
+} from "../api/schemas";
 import { t, type MessageKey } from "../i18n";
 import { WhyUnavailable } from "../components/StoreData";
 import {

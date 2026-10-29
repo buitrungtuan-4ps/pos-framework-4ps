@@ -6,7 +6,6 @@
 import { createSignal, Show } from "solid-js";
 
 import { api } from "../../api/client";
-import type { TaxClass } from "../../api/types";
 import { t } from "../../i18n";
 import { createAdminResource, failureOf } from "../../lib/resource";
 import { tenantId } from "../../state/session";
@@ -14,6 +13,7 @@ import { Banner, Button, Card, TextField } from "../../components/ui";
 import { type Column, DataTable, Drawer, EmptyState } from "../../components/kit";
 import { toast } from "../../components/Toast";
 import { errorMessage, isStale, StatusCell } from "./shared";
+import type { TaxClass } from "../../api/schemas";
 
 export function CatalogTaxClasses() {
   // The tenant's tax classes. Tenant-scoped, so the read never runs with an empty context (F0),

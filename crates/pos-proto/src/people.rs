@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 /// No `deny_unknown_fields`, as for every published node: an edge on an older release applies a node
 /// that carries a field it does not know.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct PublishedStaffMember {
     /// The employee a sign-in under [`Self::code`] acts as, a ULID string.
     ///
@@ -94,6 +95,7 @@ impl core::fmt::Debug for PublishedStaffMember {
 /// same through this type, whose `staff` defaults to empty, so the edge asks the raw node whether the
 /// key is there. An edge from before 0.14.1 does not ask, and replaces the roster with an empty one.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct PublishedPermissions {
     /// The store the node authorises staff for, a ULID string. The edge does not read it; it is
     /// there so a node lifted out of its tree still says whose it is.

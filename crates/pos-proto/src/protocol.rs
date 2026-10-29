@@ -60,6 +60,7 @@ const _: () = assert!(
 /// `Debug` redacts the value. A lease token in a log line is a credential in a log line,
 /// and logs travel to the cloud.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(transparent)]
 pub struct LeaseToken(String);
 
@@ -85,6 +86,7 @@ impl core::fmt::Debug for LeaseToken {
 
 /// The first frame a store sends on connecting.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct Hello {
     /// The oldest protocol version this edge can speak.
@@ -144,6 +146,7 @@ impl Hello {
 
 /// What the cloud answers.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case", tag = "outcome")]
 pub enum HelloOutcome {
     /// Agreed. Both sides speak this version for the life of the connection.

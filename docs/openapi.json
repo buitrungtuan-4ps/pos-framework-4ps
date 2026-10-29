@@ -75,7 +75,9 @@
         },
         "security": [
           {
-            "api_key": []
+            "api_key": [
+              "place_orders"
+            ]
           }
         ]
       },
@@ -137,7 +139,9 @@
         },
         "security": [
           {
-            "api_key": []
+            "api_key": [
+              "place_orders"
+            ]
           }
         ]
       }
@@ -190,7 +194,9 @@
         },
         "security": [
           {
-            "api_key": []
+            "api_key": [
+              "read_rollups"
+            ]
           }
         ]
       }
@@ -346,10 +352,7 @@
             "type": "string"
           },
           "queue_number": {
-            "type": [
-              "integer",
-              "null"
-            ],
+            "type": "integer",
             "format": "int32",
             "minimum": 0
           },

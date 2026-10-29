@@ -1,0 +1,158 @@
+// Copyright (c) 2026 Pizza 4P's. All rights reserved.
+// Proprietary and confidential. Internal use only. See LICENSE.
+
+//! `delivery-sandbox` against the shared `DeliveryVendor` contract suite.
+//!
+//! The harness puts an in-memory marketplace behind the adapter's transport. It holds orders by
+//! reference, applies each decision it is sent, and records the store's busy mode. It holds no
+//! customer details, as the port carries none. The adapter's futures never suspend, so the suite
+//! runs under `run_ready`, a one-poll executor.
+
+#![allow(
+    clippy::expect_used,
+    reason = "test scaffolding: a poisoned lock in the marketplace is an unrecoverable test fault"
+)]
+
+use std::sync::Mutex;
+
+use delivery_sandbox::{Action, SandboxDelivery, Status, Transport, Unreachable};
+use pos_contract_tests::harness::{DeliveryVendorHarness, Setup};
+use pos_fakes::executor::run_ready;
+use pos_ports::{BusyMode, PendingDecision, VendorOrderRef};
+use pos_proto::{OrderId, StoreId, Timestamp, Ulid};
+
+/// An in-memory marketplace.
+#[derive(Debug, Default)]
+struct Marketplace {
+    state: Mutex<State>,
+}
+
+#[derive(Debug, Default)]
+struct State {
+    orders: Vec<(String, Status)>,
+    busy: Option<BusyMode>,
+    sent: u32,
+}
+
+impl Marketplace {
+    fn state(&self) -> std::sync::MutexGuard<'_, State> {
+        self.state.lock().expect("marketplace lock")
+    }
+
+    fn stage(&self, status: Status) -> VendorOrderRef {
+        let mut state = self.state();
+        let reference = format!("sandbox-{}", state.orders.len());
+        state.orders.push((reference.clone(), status));
+        VendorOrderRef::new(reference)
+    }
+}
+
+impl Transport for Marketplace {
+    fn order(&self, order_ref: &str) -> Result<Option<Status>, Unreachable> {
+        let state = self.state();
+        Ok(state
+            .orders
+            .iter()
+            .find(|(r, _)| r == order_ref)
+            .map(|(_, s)| *s))
+    }
+
+    fn send(&self, order_ref: &str, action: Action) -> Result<(), Unreachable> {
+        let mut state = self.state();
+        state.sent = state.sent.saturating_add(1);
+        if let Some((_, status)) = state.orders.iter_mut().find(|(r, _)| r == order_ref) {
+            *status = match action {
+                Action::Accept(_) => Status::Accepted,
+                Action::Reject(_) => Status::Rejected,
+                Action::Ready => Status::Ready,
+            };
+        }
+        Ok(())
+    }
+
+    fn set_busy(&self, _store_id: StoreId, mode: BusyMode) -> Result<(), Unreachable> {
+        self.state().busy = Some(mode);
+        Ok(())
+    }
+
+    fn pending(&self, _store_id: StoreId) -> Result<Vec<PendingDecision>, Unreachable> {
+        let state = self.state();
+        Ok(state
+            .orders
+            .iter()
+            .filter(|(_, status)| *status == Status::Pending)
+            .map(|(reference, _)| PendingDecision {
+                vendor_order_ref: VendorOrderRef::new(reference.clone()),
+                order_id: OrderId::new(Ulid::from_u128(1)),
+                decide_by: Timestamp::EPOCH,
+            })
+            .collect())
+    }
+}
+
+struct Harness;
+
+impl DeliveryVendorHarness for Harness {
+    type Vendor = SandboxDelivery<Marketplace>;
+
+    async fn fresh(&self) -> Setup<Self::Vendor> {
+        Ok(SandboxDelivery::new(Marketplace::default()))
+    }
+
+    async fn stage_order(&self, vendor: &Self::Vendor) -> Setup<VendorOrderRef> {
+        Ok(vendor.transport().stage(Status::Pending))
+    }
+
+    async fn stage_expired_order(&self, vendor: &Self::Vendor) -> Setup<VendorOrderRef> {
+        Ok(vendor.transport().stage(Status::Expired))
+    }
+
+    async fn busy_mode(&self, vendor: &Self::Vendor) -> Setup<BusyMode> {
+        Ok(vendor.transport().state().busy.unwrap_or(BusyMode::Open))
+    }
+
+    fn store_id(&self) -> StoreId {
+        StoreId::new(Ulid::from_u128(1))
+    }
+}
+
+mod delivery_vendor {
+    use super::{Harness, run_ready};
+    pos_contract_tests::delivery_vendor_suite!(Harness, run_ready);
+}
+
+/// A decision repeated for the same platform order is sent once: the port's idempotency, seen
+/// from the marketplace, which the shared suite observes only as "no error".
+#[test]
+fn a_repeated_decision_is_sent_once() {
+    use pos_ports::{DeliveryVendor, PrepTime};
+
+    let vendor = SandboxDelivery::new(Marketplace::default());
+    let order = vendor.transport().stage(Status::Pending);
+    run_ready(vendor.accept(&order, PrepTime::minutes(20))).expect("accepted");
+    run_ready(vendor.accept(&order, PrepTime::minutes(20))).expect("accepted again");
+    assert_eq!(vendor.transport().state().sent, 1);
+}
+
+/// The port's rules the shared suite does not reach: an order the marketplace does not know is
+/// `not_found`, and a ready is refused before an accept and sent after one.
+#[test]
+fn an_unknown_order_is_not_found_and_a_ready_needs_an_accept() {
+    use pos_ports::{DeliveryVendor, PrepTime};
+    use pos_proto::error::ErrorStatus;
+
+    let vendor = SandboxDelivery::new(Marketplace::default());
+    let unknown = run_ready(vendor.mark_ready(&VendorOrderRef::new("never-staged")))
+        .expect_err("an unknown order");
+    assert_eq!(unknown.status(), ErrorStatus::NotFound);
+
+    let order = vendor.transport().stage(Status::Pending);
+    let early = run_ready(vendor.mark_ready(&order)).expect_err("a ready before an accept");
+    assert_eq!(early.status(), ErrorStatus::FailedPrecondition);
+    run_ready(vendor.accept(&order, PrepTime::minutes(20))).expect("accepted");
+    run_ready(vendor.mark_ready(&order)).expect("ready after the accept");
+    assert_eq!(
+        vendor.transport().order(order.as_str()),
+        Ok(Some(Status::Ready))
+    );
+}

@@ -24,8 +24,8 @@ use crate::auth::console_rbac::ConsolePermission;
 use crate::campaigns::{CampaignStore, to_node as campaigns_to_node};
 use crate::config_tree::{ConfigLevel, ConfigTreeStore};
 use crate::http::{
-    PublishedConfig, load_tree_for_write, preview_config_node, publish_config_nodes,
-    staff_redacted_for, unprocessable_violations,
+    ConfigPreview, PublishedConfig, config_redacted_for, load_tree_for_write, preview_config_node,
+    publish_config_nodes, unprocessable_violations,
 };
 use crate::version::records;
 
@@ -45,7 +45,7 @@ struct ConfigCampaignsState<Camp, Cfg, A, C> {
 
 /// A `PUT /admin/config/campaigns` body: the `(tenant, store)` to push the tenant's authored campaigns
 /// to. Like every other node publish, the campaigns come from what is authored, not the body.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PublishCampaignsRequest {
     tenant_id: String,
     store_id: String,
@@ -88,9 +88,6 @@ where
         })
 }
 
-/// Assembles a tenant's authored campaigns into a `PublishedCampaigns`, writes it as the store's
-/// `campaigns` node, and versions it — the same load→merge→publish→version shape as the other node
-/// publishes.
 /// Compiles a tenant's authored promotions into the store's `campaigns` node, with the count.
 ///
 /// Shared with the batch fan-out ([ADR-0122](../../../docs/adr/0122-a-store-group-is-a-delivery-cohort.md) §3):
@@ -114,6 +111,36 @@ where
     Ok((vec![("campaigns".to_owned(), campaigns_value)], count))
 }
 
+#[utoipa::path(
+    put,
+    path = "/admin/config/campaigns",
+    extensions(("x-permission" = json!("console.config.publish"))),
+    security(("session_cookie" = [])),
+    request_body(
+        content = PublishCampaignsRequest, description = "`tenant_id` and `store_id`. The campaigns come from what the tenant has \
+                       authored, never from the body",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = PublishedConfig, description = "Every campaign the tenant has authored is compiled into the \
+                                      store's `campaigns` node and published on the Store layer, the \
+                                      store's other Store-level settings kept. The body carries \
+                                      `config_version_id`. Audited with the number of campaigns, \
+                                      not their terms"),
+        (status = 400, description = "tenant_id or store_id is not a ULID, or a value needs a \
+                                      recorded confirmation first", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "Every attempt to publish lost a race with another publish: \
+                                      try again", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "The store's configuration would not validate with the node", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The campaign store or the configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "campaigns",
+)]
+/// Assembles a tenant's authored campaigns into a `PublishedCampaigns`, writes it as the store's
+/// `campaigns` node, and versions it — the same load→merge→publish→version shape as the other node
+/// publishes.
 async fn admin_publish_campaigns<Camp, Cfg, A, C>(
     State(state): State<ConfigCampaignsState<Camp, Cfg, A, C>>,
     headers: HeaderMap,
@@ -186,13 +213,44 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/config/campaigns/preview",
+    extensions(("x-permission" = json!("console.config.publish"))),
+    security(("session_cookie" = [])),
+    request_body(
+        content = PublishCampaignsRequest, description = "`tenant_id` and `store_id`. The campaigns come from what the tenant has \
+                       authored, never from the body. Nothing is written",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = ConfigPreview, description = "What publishing the campaigns would change: \
+                                      `from_version_id`, the version the diff is against, or `null` \
+                                      for a store never published to; `diff`, the merge patch \
+                                      (RFC 7386) the publish would apply; and `unchanged`. The diff \
+                                      never shows a staff PIN hash; shows a name or staff code \
+                                      only to a role holding console.people.read; and shows the \
+                                      campaigns, and any other priced node, only to a role holding \
+                                      console.reports.revenue, so Ops, who may publish, is not \
+                                      shown their terms. `unchanged` is computed before redaction. \
+                                      Not audited"),
+        (status = 400, description = "tenant_id or store_id is not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "The publish would be refused, with its violations verbatim", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The campaign store or the configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "campaigns",
+)]
 /// `POST /admin/config/campaigns/preview` — the dry-run of the campaigns publish. Assembles the
 /// tenant's authored campaigns into the `campaigns` node exactly as the publish route would, then
 /// returns the merge patch it would apply to the store's effective document — without minting a
 /// version, saving, or auditing (it changes nothing). `422` with the same violations a real publish
 /// would reject the candidate with. Behind [`ConsolePermission::PublishConfig`], the same audience
-/// that can actually publish. The diff's staff are redacted for the caller's role, as the generic
-/// preview's are ([`staff_redacted_for`]): it can carry the `permissions` node too.
+/// that can actually publish. The diff is redacted for the caller's role, as the generic preview's
+/// is ([`config_redacted_for`]): its staff, because it can carry the `permissions` node too, and
+/// its prices, because the `campaigns` node it previews carries combo prices, discount amounts and
+/// minimum-bill thresholds — which Ops, who may publish, does not read (S8).
 async fn preview_publish_campaigns<Camp, Cfg, A, C>(
     State(state): State<ConfigCampaignsState<Camp, Cfg, A, C>>,
     headers: HeaderMap,
@@ -237,7 +295,7 @@ where
     let state_before = &loaded.state;
     match preview_config_node(state_before.as_ref(), "campaigns", campaigns_value) {
         Ok(mut preview) => {
-            preview.diff = staff_redacted_for(&preview.diff, context.admin.role);
+            preview.diff = config_redacted_for(&preview.diff, context.admin.role);
             (StatusCode::OK, Json(preview)).into_response()
         }
         Err(violations) => unprocessable_violations(&violations),

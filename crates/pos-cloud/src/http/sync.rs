@@ -37,7 +37,7 @@ pub(in crate::http) struct ConfigSyncQuery {
 
 /// What a store should do to reach the current configuration — the wire form of a
 /// [`SyncOutcome`](crate::config_tree::SyncOutcome).
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
 #[serde(tag = "status", rename_all = "snake_case")]
 enum ConfigSyncResponse {
     /// The store already holds the current version; it applies nothing.
@@ -49,6 +49,30 @@ enum ConfigSyncResponse {
     },
 }
 
+#[utoipa::path(
+    get,
+    path = "/sync/stores/{store_id}/config",
+    security(("device_credential" = ["read_config"])),
+    params(
+        ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
+        ("held_version" = Option<String>, Query, description = "The config version the store holds, a ULID. \
+                                                                Absent when it holds none"),
+    ),
+    responses(
+        (status = 200, body = ConfigSyncResponse, description = "`status`: `up_to_date`, or `update` with the snapshot or collapsed \
+                                      delta that brings the store to the current version (ADR-0039)"),
+        (status = 400, description = "store_id is not a ULID, or held_version is not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No credential, or one the cloud does not accept: one answer for every \
+                                      credential problem", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The credential lacks the `read_config` scope, or belongs to another \
+                                      store", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "Nothing is published for this store in the credential's tenant", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 429, description = "Too many requests to the store sync surface: `Retry-After` says when \
+                                      to try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The credential store, or the configuration service, is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "configuration",
+)]
 /// Serves a store its own configuration update: nothing (up to date), a delta, or a full snapshot
 /// past *K* versions behind ([ADR-0039](../../../docs/adr/0039-config-delivery.md)).
 ///
@@ -121,6 +145,31 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/sync/stores/{store_id}/heartbeat",
+    security(("device_credential" = ["read_config"])),
+    params(
+        ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
+    ),
+    request_body(
+        content = HeartbeatBody, description = "Optional: `outbox_depth`, `lease_generation` and `print_agents`, each left out when \
+                       the store cannot say. An empty body is a bare ping",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 204, description = "Recorded: the store's last contact, and what it reported"),
+        (status = 400, description = "store_id is not a ULID, or the body is not a heartbeat report", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No credential, or one the cloud does not accept: one answer for every \
+                                      credential problem", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The credential lacks the `read_config` scope, or belongs to another \
+                                      store", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 429, description = "Too many requests to the store sync surface: `Retry-After` says when \
+                                      to try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The credential store, or the configuration service, is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "configuration",
+)]
 /// `POST /sync/stores/{store_id}/heartbeat` — a store's lightweight liveness ping
 /// ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md) slice 2). Authenticated with the same scoped
 /// API key the config pull uses (`read_config`), it advances the store's `last_seen_at` and nothing
@@ -200,18 +249,48 @@ pub const MAX_PUBLISHED_EVENTS: usize = 256;
 pub const MAX_PUBLISHED_EVENTS_BYTES: usize = 4 * 1024 * 1024;
 
 /// `POST /sync/stores/{store_id}/events`'s body: the store's committed events, oldest first.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 struct PublishedEvents {
     events: Vec<EventEnvelope<RawPayload>>,
 }
 
 /// What a publish came to: how many envelopes, counted from the first, the cloud holds. Always the
 /// whole batch on success, since ingest commits all of it or none (ADR-0143).
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 struct PublishedEventsAccepted {
     accepted: usize,
 }
 
+#[utoipa::path(
+    post,
+    path = "/sync/stores/{store_id}/events",
+    security(("device_credential" = ["publish_events"])),
+    params(
+        ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
+    ),
+    request_body(
+        content = PublishedEvents, description = "`events`: the store's committed event envelopes, oldest first, at most 256 and 4 MiB, \
+                       each naming this store (ADR-0143)",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = PublishedEventsAccepted, description = "`accepted`: how many envelopes the cloud holds, which is the whole \
+                                      batch. Ingest is idempotent, so a batch published twice is stored \
+                                      once"),
+        (status = 400, description = "store_id is not a ULID, the body is not a batch of events, or it \
+                                      carries more than 256", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No credential, or one the cloud does not accept: one answer for every \
+                                      credential problem", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The credential lacks the `publish_events` scope or belongs to another \
+                                      store, or an envelope names another store; the batch is refused whole", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 413, description = "The body is larger than 4 MiB", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 429, description = "Too many requests to the store sync surface: `Retry-After` says when \
+                                      to try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The credential store or the event store is unavailable, and nothing \
+                                      was committed", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "events",
+)]
 /// `POST /sync/stores/{store_id}/events` — a store publishes its own events over HTTPS
 /// ([ADR-0143](../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)).
 ///
@@ -275,6 +354,32 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/sync/stores/{store_id}/events/hello",
+    security(("device_credential" = ["publish_events"])),
+    params(
+        ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
+    ),
+    request_body(
+        content = pos_proto::protocol::Hello, description = "The store's protocol `Hello`, naming this store and the protocol versions it speaks \
+                       (ADR-0024)",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = pos_proto::protocol::HelloOutcome, description = "The negotiation's outcome, an agreed version or a refusal. A refusal \
+                                      is an answer, not an error, and the store keeps trading on it"),
+        (status = 400, description = "store_id is not a ULID, or the body is not a hello", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No credential, or one the cloud does not accept: one answer for every \
+                                      credential problem", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The credential lacks the `publish_events` scope or belongs to another \
+                                      store, or the hello names another store", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 429, description = "Too many requests to the store sync surface: `Retry-After` says when \
+                                      to try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The credential store is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "events",
+)]
 /// `POST /sync/stores/{store_id}/events/hello` — the protocol negotiation for the HTTPS event link
 /// ([ADR-0024](../../../docs/adr/0024-protocol-version-negotiation.md), ADR-0143), run on the cloud's side with
 /// the cloud's own window. Answers `200` with the [`HelloOutcome`](pos_proto::protocol::HelloOutcome)
@@ -349,7 +454,7 @@ where
 /// Every field is optional and the whole body is optional, because the body is younger than the
 /// route: a store running an older binary posts nothing at all, and must keep being recorded as
 /// alive rather than refused for sending the empty body it has always sent.
-#[derive(Debug, Default, serde::Deserialize)]
+#[derive(Debug, Default, serde::Deserialize, utoipa::ToSchema)]
 struct HeartbeatBody {
     /// How many events the store has committed and not yet published — its own publish backlog, the
     /// opposite direction from the relay backlog the fleet row already carries. `None` when the store

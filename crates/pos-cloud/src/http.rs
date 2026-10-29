@@ -99,32 +99,36 @@ use crate::config_tree::prerequisites_for;
 use crate::dashboard::RollupStore;
 use crate::openapi::ApiDoc;
 
-mod admin;
+pub(crate) mod admin;
 mod admitted_devices;
-mod alerts;
+pub(crate) mod alerts;
 mod archives;
 mod authored_layer;
-mod campaigns;
+pub(crate) mod campaigns;
+pub(crate) mod cell;
+pub(crate) mod cell_standing;
 mod chain;
-mod config_nodes;
-mod config_publish;
-mod countries;
-mod fleet;
-mod health;
-mod integrations;
+mod cloud_routes;
+pub(crate) mod config_nodes;
+pub(crate) mod config_publish;
+pub(crate) mod countries;
+pub(crate) mod fleet;
+pub(crate) mod health;
+pub(crate) mod integrations;
 mod lease_bump;
 mod locale_node;
-mod ota;
-mod ota_rollout;
+pub(crate) mod ota;
+pub(crate) mod ota_rollout;
 mod reason_codes;
-mod reconcile;
-mod registry;
+pub(crate) mod reconcile;
+pub(crate) mod registry;
 mod release_schedule;
 mod settings;
 mod settings_confirm;
 mod store_groups;
-mod subjects;
+pub(crate) mod subjects;
 mod sync;
+pub mod well_known;
 
 // The console's OpenAPI document (`crate::openapi_admin`) names each documented handler by its
 // path here: the handler itself where this module calls it, and the `__path_*` item utoipa derives
@@ -148,12 +152,15 @@ pub(crate) use admitted_devices::__path_admin_admitted_devices;
 use admitted_devices::admin_admitted_devices;
 pub use alerts::alerts_router;
 pub(crate) use archives::__path_admin_list_store_archives;
+pub(crate) use archives::{__path_receive_store_archive, __path_serve_store_archive_key};
 pub use archives::{store_archive_admin_router, store_archive_router};
 use campaigns::scheduled_error_response;
 pub use campaigns::{
     campaign_router, config_campaigns_router, scheduled_publish_router, voucher_router,
 };
 pub use catalog::{catalog_publish_router, catalog_router};
+pub use cell::cell_router;
+pub use cell_standing::cell_standing_router;
 pub(crate) use chain::__path_admin_chain_findings;
 pub use chain::chain_router;
 pub use config_nodes::{
@@ -164,11 +171,11 @@ pub(crate) use config_publish::{
     __path_admin_list_releases, __path_admin_read_release, __path_admin_schedule_release,
 };
 use config_publish::{
-    LoadedTree, ReleaseNodeRequest, ReleaseState, ScheduleReleaseRequest, admin_config_nodes,
-    admin_config_rollback, admin_config_version_effective, admin_config_versions, if_match_config,
-    load_tree_for_write, preview_config_node, publish_config_nodes, publish_nodes,
-    release_error_response, release_report_response, release_target_stores,
-    release_target_timezones, staff_redacted_for, unresolvable_moment,
+    ConfigPreview, LoadedTree, ReleaseNodeRequest, ReleaseState, ScheduleReleaseRequest,
+    admin_config_nodes, admin_config_rollback, admin_config_version_effective,
+    admin_config_versions, config_redacted_for, if_match_config, load_tree_for_write,
+    preview_config_node, publish_config_nodes, publish_nodes, release_error_response,
+    release_report_response, release_target_stores, release_target_timezones, unresolvable_moment,
 };
 use config_publish::{admin_config_effective, admin_config_publish};
 pub use config_publish::{config_preview_router, config_release_router};
@@ -206,7 +213,6 @@ pub use ota::{
     ota_artifact_router, ota_release_admin_router, ota_release_fetch_router, ota_report_router,
 };
 pub use ota_rollout::ota_config_router;
-pub(crate) use people::__path_admin_permissions_readiness;
 pub use people::{
     capabilities_router, config_capabilities_router, people_publish_router, people_router,
     permissions_readiness_router,
@@ -220,6 +226,10 @@ pub use reason_codes::{config_reason_codes_router, reason_code_router};
 pub use reconcile::reconcile_router;
 pub use registry::registry_router;
 use setting_refusal::save_if_confirmed;
+pub(crate) use sync::{
+    __path_edge_config_sync, __path_edge_events_hello, __path_edge_heartbeat,
+    __path_edge_publish_events,
+};
 pub use sync::{MAX_PUBLISHED_EVENTS, MAX_PUBLISHED_EVENTS_BYTES};
 use sync::{edge_config_sync, edge_events_hello, edge_heartbeat, edge_publish_events};
 // What the people, fee, settings, store-group and release routes refuse a registry failure with.
@@ -244,7 +254,6 @@ pub use translations::translation_router;
 
 // The error envelope and its helpers live in pos-cloud-api; `crate::http::api_error` and the rest
 // stay importable from here.
-use crate::openapi_admin::AdminApiDoc;
 use pos_cloud_reports::revenue::{
     admin_export_revenue, admin_export_revenue_fees, admin_export_revenue_tax, admin_revenue_daily,
 };
@@ -677,12 +686,8 @@ where
     }
 }
 
-/// Builds the cloud router over `app`.
-#[expect(
-    clippy::too_many_lines,
-    reason = "a flat registration of every cloud route in one place; splitting it would scatter the \
-              route table across helpers and obscure the surface, which is the opposite of clear"
-)]
+/// Builds the cloud router over `app`: every area's routes ([`cloud_routes`]), then the state, then
+/// the security headers.
 pub fn router<S, R, K, C, A, T, W>(app: CloudApp<S, R, K, C, A, T, W>) -> Router
 where
     S: EventStore + Clone + Send + Sync + 'static,
@@ -694,172 +699,7 @@ where
     T: ConfigTreeStore + Clone + Send + Sync + 'static,
     W: WebhookEndpointStore + Clone + Send + Sync + 'static,
 {
-    Router::new()
-        .route("/health", get(health))
-        .route("/internal/ingest", post(ingest::<S, R, K, C, A, T, W>))
-        .route(
-            "/v1/stores/{store_id}/rollups/daily",
-            get(daily_rollups::<R, K, C, A, PublishedTillNames<T>>),
-        )
-        .route("/v1/openapi.json", get(openapi))
-        .route("/admin/openapi.json", get(admin_openapi))
-        .route(
-            "/sync/stores/{store_id}/config",
-            get(edge_config_sync::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/sync/stores/{store_id}/heartbeat",
-            post(edge_heartbeat::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/sync/stores/{store_id}/events",
-            post(edge_publish_events::<S, R, K, C, A, T, W>).layer(
-                axum::extract::DefaultBodyLimit::max(MAX_PUBLISHED_EVENTS_BYTES),
-            ),
-        )
-        .route(
-            "/sync/stores/{store_id}/events/hello",
-            post(edge_events_hello::<S, R, K, C, A, T, W>),
-        )
-        .route("/admin/login", post(admin_login::<S, R, K, C, A, T, W>))
-        .route("/admin/logout", post(admin_logout::<S, R, K, C, A, T, W>))
-        .route("/admin/session", get(admin_session::<S, R, K, C, A, T, W>))
-        .route("/admin/whoami", get(admin_whoami::<S, R, K, C, A, T, W>))
-        .route(
-            "/admin/sessions",
-            get(admin_list_sessions::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/sessions/revoke-others",
-            post(admin_revoke_other_sessions::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/sessions/{id}",
-            delete(admin_revoke_session::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/totp",
-            post(admin_reenrol_totp::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/recovery-codes",
-            post(admin_generate_recovery_codes::<S, R, K, C, A, T, W>)
-                .get(admin_recovery_codes_status::<S, R, K, C, A, T, W>),
-        )
-        .route("/admin/setup", post(admin_setup::<S, R, K, C, A, T, W>))
-        .route(
-            "/admin/api-keys",
-            post(admin_create_api_key::<S, R, K, C, A, T, W>)
-                .get(admin_list_api_keys::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/api-keys/{id}",
-            delete(admin_revoke_api_key::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/admins",
-            get(admin_list_admins::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/admins/{id}/role",
-            axum::routing::patch(admin_set_admin_role::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/admins/{id}/status",
-            axum::routing::patch(admin_set_admin_status::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/invites",
-            post(admin_invite_admin::<S, R, K, C, A, T, W>)
-                .get(admin_list_invites::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/invites/accept",
-            post(admin_accept_invite::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/invites/{id}",
-            delete(admin_revoke_invite::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/stores/{store_id}/config",
-            get(admin_config_effective::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/stores/{store_id}/config/nodes",
-            get(admin_config_nodes::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/stores/{store_id}/config/versions",
-            get(admin_config_versions::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/stores/{store_id}/config/versions/{version_id}",
-            get(admin_config_version_effective::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/stores/{store_id}/config/rollback",
-            post(admin_config_rollback::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/stores/{store_id}/config/{level}",
-            axum::routing::put(admin_config_publish::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/stores/{store_id}/rollups/reset",
-            post(admin_rollups_reset::<R, K, C, A, PublishedTillNames<T>>),
-        )
-        .route(
-            "/admin/stores/{store_id}/rollups/daily",
-            get(admin_daily_rollups::<R, K, C, A, PublishedTillNames<T>>),
-        )
-        // Beside the other rollup reads, and on **this** router, because the roster is folded into
-        // the same materialised blob the reads above answer from — the state that answers it lives
-        // here. It is under `/admin/stores/…/devices/` rather than `/admin/devices/` because it is a
-        // fact about one store, and `admitted` distinguishes it from the sibling
-        // `/admin/stores/{store_id}/devices`, which lists the console's **named** devices: a
-        // different identity space that nothing joins to this one (ADR-0118 §4).
-        .route(
-            "/admin/stores/{store_id}/devices/admitted",
-            get(admin_admitted_devices::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/stores/{store_id}/revenue/daily",
-            get(admin_revenue_daily::<R, K, C, A, PublishedTillNames<T>>),
-        )
-        .route(
-            "/admin/stores/{store_id}/reports/xz",
-            get(admin_xz_report::<R, K, C, A, PublishedTillNames<T>>),
-        )
-        .route(
-            "/admin/stores/{store_id}/rollups/export",
-            get(admin_export_rollups::<R, K, C, A, PublishedTillNames<T>>),
-        )
-        .route(
-            "/admin/stores/{store_id}/revenue/export",
-            get(admin_export_revenue::<R, K, C, A, PublishedTillNames<T>>),
-        )
-        .route(
-            "/admin/stores/{store_id}/revenue/fees/export",
-            get(admin_export_revenue_fees::<R, K, C, A, PublishedTillNames<T>>),
-        )
-        .route(
-            "/admin/stores/{store_id}/revenue/tax/export",
-            get(admin_export_revenue_tax::<R, K, C, A, PublishedTillNames<T>>),
-        )
-        .route(
-            "/admin/webhooks",
-            post(admin_register_webhook::<S, R, K, C, A, T, W>)
-                .get(admin_list_webhooks::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/webhooks/{id}",
-            delete(admin_delete_webhook::<S, R, K, C, A, T, W>),
-        )
-        .route(
-            "/admin/webhooks/{id}/enable",
-            post(admin_enable_webhook::<S, R, K, C, A, T, W>),
-        )
+    cloud_routes::all_routes::<S, R, K, C, A, T, W>()
         .with_state(app)
         // The admin-console security headers ([ADR-0067] slice 5) on every response this router
         // serves — which is *only* this router. `main.rs` applies the same layer to the
@@ -899,16 +739,6 @@ struct VoucherListQuery {
 /// The generated OpenAPI document for the public `/v1` surface.
 async fn openapi() -> Json<utoipa::openapi::OpenApi> {
     Json(ApiDoc::openapi())
-}
-
-/// Serves the generated `/admin` console API document (roadmap v3 B5).
-///
-/// Unauthenticated, like `/v1/openapi.json`: it describes routes and carries no tenant data, and
-/// the console SPA this server already ships publicly names every one of these paths in its own
-/// JavaScript — so a session guard here would withhold nothing an unauthenticated caller cannot
-/// already read, while blocking the fork developer the document exists for.
-async fn admin_openapi() -> Json<utoipa::openapi::OpenApi> {
-    Json(AdminApiDoc::openapi())
 }
 
 /// Ingests a batch of event envelopes, idempotently. Internal (the reconciliation re-push target),
@@ -2535,9 +2365,9 @@ mod console_config_redaction_tests {
     //! together, as the config reads and the publish previews must, and still as two rules.
 
     use super::config_publish::redaction::{
-        PRICED_CONFIG_NODES, without_prices, without_staff_credentials, without_staff_identities,
+        PRICED_CONFIG_NODES, staff_redacted_for, without_prices, without_staff_credentials,
+        without_staff_identities,
     };
-    use super::staff_redacted_for;
     use crate::auth::admin::AdminRole;
     use crate::config_tree::merge::diff;
     use serde_json::json;

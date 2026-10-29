@@ -13,7 +13,7 @@ Verifies that an OTA release artifact was signed by the offline key before the e
 ## Depends on / used by
 
 - **Depends on** (workspace crates): `pos-ports`; in tests, `pos-contract-tests`, `pos-fakes`.
-- **Used by** (workspace crates): `pos-edge`.
+- **Used by** (workspace crates): `pos-cloud`, `pos-edge`.
 
 ## Entry points
 

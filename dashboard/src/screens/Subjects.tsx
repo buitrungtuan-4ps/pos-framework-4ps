@@ -11,7 +11,7 @@
 import { createSignal, For, Show } from "solid-js";
 
 import { api, ApiError } from "../api/client";
-import type { SubjectExport, SubjectMeta } from "../api/types";
+import type { SubjectExport, SubjectMeta } from "../api/schemas";
 import { t } from "../i18n";
 import { formatInstant } from "../lib/format";
 import { onScopedContext, RequireContext } from "../lib/scoped";

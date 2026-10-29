@@ -7,7 +7,7 @@ import type {
   PairedDevice,
   PrinterEntry,
   TerminalsResponse,
-} from "../api/types";
+} from "../api/schemas";
 import { QrCode } from "../components/QrCode";
 import { ReadFailed } from "../components/StoreData";
 import { PageHeader } from "../components/ui";

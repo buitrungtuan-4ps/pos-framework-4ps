@@ -1,0 +1,4 @@
+{
+  "$comment": "The UI languages the till (ui/) and the console (dashboard/) support. A language is listed here only when both front ends ship a complete catalogue for it, reviewed by a native speaker: never a machine translation. `cargo xtask i18n` holds each front end's catalogues and LOCALES to this list, and names a language a country module declares that is not listed as declared, not yet supported. A missing message falls back to `en`. See docs/languages.md.",
+  "supported": ["en", "vi"]
+}

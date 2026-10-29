@@ -30,7 +30,7 @@ use crate::catalog_compiler::{compile_layout_book, compile_menu};
 use crate::config_tree::{ConfigLevel, ConfigTreeStore};
 use crate::fees::FeeRuleStore;
 use crate::registry::RegistryStore;
-use crate::routes::fees::{FeePublishResult, TenantFeeRules};
+use crate::routes::fees::{FeePublishOutcome, FeePublishResult, TenantFeeRules};
 use crate::routes::publish_config_nodes_with;
 use crate::version::records;
 
@@ -100,7 +100,7 @@ where
     clippy::struct_field_names,
     reason = "tenant_id/store_id/menu_id are the wire field names; the shared _id postfix is the ULID naming convention (docs/naming-and-api.md), not a smell"
 )]
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PublishMenuRequest {
     /// The tenant that owns the catalog and the store (a 26-character ULID).
     tenant_id: String,
@@ -202,7 +202,7 @@ where
 }
 
 /// What a menu publish answers: the version it produced, and how the store's fees went with it.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct PublishedMenu {
     /// The new config version id (a ULID).
     config_version_id: String,
@@ -212,6 +212,35 @@ struct PublishedMenu {
     fees: FeePublishResult,
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/catalog/publish",
+    extensions(("x-permission" = json!("console.config.publish"))),
+    security(("session_cookie" = [])),
+    request_body(
+        content = PublishMenuRequest, description = "`tenant_id`, the `store_id` to publish to, and the `menu_id` to compile, with \
+                       the menus it inherits from",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = PublishedMenu, description = "Published: the menu's price book and the till layout are \
+                                      written to the store's `menu` and `layout` nodes in one \
+                                      configuration version, with its `fees` node where that \
+                                      changes (ADR-0159). The body carries `config_version_id` and \
+                                      `fees`, the fee publish's outcome: applied, unchanged, refused \
+                                      with each rule the store cannot apply, or failed. A store that \
+                                      cannot apply a fee still gets its menu. Audited"),
+        (status = 400, description = "tenant_id, store_id or menu_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 412, description = "Every attempt to write the store's configuration lost a race \
+                                      with another publish: try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 422, description = "The menu does not compile, naming why, or the store's \
+                                      configuration would not validate with it", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The catalog store or the configuration store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "menus",
+)]
 /// A super-admin publishes a menu to a store: compile the price book and the presentation layout →
 /// write the `MenuBook` and `LayoutBook` to the store's `menu` and `layout` config nodes, with the
 /// store's `fees` node beside them where it changes → version it through the config tree.
@@ -356,7 +385,7 @@ where
     )
     .await?;
     let fees = composed.map_or_else(
-        || FeePublishResult::of(store_id, "FEE_PUBLISH_FAILED"),
+        || FeePublishResult::of(store_id, FeePublishOutcome::Failed),
         |on_tree| on_tree.result(store_id, Some(id)),
     );
     Ok((id, fees))

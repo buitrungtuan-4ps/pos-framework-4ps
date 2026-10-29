@@ -16,7 +16,8 @@ pos-cloud-config  = { path = "../pos-cloud-config" }
 # The revenue CSV writers the catalog's export module re-exports beside the item master's.
 pos-cloud-reports = { path = "../pos-cloud-reports" }
 pos-core          = { path = "../pos-core" }
-pos-proto         = { path = "../pos-proto" }
+# `openapi`: the wire types this crate's records carry need their schemas (ADR-0177, ADR-0180).
+pos-proto         = { path = "../pos-proto", features = ["openapi"] }
 # The catalog, fee-rule, media, tax-rate and translation tables (ADR-0016). This crate implements
 # its store traits for them, since a trait can be implemented for another crate's type only where
 # the trait is defined.

@@ -493,6 +493,7 @@ async fn a_menu_batch_brings_each_members_fees_along_and_says_which_it_left_behi
         config_trees.clone(),
         catalog,
         rules,
+        Arc::new(NoopAuditRecorder),
     );
     let cookie = admin_cookie(&router).await;
     let published = router

@@ -1,0 +1,72 @@
+// Copyright (c) 2026 Pizza 4P's. All rights reserved.
+// Proprietary and confidential. Internal use only. See LICENSE.
+
+//! `storage-sandbox` against the shared `BlobStore` contract suite.
+//!
+//! The harness puts an in-memory map behind the adapter's transport. Its `keys` answers by plain text
+//! prefix, as an object store does, so the suite's prefix case checks the core's narrowing. The
+//! adapter's futures never suspend, so the suite runs under `run_ready`, a one-poll executor.
+
+#![allow(
+    clippy::expect_used,
+    reason = "test scaffolding: a poisoned lock in the map is an unrecoverable test fault"
+)]
+
+use std::collections::BTreeMap;
+use std::sync::Mutex;
+
+use pos_contract_tests::harness::{BlobStoreHarness, Setup};
+use pos_fakes::executor::run_ready;
+use storage_sandbox::{SandboxStorage, Transport, Unreachable};
+
+/// An in-memory object store.
+#[derive(Debug, Default)]
+struct Objects {
+    map: Mutex<BTreeMap<String, Vec<u8>>>,
+}
+
+impl Objects {
+    fn map(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Vec<u8>>> {
+        self.map.lock().expect("object map lock")
+    }
+}
+
+impl Transport for Objects {
+    fn put(&self, key: &str, body: &[u8]) -> Result<(), Unreachable> {
+        self.map().insert(key.to_owned(), body.to_vec());
+        Ok(())
+    }
+
+    fn get(&self, key: &str) -> Result<Option<Vec<u8>>, Unreachable> {
+        Ok(self.map().get(key).cloned())
+    }
+
+    fn delete(&self, key: &str) -> Result<(), Unreachable> {
+        self.map().remove(key);
+        Ok(())
+    }
+
+    fn keys(&self, prefix: &str) -> Result<Vec<String>, Unreachable> {
+        Ok(self
+            .map()
+            .keys()
+            .filter(|key| key.starts_with(prefix))
+            .cloned()
+            .collect())
+    }
+}
+
+struct Harness;
+
+impl BlobStoreHarness for Harness {
+    type Store = SandboxStorage<Objects>;
+
+    async fn fresh(&self) -> Setup<Self::Store> {
+        Ok(SandboxStorage::new(Objects::default()))
+    }
+}
+
+mod blob_store {
+    use super::{Harness, run_ready};
+    pos_contract_tests::blob_store_suite!(Harness, run_ready);
+}

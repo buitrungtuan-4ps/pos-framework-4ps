@@ -23,8 +23,29 @@ use crate::http::{
     RegistryTenantQuery, already_exists, if_match, not_found, version_mismatch, versioned_created,
     versioned_ok,
 };
+use crate::version::Versioned;
 use crate::version::{CreateOutcome, UpdateOutcome};
+use pos_proto::campaign::PublishedCampaign;
 
+#[utoipa::path(
+    get,
+    path = "/admin/campaigns",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The tenant whose campaigns to list (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, body = [Versioned<PublishedCampaign>], description = "The tenant's campaigns as authored, each with its `etag`. A \
+                                      campaign reaches a store only when the store's campaigns are \
+                                      published"),
+        (status = 400, description = "tenant_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The campaign store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "campaigns",
+)]
 /// A super-admin lists a tenant's authored campaigns.
 pub(super) async fn admin_list_campaigns<Camp, A, C>(
     State(state): State<CampaignState<Camp, A, C>>,
@@ -56,6 +77,26 @@ where
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/campaigns/{campaign_id}",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    params(
+        ("campaign_id" = String, Path, description = "The campaign's 26-character ULID"),
+        ("tenant_id" = String, Query, description = "The tenant that owns it (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, body = Versioned<PublishedCampaign>, description = "The campaign as authored, with its `etag` field — the token a \
+                                      PUT must send back as If-Match"),
+        (status = 400, description = "tenant_id or campaign_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no campaign with that id", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The campaign store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "campaigns",
+)]
 /// A super-admin reads one campaign by id.
 pub(super) async fn admin_get_campaign<Camp, A, C>(
     State(state): State<CampaignState<Camp, A, C>>,
@@ -92,6 +133,33 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/campaigns",
+    extensions(("x-permission" = json!("console.campaigns.manage"))),
+    security(("session_cookie" = [])),
+    request_body(
+        content = CampaignRequest, description = "`tenant_id`, `name`, `kind` (`item_level`, `combo`, `bill_level`, `voucher` \
+                       or `manual`), `priority`, and optionally `exclusion_group`, then the \
+                       `action` the edge's pricing engine applies, its `conditions` (channels, a \
+                       daily schedule window and the rest) and `quota_remaining`, in the shape of \
+                       `pos-proto`'s published campaign. The id is never sent: the server owns it",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, body = Versioned<PublishedCampaign>, description = "Created, with the id minted here. The body is the campaign and \
+                                      the ETag carries its version. Audited with its name, kind and \
+                                      priority, never its discount terms"),
+        (status = 400, description = "An id is not a ULID; name is blank; a schedule minute is \
+                                      outside the day; a channel is unknown; or a percentage or \
+                                      amount off is negative", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.campaigns.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 409, description = "A campaign with the minted id already exists", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The campaign store or the entropy source is unavailable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "campaigns",
+)]
 /// A super-admin creates a campaign; the server mints its id.
 pub(super) async fn admin_create_campaign<Camp, A, C>(
     State(state): State<CampaignState<Camp, A, C>>,
@@ -151,6 +219,41 @@ where
     }
 }
 
+#[utoipa::path(
+    put,
+    path = "/admin/campaigns/{campaign_id}",
+    extensions(("x-permission" = json!("console.campaigns.manage"))),
+    security(("session_cookie" = [])),
+    params(
+        ("campaign_id" = String, Path, description = "The campaign's 26-character ULID"),
+        ("If-Match" = String, Header, description = "The ETag the campaign was read at (ADR-0094). \
+                                                     Required; a wildcard is refused"),
+    ),
+    request_body(
+        content = CampaignRequest, description = "`tenant_id`, `name`, `kind` (`item_level`, `combo`, `bill_level`, `voucher` \
+                       or `manual`), `priority`, and optionally `exclusion_group`, then the \
+                       `action` the edge's pricing engine applies, its `conditions` (channels, a \
+                       daily schedule window and the rest) and `quota_remaining`, in the shape of \
+                       `pos-proto`'s published campaign. The id is never sent: the server owns it",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = Versioned<PublishedCampaign>, description = "Updated. The body is the campaign and the ETag carries its new \
+                                      version. Audited with its name, kind and priority before and \
+                                      after, never its discount terms"),
+        (status = 400, description = "An id is not a ULID; name is blank; a schedule minute is \
+                                      outside the day; a channel is unknown; a percentage or amount \
+                                      off is negative; or If-Match is absent, malformed, or a \
+                                      wildcard", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.campaigns.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no campaign with that id", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "The campaign changed since you read it: re-read it and try \
+                                      again", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The campaign store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "campaigns",
+)]
 /// A super-admin updates a campaign in place, by the path id.
 pub(super) async fn admin_update_campaign<Camp, A, C>(
     State(state): State<CampaignState<Camp, A, C>>,
@@ -220,6 +323,26 @@ where
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/admin/campaigns/{campaign_id}",
+    extensions(("x-permission" = json!("console.campaigns.manage"))),
+    security(("session_cookie" = [])),
+    params(
+        ("campaign_id" = String, Path, description = "The campaign's 26-character ULID"),
+        ("tenant_id" = String, Query, description = "The tenant that owns it (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 204, description = "Deleted, and audited. A store keeps running it until its \
+                                      campaigns are next published"),
+        (status = 400, description = "tenant_id or campaign_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.campaigns.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no campaign with that id", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The campaign store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "campaigns",
+)]
 /// A super-admin deletes a campaign by id.
 pub(super) async fn admin_delete_campaign<Camp, A, C>(
     State(state): State<CampaignState<Camp, A, C>>,

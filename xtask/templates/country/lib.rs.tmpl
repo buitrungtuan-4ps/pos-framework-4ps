@@ -1,0 +1,162 @@
+// Copyright (c) 2026 Pizza 4P's. All rights reserved.
+// Proprietary and confidential. Internal use only. See LICENSE.
+
+//! {{display_name}}: the values its law sets, as `cargo xtask new country` was given them
+//! ([ADR-0176](../../../docs/adr/0176-the-adapter-and-country-standard.md)).
+//!
+//! Everything below is a constant ([ADR-0105](../../../docs/adr/0105-a-country-pack-is-values.md)).
+//! The fiscal half is the offline allocator every country shares, so the module passes the
+//! `Fiscalization` contract suite before any provider is chosen.
+
+#![forbid(unsafe_code)]
+#![doc(test(attr(deny(warnings))))]
+
+use pos_country::CountryModule;
+use pos_country::offline::OfflineFiscalization;
+use pos_country::tax_class;
+use pos_proto::SalesChannel;
+use pos_proto::locale::{CountryCode, LocalePack, NumberFormat, TaxRate, TaxRateTable};
+use pos_proto::money::CurrencyCode;
+use pos_proto::text::TranslationKey;
+
+/// The country's ISO 3166-1 code.
+const COUNTRY: &str = "{{CC}}";
+
+/// The ISO 4217 code of the currency it prices in.
+const CURRENCY: &str = "{{currency}}";
+
+/// The smallest amount cash is rounded to, in minor units, or `None` for no rounding.
+const CASH_ROUNDING: Option<i64> = {{cash_rounding}};
+
+/// {{display_name}}.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct {{type_name}};
+
+impl CountryModule for {{type_name}} {
+    fn country_code(&self) -> CountryCode {
+        country_code()
+    }
+
+    fn locale_pack(&self) -> LocalePack {
+        LocalePack {
+            country_code: country_code(),
+            currency_code: currency_code(),
+            currency_exponent: {{exponent}},
+            tax_rate_table: rate_table(),
+            // The default format, `1,234,567.89`. Replace it if the country writes numbers otherwise.
+            number_format: NumberFormat::default(),
+            default_language: TranslationKey::new("{{language}}"),
+            // A default, not a determination: the operator confirms it against its lawful basis.
+            default_retention_days: {{retention_days}},
+            prices_include_tax: {{prices_include_tax}},
+            cash_rounding_increment: CASH_ROUNDING,
+            // No quick-cash keys: the exact amount only, until the country's notes are listed.
+            cash_denominations: Vec::new(),
+        }
+    }
+
+    fn display_name(&self) -> &'static str {
+        "{{display_name}}"
+    }
+
+    fn is_valid_tax_code(&self, tax_code: &str) -> bool {
+        // Format only, never registration, and the reference module's format: replace it with the
+        // country's own rule.
+        !tax_code.is_empty()
+            && tax_code.len() <= 20
+            && tax_code.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    }
+}
+
+/// [`COUNTRY`], parsed. `cargo xtask new country` checked it before writing it and a test below
+/// checks it again, so the fallback, the reference country, is never taken.
+fn country_code() -> CountryCode {
+    CountryCode::parse(COUNTRY).unwrap_or(CountryCode::ZZ)
+}
+
+/// [`CURRENCY`], parsed. Checked as [`COUNTRY`] is; the fallback is the reference country's.
+fn currency_code() -> CurrencyCode {
+    CurrencyCode::parse(CURRENCY).unwrap_or(CurrencyCode::USD)
+}
+
+/// Every tax class on every channel, stated: `rate_for` answers `None` for a missing row, and a
+/// caller treating `None` as zero would sell untaxed.
+fn rate_table() -> TaxRateTable {
+    TaxRateTable::new()
+{{rate_rows}}
+}
+
+/// `Fiscalization` for {{display_name}}, over a locally allocated range.
+///
+/// The number is a placeholder shape, the series then the index. The authority, or a provider,
+/// prescribes the real one.
+#[must_use]
+pub fn fiscalization() -> OfflineFiscalization {
+    OfflineFiscalization::new("{{cc}}", |series, index| format!("{{CC}}{series:04}/{index:06}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{COUNTRY, CURRENCY, {{type_name}}, fiscalization};
+    use core::num::NonZeroU32;
+
+    use pos_country::{CountryModule, tax_class};
+    use pos_fakes::executor::run_ready;
+    use pos_ports::fiscalization::Fiscalization;
+    use pos_proto::locale::CountryCode;
+    use pos_proto::money::CurrencyCode;
+    use pos_proto::{SalesChannel, StoreId, Ulid};
+
+    #[test]
+    fn the_codes_parse_so_no_fallback_is_taken() {
+        assert!(CountryCode::parse(COUNTRY).is_ok());
+        assert!(CurrencyCode::parse(CURRENCY).is_ok());
+        let pack = {{type_name}}.locale_pack();
+        assert_eq!(pack.country_code.as_str(), COUNTRY);
+        assert_eq!(pack.currency_code.as_str(), CURRENCY);
+    }
+
+    #[test]
+    fn every_class_has_a_rate_on_every_channel() {
+        let pack = {{type_name}}.locale_pack();
+        for (label, class) in tax_class::all() {
+            for channel in [
+                SalesChannel::DineIn,
+                SalesChannel::Takeaway,
+                SalesChannel::Delivery,
+                SalesChannel::Qr,
+                SalesChannel::Api,
+            ] {
+                assert!(
+                    pack.rate_for(class, channel).is_some(),
+                    "{label} on {channel:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_module_registers_and_is_found_by_its_code() {
+        let registry = pos_country::country_registry! { {{type_name}} };
+        registry.validate().expect("one country is valid");
+        let code = CountryCode::parse(COUNTRY).expect("the code parses");
+        assert!(registry.get(code).is_some());
+    }
+
+    #[test]
+    fn two_ranges_never_share_a_number() {
+        // A number format that drops the series hands the same number out twice after a second
+        // allocation; keep the series in whatever format replaces the placeholder.
+        let fiscal = fiscalization();
+        let store = StoreId::new(Ulid::from_u128(1));
+        let count = NonZeroU32::new(4).expect("4 is not zero");
+        let first = run_ready(fiscal.allocate_range(store, count)).expect("a range");
+        let second = run_ready(fiscal.allocate_range(store, count)).expect("a second range");
+        for number in &first.numbers {
+            assert!(
+                !second.numbers.contains(number),
+                "{number:?} was handed out by both ranges"
+            );
+        }
+    }
+}

@@ -81,7 +81,7 @@ struct ChainFindingsQuery {
 /// Positions, hashes and identifiers — no event contents and no customer identifier. A chain hash is
 /// a digest of an envelope whose every payload field `pos_proto::pii` has already proven free of
 /// personal data.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct ChainFindingView {
     /// The finding's id, derived from the contradiction rather than minted, so a re-delivery of the
     /// same bad claim does not multiply into rows.
@@ -118,12 +118,14 @@ impl ChainFindingView {
 #[utoipa::path(
     get,
     path = "/admin/chain-findings",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     params(
         ("tenant_id" = String, Query, description = "The tenant whose findings to read (a 26-character ULID)"),
         ("store_id" = Option<String>, Query, description = "Narrow to one store (a ULID); absent reads across the tenant's stores"),
     ),
     responses(
-        (status = 200, description = "The contradictions the cloud refused, newest first. Each is \
+        (status = 200, body = [ChainFindingView], description = "The contradictions the cloud refused, newest first. Each is \
                                       two hashes claiming to describe one store's chain at one \
                                       length, and only one of them can be true. An empty list is \
                                       the expected answer: it means nothing was refused, not that \

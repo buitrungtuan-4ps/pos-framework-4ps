@@ -25,6 +25,7 @@ use crate::money::{Money, MoneyError, Rounding};
 /// The wire form is the integer count of thousandths, so 1.5 is `1500`. Naming it
 /// `milli` rather than `value` keeps the scale visible at every use site.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Quantity {
     /// Thousandths of a unit.

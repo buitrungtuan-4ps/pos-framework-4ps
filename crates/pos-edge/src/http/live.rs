@@ -42,6 +42,7 @@ use crate::app::Edge;
 
 /// One line of an open order, with everything a screen needs to draw it and act on it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct LiveLineResponse {
     /// The id a fire, a void or a bump is addressed to.
     order_line_id: String,
@@ -62,6 +63,7 @@ struct LiveLineResponse {
     /// reloads mid-service still counts from when the food was actually ordered — and two boards
     /// side by side agree.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     fired_time: Option<Timestamp>,
     /// The modifiers chosen for the line (ADR-0127), as ids — the caller names them from the price
     /// book it already holds. Always present, empty for a line that carries none, so a reader never
@@ -71,6 +73,7 @@ struct LiveLineResponse {
     /// the way every other optional field on this route is: a `seat` of zero is not "no seat", and a
     /// null would be a second spelling of the same nothing.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     seat: Option<u16>,
     /// The course the line goes out on, absent for a line on none (ADR-0130). Omitted when absent,
     /// for the reason `seat` is.
@@ -79,30 +82,36 @@ struct LiveLineResponse {
     /// offered to send starters the screen no longer knew were starters — the same loss `seat` was
     /// added here to stop, one field over.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     course_id: Option<String>,
     /// The station the line was fired to, absent while it is still on the pad. Omitted when absent,
     /// for the reason `seat` is. What a kitchen board filters on, so a bar screen that reloads shows
     /// the bar's tickets and not the grill's.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     station_id: Option<String>,
     /// Whether a guest note was written for the line. Always present, because `true` with no `note`
     /// is a note the edge lost to a restart, which a screen must say rather than hide (ADR-0157).
     note_present: bool,
     /// The guest's note while the edge holds it. Omitted when absent, for the reason `seat` is.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     note: Option<String>,
 }
 
 /// One open order.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct LiveOrderResponse {
     order_id: String,
     /// The table it sits on. Absent for a counter order, which has none.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     table_id: Option<String>,
     /// A bill already open on it, so a device that reloads on the payment screen settles **that**
     /// bill rather than asking for a second one the domain would refuse.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     bill_id: Option<String>,
     /// Every bill still open on it, oldest first: one for an ordinary table, one per unpaid part
     /// once its bill has been split (ADR-0128). `bill_id` names only the newest, so a device that
@@ -112,27 +121,54 @@ struct LiveOrderResponse {
     /// of its channel, and whether the guest eats in or takes away (ADR-0160 decision 2). Absent for
     /// an order the edge cannot name a channel for.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     sales_channel: Option<&'static str>,
     lines: Vec<LiveLineResponse>,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/orders/live",
+    security(("till_session" = [])),
+    responses(
+        (status = 200, body = Vec<LiveOrderResponse>, description = "Every open order, floor and counter, with its table, open bills and \
+                                      channel where it has them, and every line with the id a fire, a void \
+                                      or a bump is addressed to"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+    ),
+    tag = "orders",
+))]
 /// `GET /api/orders/live` — every open order with its lines.
 ///
 /// A pure read of the projection: no decision, no write, and nothing that can fail. An order the
 /// store has settled is gone from it, which is what keeps the answer the size of the store's live
 /// trading rather than of its history.
-pub(crate) async fn read<S>(State(edge): State<Arc<Edge<S>>>) -> Response
+pub(crate) async fn live_orders<S>(State(edge): State<Arc<Edge<S>>>) -> Response
 where
     S: EventStore + Send + Sync + 'static,
 {
     respond(edge.live_orders())
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/orders/kitchen",
+    security(("till_session" = [])),
+    responses(
+        (status = 200, body = Vec<LiveOrderResponse>, description = "Every open order, and each paid order without a table that the kitchen \
+                                      has not finished, fired on the current business day, in the shape `GET \
+                                      /api/orders/live` answers with"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+    ),
+    tag = "kitchen",
+))]
 /// `GET /api/orders/kitchen` — what the kitchen still has to make, in the same shape.
 ///
 /// A read, like the live one; it also ends the day for a paid order fired on an earlier business
 /// day, which then leaves the board and has its notes forgotten.
-pub(crate) async fn kitchen<S>(State(edge): State<Arc<Edge<S>>>) -> Response
+pub(crate) async fn kitchen_orders<S>(State(edge): State<Arc<Edge<S>>>) -> Response
 where
     S: EventStore + Send + Sync + 'static,
 {

@@ -1,29 +1,83 @@
 # Add a country module
 
-**Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-08-21
+**Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-10-20
 
 A country module holds everything specific to one country: its tax-invoice rules (`Fiscalization`),
 its locale pack (currency, timezone, date/number formats, receipt templates, channel-keyed tax rates),
 and any local vendors. The core never changes when you add one, and a fork that serves two of five
 countries compiles only those two ([ADR-0027](../adr/0027-country-modules.md)).
 
-The reference module is [`countries/zz`](../../countries/zz) — copy it. Three real ones are
+Generate it ([ADR-0176](../adr/0176-the-adapter-and-country-standard.md)). Every value the
+country's law sets is a required flag, and the command refuses to run without one:
+
+```bash
+cargo xtask new country <cc> --display-name <name> --currency <ISO 4217> --exponent <0-4> \
+  --prices-include-tax <true|false> --cash-rounding <none|minor units> \
+  --tax-rate food=<basis points> --tax-rate alcohol=<bp> --tax-rate exempt=<bp> \
+  [--tax-rate food@takeaway=<bp>] --retention-days <n> --language <tag>
+```
+
+It writes `countries/<cc>` and does the three edits below for you, in `pos-edge` and `pos-cloud`
+alike, and adds the country to no default feature. The module's `Fiscalization` is the shared
+offline allocator, so its contract suite passes from the first build. It prints the neighbouring
+README lines to paste, which `cargo xtask crates` also shows. Then fill in what it left neutral,
+under [Fill in the country's obligations](#fill-in-the-countrys-obligations): the number format, the
+tax-code rule, the cash denominations and the invoice number's shape.
+
+## Try it with an illustrative country
+
+Run the generator once on a country that does not exist before you write a real one. Every value
+below is **illustrative**: `XA` is an ISO 3166 user-assigned code and `XTS` is the code ISO 4217
+reserves for testing, so neither names a real market, and the rates, rounding and retention period
+are invented for the example. They are not any country's law. A real country's values come from its
+law, confirmed by its owner ([ADR-0105](../adr/0105-a-country-pack-is-values.md)).
+
+<!-- guide:command -->
+```bash
+cargo xtask new country xa --display-name "Example country" --currency XTS --exponent 2 \
+  --prices-include-tax false --cash-rounding 5 --tax-rate food=1000 --tax-rate alcohol=1000 \
+  --tax-rate exempt=0 --tax-rate food@takeaway=800 --retention-days 365 --language en
+```
+
+Then prove what it wrote: the module passes its own tests and the `Fiscalization` contract suite,
+it is wired so `cargo xtask countries` accepts it, and both binaries build with it selected.
+
+<!-- guide:verify -->
+```bash
+cargo test -p pos-country-xa
+cargo xtask countries
+cargo check -p pos-edge --no-default-features --features country-xa
+cargo check -p pos-cloud --no-default-features --features country-xa
+```
+
+The example is not meant to be kept. Remove it with `rm -r countries/xa` and `git checkout --
+Cargo.toml Cargo.lock crates/pos-edge crates/pos-cloud`, then run the generator again with your
+country's values.
+`just guides` runs these steps for you, in a scratch worktree, and fails if any of them stops
+working ([How a guide stays true](README.md#how-a-guide-stays-true)).
+
+## Read a real module next
+
+The reference module is [`countries/zz`](../../countries/zz). Three real ones are
 written against the same shape and are the better model for a market you actually intend to open:
 [`countries/vn`](../../countries/vn), [`countries/jp`](../../countries/jp) and
 [`countries/in`](../../countries/in) ([ADR-0105](../adr/0105-a-country-pack-is-values.md)). Read the
 one closest to yours: Japan if your tax varies by channel, India if your invoice must print the
 rate's components, Vietnam if neither.
 
-## Adding a country is exactly three edits
+## What the three edits are
+
+`cargo xtask new country` makes these. They are listed here for review, and for adding a country
+by hand.
 
 `cc` is the lowercase ISO country code (e.g. `vn`, `jp`). The crate **must** be named `pos-country-<cc>`.
 
 1. **The module itself** — `countries/<cc>/` with `Cargo.toml` (`name = "pos-country-<cc>"`), `src/lib.rs`,
-   and `tests/`. Copy `countries/zz` and rename.
+   and `tests/`.
 2. **The workspace** — add `"countries/<cc>"` to `members` in the root `Cargo.toml`. Without this the
    directory is never compiled, linted, or tested — it *looks* done and isn't.
 3. **Each binary that should carry it** — add a `country-<cc>` feature in `crates/pos-edge/Cargo.toml`
-   (and `pos-cloud` if it needs country logic):
+   and `crates/pos-cloud/Cargo.toml`, and an arm in each binary's `src/countries.rs`:
    ```toml
    [features]
    country-vn = ["dep:pos-country-vn"]

@@ -5,138 +5,140 @@
 // this surfaces it as an `ApiError` the screens show without guessing.
 
 import type {
-  ActivationCode,
-  Connection,
   ConnectionInput,
-  ProviderCatalogue,
-  AdminIdentity,
-  AdminInvite,
   AdminRole,
-  AdminSessionView,
   AdminStatus,
-  Alert,
-  ApiKeySummary,
-  Assignment,
   AssignmentTarget,
-  Area,
-  AuditEntry,
   AuditFilter,
-  Brand,
   Campaign,
   CampaignInput,
   CampaignPreview,
-  CapabilityCatalogue,
-  CatalogItem,
-  ChainFinding,
-  Country,
-  FloorTable,
-  RoutingRule,
-  Station,
-  TableQrSheet,
-  ChannelPrice,
   ConfigLevel,
-  ConfigNodes,
-  ConfigVersion,
-  CreateApiKeyResponse,
-  CreatedAssignment,
-  CreatedId,
-  DailyRevenue,
-  DailyRollup,
-  XzReport,
-  Device,
-  CreateTerminalResponse,
-  DeviceProposalSummary,
-  PaperWidth,
-  DisplayCategory,
-  DisplaySubcategory,
-  AdmittedDevice,
-  StoreArchive,
-  Employee,
   EntityStatus,
   ETag,
-  Enrolment,
-  FleetStore,
-  RegionAcknowledgement,
-  StoreLease,
-  Ingredient,
   IngredientInput,
-  InviteAdminResponse,
-  ItemCategory,
   ItemListFilter,
-  ItemSubcategory,
   Json,
-  LayoutButton,
-  Menu,
-  MenuPlacement,
-  MenuSection,
   ItemImportReport,
-  NodePreview,
-  ModifierGroup,
-  PermissionInfo,
-  PermissionsPublishReport,
-  PermissionsReadiness,
-  RecoveryCodesResponse,
-  RecoveryCodesStatus,
-  SalesChannel,
   OtaPlacement,
   OtaRollout,
-  HostedRelease,
-  FetchedRelease,
-  PublishDevicesResponse,
   PublishPlacementRequest,
   PublishRolloutRequest,
   ReasonCode,
   ReasonCodeInput,
   ReasonCodePublishResult,
-  ReconcileRun,
   Recipe,
   RecipeInput,
   QrGuardrails,
   VendorPolicy,
-  EffectiveSetting,
   EffectiveFees,
-  FeePublishReport,
   FeeRule,
   FeeRuleFields,
   FeeScope,
   PreviewFeeRule,
-  SampleBill,
   SampleLineInput,
-  SettingDefinition,
-  SettingPresetsReport,
-  SettingPublishReport,
   SettingScope,
-  WrittenSetting,
-  PublishedConfig,
-  RegisterWebhookResponse,
-  RoleTemplate,
-  Release,
   ReleaseNode,
-  ReleaseReport,
-  ScheduledPublish,
-  ScheduledPublishCreated,
-  Store,
-  StoreGroup,
-  ConfigBatchReport,
-  Supplier,
   SupplierInput,
-  TaskHealthReport,
-  MediaSummary,
-  SubjectExport,
-  SubjectMeta,
-  TaxClass,
-  TaxRate,
-  Tenant,
   TrailOrder,
-  TranslationGrid,
-  TranslationImportReport,
   Page,
   PageRequest,
   UploadedMedia,
   Voucher,
-  WebhookSummary,
 } from "./types";
+import type { AdminMethod, AdminUrlFor } from "./paths";
 import { setActingAdmin, setAuthed } from "../state/session";
+import type { KnownSalesChannel } from "../lib/channels";
+import type {
+  ActivationCode,
+  AdminIdentity,
+  AdminInvite,
+  AdminSessionView,
+  AdmittedDevice,
+  Alert,
+  ApiKeySummary,
+  Area,
+  Assignment,
+  AuditEntry,
+  Brand,
+  CapabilityCatalogue,
+  CatalogItem,
+  ChainFinding,
+  ChannelPrice,
+  ConfigBatchReport,
+  ConfigNodes,
+  ConfigVersion,
+  Connection,
+  Country,
+  CreateApiKeyResponse,
+  CreateTerminalResponse,
+  CreatedAssignment,
+  CreatedId,
+  DailyRevenue,
+  DailyRollup,
+  Device,
+  DeviceProposalSummary,
+  DisplayCategory,
+  DisplaySubcategory,
+  EffectiveSetting,
+  Employee,
+  Enrolment,
+  FeePublishReport,
+  FetchedRelease,
+  FleetStore,
+  FloorTable,
+  HostedRelease,
+  Ingredient,
+  InviteAdminResponse,
+  ItemCategory,
+  ItemSubcategory,
+  LayoutButton,
+  MediaSummary,
+  Menu,
+  MenuPlacement,
+  MenuSection,
+  ModifierGroup,
+  NodePreview,
+  PermissionInfo,
+  PermissionsPublishReport,
+  PermissionsReadiness,
+  ProviderCatalogue,
+  PublishDevicesResponse,
+  PublishedConfig,
+  ReconcileRun,
+  RecoveryCodesResponse,
+  RecoveryCodesStatus,
+  RegionAcknowledgement,
+  RegisterWebhookResponse,
+  Release,
+  ReleaseReport,
+  RoleTemplate,
+  RoutingRule,
+  SampleBill,
+  ScheduledPublish,
+  ScheduledPublishCreated,
+  SettingDefinition,
+  SettingPresetsReport,
+  SettingPublishReport,
+  Station,
+  Store,
+  StoreArchive,
+  StoreGroup,
+  StoreLease,
+  SubjectExport,
+  SubjectMeta,
+  Supplier,
+  TableQrSheet,
+  TaskHealthReport,
+  TaxClass,
+  TaxRate,
+  Tenant,
+  TranslationGrid,
+  TranslationImportReport,
+  WebhookSummary,
+  WrittenSetting,
+  XzReport,
+} from "./schemas";
 
 /** One field-level reason from an AIP-193 error body: the offending field, and a stable reason for it. */
 export interface ApiErrorDetail {
@@ -253,7 +255,11 @@ function errorDetails(raw: unknown): ApiErrorDetail[] {
   });
 }
 
-async function requestJson<T>(method: string, path: string, body?: unknown): Promise<T> {
+export async function requestJson<T, M extends AdminMethod = AdminMethod>(
+  method: M,
+  path: AdminUrlFor<M>,
+  body?: unknown,
+): Promise<T> {
   const response = await fetch(path, {
     method,
     headers: body === undefined ? undefined : { "content-type": "application/json" },
@@ -269,13 +275,13 @@ async function requestJson<T>(method: string, path: string, body?: unknown): Pro
 // entity-tag. The server requires it, so this is the only way to reach a mutating `/admin` route.
 // `etag` is the opaque token as it arrived, and the quotes are added here so no caller has to know
 // the header's grammar.
-async function requestJsonIfMatch<T>(
-  method: string,
-  path: string,
+async function requestJsonIfMatch<T, M extends AdminMethod = AdminMethod>(
+  method: M,
+  path: AdminUrlFor<M>,
   etag: ETag,
   body?: unknown,
 ): Promise<T> {
-  return requestJsonIfMatchRaw<T>(method, path, `"${etag}"`, body);
+  return requestJsonIfMatchRaw<T, M>(method, path, `"${etag}"`, body);
 }
 
 // The same conditional write with the header value formed by the caller, for the config tree
@@ -283,9 +289,9 @@ async function requestJsonIfMatch<T>(
 // to is asserted with `If-Match: *`, which the record-shaped routes above refuse and this one
 // requires. Passing the formed value through keeps that grammar in one place — `configPrecondition`
 // — instead of teaching this helper a second shape.
-async function requestJsonIfMatchRaw<T>(
-  method: string,
-  path: string,
+async function requestJsonIfMatchRaw<T, M extends AdminMethod = AdminMethod>(
+  method: M,
+  path: AdminUrlFor<M>,
   ifMatch: string,
   body?: unknown,
 ): Promise<T> {
@@ -337,7 +343,9 @@ function precondition(version: string | null): string {
 // A read that also hands back the `ETag` the response carried. Collections put their version in the
 // header rather than the body, because a JSON array has nowhere to put a field (ADR-0095); `null`
 // means nothing has been saved yet, which is what the next write asserts with `*`.
-async function requestJsonWithEtag<T>(path: string): Promise<{ value: T; etag: string | null }> {
+async function requestJsonWithEtag<T>(
+  path: AdminUrlFor<"GET">,
+): Promise<{ value: T; etag: string | null }> {
   const response = await fetch(path, { headers: { accept: "application/json" } });
   if (!response.ok) {
     throw await failure(response);
@@ -350,9 +358,9 @@ async function requestJsonWithEtag<T>(path: string): Promise<{ value: T; etag: s
 }
 
 // The `requestJsonIfMatchRaw` shape for a route that answers `204`.
-async function requestVoidIfMatchRaw(
-  method: string,
-  path: string,
+async function requestVoidIfMatchRaw<M extends AdminMethod>(
+  method: M,
+  path: AdminUrlFor<M>,
   ifMatch: string,
   body?: unknown,
 ): Promise<void> {
@@ -374,23 +382,13 @@ async function requestVoidIfMatchRaw(
 // do not carry every field, so the server has no representation to return that it did not invent
 // (ADR-0094). The new version comes back in the `ETag` header; every screen reloads after a write,
 // so nothing here reads it.
-async function requestVoidIfMatch(
-  method: string,
-  path: string,
+async function requestVoidIfMatch<M extends AdminMethod>(
+  method: M,
+  path: AdminUrlFor<M>,
   etag: ETag,
   body?: unknown,
 ): Promise<void> {
-  const response = await fetch(path, {
-    method,
-    headers: {
-      "if-match": `"${etag}"`,
-      ...(body === undefined ? {} : { "content-type": "application/json" }),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  if (!response.ok) {
-    throw await failure(response);
-  }
+  return requestVoidIfMatchRaw(method, path, `"${etag}"`, body);
 }
 
 // The request fields that name where a new assignment grants its role (ADR-0158 decision 3).
@@ -409,9 +407,9 @@ function assignmentTargetFields(target: AssignmentTarget): Record<string, string
 // an assignment, or archiving a person or a role, answers `200` with how each store's publish
 // went; any other write answers `204`, which is `null` here. A conditional write passes the `etag`
 // it read the record at, as `requestVoidIfMatch` does.
-async function requestPublishReport(
-  method: string,
-  path: string,
+async function requestPublishReport<M extends AdminMethod>(
+  method: M,
+  path: AdminUrlFor<M>,
   etag?: ETag,
   body?: unknown,
 ): Promise<PermissionsPublishReport | null> {
@@ -429,7 +427,11 @@ async function requestPublishReport(
   return response.status === 200 ? ((await response.json()) as PermissionsPublishReport) : null;
 }
 
-async function requestVoid(method: string, path: string, body?: unknown): Promise<void> {
+async function requestVoid<M extends AdminMethod>(
+  method: M,
+  path: AdminUrlFor<M>,
+  body?: unknown,
+): Promise<void> {
   const response = await fetch(path, {
     method,
     headers: body === undefined ? undefined : { "content-type": "application/json" },
@@ -442,7 +444,7 @@ async function requestVoid(method: string, path: string, body?: unknown): Promis
 
 // `GET` for an effective config returns the composed document or `404` when nothing is published;
 // the caller distinguishes "not found" (a fresh store) from a real error by the status.
-async function requestJsonOrNull<T>(path: string): Promise<T | null> {
+async function requestJsonOrNull<T>(path: AdminUrlFor<"GET">): Promise<T | null> {
   const response = await fetch(path);
   if (response.status === 404) {
     return null;
@@ -455,7 +457,7 @@ async function requestJsonOrNull<T>(path: string): Promise<T | null> {
 
 // Uploads a raw binary body (an image) and reads the JSON reply (ADR-0075). The server re-encodes and
 // bounds it, so the browser sends the file as-is; the `content-type` names the format for the decoder.
-async function requestUpload<T>(path: string, file: Blob): Promise<T> {
+async function requestUpload<T>(path: AdminUrlFor<"POST">, file: Blob): Promise<T> {
   const response = await fetch(path, {
     method: "POST",
     headers: { "content-type": file.type || "application/octet-stream" },
@@ -470,7 +472,7 @@ async function requestUpload<T>(path: string, file: Blob): Promise<T> {
 // Fetches a CSV export (ADR-0075) and hands it to the browser as a file download. The session cookie
 // rides the same-origin request, so a viewer without the domain's manage permission gets a `403` that
 // surfaces as an `ApiError` for the caller to toast — no partial file is saved.
-async function downloadCsv(path: string, filename: string): Promise<void> {
+async function downloadCsv(path: AdminUrlFor<"GET">, filename: string): Promise<void> {
   const response = await fetch(path);
   if (!response.ok) {
     throw await failure(response);
@@ -765,8 +767,7 @@ export const api = {
   listStoreDevices: (tenantId: string, storeId: string, status: string) =>
     requestJson<DeviceProposalSummary[]>(
       "GET",
-      `/admin/devices/proposals?${tenantQuery(tenantId)}` +
-        `&store_id=${encodeURIComponent(storeId)}&status=${encodeURIComponent(status)}`,
+      `/admin/devices/proposals?${tenantQuery(tenantId)}&store_id=${encodeURIComponent(storeId)}&status=${encodeURIComponent(status)}`,
     ),
   // Approving carries the two facts discovery cannot find (ADR-0100): how the device is attached,
   // which decides whether a cash drawer may be opened at all, and the kitchen station it serves —
@@ -775,9 +776,7 @@ export const api = {
   approveDevice: (tenantId: string, id: string, connection: string, stationId?: string) =>
     requestVoid(
       "POST",
-      `/admin/devices/proposals/${encodeURIComponent(id)}/approve?${tenantQuery(tenantId)}` +
-        `&connection=${encodeURIComponent(connection)}` +
-        (stationId ? `&station_id=${encodeURIComponent(stationId)}` : ""),
+      `/admin/devices/proposals/${encodeURIComponent(id)}/approve?${tenantQuery(tenantId)}&connection=${encodeURIComponent(connection)}${stationId ? `&station_id=${encodeURIComponent(stationId)}` : ""}`,
     ),
   rejectDevice: (tenantId: string, id: string) =>
     requestVoid(
@@ -825,7 +824,7 @@ export const api = {
   setPrinterPaper: (
     tenantId: string,
     id: string,
-    paperWidth: PaperWidth,
+    paperWidth: string,
     cutsPaper: boolean,
     version: string,
   ) =>
@@ -1578,11 +1577,11 @@ export const api = {
   // applies channels/tender as gates and qr as its staff-confirmation source; vendor policy is
   // authored here, its live marketplace loop deferred.
   readChannels: (tenantId: string, storeId: string) =>
-    requestJson<{ enabled: SalesChannel[] } | null>(
+    requestJson<{ enabled: KnownSalesChannel[] } | null>(
       "GET",
       `/admin/config/channels?${tenantQuery(tenantId)}&store_id=${encodeURIComponent(storeId)}`,
     ),
-  publishChannels: (tenantId: string, storeId: string, enabled: SalesChannel[]) =>
+  publishChannels: (tenantId: string, storeId: string, enabled: KnownSalesChannel[]) =>
     requestJson<PublishedConfig>("PUT", "/admin/config/channels", {
       tenant_id: tenantId,
       store_id: storeId,
@@ -1891,7 +1890,7 @@ export const api = {
   previewFees: (
     tenantId: string,
     storeId: string,
-    salesChannel: SalesChannel,
+    salesChannel: KnownSalesChannel,
     rules: readonly PreviewFeeRule[],
     lines: readonly SampleLineInput[],
   ) =>
@@ -2389,7 +2388,7 @@ export const api = {
   // the button already there (ADR-0095).
   createLayoutButton: (
     tenantId: string,
-    salesChannel: SalesChannel,
+    salesChannel: KnownSalesChannel,
     menuItemId: string,
     fields: LayoutButtonFields,
   ) =>
@@ -2402,7 +2401,7 @@ export const api = {
   // Relabel or move a button already on that channel, at the version it was read at.
   updateLayoutButton: (
     tenantId: string,
-    salesChannel: SalesChannel,
+    salesChannel: KnownSalesChannel,
     menuItemId: string,
     etag: ETag,
     fields: LayoutButtonFields,
@@ -2413,7 +2412,7 @@ export const api = {
       etag,
       { tenant_id: tenantId, ...layoutButtonBody(fields) },
     ),
-  removeLayoutButton: (tenantId: string, salesChannel: SalesChannel, menuItemId: string) =>
+  removeLayoutButton: (tenantId: string, salesChannel: KnownSalesChannel, menuItemId: string) =>
     requestVoid(
       "DELETE",
       `/admin/catalog/layout-buttons/${encodeURIComponent(salesChannel)}/${encodeURIComponent(menuItemId)}?${tenantQuery(tenantId)}`,

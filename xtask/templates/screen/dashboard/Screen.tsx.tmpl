@@ -1,0 +1,14 @@
+// The {{title}} screen, at `{{path}}`: written by `cargo xtask new screen --app dashboard`, with its
+// title and nothing else yet. Its entry in `state/screens.ts` and its nav group, its component in
+// `App.tsx`, its strings and its test came with it.
+
+import { PageHeader } from "../components/ui";
+import { t } from "../i18n";
+
+export function {{component}}() {
+  return (
+    <div>
+      <PageHeader title={t("{{key}}")} />
+    </div>
+  );
+}

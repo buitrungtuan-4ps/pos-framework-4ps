@@ -100,6 +100,7 @@ flowchart LR
   pos_cloud --> shipping_ahamove
   pos_cloud --> shipping_grabexpress
   pos_cloud --> store_postgres
+  pos_cloud --> updater_minisign
   pos_cloud_api --> pos_ports
   pos_cloud_api --> pos_proto
   pos_cloud_api --> store_postgres
@@ -140,6 +141,7 @@ flowchart LR
   pos_cloud_reports --> pos_ports
   pos_cloud_reports --> pos_proto
   pos_cloud_reports --> store_postgres
+  pos_contract_tests --> pos_core
   pos_contract_tests --> pos_ports
   pos_contract_tests --> pos_proto
   pos_core --> pos_proto
@@ -230,19 +232,19 @@ flowchart LR
 | `pos-cloud-people` | app | `crates/pos-cloud-people` | The cloud's people and access: employees, role templates and assignments, their compile to a store's permissions node, its publish and republish queue, the capability flags, and their routes and stores. | `pos-cloud` | — |
 | `pos-cloud-reports` | app | `crates/pos-cloud-reports` | The cloud's reports: rollups folded from the event log and materialised, revenue, the X/Z report, their CSV exports and their routes. | `pos-cloud`, `pos-cloud-catalog` | — |
 | `pos-contract-tests` | testing | `crates/pos-contract-tests` | The shared suite every implementation of every port must pass. | `pos-fakes` | `blob-garage`, `cloud-sync-http`, `erp-sap`, `key-vault-keyring`, `link-nats`, `metrics-vm`, `pos-cloud`, `pos-cloud-reports`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-edge`, `printer-escpos`, `shipping-ahamove`, `shipping-grabexpress`, `store-postgres`, `store-sqlite`, `updater-minisign` |
-| `pos-core` | core | `crates/pos-core` | The domain: business rules, state machines, permissions and money arithmetic, with no I/O. | `pos-cloud`, `pos-cloud-catalog`, `pos-cloud-config`, `pos-cloud-devices`, `pos-cloud-floor`, `pos-cloud-people`, `pos-edge`, `pos-edge-app`, `pos-edge-printing`, `pos-simulator` | — |
+| `pos-core` | core | `crates/pos-core` | The domain: business rules, state machines, permissions and money arithmetic, with no I/O. | `pos-cloud`, `pos-cloud-catalog`, `pos-cloud-config`, `pos-cloud-devices`, `pos-cloud-floor`, `pos-cloud-people`, `pos-contract-tests`, `pos-edge`, `pos-edge-app`, `pos-edge-printing`, `pos-simulator` | — |
 | `pos-country` | country | `crates/pos-country` | What a country module is, and the feature-selected registry a binary builds from the ones it carries. | `pos-cloud`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-edge` | — |
 | `pos-country-in` | country | `countries/in` | The country module for India. | `pos-cloud`, `pos-edge` | — |
 | `pos-country-jp` | country | `countries/jp` | The country module for Japan. | `pos-cloud`, `pos-edge` | — |
 | `pos-country-vn` | country | `countries/vn` | The country module for Vietnam. | `pos-cloud`, `pos-edge` | — |
 | `pos-country-zz` | country | `countries/zz` | The reference country module, copied to start a new country. | `pos-cloud`, `pos-edge` | — |
-| `pos-edge` | app | `crates/pos-edge` | The store binary, pos_edge: serves the till, applies each decision in one transaction, and syncs with the cloud. | `minimal-edge` | — |
+| `pos-edge` | app | `crates/pos-edge` | The store binary, pos_edge: serves the till, applies each decision in one transaction, and syncs with the cloud. | `minimal-edge` | `pos-edge` |
 | `pos-edge-app` | app | `crates/pos-edge-app` | The store's application layer: Edge and every command it loads, decides, applies and publishes, with sign-in, the fan-out, and the authorities, clocks and status it keeps. | `pos-edge`, `pos-edge-printing` | — |
 | `pos-edge-printing` | app | `crates/pos-edge-printing` | The store's printing: which device prints what, the receipt, ticket and report documents, the cash drawer, and the print-agent lane with its queue. | `pos-edge` | — |
 | `pos-fakes` | testing | `crates/pos-fakes` | In-memory implementations of every port, held to the same contract suites as the real adapters. | `minimal-edge` | `key-vault-keyring`, `pos-cloud`, `pos-cloud-api`, `pos-cloud-config`, `pos-cloud-reports`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-edge`, `pos-edge-app`, `printer-escpos`, `store-sqlite`, `updater-minisign` |
-| `pos-ports` | port | `crates/pos-ports` | The twenty traits between the framework and the outside world. | `blob-garage`, `cloud-sync-http`, `erp-sap`, `key-vault-keyring`, `link-nats`, `metrics-vm`, `pos-cloud`, `pos-cloud-api`, `pos-cloud-config`, `pos-cloud-people`, `pos-cloud-reports`, `pos-contract-tests`, `pos-country`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-edge`, `pos-edge-app`, `pos-edge-printing`, `pos-fakes`, `pos-print-agent`, `pos-render`, `printer-escpos`, `shipping-ahamove`, `shipping-grabexpress`, `store-postgres`, `store-sqlite`, `updater-minisign` | — |
+| `pos-ports` | port | `crates/pos-ports` | The twenty traits between the framework and the outside world. | `blob-garage`, `cloud-sync-http`, `erp-sap`, `key-vault-keyring`, `link-nats`, `metrics-vm`, `pos-cloud`, `pos-cloud-api`, `pos-cloud-config`, `pos-cloud-people`, `pos-cloud-reports`, `pos-contract-tests`, `pos-country`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-edge`, `pos-edge-app`, `pos-edge-printing`, `pos-fakes`, `pos-print-agent`, `pos-render`, `printer-escpos`, `shipping-ahamove`, `shipping-grabexpress`, `store-postgres`, `store-sqlite`, `updater-minisign` | `pos-ports` |
 | `pos-print-agent` | app | `crates/pos-print-agent` | The print agent: claims rendered jobs from a store's edge and writes them to a printer this machine reaches. | — | — |
-| `pos-proto` | core | `crates/pos-proto` | Wire types, the event catalogue and envelope, value types, and PROTOCOL_VERSION. | `cloud-sync-http`, `erp-sap`, `link-nats`, `metrics-vm`, `minimal-edge`, `pos-cloud`, `pos-cloud-api`, `pos-cloud-catalog`, `pos-cloud-config`, `pos-cloud-devices`, `pos-cloud-floor`, `pos-cloud-inventory`, `pos-cloud-people`, `pos-cloud-reports`, `pos-contract-tests`, `pos-core`, `pos-country`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-edge`, `pos-edge-app`, `pos-edge-printing`, `pos-fakes`, `pos-ports`, `pos-print-agent`, `pos-providers`, `printer-escpos`, `shipping-ahamove`, `shipping-grabexpress`, `store-postgres`, `store-sqlite` | — |
+| `pos-proto` | core | `crates/pos-proto` | Wire types, the event catalogue and envelope, value types, and PROTOCOL_VERSION. | `cloud-sync-http`, `erp-sap`, `link-nats`, `metrics-vm`, `minimal-edge`, `pos-cloud`, `pos-cloud-api`, `pos-cloud-catalog`, `pos-cloud-config`, `pos-cloud-devices`, `pos-cloud-floor`, `pos-cloud-inventory`, `pos-cloud-people`, `pos-cloud-reports`, `pos-contract-tests`, `pos-core`, `pos-country`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-edge`, `pos-edge-app`, `pos-edge-printing`, `pos-fakes`, `pos-ports`, `pos-print-agent`, `pos-providers`, `printer-escpos`, `shipping-ahamove`, `shipping-grabexpress`, `store-postgres`, `store-sqlite` | `pos-proto` |
 | `pos-providers` | port | `crates/pos-providers` | The vendor catalogue: the descriptor each vendor adapter exports, and the registry built from them. | `erp-sap`, `pos-cloud`, `shipping-ahamove`, `shipping-grabexpress` | — |
 | `pos-render` | app | `crates/pos-render` | Turns a line of text in any script into the 1-bit raster a thermal printer prints. | `pos-edge`, `pos-edge-printing` | — |
 | `pos-simulator` | testing | `crates/pos-simulator` | The virtual-fleet simulator: an executable capacity model and deterministic fleet scenarios. | — | — |
@@ -251,6 +253,6 @@ flowchart LR
 | `shipping-grabexpress` | adapter | `crates/adapters/shipping-grabexpress` | The Grab Express ShippingDispatch adapter: book, cancel and track a courier job over HTTPS. | `pos-cloud` | — |
 | `store-postgres` | adapter | `crates/adapters/store-postgres` | The cloud EventStore and the cloud's own stores over PostgreSQL (tokio-postgres, deadpool, monthly partitions, RLS). | `pos-cloud`, `pos-cloud-api`, `pos-cloud-catalog`, `pos-cloud-config`, `pos-cloud-devices`, `pos-cloud-floor`, `pos-cloud-inventory`, `pos-cloud-people`, `pos-cloud-reports` | — |
 | `store-sqlite` | adapter | `crates/adapters/store-sqlite` | The edge store over SQLite: event, config, device, subject and intake stores on one single-writer thread. | `pos-edge`, `pos-edge-app`, `pos-edge-printing` | — |
-| `updater-minisign` | adapter | `crates/adapters/updater-minisign` | The minisign Signer for over-the-air updates: verify only. | `pos-edge` | — |
+| `updater-minisign` | adapter | `crates/adapters/updater-minisign` | The minisign Signer for over-the-air updates: verify only. | `pos-cloud`, `pos-edge` | — |
 | `windows-protect` | adapter | `crates/adapters/windows-protect` | Windows' own protection for a store box's state: DPAPI for the vault key, and who may read the state directory. | `key-vault-keyring`, `pos-edge` | — |
 | `xtask` | tool | `xtask` | Repository checks run by just preflight and CI: dependency rule, snapshots, migrations, links, changelog, code size. | — | — |

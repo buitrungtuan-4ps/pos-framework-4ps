@@ -31,14 +31,14 @@ pub fn registry() -> Result<Registry, RegistryError> {
 }
 
 /// The catalogue as the console reads it.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct CatalogueView {
     /// Every provider, grouped by family in [`Family::ALL`]'s order and in listed order within one.
     pub providers: Vec<ProviderView>,
 }
 
 /// One provider, with the schema the console draws its form from.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct ProviderView {
     provider_id: &'static str,
     family: &'static str,
@@ -52,19 +52,23 @@ pub struct ProviderView {
 }
 
 /// One field of a provider's settings schema.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct FieldView {
     key: &'static str,
     label_key: &'static str,
     kind: &'static str,
     required: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     max_length: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     min: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     max: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     options: Option<&'static [&'static str]>,
 }
 

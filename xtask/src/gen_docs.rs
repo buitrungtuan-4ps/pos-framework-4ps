@@ -7,6 +7,11 @@
 //! - `crate-graph.md`: the workspace crates by layer, as a Mermaid graph of the dependencies outside
 //!   tests, and a table of each crate's dependents. From `cargo metadata` and each crate's contract
 //!   card. It changes only when a dependency or a card does.
+//! - `codeowners-crates.txt`: the line the root `CODEOWNERS` would hold for each crate, from its
+//!   card's owners; `--check` also fails where a crate's own line in `CODEOWNERS` differs
+//!   ([`codeowners`]). Nothing here writes `CODEOWNERS`.
+//! - `route-map.md`: every route the four OpenAPI documents describe, with its handler, who may
+//!   call it, the permission it needs and the handler's file ([`route_map`]).
 //! - `adr-index.md`: the ADRs nothing cites, and the citations of ADRs that do not exist. A
 //!   citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under [`CITING_ROOTS`].
 //!   It changes only when an ADR is first cited, stops being cited, or is added.
@@ -19,6 +24,9 @@
 //! The full map of which file cites which ADR changes with almost every pull request, so it is not
 //! committed. `--adr-citations [ADR-NNNN]` prints it, for every ADR or for one, as Markdown on
 //! standard output.
+
+mod codeowners;
+mod route_map;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -90,7 +98,12 @@ pub fn run(args: &[String]) -> Result<Vec<Finding>, Error> {
     }
     let crates = load(&root)?;
     let mut findings = dangling_findings(&adrs, &citations);
-    for (path, text) in documents(&crates, &adrs, &citations) {
+    findings.extend(codeowners::mismatches(
+        &crates,
+        &std::fs::read_to_string(root.join("CODEOWNERS"))?,
+    ));
+    let routes = route_map::render(&root, GENERATED)?;
+    for (path, text) in documents(&crates, &adrs, &citations, routes) {
         if matches!(mode, Mode::Check) {
             if !matches_committed(&root, &path, &text) {
                 findings.push(
@@ -111,13 +124,19 @@ fn documents(
     crates: &[Crate],
     adrs: &BTreeMap<u32, (String, String)>,
     citations: &Citations,
-) -> [(String, String); 2] {
+    route_map: String,
+) -> [(String, String); 4] {
     [
         (format!("{OUT_DIR}/crate-graph.md"), crate_graph(crates)),
+        (
+            format!("{OUT_DIR}/codeowners-crates.txt"),
+            codeowners::render(crates),
+        ),
         (
             format!("{OUT_DIR}/adr-index.md"),
             adr_index(adrs, citations),
         ),
+        (format!("{OUT_DIR}/route-map.md"), route_map),
     ]
 }
 
@@ -135,7 +154,8 @@ pub fn up_to_date(crates: &[Crate]) -> Result<Vec<(String, bool)>, Error> {
     let root = repo_root();
     let adrs = adr_titles(&root.join("docs/adr"))?;
     let citations = citations(&citing_files(&root)?);
-    Ok(documents(crates, &adrs, &citations)
+    let routes = route_map::render(&root, GENERATED)?;
+    Ok(documents(crates, &adrs, &citations, routes)
         .into_iter()
         .map(|(path, text)| {
             let current = matches_committed(&root, &path, &text);

@@ -22,19 +22,22 @@ use crate::http::{load_tree_for_write, not_found, publish_nodes};
 use crate::registry::RegistryStore;
 use crate::settings::SettingsStore;
 use crate::store_groups::StoreGroupStore;
+use pos_cloud_api::response::StoresPublished;
 // Moved to pos-cloud-config; imported here, so the settings routes keep reaching it.
 pub(in crate::http) use pos_cloud_config::route::TenantLayout;
 
 #[utoipa::path(
     post,
     path = "/admin/settings/publish",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.config.publish"))),
     request_body(
-        description = "The tenant, and optionally one store. Without a store, every store of the \
+        content = SettingsStoreRequest, description = "The tenant, and optionally one store. Without a store, every store of the \
                        tenant is republished",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Each store's resolved settings republished, with the same \
+        (status = 200, body = StoresPublished<SettingPublishResult>, description = "Each store's resolved settings republished, with the same \
                                       per-store outcomes as a write"),
         (status = 400, description = "tenant_id or store_id is not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
@@ -113,13 +116,28 @@ where
     publish_results_response(&results)
 }
 
+/// How one store's settings publish went, as its token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+pub(super) enum SettingPublishOutcome {
+    /// The store's settings were written in a new version.
+    #[serde(rename = "SETTING_PUBLISH_APPLIED")]
+    Applied,
+    /// The store already ran these settings; no version was made.
+    #[serde(rename = "SETTING_PUBLISH_UNCHANGED")]
+    Unchanged,
+    /// The publish could not be written; it is retried with `POST /admin/settings/publish`.
+    #[serde(rename = "SETTING_PUBLISH_FAILED")]
+    Failed,
+}
+
 /// How one store's settings publish went.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub(super) struct SettingPublishResult {
     store_id: String,
-    /// `SETTING_PUBLISH_APPLIED`, `SETTING_PUBLISH_UNCHANGED` or `SETTING_PUBLISH_FAILED`.
-    outcome: &'static str,
+    /// How it went.
+    outcome: SettingPublishOutcome,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     config_version_id: Option<String>,
 }
 
@@ -152,7 +170,7 @@ where
                 .iter()
                 .map(|store_id| SettingPublishResult {
                     store_id: store_id.to_string(),
-                    outcome: "SETTING_PUBLISH_FAILED",
+                    outcome: SettingPublishOutcome::Failed,
                     config_version_id: None,
                 })
                 .collect();
@@ -174,17 +192,17 @@ where
         results.push(match published.version {
             Ok(Some(version)) => SettingPublishResult {
                 store_id: store_id.to_string(),
-                outcome: "SETTING_PUBLISH_APPLIED",
+                outcome: SettingPublishOutcome::Applied,
                 config_version_id: Some(version.to_string()),
             },
             Ok(None) => SettingPublishResult {
                 store_id: store_id.to_string(),
-                outcome: "SETTING_PUBLISH_UNCHANGED",
+                outcome: SettingPublishOutcome::Unchanged,
                 config_version_id: None,
             },
             Err(()) => SettingPublishResult {
                 store_id: store_id.to_string(),
-                outcome: "SETTING_PUBLISH_FAILED",
+                outcome: SettingPublishOutcome::Failed,
                 config_version_id: None,
             },
         });
@@ -281,5 +299,30 @@ where
     StorePublish {
         version,
         switch_without_people,
+    }
+}
+
+#[cfg(test)]
+mod outcome_tests {
+    //! The outcome serialises as the token it replaced.
+
+    use super::SettingPublishOutcome;
+
+    #[test]
+    fn each_outcome_is_its_token() {
+        let tokens = [
+            (SettingPublishOutcome::Applied, "SETTING_PUBLISH_APPLIED"),
+            (
+                SettingPublishOutcome::Unchanged,
+                "SETTING_PUBLISH_UNCHANGED",
+            ),
+            (SettingPublishOutcome::Failed, "SETTING_PUBLISH_FAILED"),
+        ];
+        for (outcome, token) in tokens {
+            assert_eq!(
+                serde_json::to_value(outcome).expect("json"),
+                serde_json::json!(token)
+            );
+        }
     }
 }

@@ -32,6 +32,7 @@ use crate::app::Edge;
 
 /// The store's money settings, as the in-store UI reads them.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct LocaleResponse {
     /// The currency every figure on this till is denominated in.
     currency_code: String,
@@ -49,6 +50,7 @@ pub(crate) struct LocaleResponse {
     /// The till does not apply this — `pos_core::billing` does, and the rounding is already inside
     /// the total the check reports. It is here so the screen can *show* the adjustment as its own
     /// line, which is what makes a rounded bill reconcile for the guest reading it.
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     cash_rounding_increment: Option<i64>,
     /// Whether the prices on this store's menu already contain their tax
     /// ([ADR-0104](../../../../docs/adr/0104-multi-component-and-inclusive-tax.md)).
@@ -65,11 +67,30 @@ pub(crate) struct LocaleResponse {
     /// none. A till that has never been told otherwise starts in it, so a Vietnamese shop does not
     /// open every reload in English.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     display_language: Option<String>,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/locale",
+    security(("till_session" = [])),
+    params(
+        ("If-None-Match" = Option<String>, Header, description = "The ETag of the copy the till holds"),
+    ),
+    responses(
+        (status = 200, body = LocaleResponse, description = "The money facts the pay screen needs: the currency, the notes a guest can \
+                                      hand over, and what a total rounds to in cash. Empty until a `locale` node \
+                                      is published. \
+                                      The ETag tags this body"),
+        (status = 304, description = "If-None-Match names the current ETag: nothing changed, and no body is sent"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+    ),
+    tag = "published configuration",
+))]
 /// `GET /api/locale` — the store's published money settings, read from the live session.
-pub(crate) async fn settings<S>(State(edge): State<Arc<Edge<S>>>) -> Response
+pub(crate) async fn locale_settings<S>(State(edge): State<Arc<Edge<S>>>) -> Response
 where
     S: EventStore + Send + Sync + 'static,
 {

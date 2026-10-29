@@ -39,7 +39,9 @@ pub use confirm::check_confirmations;
 pub const SCHEDULED_PUBLISH_ACTIVATOR: &str = "scheduled_publish_activator";
 
 /// A scheduled publish's lifecycle status.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ScheduledPublishStatus {
     /// Waiting for its effective time; the activator will apply it.

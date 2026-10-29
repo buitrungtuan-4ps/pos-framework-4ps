@@ -14,7 +14,7 @@ import type {
   LayoutCategory,
   MenuItemResponse,
   ModifierGroup,
-} from "../api/types";
+} from "../api/schemas";
 import {
   chooseSeat,
   groupsFor,

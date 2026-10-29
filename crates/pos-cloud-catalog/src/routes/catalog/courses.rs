@@ -9,6 +9,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use pos_cloud_api::console::{audit_action, mint_ulid, require_permission};
 use pos_cloud_api::response::{api_error_with_details, parse_ulid_fields};
+use pos_cloud_api::version::Versioned;
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{CourseId, TenantId};
@@ -24,6 +25,23 @@ use crate::routes::{
 };
 use crate::version::UpdateOutcome;
 
+#[utoipa::path(
+    get,
+    path = "/admin/catalog/courses",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The tenant whose courses to list (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, body = [Versioned<Course>], description = "The tenant's courses, as an array, each with its `etag`, in service order: by `sort` ascending, then by id (ADR-0130)"),
+        (status = 400, description = "tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The catalog store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "catalog taxonomy",
+)]
 /// A super-admin lists a tenant's courses, **in service order**
 /// ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).
 pub(super) async fn admin_list_courses<Cat, A, C>(
@@ -56,6 +74,25 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/catalog/courses",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
+    security(("session_cookie" = [])),
+    request_body(
+        content = CreateCourseRequest, description = "`tenant_id`, the course's `name`, and `sort`, where it falls in the service sequence, ascending (absent is 0)",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, body = Versioned<Course>, description = "Created, active, with the id minted here. The body is the \
+                                      record and the ETag carries its version. Audited"),
+        (status = 400, description = "tenant_id is absent or not a ULID, or name is blank", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.catalog.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The catalog store or the entropy source is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "catalog taxonomy",
+)]
 /// A super-admin creates a course; the id is minted here and returned once.
 pub(super) async fn admin_create_course<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,
@@ -121,6 +158,34 @@ where
     }
 }
 
+#[utoipa::path(
+    patch,
+    path = "/admin/catalog/courses/{course_id}",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
+    security(("session_cookie" = [])),
+    params(
+        ("course_id" = String, Path, description = "The course (a 26-character ULID)"),
+        ("If-Match" = String, Header, description = "The ETag the record was read at (ADR-0094). \
+                                                     Required; a wildcard is refused"),
+    ),
+    request_body(
+        content = UpdateCourseRequest, description = "`tenant_id`, and the course's `name`, `sort` and `status` (`active` or `archived`) as they should now stand",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = Versioned<Course>, description = "Updated. The body is the record and the ETag carries its new \
+                                      version. Audited"),
+        (status = 400, description = "course_id or tenant_id is not a ULID, name is blank, status is not `active` or `archived`, or If-Match is \
+                                      absent, malformed, or a wildcard", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.catalog.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The tenant has no course with that id", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 412, description = "The course changed since you read it: re-read it and try \
+                                      again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The catalog store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "catalog taxonomy",
+)]
 /// A super-admin renames a course, moves it in the service sequence and/or archives it.
 pub(super) async fn admin_update_course<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,

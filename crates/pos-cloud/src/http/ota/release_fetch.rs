@@ -19,11 +19,11 @@ use serde::{Deserialize, Serialize};
 
 use super::release_upload::admit_release_artifact;
 use crate::audit::AuditRecorder;
-use crate::auth::admin::AdminStore;
+use crate::auth::admin::{AdminContext, AdminStore};
 use crate::auth::console_rbac::ConsolePermission;
 use crate::http::Json;
 use crate::ota::{ArtifactStore, RecordOutcome, validate_release_tag};
-use crate::release_source::{ReleaseSource, ReleaseSourceError};
+use crate::release_source::{FetchedArtifact, FetchedRelease, ReleaseSource, ReleaseSourceError};
 
 // ---------------------------------------------------------------------------------------------
 // The other door: the cloud fetches the pair the release workflow already published
@@ -45,20 +45,41 @@ struct OtaReleaseFetchState<B, L, A, C, S> {
 /// `release` is spelled the way the registry keys it and a rollout's `target_version` names it —
 /// bare, without a leading `v` ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md)
 /// Amendment 2). Which tag that is on the forge is the source's business, and it tries both.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct FetchReleaseRequest {
     release: String,
 }
 
+/// What a release fetch answers: the release, the forge's tag for it, and each artifact it hosted.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+struct ReleaseFetched {
+    /// The release, as the console named it.
+    release: String,
+    /// The tag the forge published it under.
+    tag: String,
+    /// Each artifact the fetch put in the cloud.
+    artifacts: Vec<FetchedArtifactResponse>,
+}
+
+/// What a fetch did with one artifact: `recorded` for a new one, `already_hosted` for one the cloud
+/// already held with these exact bytes, so a re-run reads as a no-op rather than as work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+enum ArtifactFetchOutcome {
+    /// Stored now.
+    Recorded,
+    /// Already held with these bytes.
+    AlreadyHosted,
+}
+
 /// One artifact the fetch put in the cloud.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 struct FetchedArtifactResponse {
     arch: String,
     size_bytes: i64,
     sha256: String,
-    /// `recorded` for a new artifact, `already_hosted` for one the cloud already held with these
-    /// exact bytes — so a re-run reads as a no-op rather than as work.
-    outcome: &'static str,
+    /// Whether the cloud stored it now or already held these exact bytes.
+    outcome: ArtifactFetchOutcome,
     /// The asset the bytes came from, so the console can say what it took.
     asset: String,
 }
@@ -144,6 +165,39 @@ fn release_fetch_refusal(error: &ReleaseSourceError) -> Response {
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/ota/releases/fetch",
+    extensions(("x-permission" = json!("console.ota.publish"))),
+    security(("session_cookie" = [])),
+    request_body(
+        content = FetchReleaseRequest, description = "`release`: the version to fetch, spelled bare, without a leading `v`. The \
+                       cloud tries the release workflow's tag with and without one",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = ReleaseFetched, description = "Every signed executable the release publishes is hosted. The \
+                                      body carries `release`, `tag`, the release source's tag it \
+                                      came from, and `artifacts`: for each, `arch`, `size_bytes`, \
+                                      `sha256`, `asset`, and `outcome`, `recorded` or \
+                                      `already_hosted`. Audited"),
+        (status = 400, description = "release cannot name a hosted release", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.ota.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The release source publishes no release under either \
+                                      spelling", body = crate::openapi_admin::ErrorResponse),
+        (status = 409, description = "No release source is configured on this cloud; the release \
+                                      source refused the cloud's credentials; or a target is \
+                                      already hosted with different bytes. Targets admitted before \
+                                      the refusal stay hosted, and the upload remains the way in", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "The release carries no signed executable, or an asset is too \
+                                      large or not what it claims to be", body = crate::openapi_admin::ErrorResponse),
+        (status = 500, description = "The storage keys could not be composed", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The release source, the object store or the release registry \
+                                      is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "release hosting",
+)]
 /// A super-admin points the cloud at a release, and it fetches every pair the forge holds for it.
 ///
 /// The button behind `docs/release-runbook.md` step 5: instead of downloading six files and running
@@ -186,23 +240,86 @@ where
             &[("release_source", "not configured in cloud.toml")],
         );
     };
+    let release = match requested_release(&request) {
+        Ok(release) => release,
+        Err(refusal) => return refusal,
+    };
+    let fetched = match fetched_release(source, &release).await {
+        Ok(fetched) => fetched,
+        Err(refusal) => return refusal,
+    };
+    let tag = fetched.tag.clone();
+    let recorded = match host_fetched_artifacts(&state, &release, fetched.artifacts).await {
+        Ok(recorded) => recorded,
+        Err(refusal) => return refusal,
+    };
+    record_release_fetch(&state, &context, &release, &tag, &recorded).await;
+    Json(ReleaseFetched {
+        release,
+        tag,
+        artifacts: recorded,
+    })
+    .into_response()
+}
+
+/// Records what a fetch hosted against the release it was for: the forge's tag and each artifact.
+async fn record_release_fetch<B, L, A, C, S>(
+    state: &OtaReleaseFetchState<B, L, A, C, S>,
+    context: &AdminContext,
+    release: &str,
+    tag: &str,
+    recorded: &[FetchedArtifactResponse],
+) where
+    C: ClockSource,
+{
+    audit_action(
+        &state.audit,
+        &state.clock,
+        context,
+        None,
+        "release.fetch",
+        "release_artifact",
+        release,
+        None,
+        Some(serde_json::json!({
+            "tag": tag,
+            "artifacts": recorded,
+        })),
+    )
+    .await;
+}
+
+/// The release the operator named, trimmed, once it could be a storage key.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it is the refusal the caller returns"
+)]
+fn requested_release(request: &FetchReleaseRequest) -> Result<String, Response> {
     let release = request.release.trim().to_owned();
     if let Err(error) = validate_release_tag(&release) {
-        return api_error_with_details(
+        return Err(api_error_with_details(
             ErrorStatus::InvalidArgument,
             format!("release: {error}"),
             &[("release", "not usable as a storage key")],
-        );
+        ));
     }
-    let fetched = match source.fetch(&release).await {
+    Ok(release)
+}
+
+/// What the source publishes for `release`, once it holds at least one signed executable.
+async fn fetched_release<S: ReleaseSource>(
+    source: &S,
+    release: &str,
+) -> Result<FetchedRelease, Response> {
+    let fetched = match source.fetch(release).await {
         Ok(fetched) => fetched,
         Err(error) => {
             tracing::warn!(%error, %release, "fetching a release from the release source failed");
-            return release_fetch_refusal(&error);
+            return Err(release_fetch_refusal(&error));
         }
     };
     if fetched.artifacts.is_empty() {
-        return api_error_with_details(
+        return Err(api_error_with_details(
             ErrorStatus::Unprocessable,
             format!(
                 "{} carries no OTA pair: the cloud installs the bare executable \
@@ -211,56 +328,87 @@ where
                 fetched.tag, fetched.tag
             ),
             &[("release", "the release holds no signed executable")],
-        );
+        ));
     }
+    Ok(fetched)
+}
 
-    let mut recorded = Vec::with_capacity(fetched.artifacts.len());
-    for artifact in fetched.artifacts {
+/// Admits each fetched pair through the door the upload uses, in order, and answers what each
+/// became. The first refusal stops the walk; what was admitted before it stays hosted.
+async fn host_fetched_artifacts<B, L, A, C, S>(
+    state: &OtaReleaseFetchState<B, L, A, C, S>,
+    release: &str,
+    artifacts: Vec<FetchedArtifact>,
+) -> Result<Vec<FetchedArtifactResponse>, Response>
+where
+    B: BlobStore,
+    L: ArtifactStore,
+    C: ClockSource,
+{
+    let mut recorded = Vec::with_capacity(artifacts.len());
+    for artifact in artifacts {
         let asset = artifact.asset_name.clone();
-        let (admitted, outcome) = match admit_release_artifact(
+        let (admitted, outcome) = admit_release_artifact(
             &state.blobs,
             &state.releases,
             &state.clock,
-            &release,
+            release,
             artifact.target,
             &artifact.binary,
             &artifact.signature,
         )
-        .await
-        {
-            Ok(admitted) => admitted,
-            Err(refusal) => return refusal,
-        };
+        .await?;
         recorded.push(FetchedArtifactResponse {
             arch: admitted.target.to_string(),
             size_bytes: admitted.size_bytes,
             sha256: admitted.sha256,
             outcome: match outcome {
-                RecordOutcome::Recorded => "recorded",
-                RecordOutcome::AlreadyRecorded => "already_hosted",
+                RecordOutcome::Recorded => ArtifactFetchOutcome::Recorded,
+                RecordOutcome::AlreadyRecorded => ArtifactFetchOutcome::AlreadyHosted,
             },
             asset,
         });
     }
-    audit_action(
-        &state.audit,
-        &state.clock,
-        &context,
-        None,
-        "release.fetch",
-        "release_artifact",
-        &release,
-        None,
-        Some(serde_json::json!({
-            "tag": fetched.tag,
-            "artifacts": recorded,
-        })),
-    )
-    .await;
-    Json(serde_json::json!({
-        "release": release,
-        "tag": fetched.tag,
-        "artifacts": recorded,
-    }))
-    .into_response()
+    Ok(recorded)
+}
+
+#[cfg(test)]
+mod answer_tests {
+    //! Each answer serialises to the bytes the `json!` it replaced did.
+
+    use super::ReleaseFetched;
+
+    #[test]
+    fn a_fetch_answers_its_release_tag_and_artifacts() {
+        let answer = ReleaseFetched {
+            release: "1.2.3".to_owned(),
+            tag: "v1.2.3".to_owned(),
+            artifacts: Vec::new(),
+        };
+        assert_eq!(
+            serde_json::to_value(answer).expect("json"),
+            serde_json::json!({ "release": "1.2.3", "tag": "v1.2.3", "artifacts": [] })
+        );
+    }
+}
+
+#[cfg(test)]
+mod outcome_tests {
+    //! The outcome serialises as the token it replaced.
+
+    use super::ArtifactFetchOutcome;
+
+    #[test]
+    fn each_outcome_is_its_token() {
+        let tokens = [
+            (ArtifactFetchOutcome::Recorded, "recorded"),
+            (ArtifactFetchOutcome::AlreadyHosted, "already_hosted"),
+        ];
+        for (outcome, token) in tokens {
+            assert_eq!(
+                serde_json::to_value(outcome).expect("json"),
+                serde_json::json!(token)
+            );
+        }
+    }
 }

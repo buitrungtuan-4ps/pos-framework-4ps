@@ -208,3 +208,62 @@ fn the_database_refuses_a_placement_the_framework_never_defined() {
         );
     });
 }
+
+// --- pinned before `bump_store_lease` is split (ADR-0170 decision 7) ----------------------------
+
+/// The bump's refusals, which nothing else asserts: each comes back as the outcome it is, with
+/// the number the probe read, and a refused bump writes nothing.
+///
+/// Read in the order the statement evaluates them — the generation before the handover — so a
+/// caller holding a stale read is told that rather than sent to acknowledge a handover it has not
+/// seen.
+#[test]
+fn a_refused_bump_says_which_precondition_failed_and_writes_nothing() {
+    block_on(async {
+        let (store, _admin) = prepared().await.expect("prepare the database");
+        let trees = store.config_trees();
+        let (tenant, store_id) = ids();
+        let bump = |acknowledge: Option<i64>, expected: Option<i64>| {
+            let trees = trees.clone();
+            async move {
+                trees
+                    .bump_store_lease(
+                        tenant,
+                        store_id,
+                        1_000,
+                        None,
+                        store_postgres::StoredRegionWrite::Keep,
+                        acknowledge,
+                        expected,
+                    )
+                    .await
+                    .expect("the bump reached the database")
+            }
+        };
+        let refused = |outcome: store_postgres::BumpOutcome| match outcome {
+            store_postgres::BumpOutcome::VersionMismatch { current } => {
+                format!("mismatch {current:?}")
+            }
+            store_postgres::BumpOutcome::Undrained { superseded } => {
+                format!("undrained {superseded}")
+            }
+            store_postgres::BumpOutcome::Issued(stored) => format!("issued {}", stored.generation),
+        };
+
+        // No row, and the caller named a generation rather than `*`: the insert refuses.
+        assert_eq!(refused(bump(None, Some(0)).await), "mismatch None");
+        // `*` on no row issues generation 0; `*` again finds a row and is a mismatch.
+        assert_eq!(refused(bump(None, None).await), "issued 0");
+        assert_eq!(refused(bump(None, None).await), "mismatch Some(0)");
+        // At 0, the next bump issues 1 and leaves 0 superseded and undrained.
+        assert_eq!(refused(bump(None, Some(0)).await), "issued 1");
+        // At 1 with 0 still undrained, a bump that does not acknowledge it is refused for that.
+        assert_eq!(refused(bump(None, Some(1)).await), "undrained 0");
+        // A stale read is told it is stale even while a handover is open.
+        assert_eq!(refused(bump(None, Some(0)).await), "mismatch Some(1)");
+        // Acknowledging a generation that is not the superseded one is still a handover refusal.
+        assert_eq!(refused(bump(Some(7), Some(1)).await), "undrained 0");
+        // Acknowledging the superseded generation issues the next.
+        assert_eq!(refused(bump(Some(0), Some(1)).await), "issued 2");
+    });
+}

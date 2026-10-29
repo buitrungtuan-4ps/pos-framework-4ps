@@ -1,0 +1,176 @@
+// Copyright (c) 2026 Pizza 4P's. All rights reserved.
+// Proprietary and confidential. Internal use only. See LICENSE.
+
+//! {{purpose}}
+//!
+//! The shape every courier adapter here has ([ADR-0176](../../../../docs/adr/0176-the-adapter-and-country-standard.md)):
+//!
+//! - **A transport seam.** [`Transport`] is the only thing that talks to the courier. Its `book` is
+//!   idempotent by shipment, the way a courier's idempotency key is: asked twice, it answers the
+//!   first job again and summons no second rider. A real adapter puts the courier's HTTP client
+//!   behind it; the contract test puts an in-memory courier behind it.
+//! - **A pure core.** [`SandboxCourier`] implements `ShippingDispatch` over any transport and keeps
+//!   the port's rules: a completed job is refused a cancel, an already cancelled one is cancelled
+//!   again without error, a finished job can still be tracked, an unknown job is `not_found`, and an
+//!   unreachable courier is `unavailable`.
+//!
+//! The recipient's details travel only inside the request the transport sends; nothing here logs
+//! them. The sandbox is [`PROVIDER`], `courier.sandbox`.
+
+use pos_ports::{CourierJobRef, DeliveryRequest, PortError, PortName, Shipment, ShippingDispatch};
+use pos_proto::ids::ShipmentId;
+use pos_proto::money::Money;
+use pos_proto::wire_enum::Open;
+use pos_proto::{ShipmentStatus, Timestamp};
+use pos_providers::{Family, ProviderDescriptor};
+
+/// This adapter as the provider catalogue lists it: a sandbox, which serves every country and asks
+/// for no settings.
+pub static PROVIDER: ProviderDescriptor = ProviderDescriptor {
+    provider_id: "courier.sandbox",
+    family: Family::Courier,
+    name_key: "provider.courier.sandbox",
+    countries: &[],
+    fields: &[],
+    capabilities: &[],
+    sandbox: true,
+};
+
+/// The courier, as the adapter sees it.
+pub trait Transport: Send + Sync {
+    /// Books a rider for `request`. Idempotent by its shipment: a second call answers the first
+    /// job.
+    ///
+    /// # Errors
+    ///
+    /// [`Unreachable`] if the courier cannot be reached.
+    fn book(&self, request: &DeliveryRequest) -> Result<Job, Unreachable>;
+
+    /// The courier's record of `job_ref`, or `None` if it has none.
+    ///
+    /// # Errors
+    ///
+    /// [`Unreachable`] if the courier cannot be reached.
+    fn track(&self, job_ref: &str) -> Result<Option<Job>, Unreachable>;
+
+    /// Cancels the unfinished job `job_ref`, answering its record after, or `None`.
+    ///
+    /// # Errors
+    ///
+    /// [`Unreachable`] if the courier cannot be reached.
+    fn cancel(&self, job_ref: &str) -> Result<Option<Job>, Unreachable>;
+}
+
+/// The courier could not be reached.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Unreachable;
+
+/// What the courier says about one job.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Job {
+    /// The shipment it was booked for.
+    pub shipment_id: ShipmentId,
+    /// The courier's reference for the job.
+    pub job_ref: String,
+    /// Where it stands.
+    pub status: ShipmentStatus,
+    /// What the courier charges, once it says.
+    pub fee: Option<Money>,
+    /// When the courier last changed it.
+    pub at: Timestamp,
+}
+
+/// A `ShippingDispatch` over a [`Transport`].
+#[derive(Debug)]
+pub struct SandboxCourier<T> {
+    transport: T,
+}
+
+impl<T: Transport> SandboxCourier<T> {
+    /// A courier reached through `transport`.
+    pub const fn new(transport: T) -> Self {
+        Self { transport }
+    }
+
+    /// The transport, for a harness to inspect or stage.
+    pub const fn transport(&self) -> &T {
+        &self.transport
+    }
+
+    fn record(&self, job_ref: &CourierJobRef) -> Result<Job, PortError> {
+        self.transport
+            .track(job_ref.as_str())
+            .map_err(|_| unreachable())?
+            .ok_or_else(not_found)
+    }
+}
+
+impl<T: Transport> ShippingDispatch for SandboxCourier<T> {
+    fn courier_name(&self) -> &'static str {
+        "sandbox"
+    }
+
+    async fn create_delivery(&self, request: &DeliveryRequest) -> Result<Shipment, PortError> {
+        let job = self.transport.book(request).map_err(|_| unreachable())?;
+        Ok(shipment(job))
+    }
+
+    async fn cancel(&self, courier_job_ref: &CourierJobRef) -> Result<Shipment, PortError> {
+        let job = self.record(courier_job_ref)?;
+        match job.status {
+            ShipmentStatus::Completed => Err(PortError::failed_precondition(
+                PortName::ShippingDispatch,
+                "the job has completed; a delivered order cannot be cancelled",
+            )),
+            ShipmentStatus::Cancelled => Ok(shipment(job)),
+            ShipmentStatus::Accepted | ShipmentStatus::InTransit | ShipmentStatus::Unspecified => {
+                let cancelled = self
+                    .transport
+                    .cancel(courier_job_ref.as_str())
+                    .map_err(|_| unreachable())?
+                    .ok_or_else(not_found)?;
+                Ok(shipment(cancelled))
+            }
+        }
+    }
+
+    async fn track(&self, courier_job_ref: &CourierJobRef) -> Result<Shipment, PortError> {
+        self.record(courier_job_ref).map(shipment)
+    }
+}
+
+/// The port's shipment for a courier's job.
+fn shipment(job: Job) -> Shipment {
+    Shipment {
+        shipment_id: job.shipment_id,
+        courier_job_ref: CourierJobRef::new(job.job_ref),
+        status: Open::from_known(job.status),
+        fee: job.fee,
+        updated_at: job.at,
+    }
+}
+
+fn unreachable() -> PortError {
+    PortError::unavailable(
+        PortName::ShippingDispatch,
+        "the courier could not be reached",
+    )
+}
+
+fn not_found() -> PortError {
+    PortError::not_found(
+        PortName::ShippingDispatch,
+        "the courier has no record of this job",
+    )
+}
+
+#[cfg(test)]
+mod provider_tests {
+    use pos_providers::Registry;
+
+    #[test]
+    fn the_catalogue_accepts_this_adapters_descriptor() {
+        let registry = Registry::new([&super::PROVIDER]).expect("a well-formed descriptor");
+        assert!(registry.get("courier.sandbox").is_some());
+    }
+}

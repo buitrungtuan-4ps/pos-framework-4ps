@@ -9,6 +9,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use pos_cloud_api::console::{audit_action, mint_ulid, require_permission};
 use pos_cloud_api::response::{parse_ulid_fields, ulid_refusal};
+use pos_cloud_api::version::Versioned;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::TenantId;
 
@@ -28,6 +29,25 @@ use crate::routes::{
 };
 use crate::version::UpdateOutcome;
 
+#[utoipa::path(
+    get,
+    path = "/admin/catalog/menus",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The tenant whose menus to list (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, body = [Versioned<Menu>], description = "The tenant's menus, as an array, each with its \
+                                      `parent_menu_id` (absent for a menu that inherits from none) \
+                                      and its `etag`"),
+        (status = 400, description = "tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The catalog store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "menus",
+)]
 /// A super-admin lists a tenant's menus.
 pub(super) async fn admin_list_menus<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,
@@ -59,6 +79,26 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/catalog/menus",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
+    security(("session_cookie" = [])),
+    request_body(
+        content = CreateMenuRequest, description = "`tenant_id`, the menu's `name`, and optionally `parent_menu_id`, a menu it \
+                       inherits its placements from",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, body = Versioned<Menu>, description = "Created, active, with the id minted here. The body is the \
+                                      record and the ETag carries its version. Audited"),
+        (status = 400, description = "tenant_id or parent_menu_id is not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.catalog.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The catalog store or the entropy source is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "menus",
+)]
 /// A super-admin creates a menu, optionally under a parent it inherits from.
 pub(super) async fn admin_create_menu<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,
@@ -120,6 +160,36 @@ where
     }
 }
 
+#[utoipa::path(
+    patch,
+    path = "/admin/catalog/menus/{menu_id}",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
+    security(("session_cookie" = [])),
+    params(
+        ("menu_id" = String, Path, description = "The menu (a 26-character ULID)"),
+        ("If-Match" = String, Header, description = "The ETag the record was read at (ADR-0094). \
+                                                     Required; a wildcard is refused"),
+    ),
+    request_body(
+        content = UpdateMenuRequest, description = "`tenant_id`, and the menu's `name`, `parent_menu_id` (absent clears it) and \
+                       `status` (`active` or `archived`) as they should now stand",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = Versioned<Menu>, description = "Updated. The body is the record and the ETag carries its new \
+                                      version. Audited"),
+        (status = 400, description = "menu_id, tenant_id or parent_menu_id is not a ULID, status is \
+                                      not `active` or `archived`, or If-Match is absent, malformed, \
+                                      or a wildcard", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.catalog.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The tenant has no menu with that id", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 412, description = "The menu changed since you read it: re-read it and try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 422, description = "The parent would make the inheritance chain loop", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The catalog store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "menus",
+)]
 /// A super-admin renames a menu, (re)sets its parent and/or status.
 pub(super) async fn admin_update_menu<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,
@@ -205,6 +275,25 @@ where
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/catalog/menus/{menu_id}/sections",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    params(
+        ("menu_id" = String, Path, description = "The menu (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The tenant that owns it (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, body = [Versioned<MenuSection>], description = "The menu's sections, as an array, each with its `sort` and \
+                                      `etag`"),
+        (status = 400, description = "tenant_id or menu_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The catalog store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "menus",
+)]
 /// A super-admin lists a menu's sections (tenant named on the query).
 pub(super) async fn admin_list_menu_sections<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,
@@ -238,6 +327,29 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/catalog/menus/{menu_id}/sections",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
+    security(("session_cookie" = [])),
+    params(
+        ("menu_id" = String, Path, description = "The menu (a 26-character ULID)"),
+    ),
+    request_body(
+        content = CreateMenuSectionRequest, description = "`tenant_id`, the section's `name`, and `sort`, where it falls on the menu, \
+                       ascending (absent is 0)",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, body = Versioned<MenuSection>, description = "Created, active, with the id minted here. The body is the \
+                                      record and the ETag carries its version. Audited"),
+        (status = 400, description = "tenant_id or menu_id is not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.catalog.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The catalog store or the entropy source is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "menus",
+)]
 /// A super-admin creates a section within a menu.
 pub(super) async fn admin_create_menu_section<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,
@@ -299,6 +411,36 @@ where
     }
 }
 
+#[utoipa::path(
+    patch,
+    path = "/admin/catalog/menus/{menu_id}/sections/{menu_section_id}",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
+    security(("session_cookie" = [])),
+    params(
+        ("menu_id" = String, Path, description = "The menu (a 26-character ULID)"),
+        ("menu_section_id" = String, Path, description = "The section (a 26-character ULID)"),
+        ("If-Match" = String, Header, description = "The ETag the record was read at (ADR-0094). \
+                                                     Required; a wildcard is refused"),
+    ),
+    request_body(
+        content = UpdateMenuSectionRequest, description = "`tenant_id`, and the section's `name`, `sort` and `status` (`active` or \
+                       `archived`) as they should now stand",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = Versioned<MenuSection>, description = "Updated. The body is the record and the ETag carries its new \
+                                      version. Audited"),
+        (status = 400, description = "An id is not a ULID, status is not `active` or `archived`, or \
+                                      If-Match is absent, malformed, or a wildcard", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.catalog.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The menu has no section with that id", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 412, description = "The section changed since you read it: re-read it and try \
+                                      again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The catalog store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "menus",
+)]
 /// A super-admin renames a menu section, sets its sort and/or status.
 pub(super) async fn admin_update_menu_section<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,

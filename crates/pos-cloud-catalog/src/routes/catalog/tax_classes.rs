@@ -9,6 +9,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use pos_cloud_api::console::{audit_action, mint_ulid, require_permission};
 use pos_cloud_api::response::parse_ulid_fields;
+use pos_cloud_api::version::Versioned;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{TaxClassId, TenantId};
 
@@ -24,6 +25,23 @@ use crate::routes::{
 };
 use crate::version::UpdateOutcome;
 
+#[utoipa::path(
+    get,
+    path = "/admin/catalog/tax-classes",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, body = [Versioned<TaxClass>], description = "The tenant's tax classes, as an array, each with its `etag`"),
+        (status = 400, description = "tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The catalog store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "tax",
+)]
 /// A super-admin lists a tenant's tax classes.
 pub(super) async fn admin_list_tax_classes<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,
@@ -55,6 +73,26 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/catalog/tax-classes",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
+    security(("session_cookie" = [])),
+    request_body(
+        content = CreateTaxClassRequest, description = "`tenant_id` and the class's `name`",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, body = Versioned<TaxClass>, description = "Created, active, with the id minted here. The body is the \
+                                      record and the ETag carries its version. Audited. A store \
+                                      refuses to price an item in it on a channel with no rate"),
+        (status = 400, description = "tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.catalog.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The catalog store or the entropy source is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "tax",
+)]
 /// A super-admin creates a tax class; the id is minted here and returned once in the created record.
 pub(super) async fn admin_create_tax_class<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,
@@ -156,6 +194,37 @@ pub(super) fn still_referenced(kind: &str, count: usize) -> Response {
     )])
 }
 
+#[utoipa::path(
+    patch,
+    path = "/admin/catalog/tax-classes/{tax_class_id}",
+    extensions(("x-permission" = json!("console.catalog.manage"))),
+    security(("session_cookie" = [])),
+    params(
+        ("tax_class_id" = String, Path, description = "The tax class (a 26-character ULID)"),
+        ("If-Match" = String, Header, description = "The ETag the record was read at (ADR-0094). \
+                                                     Required; a wildcard is refused"),
+    ),
+    request_body(
+        content = UpdateTaxClassRequest, description = "`tenant_id`, and the class's `name` and `status` (`active` or `archived`) as \
+                       they should now stand",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = Versioned<TaxClass>, description = "Updated. The body is the record and the ETag carries its new \
+                                      version. Audited"),
+        (status = 400, description = "tax_class_id or tenant_id is not a ULID, status is not \
+                                      `active` or `archived`, or If-Match is absent, malformed, or a \
+                                      wildcard", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.catalog.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The tenant has no tax class with that id", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 412, description = "The class changed since you read it: re-read it and try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 422, description = "Archiving it is refused while active items still use it, \
+                                      naming how many", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The catalog store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "tax",
+)]
 /// A super-admin renames a tax class and/or sets its status.
 pub(super) async fn admin_update_tax_class<Cat, A, C>(
     State(state): State<CatalogState<Cat, A, C>>,

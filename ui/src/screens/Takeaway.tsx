@@ -2,7 +2,7 @@ import { For, Show, createSignal, onMount } from "solid-js";
 import { useNavigate, useSearchParams } from "@solidjs/router";
 
 import { api } from "../api/client";
-import type { BillResponse, CounterOrder, PaymentRequest, ReprintResponse } from "../api/types";
+import type { BillResponse, CounterOrder, PaymentRequest, ReprintResponse } from "../api/schemas";
 import { Keypad } from "../components/Keypad";
 import { ReadFailed } from "../components/StoreData";
 import { PageHeader } from "../components/ui";

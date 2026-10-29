@@ -6,6 +6,7 @@
 //!
 //! The fake used to refuse after the ten-thousandth unsent event *after* storing the event it
 //! refused — a state the real store could never reach — and every edge test ran against that rule.
+//! An event two racing transactions both appended lands once.
 
 #![allow(
     clippy::expect_used,
@@ -67,5 +68,29 @@ fn an_outbox_past_the_old_ceiling_still_takes_every_sale() {
 
         let depth = store.outbox_depth(store_id()).await.expect("depth");
         assert_eq!(u128::from(depth), OLD_CEILING + 1);
+    });
+}
+
+/// Two transactions racing to append the same event each find it new, and both commit: the event
+/// is stored and queued once, and the second commit keeps the stored copy.
+#[test]
+fn an_event_two_transactions_both_appended_lands_once() {
+    let store = FakeStore::default();
+    run_ready(async {
+        let mut first = store.begin().await.expect("begin");
+        let mut second = store.begin().await.expect("begin");
+        store
+            .append(&mut first, &[envelope(7)])
+            .await
+            .expect("append");
+        store
+            .append(&mut second, &[envelope(7)])
+            .await
+            .expect("append");
+        first.commit().await.expect("commit");
+        second.commit().await.expect("commit");
+
+        let depth = store.outbox_depth(store_id()).await.expect("depth");
+        assert_eq!(depth, 1, "queued once, not once per transaction");
     });
 }

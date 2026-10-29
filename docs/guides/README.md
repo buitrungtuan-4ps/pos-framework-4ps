@@ -18,6 +18,8 @@ The first is for someone **outside** this system calling it; the rest are for so
 | Take a fork all the way to a trading store | [Go live](../go-live.md), and the [gate register](../gate-register.md) it stops at |
 | Write an adapter for a new vendor/device | [Write an adapter](write-an-adapter.md) |
 | Add a new country (tax, locale, vendors) | [Add a country module](add-a-country-module.md) |
+| Let stores run a value differently, from the console | [Add a setting](add-a-setting.md) |
+| Add something the business does, across every tier | [Add a business area](add-a-business-area.md) |
 | Prove the capacity numbers, run fleet scenarios | [Run the simulator](run-the-simulator.md) |
 | Fulfil a data-subject request, backups included | [Data-subject requests](data-subject-requests.md) |
 
@@ -43,3 +45,20 @@ This is not one server. It is two programs, and they run in **different places**
 
 So "deploy to the cloud" brings up `pos_cloud` only. To try the selling side, run `pos_edge`
 locally — that is Part 1 of [Start from zero](start-from-zero.md).
+
+## How a guide stays true
+
+A guide marks each block that must keep working with an HTML comment, unseen when rendered, on the
+line before its fence. `cargo xtask guides --check`, part of `just preflight`, reads every one:
+
+| Marker | The block holds | Checked |
+|---|---|---|
+| `<!-- guide:command -->` | What the reader types | Each `cargo xtask new …` line is planned as `--dry-run` plans it, and must be accepted |
+| `<!-- guide:verify -->` | What proves the result works | Each line is a `cargo test`, `cargo check` or `cargo xtask` command |
+| `<!-- guide:excerpt <path> -->` | Code quoted from `<path>` | Its lines are still in that file, contiguous and verbatim, under one shared indent |
+
+Quote code rather than paraphrase it, so a change to that code fails the check.
+
+`just guides` then does what each guide says, in a scratch worktree of the last commit: the
+`cargo xtask new` lines of its command blocks, then its verify steps. Other lines in a command block,
+such as cleaning up, are the reader's to run.
