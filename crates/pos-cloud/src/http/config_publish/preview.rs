@@ -29,10 +29,11 @@ use crate::http::{Json, unprocessable_violations};
 /// What publishing a candidate node *would* change, computed without minting a version or saving:
 /// the RFC 7386 merge patch from the store's current effective document to the candidate, so the
 /// console can show a real before/after before anyone commits ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md)).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub(in crate::http) struct ConfigPreview {
     /// The version the diff is computed against — the store's current version — or `null` when the
     /// store has no published configuration yet (the candidate is then entirely new).
+    #[schema(required = true)]
     pub(in crate::http) from_version_id: Option<String>,
     /// The RFC 7386 merge patch a publish would apply to the effective document. An empty object
     /// means the candidate composes to exactly today's effective document.
@@ -132,7 +133,7 @@ struct ConfigPreviewState<Cfg, A, C> {
 
 /// A `POST /admin/config/preview` body — the same `(node, arguments)` pair a batch publish takes,
 /// aimed at one store instead of a cohort.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PreviewNodeRequest {
     tenant_id: String,
     store_id: String,
@@ -145,11 +146,12 @@ struct PreviewNodeRequest {
 }
 
 /// What a preview answers with: the node it compiled, and the diff a publish of it would apply.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 struct NodePreview {
     /// Echoed back so a console that fired several previews can tell the answers apart.
     node: String,
     /// The version the diff is computed against, or `null` when the store has no tree yet.
+    #[schema(required = true)]
     from_version_id: Option<String>,
     /// The RFC 7386 merge patch the publish would apply to the store's effective document, with its
     /// staff and prices redacted for the caller's role ([`admin_preview_config_node`]).
@@ -164,13 +166,13 @@ struct NodePreview {
     extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id`, `store_id`, `node` (one of the nodes a batch publish can \
+        content = PreviewNodeRequest, description = "`tenant_id`, `store_id`, `node` (one of the nodes a batch publish can \
                        compile), and `arguments`, that node's own publish body without the tenant \
                        and store. Nothing is written",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "What publishing the node would change: `node`; \
+        (status = 200, body = NodePreview, description = "What publishing the node would change: `node`; \
                                       `from_version_id`, the version the diff is against, or `null` \
                                       for a store never published to; `diff`, the merge patch \
                                       (RFC 7386) the publish would apply; and `unchanged`. The node \

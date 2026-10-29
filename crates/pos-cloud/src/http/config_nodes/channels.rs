@@ -20,6 +20,8 @@ use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::ConfigTreeStore;
 use crate::http::{Json, read_store_node_as_run};
+use pos_proto::channels::{PublishedChannels, PublishedTender};
+use pos_proto::origins::PublishedOrigins;
 
 #[utoipa::path(
     get,
@@ -31,7 +33,7 @@ use crate::http::{Json, read_store_node_as_run};
         ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The store's `channels` node as the store runs it — the sales channels it takes orders on — \
+        (status = 200, body = Option<PublishedChannels>, description = "The store's `channels` node as the store runs it — the sales channels it takes orders on — \
                                       composed from all four layers, or `null` when it has none"),
         (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
@@ -80,11 +82,11 @@ where
     extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id` and `store_id`, then `enabled`, the sales-channel tokens the store takes orders on (ADR-0080)",
+        content = PublishChannelsRequest, description = "`tenant_id` and `store_id`, then `enabled`, the sales-channel tokens the store takes orders on (ADR-0080)",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Published as the store's `channels` node on its Store layer. \
+        (status = 200, body = pos_cloud_config::route::PublishedConfig, description = "Published as the store's `channels` node on its Store layer. \
                                       The body carries `config_version_id`, which the store pulls on \
                                       its next sync. Audited with the node's value"),
         (status = 400, description = "tenant_id or store_id is not a ULID, a token is not a sales channel, or a value needs \
@@ -153,7 +155,7 @@ where
         ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The store's `tender` node as the store runs it — the payment methods it accepts — \
+        (status = 200, body = Option<PublishedTender>, description = "The store's `tender` node as the store runs it — the payment methods it accepts — \
                                       composed from all four layers, or `null` when it has none"),
         (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
@@ -202,11 +204,11 @@ where
     extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id` and `store_id`, then `accepted`, the payment-method tokens the store takes (ADR-0080)",
+        content = PublishTenderRequest, description = "`tenant_id` and `store_id`, then `accepted`, the payment-method tokens the store takes (ADR-0080)",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Published as the store's `tender` node on its Store layer. \
+        (status = 200, body = pos_cloud_config::route::PublishedConfig, description = "Published as the store's `tender` node on its Store layer. \
                                       The body carries `config_version_id`, which the store pulls on \
                                       its next sync. Audited with the node's value"),
         (status = 400, description = "tenant_id or store_id is not a ULID, a token is not a payment method, or a value needs \
@@ -275,7 +277,7 @@ where
         ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The store's `origins` node as the store runs it — the origins its edge answers besides its own (ADR-0111) — \
+        (status = 200, body = Option<PublishedOrigins>, description = "The store's `origins` node as the store runs it — the origins its edge answers besides its own (ADR-0111) — \
                                       composed from all four layers, or `null` when it has none"),
         (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
@@ -324,11 +326,11 @@ where
     extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id` and `store_id`, then `allowed`, the origins the store's edge answers besides the one serving it, each checked by the rule the edge applies (ADR-0111). An empty list withdraws every second origin; the store's own UI is never affected",
+        content = PublishOriginsRequest, description = "`tenant_id` and `store_id`, then `allowed`, the origins the store's edge answers besides the one serving it, each checked by the rule the edge applies (ADR-0111). An empty list withdraws every second origin; the store's own UI is never affected",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Published as the store's `origins` node on its Store layer. \
+        (status = 200, body = pos_cloud_config::route::PublishedConfig, description = "Published as the store's `origins` node on its Store layer. \
                                       The body carries `config_version_id`, which the store pulls on \
                                       its next sync. Audited with the node's value"),
         (status = 400, description = "tenant_id or store_id is not a ULID, an origin is refused by that rule, or a value needs \

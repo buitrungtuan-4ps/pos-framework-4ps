@@ -112,8 +112,8 @@ pub fn offset_without_limit_refusal() -> Response {
 /// The bounds are echoed because a pager needs them to render "1–25 of 812" and to build the next
 /// request, and because the alternative — the client tracking what it sent — breaks the moment a
 /// link is shared or a page is reloaded.
-#[derive(Debug, Clone, Serialize)]
-struct PagedBody<T> {
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct PagedBody<T> {
     items: Vec<T>,
     total: u32,
     limit: u32,
@@ -133,6 +133,60 @@ pub fn paged_ok<T: Serialize>(page: Page<T>, request: PageRequest) -> Response {
         }),
     )
         .into_response()
+}
+
+/// What a list route that pages answers, as its OpenAPI schema names it: the whole set as an array
+/// without `limit`, or a [`PagedBody`] with one (ADR-0098).
+///
+/// The handler answers with one or the other through [`paged_ok`] or a plain `Json`; this type
+/// only describes the two shapes as one `oneOf`. [`list_or_page_tests`] holds each variant to the
+/// bytes the handler's own answer serialises to.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+#[serde(untagged)]
+pub enum ListOrPage<T> {
+    /// The whole set, when the caller named no `limit`.
+    All(Vec<T>),
+    /// One page, when it did.
+    Page(PagedBody<T>),
+}
+
+#[cfg(test)]
+mod list_or_page_tests {
+    //! [`ListOrPage`] describes exactly what the two reads answer.
+
+    use super::{ListOrPage, Page, PagedBody, paged_ok};
+    use crate::paging::PageRequest;
+
+    #[test]
+    fn each_variant_serialises_as_the_answer_it_describes() {
+        let rows = vec!["a".to_owned(), "b".to_owned()];
+        let whole = serde_json::to_value(ListOrPage::All(rows.clone())).expect("serialise");
+        assert_eq!(whole, serde_json::to_value(&rows).expect("serialise"));
+
+        let request = PageRequest::new(25, 50).expect("in range");
+        let page = PagedBody {
+            items: rows.clone(),
+            total: 2,
+            limit: request.limit(),
+            offset: request.offset(),
+        };
+        let described = serde_json::to_value(ListOrPage::Page(page)).expect("serialise");
+        let answered = paged_ok(Page::new(rows, 2), request);
+        let bytes = body_bytes(answered);
+        let sent: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        assert_eq!(described, sent);
+    }
+
+    /// The bytes of a response built from an in-memory body.
+    fn body_bytes(response: axum::response::Response) -> Vec<u8> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime");
+        runtime
+            .block_on(axum::body::to_bytes(response.into_body(), usize::MAX))
+            .expect("body")
+            .to_vec()
+    }
 }
 
 #[cfg(test)]

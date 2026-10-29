@@ -75,7 +75,7 @@ async fn require_hosted_release<L: ArtifactStore>(
     extensions(("x-permission" = json!("console.ota.publish"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id` and `store_id`; `target_version`, the release to install as \
+        content = PublishRolloutRequest, description = "`tenant_id` and `store_id`; `target_version`, the release to install as \
                        `MAJOR.MINOR.PATCH`, which the cloud must already host; `min_ring`, the \
                        lowest eligible ring (`lab`, `pilot` or `fleet`); `rollout_percent`, the \
                        share of the fleet ring currently eligible, 0 to 100; `signing_key_id`, the \
@@ -85,7 +85,7 @@ async fn require_hosted_release<L: ArtifactStore>(
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Published as the store's `fleet_update` node on the Store \
+        (status = 200, body = PublishedConfig, description = "Published as the store's `fleet_update` node on the Store \
                                       layer, the store's other Store-level settings kept. The body \
                                       carries `config_version_id`. Audited"),
         (status = 400, description = "tenant_id or store_id is not a ULID; target_version cannot \
@@ -175,12 +175,12 @@ where
     extensions(("x-permission" = json!("console.ota.publish"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id` and `store_id`, and `halted`: `true` stops the rollout, `false` \
+        content = HaltRolloutRequest, description = "`tenant_id` and `store_id`, and `halted`: `true` stops the rollout, `false` \
                        resumes it. The rest of the rollout is kept as the store runs it",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "The kill switch is set on the rollout the store runs, read \
+        (status = 200, body = PublishedConfig, description = "The kill switch is set on the rollout the store runs, read \
                                       from the tree the write lands on, and republished on the Store \
                                       layer. The body carries `config_version_id`. Audited"),
         (status = 400, description = "tenant_id or store_id is not a ULID; the store has no \
@@ -408,7 +408,7 @@ where
         ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The `fleet_update` node the store runs, its layers composed, \
+        (status = 200, body = pos_cloud_api::body_schema::FreeFormJson, description = "The `fleet_update` node the store runs, its layers composed, \
                                       so a rollout a rollback restored reads as it runs; or `null` \
                                       when none is published"),
         (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),

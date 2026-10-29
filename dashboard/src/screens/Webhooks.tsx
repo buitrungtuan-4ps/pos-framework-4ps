@@ -12,7 +12,7 @@
 import { createSignal, Show } from "solid-js";
 
 import { api } from "../api/client";
-import type { WebhookSummary } from "../api/types";
+import type { WebhookSummary } from "../api/schemas";
 import { t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, tenantId } from "../state/session";

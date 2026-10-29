@@ -78,7 +78,7 @@ struct FleetState<F, A, C, Cfg, Ack> {
 /// No `acknowledged_by`. The row does not carry one — the audit action
 /// `store.edge_placement.acknowledge` does, and it is the copy that survives the next answer. The
 /// console links to the store's audit tab rather than showing a name this read cannot honestly give.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct RegionAcknowledgementView {
     /// The country the store was registered in when the answer was written.
     profile_country: String,
@@ -97,7 +97,7 @@ struct RegionAcknowledgementView {
 /// Two opaque identifiers and a duration, carried verbatim from what the store reported. No document,
 /// no line, no name: nothing a ticket *says* helps diagnose a stalled agent, so nothing a ticket says
 /// crosses this wire either.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct FleetPrintAgent {
     /// The terminal a console admin created and a manager bound at the till.
     agent_device_id: String,
@@ -106,6 +106,7 @@ struct FleetPrintAgent {
     /// How long the oldest still-unacknowledged job has waited, or `null` when nothing is waiting.
     /// `null` is the healthy answer and is deliberately not zero.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     oldest_unacknowledged_secs: Option<u64>,
 }
 

@@ -35,17 +35,20 @@ use crate::printing::{Printers, published_printers};
 
 /// One published printer, as the Devices screen lists it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct PrinterResponse {
     device_id: String,
     name: String,
     /// The station it serves, absent for the receipt printer.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     station_id: Option<String>,
 }
 
 /// What came of a test page: the same token a receipt's print reports (`PRINTED`, `NO_PRINTER`,
 /// `PRINTER_UNAVAILABLE`, …).
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct TestPrintResponse {
     print: &'static str,
 }
@@ -55,7 +58,7 @@ pub(crate) struct TestPrintResponse {
     path = "/api/printers",
     security(("till_session" = [])),
     responses(
-        (status = 200, description = "The printers this store published, in publication order"),
+        (status = 200, body = Vec<PrinterResponse>, description = "The printers this store published, in publication order"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
         (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
     ),
@@ -87,7 +90,7 @@ where
         ("id" = String, Path, description = "The printer's device id, a ULID"),
     ),
     responses(
-        (status = 200, description = "`print`: what came of printing a page that names the printer"),
+        (status = 200, body = TestPrintResponse, description = "`print`: what came of printing a page that names the printer"),
         (status = 400, description = "The id is not a ULID"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
         (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or the \

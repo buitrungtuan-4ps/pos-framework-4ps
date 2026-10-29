@@ -9,6 +9,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use pos_cloud_api::console::{audit_action, mint_ulid, require_permission};
 use pos_cloud_api::response::parse_ulid_fields;
+use pos_cloud_api::version::Versioned;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::TenantId;
 
@@ -39,7 +40,7 @@ use crate::version::UpdateOutcome;
         ("tenant_id" = String, Query, description = "The tenant whose item categories to list (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The tenant's item categories, as an array, each with its `etag`"),
+        (status = 200, body = [Versioned<ItemCategory>], description = "The tenant's item categories, as an array, each with its `etag`"),
         (status = 400, description = "tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -84,11 +85,11 @@ where
     extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id` and the category's `name`",
+        content = CreateItemCategoryRequest, description = "`tenant_id` and the category's `name`",
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Created, active, with the id minted here. The body is the \
+        (status = 201, body = Versioned<ItemCategory>, description = "Created, active, with the id minted here. The body is the \
                                       record and the ETag carries its version. Audited"),
         (status = 400, description = "tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -165,11 +166,11 @@ where
                                                      Required; a wildcard is refused"),
     ),
     request_body(
-        description = "`tenant_id`, and the category's `name` and `status` (`active` or `archived`) as they should now stand",
+        content = UpdateItemCategoryRequest, description = "`tenant_id`, and the category's `name` and `status` (`active` or `archived`) as they should now stand",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Updated. The body is the record and the ETag carries its new \
+        (status = 200, body = Versioned<ItemCategory>, description = "Updated. The body is the record and the ETag carries its new \
                                       version. Audited"),
         (status = 400, description = "item_category_id or tenant_id is not a ULID, status is not `active` or `archived`, or If-Match is \
                                       absent, malformed, or a wildcard", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -272,7 +273,7 @@ where
         ("tenant_id" = String, Query, description = "The tenant whose item sub-categories to list (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The tenant's item sub-categories, as an array, each with its `etag`, and the `item_category_id` it belongs to"),
+        (status = 200, body = [Versioned<ItemSubcategory>], description = "The tenant's item sub-categories, as an array, each with its `etag`, and the `item_category_id` it belongs to"),
         (status = 400, description = "tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -317,11 +318,11 @@ where
     extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id`, the parent `item_category_id`, and the sub-category's `name`",
+        content = CreateItemSubcategoryRequest, description = "`tenant_id`, the parent `item_category_id`, and the sub-category's `name`",
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Created, active, with the id minted here. The body is the \
+        (status = 201, body = Versioned<ItemSubcategory>, description = "Created, active, with the id minted here. The body is the \
                                       record and the ETag carries its version. Audited"),
         (status = 400, description = "tenant_id or item_category_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -405,11 +406,11 @@ where
                                                      Required; a wildcard is refused"),
     ),
     request_body(
-        description = "`tenant_id`, and the sub-category's parent `item_category_id`, `name` and `status` (`active` or `archived`) as they should now stand",
+        content = UpdateItemSubcategoryRequest, description = "`tenant_id`, and the sub-category's parent `item_category_id`, `name` and `status` (`active` or `archived`) as they should now stand",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Updated. The body is the record and the ETag carries its new \
+        (status = 200, body = Versioned<ItemSubcategory>, description = "Updated. The body is the record and the ETag carries its new \
                                       version. Audited"),
         (status = 400, description = "item_subcategory_id, tenant_id or item_category_id is not a ULID, status is not `active` or `archived`, or If-Match is \
                                       absent, malformed, or a wildcard", body = pos_cloud_api::error_schema::ErrorResponse),

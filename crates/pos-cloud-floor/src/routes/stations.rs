@@ -7,7 +7,9 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use pos_cloud_api::console::{audit_action, mint_ulid, require_permission};
+use pos_cloud_api::response::CreatedId;
 use pos_cloud_api::response::{api_error_with_details, parse_ulid_fields, ulid_refusal};
+use pos_cloud_api::version::Versioned;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{StationId, StoreId, TenantId};
 use pos_proto::printing::ReceiptLanguage;
@@ -23,7 +25,7 @@ use super::{
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::catalog::CatalogStore;
-use crate::floorplan::{NewStation, StationStore, StationUpdate};
+use crate::floorplan::{NewStation, Station, StationStore, StationUpdate};
 use crate::registry::EntityStatus;
 use crate::version::UpdateOutcome;
 use axum::Json;
@@ -41,7 +43,7 @@ use pos_cloud_config::route::{entity_status_refusal, parse_entity_status};
         ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The store's kitchen stations, active and archived, as an array, each with its `etag`"),
+        (status = 200, body = [Versioned<Station>], description = "The store's kitchen stations, active and archived, as an array, each with its `etag`"),
         (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -91,7 +93,7 @@ where
         ("tenant_id" = String, Query, description = "The tenant the record belongs to (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The station. The ETag carries the version it was read at"),
+        (status = 200, body = Versioned<Station>, description = "The station. The ETag carries the version it was read at"),
         (status = 400, description = "station_id or tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -144,7 +146,7 @@ where
     extensions(("x-permission" = json!("console.floor.manage"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id` and `store_id`, and the station's `name`, which may not be blank; optionally \
+        content = CreateStationRequest, description = "`tenant_id` and `store_id`, and the station's `name`, which may not be blank; optionally \
                        `backup_station_id`, the station its tickets go to when its printer is down; \
                        `is_default`, whether it is the store's catch-all for a fired line no rule \
                        routes; `late_after_seconds`, from 60 to 3600, when the kitchen display marks \
@@ -154,7 +156,7 @@ where
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Created, active, with the id minted here. The body carries `id`, and the ETag carries \
+        (status = 201, body = CreatedId, description = "Created, active, with the id minted here. The body carries `id`, and the ETag carries \
                                       its version. Audited"),
         (status = 400, description = "tenant_id or store_id is absent or not a ULID; name is blank; backup_station_id is \
                                       not a ULID; late_after_seconds is outside 60 to 3600; or ticket_language is not \
@@ -253,11 +255,7 @@ where
             )
             .await;
             with_etag(
-                (
-                    StatusCode::CREATED,
-                    Json(serde_json::json!({ "id": station_id.to_string() })),
-                )
-                    .into_response(),
+                (StatusCode::CREATED, Json(CreatedId::new(station_id))).into_response(),
                 &version,
             )
         }
@@ -276,7 +274,7 @@ where
                                                      Required; a wildcard is refused"),
     ),
     request_body(
-        description = "`tenant_id`, `status` (`active` or `archived`), and the station's `name`, which may not be blank; optionally \
+        content = UpdateStationRequest, description = "`tenant_id`, `status` (`active` or `archived`), and the station's `name`, which may not be blank; optionally \
                        `backup_station_id`, the station its tickets go to when its printer is down; \
                        `is_default`, whether it is the store's catch-all for a fired line no rule \
                        routes; `late_after_seconds`, from 60 to 3600, when the kitchen display marks \

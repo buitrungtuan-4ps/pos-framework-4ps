@@ -23,7 +23,7 @@ use crate::auth::enrol::{MIN_PASSWORD_LEN, build_enrolment};
 use crate::http::{CloudApp, Json, enum_refusal, mint_credential, random_hex_32};
 
 /// A request to invite a new console admin.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(in crate::http) struct InviteAdminRequest {
     /// The invitee's email — the address they will sign in with (normalised server-side).
     email: String,
@@ -35,7 +35,7 @@ pub(in crate::http) struct InviteAdminRequest {
 
 /// The one-time response to an invitation: the id, the single-use token (shown once) the inviter
 /// copies into the invite link, and the expiry. Only the token's hash is stored.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct InviteAdminResponse {
     /// The invite's id (a ULID).
     invite_id: String,
@@ -52,12 +52,12 @@ struct InviteAdminResponse {
     extensions(("x-permission" = json!("console.admins.invite"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "The invitee's `email`, the address they will sign in with; their `name`; and \
+        content = InviteAdminRequest, description = "The invitee's `email`, the address they will sign in with; their `name`; and \
                        the `role` they are granted on acceptance: `owner`, `admin`, `ops` or `viewer`",
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Invited. The body carries `invite_id`, the single-use `token` \
+        (status = 201, body = InviteAdminResponse, description = "Invited. The body carries `invite_id`, the single-use `token` \
                                       and `expires_at_ms`. The token is returned exactly once — only \
                                       its hash is stored — and the inviter hands the link carrying \
                                       it to the invitee themselves. The audit entry records the role, \
@@ -262,7 +262,7 @@ where
     extensions(("x-permission" = json!("console.admins.invite"))),
     security(("session_cookie" = [])),
     responses(
-        (status = 200, description = "The invitations not yet accepted and not expired, as an array: \
+        (status = 200, body = [pos_cloud_api::auth::admin::AdminInvite], description = "The invitations not yet accepted and not expired, as an array: \
                                       each with `id`, `email`, `name`, `role`, `invited_by` and \
                                       `accepted`. Never the token, which is stored only as a hash"),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
@@ -377,7 +377,7 @@ where
 /// A self-enrolment request: the single-use invite token and the password the invitee chooses.
 ///
 /// [`fmt::Debug`] redacts both, so a logged request cannot leak the token or the password.
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, utoipa::ToSchema)]
 pub(in crate::http) struct AcceptInviteRequest {
     /// The single-use invite token from the invite link.
     token: String,
@@ -401,12 +401,12 @@ impl fmt::Debug for AcceptInviteRequest {
     security(),
     extensions(("x-public-reason" = json!("the single-use token from the invitation link"))),
     request_body(
-        description = "The single-use `token` from the invite link and the `password` the invitee \
+        content = AcceptInviteRequest, description = "The single-use `token` from the invite link and the `password` the invitee \
                        chooses, at least 12 characters. No session: the token is the authorisation",
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Enrolled. The invitation is used up, and the body carries the \
+        (status = 201, body = pos_cloud_api::auth::enrol::Enrolment, description = "Enrolled. The invitation is used up, and the body carries the \
                                       new administrator's one-time TOTP enrolment (QR payload and \
                                       base32 secret) — returned exactly once, never readable again. \
                                       Sign in with `POST /admin/login`"),

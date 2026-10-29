@@ -78,6 +78,7 @@ pub mod archive;
 pub mod archive_retention;
 pub mod assets;
 pub mod campaigns;
+pub mod cell;
 pub mod chain_audit;
 pub mod clock;
 pub mod cloud;
@@ -92,11 +93,16 @@ pub mod lease;
 pub mod metrics;
 mod openapi;
 mod openapi_admin;
+#[cfg(test)]
+mod openapi_bodies;
 mod openapi_device;
+#[cfg(test)]
+mod openapi_required;
 #[cfg(test)]
 mod openapi_security;
 pub mod orders;
 pub mod ota;
+mod outbound;
 mod persistence;
 pub mod providers;
 pub mod qr_http;

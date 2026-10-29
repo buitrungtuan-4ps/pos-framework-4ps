@@ -30,7 +30,7 @@ use crate::ota::ArtifactStore;
 /// you mean" — one store has at most one in flight — it is the caller stating *which machine* they
 /// checked. A settle that took no number would let a stale console close a handover the operator
 /// never looked at.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct SettleHandoverRequest {
     tenant_id: String,
     store_id: String,
@@ -42,7 +42,7 @@ pub(super) struct SettleHandoverRequest {
 /// No generation, and that asymmetry with settle is deliberate. Settle is an attestation about one
 /// named machine's disk; retire is a decision about the handover the row currently describes, and
 /// the row's own preconditions — settled, and not already retired — are what make it unambiguous.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct RetireHandoverRequest {
     tenant_id: String,
     store_id: String,
@@ -54,7 +54,7 @@ pub(super) struct RetireHandoverRequest {
     extensions(("x-permission" = json!("console.stores.manage"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id`, `store_id`, and `superseded_generation`, the machine the caller \
+        content = SettleHandoverRequest, description = "`tenant_id`, `store_id`, and `superseded_generation`, the machine the caller \
                        attests holds no events: a box already powered off, or one whose disk was read \
                        directly. Publishes nothing",
         content_type = "application/json",
@@ -160,7 +160,7 @@ where
     extensions(("x-permission" = json!("console.stores.manage"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id` and `store_id`: the store whose settled handover's outgoing \
+        content = RetireHandoverRequest, description = "`tenant_id` and `store_id`: the store whose settled handover's outgoing \
                        machine, its database and its hosting are no longer needed. A decision no \
                        fact in the system implies (ADR-0110). Publishes nothing",
         content_type = "application/json",

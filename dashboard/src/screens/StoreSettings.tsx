@@ -36,6 +36,7 @@ import { FormSection, PublishBar, type PublishState, StickyActions } from "../co
 import { describePublish } from "../lib/publish-copy";
 import { toast } from "../components/Toast";
 import { apiMessage } from "../lib/errors";
+import { countryHint } from "../lib/cell-country";
 
 /** A short list of common IANA zones offered as suggestions; any valid zone is accepted server-side. */
 const COMMON_TIMEZONES = [
@@ -510,7 +511,7 @@ export function StoreSettings() {
                 }))}
                 onChange={setCountry}
                 placeholder={t("storeSettings.countryNone")}
-                hint={t("storeSettings.countryHint")}
+                hint={countryHint(country())}
               />
 
               {/* This picker keeps what was last applied rather than snapping back to blank. The

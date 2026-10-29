@@ -7,7 +7,9 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use pos_cloud_api::console::{audit_action, mint_ulid, require_permission};
+use pos_cloud_api::response::CreatedId;
 use pos_cloud_api::response::{api_error_with_details, parse_ulid_fields};
+use pos_cloud_api::version::Versioned;
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{AreaId, StoreId, TenantId};
@@ -19,7 +21,7 @@ use super::{
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::catalog::CatalogStore;
-use crate::floorplan::{AreaStore, AreaUpdate, NewArea};
+use crate::floorplan::{Area, AreaStore, AreaUpdate, NewArea};
 use crate::registry::EntityStatus;
 use crate::version::UpdateOutcome;
 use axum::Json;
@@ -37,7 +39,7 @@ use pos_cloud_config::route::{entity_status_refusal, parse_entity_status};
         ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The store's areas, active and archived, as an array, each with its `etag`"),
+        (status = 200, body = [Versioned<Area>], description = "The store's areas, active and archived, as an array, each with its `etag`"),
         (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -87,7 +89,7 @@ where
         ("tenant_id" = String, Query, description = "The tenant the record belongs to (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The area. The ETag carries the version it was read at"),
+        (status = 200, body = Versioned<Area>, description = "The area. The ETag carries the version it was read at"),
         (status = 400, description = "area_id or tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -140,11 +142,11 @@ where
     extensions(("x-permission" = json!("console.floor.manage"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id` and `store_id`, and the area's `name`, which may not be blank",
+        content = CreateAreaRequest, description = "`tenant_id` and `store_id`, and the area's `name`, which may not be blank",
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Created, active, with the id minted here. The body carries `id`, and the ETag carries \
+        (status = 201, body = CreatedId, description = "Created, active, with the id minted here. The body carries `id`, and the ETag carries \
                                       its version. Audited"),
         (status = 400, description = "tenant_id or store_id is absent or not a ULID, or name is blank", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -221,11 +223,7 @@ where
             )
             .await;
             with_etag(
-                (
-                    StatusCode::CREATED,
-                    Json(serde_json::json!({ "id": area_id.to_string() })),
-                )
-                    .into_response(),
+                (StatusCode::CREATED, Json(CreatedId::new(area_id))).into_response(),
                 &version,
             )
         }
@@ -244,7 +242,7 @@ where
                                                      Required; a wildcard is refused"),
     ),
     request_body(
-        description = "`tenant_id`, and the area's `name` and `status` (`active` or `archived`) as they should now \
+        content = UpdateAreaRequest, description = "`tenant_id`, and the area's `name` and `status` (`active` or `archived`) as they should now \
                        stand",
         content_type = "application/json",
     ),

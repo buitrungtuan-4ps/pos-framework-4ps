@@ -40,7 +40,7 @@ use crate::version::{UpdateOutcome, Version, Versioned};
     extensions(("x-permission" = json!("console.data.read"))),
     params(("tenant_id" = String, Query, description = "The tenant whose cohorts to list (a 26-character ULID)")),
     responses(
-        (status = 200, description = "The tenant's store groups, creation order, each with its \
+        (status = 200, body = [StoreGroupView], description = "The tenant's store groups, creation order, each with its \
                                       membership. Archived groups are included: an operator needs to \
                                       see a retired cohort in order to bring it back"),
         (status = 400, description = "tenant_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
@@ -108,8 +108,9 @@ where
     path = "/admin/store-groups",
     security(("session_cookie" = [])),
     extensions(("x-permission" = json!("console.stores.manage"))),
+    request_body(content = CreateStoreGroupRequest, content_type = "application/json"),
     responses(
-        (status = 201, description = "The group, with the ETag to hand back on its first edit. It \
+        (status = 201, body = Versioned<StoreGroup>, description = "The group, with the ETag to hand back on its first edit. It \
                                       holds no stores yet — membership is a second call, so naming \
                                       a cohort is never itself an act with a fleet-wide reach"),
         (status = 400, description = "tenant_id is absent or not a ULID, or name is empty", body = crate::openapi_admin::ErrorResponse),
@@ -194,8 +195,9 @@ where
         ("group_id" = String, Path, description = "The group to rename or (un)archive (a 26-character ULID)"),
         ("If-Match" = String, Header, description = "The ETag the group was read at (ADR-0094). Required"),
     ),
+    request_body(content = UpdateStoreGroupRequest, content_type = "application/json"),
     responses(
-        (status = 200, description = "The group as it now stands, with its new ETag"),
+        (status = 200, body = Versioned<StoreGroup>, description = "The group as it now stands, with its new ETag"),
         (status = 400, description = "group_id or tenant_id is not a ULID, name is empty, or status is not active/archived", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
         (status = 403, description = "The role lacks console.stores.manage", body = crate::openapi_admin::ErrorResponse),
@@ -283,8 +285,9 @@ where
         ("group_id" = String, Path, description = "The group whose membership to replace (a 26-character ULID)"),
         ("If-Match" = String, Header, description = "The ETag the group was read at (ADR-0094/0095 shape C). Required"),
     ),
+    request_body(content = SetStoreGroupMembersRequest, content_type = "application/json"),
     responses(
-        (status = 200, description = "The membership as stored, deduplicated, with the group's new ETag, and `stores`: \
+        (status = 200, body = StoreGroupMembership, description = "The membership as stored, deduplicated, with the group's new ETag, and `stores`: \
                                       when an assignment names the group, how the `permissions` publish went at each open store \
                                       that joined or left it (ADR-0158), and empty otherwise"),
         (status = 400, description = "group_id, tenant_id or a store id is not a ULID", body = crate::openapi_admin::ErrorResponse),
@@ -392,6 +395,18 @@ async fn record_membership<Grp, Reg, Cfg, A, C>(
     .await;
 }
 
+/// What a membership write answers: the members as stored, the group's new version, and how the
+/// `permissions` publish went at each store whose staff it moved.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+pub(super) struct StoreGroupMembership {
+    /// The member stores, each a ULID, in the order first named.
+    store_ids: Vec<String>,
+    /// The group's new version, as the `ETag` header carries it.
+    etag: String,
+    /// One result per store whose staff the change moved.
+    stores: Vec<PermissionsPublishResult>,
+}
+
 /// The membership as stored, with the group's new version in the header and the body, and how the
 /// `permissions` publish went at each store whose staff it moved.
 fn membership_answer(
@@ -402,11 +417,11 @@ fn membership_answer(
     (
         StatusCode::OK,
         [(ETAG, version.as_str().to_owned())],
-        Json(serde_json::json!({
-            "store_ids": membership,
-            "etag": version.as_str(),
-            "stores": stores,
-        })),
+        Json(StoreGroupMembership {
+            store_ids: membership.to_vec(),
+            etag: version.as_str().to_owned(),
+            stores: stores.to_vec(),
+        }),
     )
         .into_response()
 }
@@ -519,4 +534,28 @@ where
         .map(|row| row.record.store_id)
         .filter(|id| before.contains(id) != members.contains(id))
         .collect())
+}
+
+#[cfg(test)]
+mod answer_tests {
+    //! Each answer serialises to the bytes the `json!` it replaced did.
+
+    use super::StoreGroupMembership;
+
+    #[test]
+    fn a_membership_answers_its_stores_version_and_publishes() {
+        let answer = StoreGroupMembership {
+            store_ids: vec!["01J0000000000000000000000S".to_owned()],
+            etag: "7".to_owned(),
+            stores: Vec::new(),
+        };
+        assert_eq!(
+            serde_json::to_value(answer).expect("json"),
+            serde_json::json!({
+                "store_ids": ["01J0000000000000000000000S"],
+                "etag": "7",
+                "stores": [],
+            })
+        );
+    }
 }

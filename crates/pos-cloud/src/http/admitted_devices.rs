@@ -27,7 +27,7 @@ use crate::http::{CloudApp, Json};
         ("tenant_id" = String, Query, description = "The tenant that store belongs to (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The store's admitted devices, still-admitted first and \
+        (status = 200, body = [pos_cloud_reports::types::AdmittedDevice], description = "The store's admitted devices, still-admitted first and \
                                       newest admission first within each group. Each entry carries \
                                       the edge-minted local device id, when it was admitted, the \
                                       paired device whose signed-in manager minted the code (absent \

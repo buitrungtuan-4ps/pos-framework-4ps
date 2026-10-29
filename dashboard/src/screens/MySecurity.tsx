@@ -8,12 +8,12 @@
 import { createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
-import type { Enrolment } from "../api/types";
 import { t } from "../i18n";
 import { Banner, Button, Card, PageHeader, TextField } from "../components/ui";
 import { ConfirmDialog } from "../components/kit";
 import { toast } from "../components/Toast";
 import { apiMessage } from "../lib/errors";
+import type { Enrolment } from "../api/schemas";
 
 export function MySecurity() {
   const [password, setPassword] = createSignal("");

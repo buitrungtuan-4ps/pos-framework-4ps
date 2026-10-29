@@ -44,7 +44,7 @@ struct ConfigInventoryState<Inv, Cfg, A, C> {
 /// A `PUT /admin/config/inventory` body: the `(tenant, store)` to push the tenant's authored inventory
 /// to. Like every other node publish, the ingredients/recipes/suppliers come from what is authored, not
 /// the body.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PublishInventoryRequest {
     tenant_id: String,
     store_id: String,
@@ -157,12 +157,12 @@ where
     extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id` and `store_id`. The tenant's authored ingredients, recipes and \
+        content = PublishInventoryRequest, description = "`tenant_id` and `store_id`. The tenant's authored ingredients, recipes and \
                        suppliers are what is published, never the body",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Compiled into the store's `inventory` node and published on the \
+        (status = 200, body = PublishedConfig, description = "Compiled into the store's `inventory` node and published on the \
                                       Store layer, the store's other settings kept. The body carries \
                                       `config_version_id`. Audited with how many of each kind went in, \
                                       never the recipe amounts"),

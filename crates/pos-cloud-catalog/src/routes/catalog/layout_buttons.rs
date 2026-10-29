@@ -35,7 +35,7 @@ use crate::version::{CreateOutcome, UpdateOutcome, Versioned};
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "Every button on every channel's till layout, as an array, each \
+        (status = 200, body = [Versioned<LayoutButton>], description = "Every button on every channel's till layout, as an array, each \
                                       with its `etag`"),
         (status = 400, description = "tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -130,14 +130,14 @@ fn build_layout_button(
     extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`sales_channel` and `menu_item_id`, the slot the button is for — an item has \
+        content = CreateLayoutButtonRequest, description = "`sales_channel` and `menu_item_id`, the slot the button is for — an item has \
                        at most one button per channel — then `tenant_id`, the `display_category_id` the button sits under and optionally its \
                        `display_subcategory_id`, its `label`, and its place: `grid_column` and \
                        `grid_row` together for a fixed slot, otherwise it flows by `sort`",
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Placed. The body is the button and the ETag carries its \
+        (status = 201, body = Versioned<LayoutButton>, description = "Placed. The body is the button and the ETag carries its \
                                       version. Audited"),
         (status = 400, description = "An id is not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -214,13 +214,13 @@ where
                                                      Required; a wildcard is refused"),
     ),
     request_body(
-        description = "`tenant_id`, the `display_category_id` the button sits under and optionally its \
+        content = SetLayoutButtonRequest, description = "`tenant_id`, the `display_category_id` the button sits under and optionally its \
                        `display_subcategory_id`, its `label`, and its place: `grid_column` and \
                        `grid_row` together for a fixed slot, otherwise it flows by `sort`, as they should now stand",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Updated. The body is the button and the ETag carries its new \
+        (status = 200, body = Versioned<LayoutButton>, description = "Updated. The body is the button and the ETag carries its new \
                                       version. Audited"),
         (status = 400, description = "An id is not a ULID, or If-Match is absent, malformed, or a \
                                       wildcard", body = pos_cloud_api::error_schema::ErrorResponse),

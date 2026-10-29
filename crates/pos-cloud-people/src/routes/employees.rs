@@ -3,6 +3,9 @@
 
 //! `/admin/employees`: a tenant's employees.
 
+use pos_cloud_api::response::CreatedId;
+use pos_cloud_api::response::StoresPublished;
+use pos_cloud_api::version::Versioned;
 use std::collections::BTreeSet;
 
 use axum::Json;
@@ -16,6 +19,7 @@ use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{StoreId, TenantId};
 
 use super::PeopleState;
+use super::publish::PermissionsPublishResult;
 use super::requests::{
     CreateEmployeeRequest, EmployeeListQuery, PIN_MAX_DIGITS, PeopleTenantQuery, SetPinRequest,
     UpdateEmployeeRequest, hash_pin, people_entropy_unavailable, people_error_response,
@@ -31,7 +35,7 @@ use crate::people::{
 use crate::registry::{EntityStatus, RegistryStore};
 use crate::version::{UpdateOutcome, Version};
 use pos_cloud_api::conditional::{if_match, version_mismatch, versioned_ok, with_etag};
-use pos_cloud_api::paged::{paged_ok, parse_page};
+use pos_cloud_api::paged::{ListOrPage, paged_ok, parse_page};
 use pos_cloud_api::refusal::{enum_refusal, not_found, present_param};
 use pos_cloud_catalog::routes::catalog::page_shaping_needs_a_limit_refusal;
 use pos_cloud_config::route::{entity_status_refusal, parse_entity_status};
@@ -56,7 +60,7 @@ use pos_cloud_config::route::{entity_status_refusal, parse_entity_status};
                                                        `sort`'s direction. Only with `limit`"),
     ),
     responses(
-        (status = 200, description = "Without `limit`, every employee as an array; with it, a page: \
+        (status = 200, body = ListOrPage<Versioned<Employee>>, description = "Without `limit`, every employee as an array; with it, a page: \
                                       `items`, `total`, `limit` and `offset`. Each employee has \
                                       `employee_id`, `tenant_id`, `code`, `name`, `status` and \
                                       `has_pin` — never the PIN or its hash"),
@@ -187,7 +191,7 @@ fn employee_list_filter(
         ("tenant_id" = String, Query, description = "The tenant that employs them (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The employee, with an ETag carrying the version it was read at \
+        (status = 200, body = Versioned<Employee>, description = "The employee, with an ETag carrying the version it was read at \
                                       — the token a PATCH must send back as If-Match"),
         (status = 400, description = "tenant_id or employee_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -242,12 +246,12 @@ where
     security(("session_cookie" = [])),
     extensions(("x-permission" = json!("console.people.manage"))),
     request_body(
-        description = "`tenant_id`, the staff `code` the person types to sign in, unique within the \
+        content = CreateEmployeeRequest, description = "`tenant_id`, the staff `code` the person types to sign in, unique within the \
                        tenant, and their `name`. No PIN: it is set with `PUT …/pin`",
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Created. The body is `{ \"id\": … }` and the ETag carries \
+        (status = 201, body = CreatedId, description = "Created. The body is `{ \"id\": … }` and the ETag carries \
                                       the new employee's version. The employee starts active"),
         (status = 400, description = "tenant_id is absent or not a ULID, or code or name is blank", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -336,11 +340,7 @@ where
             )
             .await;
             with_etag(
-                (
-                    StatusCode::CREATED,
-                    Json(serde_json::json!({ "id": employee_id.to_string() })),
-                )
-                    .into_response(),
+                (StatusCode::CREATED, Json(CreatedId::new(employee_id))).into_response(),
                 &version,
             )
         }
@@ -375,12 +375,12 @@ fn code_in_use() -> Response {
                                                      (ADR-0094). Required; a wildcard is refused"),
     ),
     request_body(
-        description = "`tenant_id`, the `name` and the `status` (`active` or `archived`) as they \
+        content = UpdateEmployeeRequest, description = "`tenant_id`, the `name` and the `status` (`active` or `archived`) as they \
                        should now stand. The staff code cannot be changed",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Archived. The person is taken off every store they were \
+        (status = 200, body = StoresPublished<PermissionsPublishResult>, description = "Archived. The person is taken off every store they were \
                                       assigned to at once (ADR-0158 decision 7): `stores` lists each \
                                       store with its `outcome`, `PERMISSIONS_PUBLISH_APPLIED` with \
                                       its `config_version_id` or `PERMISSIONS_PUBLISH_FAILED`, which \
@@ -583,7 +583,7 @@ async fn record_employee_update<P, R, Cfg, A, C>(
         ("employee_id" = String, Path, description = "The employee's 26-character ULID"),
     ),
     request_body(
-        description = "`tenant_id` and the `pin`: digits only, at least the tenant's \
+        content = SetPinRequest, description = "`tenant_id` and the `pin`: digits only, at least the tenant's \
                        `session.pin_min_length` (four where it sets none) and at most eight. The PIN \
                        is hashed at once and is never returned, stored in the clear, logged or \
                        audited (ADR-0070)",

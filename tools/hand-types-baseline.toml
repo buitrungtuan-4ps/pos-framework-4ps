@@ -1,0 +1,8 @@
+# How many wire types each front end still mirrors by hand in src/api/types.ts, rather than
+# naming the OpenAPI document's schema in src/api/schemas.ts (ADR-0177 decision 3). Each
+# number only falls: `cargo xtask hand-types` fails above it, and below it until
+# `cargo xtask hand-types --write-baseline` lowers it, which refuses to raise one.
+
+[hand_types]
+dashboard = 68
+ui = 0

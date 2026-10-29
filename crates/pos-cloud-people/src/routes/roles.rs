@@ -8,13 +8,17 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use pos_cloud_api::console::{audit_action, mint_ulid, require_permission};
+use pos_cloud_api::response::CreatedId;
+use pos_cloud_api::response::StoresPublished;
 use pos_cloud_api::response::{api_error_with_details, parse_ulid_fields};
+use pos_cloud_api::version::Versioned;
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::TenantId;
 
 use super::PeopleState;
 use super::checks::planned_role_update;
+use super::publish::PermissionsPublishResult;
 use super::requests::{
     CreateRoleRequest, PeopleTenantQuery, UpdateRoleRequest, people_entropy_unavailable,
     people_error_response,
@@ -23,7 +27,7 @@ use crate::auth::admin::{AdminContext, AdminStore};
 use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::ConfigTreeStore;
 use crate::people::{
-    AssignmentStore, EmployeeStore, NewRoleTemplate, PermissionInfo, RoleTemplateId,
+    AssignmentStore, EmployeeStore, NewRoleTemplate, PermissionInfo, RoleTemplate, RoleTemplateId,
     RoleTemplateStore, is_known_permission, is_pin_flagged_permission, permission_catalogue,
 };
 use crate::registry::RegistryStore;
@@ -38,7 +42,7 @@ use pos_cloud_config::route::{entity_status_refusal, parse_entity_status};
     security(("session_cookie" = [])),
     extensions(("x-permission" = json!("console.data.read"))),
     responses(
-        (status = 200, description = "Every permission a role may grant, as an array: each with \
+        (status = 200, body = [PermissionInfo], description = "Every permission a role may grant, as an array: each with \
                                       `id`, `group`, `risk`, `pin_required` (whether it may be \
                                       granted with approval) and `description`. The same for every \
                                       tenant"),
@@ -86,7 +90,7 @@ where
         ("tenant_id" = String, Query, description = "The tenant whose roles to list (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "Every role template of the tenant, as an array. A role names \
+        (status = 200, body = [Versioned<RoleTemplate>], description = "Every role template of the tenant, as an array. A role names \
                                       permissions, never a person"),
         (status = 400, description = "tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -138,7 +142,7 @@ where
         ("tenant_id" = String, Query, description = "The tenant that owns it (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The role template, with an ETag carrying the version it was \
+        (status = 200, body = Versioned<RoleTemplate>, description = "The role template, with an ETag carrying the version it was \
                                       read at — the token a PATCH must send back as If-Match"),
         (status = 400, description = "tenant_id or role_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -248,7 +252,7 @@ pub(super) fn granted_with_approval(
     security(("session_cookie" = [])),
     extensions(("x-permission" = json!("console.people.manage"))),
     request_body(
-        description = "`tenant_id`, `name`, `permissions` (granted directly), \
+        content = CreateRoleRequest, description = "`tenant_id`, `name`, `permissions` (granted directly), \
                        `permissions_with_approval` (granted only with a direct holder's approval, \
                        each PIN-flagged; absent is none) and `discount_ceiling_minor` (how much the \
                        role may discount without a manager, in the currency's minor unit; absent is \
@@ -257,7 +261,7 @@ pub(super) fn granted_with_approval(
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Created. The body is `{ \"id\": … }` and the ETag carries \
+        (status = 201, body = CreatedId, description = "Created. The body is `{ \"id\": … }` and the ETag carries \
                                       the new role's version"),
         (status = 400, description = "tenant_id is absent or not a ULID; name is blank; a \
                                       permission id is unknown, not PIN-flagged where granted with \
@@ -315,11 +319,7 @@ where
         Ok(version) => {
             record_role_create(&state, &context, &new_role).await;
             with_etag(
-                (
-                    StatusCode::CREATED,
-                    Json(serde_json::json!({ "id": role_template_id.to_string() })),
-                )
-                    .into_response(),
+                (StatusCode::CREATED, Json(CreatedId::new(role_template_id))).into_response(),
                 &version,
             )
         }
@@ -409,14 +409,14 @@ async fn record_role_create<P, R, Cfg, A, C>(
                                                      Required; a wildcard is refused"),
     ),
     request_body(
-        description = "The role as it should now stand: `tenant_id`, `name`, `permissions`, \
+        content = UpdateRoleRequest, description = "The role as it should now stand: `tenant_id`, `name`, `permissions`, \
                        `discount_ceiling_minor` and `status` (`active` or `archived`), and \
                        optionally `permissions_with_approval` — absent, the role keeps what it \
                        grants with approval, less anything `permissions` now grants directly",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Archived. An archived role grants nothing, so every store where \
+        (status = 200, body = StoresPublished<PermissionsPublishResult>, description = "Archived. An archived role grants nothing, so every store where \
                                       someone holds it is published to at once (ADR-0158 decision \
                                       7): `stores` lists each store with its `outcome`, \
                                       `PERMISSIONS_PUBLISH_APPLIED` with its `config_version_id` or \

@@ -35,12 +35,12 @@ use crate::devices::{
         ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
     ),
     request_body(
-        description = "A device the store discovered: `kind` (`printer` or `kds`), `name` and `address` \
+        content = ProposeDeviceRequest, description = "A device the store discovered: `kind` (`printer` or `kds`), `name` and `address` \
                        (ADR-0041)",
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Proposed: its `id`, and `status` pending until an operator approves it \
+        (status = 201, body = ProposeDeviceResponse, description = "Proposed: its `id`, and `status` pending until an operator approves it \
                                       at the console"),
         (status = 400, description = "store_id is not a ULID, kind is not a known device kind, or name or \
                                       address is blank", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -125,7 +125,7 @@ where
             StatusCode::CREATED,
             Json(ProposeDeviceResponse {
                 id: id.to_string(),
-                status: DeviceProposalStatus::Pending.as_wire().to_owned(),
+                status: DeviceProposalStatus::Pending,
             }),
         )
             .into_response(),
@@ -141,7 +141,7 @@ where
         ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
     ),
     responses(
-        (status = 200, description = "The store's approved devices, never a raw discovery"),
+        (status = 200, body = [DeviceProposalSummary], description = "The store's approved devices, never a raw discovery"),
         (status = 400, description = "store_id is not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No credential, or one the cloud does not accept: one answer for every \
                                       credential problem", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -209,7 +209,7 @@ where
                                                         queue), `approved` or `rejected`"),
     ),
     responses(
-        (status = 200, description = "The devices, as an array: each with `id`, `store_id`, `kind`, \
+        (status = 200, body = [DeviceProposalSummary], description = "The devices, as an array: each with `id`, `store_id`, `kind`, \
                                       `name`, `address`, `status` and `version`, and once approved \
                                       its `connection`, `station_id`, print agent, drawer mark, \
                                       paper, and a till's receipt printer, receipt languages and \

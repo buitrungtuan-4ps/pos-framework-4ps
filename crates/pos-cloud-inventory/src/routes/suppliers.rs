@@ -19,12 +19,13 @@ use super::{
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::inventory::InventoryStore;
-use crate::version::{CreateOutcome, UpdateOutcome};
+use crate::version::{CreateOutcome, UpdateOutcome, Versioned};
 use pos_cloud_api::conditional::{
     already_exists, if_match, version_mismatch, versioned_created, versioned_ok,
 };
 use pos_cloud_api::refusal::not_found;
 use pos_cloud_config::route::RegistryTenantQuery;
+use pos_proto::inventory::PublishedSupplier;
 
 #[utoipa::path(
     get,
@@ -35,7 +36,7 @@ use pos_cloud_config::route::RegistryTenantQuery;
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The tenant's suppliers, as an array, each with its `etag`"),
+        (status = 200, body = [Versioned<PublishedSupplier>], description = "The tenant's suppliers, as an array, each with its `etag`"),
         (status = 400, description = "tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -84,7 +85,7 @@ where
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The supplier. The ETag carries the version it was read at"),
+        (status = 200, body = Versioned<PublishedSupplier>, description = "The supplier. The ETag carries the version it was read at"),
         (status = 400, description = "supplier_id or tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -135,11 +136,11 @@ where
     extensions(("x-permission" = json!("console.inventory.manage"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id`, and the supplier's `name`, which may not be blank",
+        content = SupplierRequest, description = "`tenant_id`, and the supplier's `name`, which may not be blank",
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Created, with the id minted here. The body is the supplier and the ETag carries its \
+        (status = 201, body = Versioned<PublishedSupplier>, description = "Created, with the id minted here. The body is the supplier and the ETag carries its \
                                       version. Audited"),
         (status = 400, description = "tenant_id is absent or not a ULID, or name is blank", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -218,11 +219,11 @@ where
                                                      Required; a wildcard is refused"),
     ),
     request_body(
-        description = "`tenant_id`, and the supplier's `name`, which may not be blank, as it should now stand",
+        content = SupplierRequest, description = "`tenant_id`, and the supplier's `name`, which may not be blank, as it should now stand",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Updated. The body is the supplier and the ETag carries its new version. Audited"),
+        (status = 200, body = Versioned<PublishedSupplier>, description = "Updated. The body is the supplier and the ETag carries its new version. Audited"),
         (status = 400, description = "supplier_id or tenant_id is not a ULID, name is blank, or If-Match is \
                                       absent, malformed or a wildcard", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),

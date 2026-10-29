@@ -34,9 +34,10 @@ struct AlertState<Al, A, C> {
 
 /// The console's view of a stored alert: the record with the kind/severity as their wire tokens and
 /// the lifecycle instants as Unix ms.
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
 struct AlertView {
     id: String,
+    #[schema(required = true)]
     tenant_id: Option<String>,
     kind: &'static str,
     dedup_key: String,
@@ -45,7 +46,9 @@ struct AlertView {
     detail: serde_json::Value,
     first_seen_at_ms: i64,
     last_seen_at_ms: i64,
+    #[schema(required = true)]
     resolved_at_ms: Option<i64>,
+    #[schema(required = true)]
     acknowledged_at_ms: Option<i64>,
 }
 
@@ -128,7 +131,7 @@ fn alert_error_response(error: &AlertStoreError) -> Response {
                                                     (default 200)"),
     ),
     responses(
-        (status = 200, description = "The alerts, fleet-wide, as an array: each with `id`, \
+        (status = 200, body = [AlertView], description = "The alerts, fleet-wide, as an array: each with `id`, \
                                       `tenant_id` (absent for a server-wide condition), `kind`, \
                                       `dedup_key`, `severity` (`info`, `warning` or `critical`), \
                                       `summary`, `detail`, and the Unix-millisecond instants it was \

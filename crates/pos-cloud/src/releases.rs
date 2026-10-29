@@ -51,7 +51,9 @@ use pos_proto::ids::{StoreId, TenantId};
 /// stores an operator needs the two shops that did not take it, not a red cross over the fleet. There
 /// is no `RolledBack` — an applied write is a config version, and the way back is
 /// [ADR-0095](../../../docs/adr/0095-conditional-writes-for-collections.md)'s version history.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ReleaseStatus {
     /// Being assembled. Nothing is scheduled; nothing will fire.

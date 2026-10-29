@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 
 import { publishState } from "../src/components/kit";
 import { lastEditedMs, staleNodes } from "../src/lib/published";
-import type { ConfigNode } from "../src/api/types";
+import type { ConfigNode } from "../src/api/schemas";
 
 const node = (name: string, versionId: string | null, atMs: number | null): ConfigNode => ({
   node: name,

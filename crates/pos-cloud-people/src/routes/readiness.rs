@@ -88,7 +88,7 @@ struct ReadinessQuery {
 }
 
 /// What `GET /admin/stores/{store_id}/permissions/readiness` answers.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 struct PermissionsReadiness {
     store_id: String,
     /// What the store runs for `permissions.enforced`.
@@ -96,9 +96,11 @@ struct PermissionsReadiness {
     /// The scope of the value the store runs, a `SETTING_SCOPE_*` token, absent when it runs the
     /// default.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     enforced_scope: Option<&'static str>,
     /// The tenant, brand, store group or store that value was written for, beside `enforced_scope`.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     enforced_scope_id: Option<String>,
     roles: Vec<crate::people_readiness::RoleReadiness>,
     people_without_role: usize,
@@ -140,7 +142,7 @@ fn enforced_at(
         ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "`store_id`; `enforced`, what the store runs for \
+        (status = 200, body = PermissionsReadiness, description = "`store_id`; `enforced`, what the store runs for \
                                       `permissions.enforced`, with `enforced_scope` and \
                                       `enforced_scope_id` naming the value's level, both absent \
                                       for the default; `roles`, one per active role an active \

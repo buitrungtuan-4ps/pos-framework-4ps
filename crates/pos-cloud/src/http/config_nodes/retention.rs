@@ -19,10 +19,11 @@ use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::ConfigTreeStore;
 use crate::http::{Json, read_store_node_as_run};
+use pos_proto::retention::PublishedRetention;
 
 /// A `PUT /admin/config/retention` body: how many days a store's edge keeps a synced event
 /// (ADR-0145).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct PublishRetentionRequest {
     tenant_id: String,
     store_id: String,
@@ -39,7 +40,7 @@ pub(super) struct PublishRetentionRequest {
         ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The store's `retention` node as the store runs it — how many days its edge keeps a synced event — \
+        (status = 200, body = Option<PublishedRetention>, description = "The store's `retention` node as the store runs it — how many days its edge keeps a synced event — \
                                       composed from all four layers, or `null` when it has none (the edge then keeps 90 days)"),
         (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
@@ -88,11 +89,11 @@ where
     extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id` and `store_id`, then `event_log_days`, how many days the store's edge keeps an event once synced, from 30 to 3650 (ADR-0145)",
+        content = PublishRetentionRequest, description = "`tenant_id` and `store_id`, then `event_log_days`, how many days the store's edge keeps an event once synced, from 30 to 3650 (ADR-0145)",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Published as the store's `retention` node on its Store layer. \
+        (status = 200, body = pos_cloud_config::route::PublishedConfig, description = "Published as the store's `retention` node on its Store layer. \
                                       The body carries `config_version_id`, which the store pulls on \
                                       its next sync. Audited with the node's value"),
         (status = 400, description = "tenant_id or store_id is not a ULID, event_log_days is out of range, or a value needs \

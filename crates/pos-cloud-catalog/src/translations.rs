@@ -21,7 +21,9 @@ use crate::version::{UpdateOutcome, Version, Versioned};
 pub const FALLBACK_LOCALE: &str = "en";
 
 /// A tenant's translation grid: content key → (locale → rendered string).
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
+)]
 #[serde(transparent)]
 pub struct TranslationGrid(BTreeMap<String, BTreeMap<String, String>>);
 

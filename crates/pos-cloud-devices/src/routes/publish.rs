@@ -43,7 +43,7 @@ struct DevicePublishState<D, Cfg, A, C> {
 }
 
 /// A super-admin selects the (tenant, store) whose `devices` node to compile and publish.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PublishDevicesRequest {
     /// The tenant that owns the store (a 26-character ULID).
     tenant_id: String,
@@ -83,18 +83,30 @@ where
         })
 }
 
+/// What a devices publish answers: the version it made, how many devices it carries, and how many
+/// approved proposals it left out.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+struct DevicesPublished {
+    /// The new config version, a ULID.
+    config_version_id: String,
+    /// How many devices the store's node now names.
+    device_count: usize,
+    /// How many it considered and left out.
+    skipped_count: usize,
+}
+
 #[utoipa::path(
     post,
     path = "/admin/devices/publish",
     extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id` and the `store_id` whose approved devices to compile into its \
+        content = PublishDevicesRequest, description = "`tenant_id` and the `store_id` whose approved devices to compile into its \
                        `devices` node (ADR-0100)",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Published. The body carries `config_version_id`, the version \
+        (status = 200, body = DevicesPublished, description = "Published. The body carries `config_version_id`, the version \
                                       the store syncs, `device_count`, and `skipped_count`: approved \
                                       devices held back because no connection was ever recorded for \
                                       them, which are not published as a guess. Audited"),
@@ -214,11 +226,11 @@ where
     .await;
     (
         StatusCode::OK,
-        Json(serde_json::json!({
-            "config_version_id": id.to_string(),
-            "device_count": published_count,
-            "skipped_count": considered.saturating_sub(published_count),
-        })),
+        Json(DevicesPublished {
+            config_version_id: id.to_string(),
+            device_count: published_count,
+            skipped_count: considered.saturating_sub(published_count),
+        }),
     )
         .into_response()
 }
@@ -386,4 +398,28 @@ fn device_kind_token(short: &str) -> String {
 /// As [`device_kind_token`], for a connection (`usb` → `DEVICE_CONNECTION_USB`).
 fn device_connection_token(short: &str) -> String {
     format!("DEVICE_CONNECTION_{}", short.to_ascii_uppercase())
+}
+
+#[cfg(test)]
+mod answer_tests {
+    //! The answer serialises to the bytes the `json!` it replaced did.
+
+    use super::DevicesPublished;
+
+    #[test]
+    fn a_devices_publish_answers_its_version_and_counts() {
+        let answer = DevicesPublished {
+            config_version_id: "01J0000000000000000000000V".to_owned(),
+            device_count: 3,
+            skipped_count: 1,
+        };
+        assert_eq!(
+            serde_json::to_value(answer).expect("json"),
+            serde_json::json!({
+                "config_version_id": "01J0000000000000000000000V",
+                "device_count": 3,
+                "skipped_count": 1,
+            })
+        );
+    }
 }

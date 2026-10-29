@@ -4,7 +4,7 @@ import { ApproverFields } from "../components/ApproverFields";
 import { AssigneeField, DrawerOwner } from "../components/DrawerOwner";
 import { Keypad } from "../components/Keypad";
 import { PageHeader } from "../components/ui";
-import type { ApproverRequest, DrawerEntry, DrawerOutcome, ShiftResponse } from "../api/types";
+import type { ApproverRequest, DrawerEntry, DrawerOutcome, ShiftResponse } from "../api/schemas";
 import { t, type MessageKey } from "../i18n";
 import { WhyUnavailable } from "../components/StoreData";
 import { money, type Money } from "../lib/money";

@@ -46,6 +46,7 @@ pub(crate) struct PrintAgentDeps<S, A> {
 
 /// The terminal a device is claiming or releasing, named by its cloud-approved device id.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(super) struct AgentRequest {
     /// The `TERMINAL` entry's id, as it appears in the published `devices` node.
     agent_device_id: String,
@@ -53,6 +54,7 @@ pub(super) struct AgentRequest {
 
 /// What the claim did, in the vocabulary the till renders.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct AgentResponse {
     /// `BOUND`, `HELD_BY_ANOTHER_DEVICE` or `DEVICE_HOLDS_ANOTHER_AGENT`.
     outcome: &'static str,
@@ -60,6 +62,7 @@ struct AgentResponse {
 
 /// The store's terminals, as the till's **This device** card lists them.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct TerminalsResponse {
     /// The published `TERMINAL` entries, in the order the `devices` node lists them.
     terminals: Vec<TerminalResponse>,
@@ -71,11 +74,13 @@ struct TerminalsResponse {
     /// bind answers that it is already another, and nothing on a screen can release it. Only ever
     /// the caller's own binding: never another device's, and never a person.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     unlisted_agent_device_id: Option<String>,
 }
 
 /// One published terminal, and whether a device holds it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct TerminalResponse {
     /// The `TERMINAL` entry's id, which a claim and a release name.
     agent_device_id: String,
@@ -130,7 +135,7 @@ fn needs_manage_devices() -> Response {
     security(("till_session" = [])),
     extensions(("x-permission" = json!("admin.device.manage"))),
     responses(
-        (status = 200, description = "The store's published terminals, each held by this device, another \
+        (status = 200, body = TerminalsResponse, description = "The store's published terminals, each held by this device, another \
                                       device or nobody, never naming which other device; and the terminal \
                                       this device holds that the `devices` node does not list, if any"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
@@ -214,11 +219,11 @@ where
     security(("till_session" = [])),
     extensions(("x-permission" = json!("admin.device.manage"))),
     request_body(
-        description = "`agent_device_id`, the id of a `TERMINAL` entry the store's `devices` node publishes",
+        content = AgentRequest, description = "`agent_device_id`, the id of a `TERMINAL` entry the store's `devices` node publishes",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "`outcome`: `BOUND`, `HELD_BY_ANOTHER_DEVICE` or \
+        (status = 200, body = AgentResponse, description = "`outcome`: `BOUND`, `HELD_BY_ANOTHER_DEVICE` or \
                                       `DEVICE_HOLDS_ANOTHER_AGENT`"),
         (status = 400, description = "`agent_device_id` is not a ULID"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
@@ -283,7 +288,7 @@ where
     security(("till_session" = [])),
     extensions(("x-permission" = json!("admin.device.manage"))),
     request_body(
-        description = "`agent_device_id`, the id of a `TERMINAL` entry the store's `devices` node publishes",
+        content = AgentRequest, description = "`agent_device_id`, the id of a `TERMINAL` entry the store's `devices` node publishes",
         content_type = "application/json",
     ),
     responses(

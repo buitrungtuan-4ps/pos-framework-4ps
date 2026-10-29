@@ -74,7 +74,7 @@ pub(in crate::http) struct ReleaseState<Rel, Sch, Grp, Reg, Cfg, A, C> {
 }
 
 /// A release on the wire.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(super) struct ReleaseView {
     release_id: String,
     tenant_id: String,
@@ -83,11 +83,15 @@ pub(super) struct ReleaseView {
     /// and every other status on this surface reaches the console `snake_case`. Two spellings for one
     /// concept is two branches in the console's type for no gain.
     status: ReleaseStatus,
+    #[schema(required = true)]
     target_group_id: Option<String>,
     /// The operator's local date, for a wall-clock release. Null for an instant release.
+    #[schema(required = true)]
     wall_clock_date: Option<String>,
+    #[schema(required = true)]
     wall_clock_time: Option<String>,
     /// The single instant, for a release timed in UTC. Null for a wall-clock release.
+    #[schema(required = true)]
     instant_at_ms: Option<i64>,
     created_by: String,
     created_at_ms: i64,
@@ -124,7 +128,7 @@ impl ReleaseView {
 /// `failure` is why the pair last could not apply. A pair that failed is still `PENDING`: the
 /// activator retries it, and what an operator needs meanwhile is the reason, not a status that
 /// pretends the attempt never happened.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(super) struct ReleasePairView {
     pub(super) pair_id: String,
     pub(super) store_id: String,
@@ -139,13 +143,16 @@ pub(super) struct ReleasePairView {
     /// clock it came from draws every shop's 04:00 in the reader's own time — which is the review
     /// ADR-0125 §26 rejected fire-time conversion to avoid. `None` for a release timed as a plain
     /// UTC instant, which has no per-store clock, and for pairs written before the column existed.
+    #[schema(required = true)]
     pub(super) resolved_timezone: Option<String>,
+    #[schema(required = true)]
     pub(super) applied_version_id: Option<String>,
+    #[schema(required = true)]
     pub(super) failure: Option<String>,
 }
 
 /// A release and the grid of its pairs.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(super) struct ReleaseReport {
     pub(super) release: ReleaseView,
     pub(super) pairs: Vec<ReleasePairView>,
@@ -153,7 +160,7 @@ pub(super) struct ReleaseReport {
 
 /// A `POST /admin/config-releases` body: the name, the cohort, and the moment. No nodes — those arrive at
 /// schedule time, with the store list, because both are snapshotted then (ADR-0125 §3).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateReleaseRequest {
     pub(super) tenant_id: String,
     pub(super) name: String,
@@ -174,7 +181,7 @@ pub(super) struct CreateReleaseRequest {
 }
 
 /// One node of a release, and the arguments its plan needs — the same pair a batch publish takes.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(in crate::http) struct ReleaseNodeRequest {
     pub(in crate::http) node: String,
     #[serde(default)]
@@ -182,7 +189,7 @@ pub(in crate::http) struct ReleaseNodeRequest {
 }
 
 /// A `POST /admin/config-releases/{release_id}/schedule` body.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(in crate::http) struct ScheduleReleaseRequest {
     pub(super) tenant_id: String,
     /// The nodes to carry, in any order — the activator applies them in dependency order per store.
@@ -193,7 +200,7 @@ pub(in crate::http) struct ScheduleReleaseRequest {
 }
 
 /// A body carrying nothing but the tenant — what `cancel` needs, since the id is in the path.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct ReleaseTenantRequest {
     pub(super) tenant_id: String,
 }

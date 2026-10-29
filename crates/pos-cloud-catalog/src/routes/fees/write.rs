@@ -17,6 +17,7 @@ use pos_proto::fees::{FeeItems, PublishedFee};
 use pos_proto::ids::{FeeId, StoreId, TenantId};
 
 use super::layout::{FeeCatalog, FeeLayout};
+use super::publish::FeePublishResult;
 use super::publish::publish_fees_to;
 use super::rule::{FeeRuleRequest, build_fee_rule, parse_fee_scope};
 use super::{FeesState, fee_audit_id, fee_publish_counts, fee_store_error_response};
@@ -28,13 +29,35 @@ use crate::fees::{CategoryItems, FeeRule, FeeRuleStore, StoreFacts, StoreFault};
 use crate::registry::RegistryStore;
 use crate::routes::{FieldRefusal, load_tree_for_write};
 
+/// What a fee write answers: the fee it wrote, and how publishing to each store it reached went.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+struct FeeWritten {
+    /// The fee's id, a ULID: the one sent, or the one minted for a new fee.
+    fee_id: String,
+    /// One result per store the write reached.
+    stores: Vec<FeePublishResult>,
+}
+
+impl FeeWritten {
+    /// `201` for a fee this write minted, `200` for one it replaced.
+    fn answer(minted: bool, fee_id: FeeId, stores: Vec<FeePublishResult>) -> Response {
+        let status = if minted {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        };
+        let fee_id = fee_id.to_string();
+        (status, Json(Self { fee_id, stores })).into_response()
+    }
+}
+
 #[utoipa::path(
     post,
     path = "/admin/fees",
     security(("session_cookie" = [])),
     extensions(("x-permission" = json!("console.config.publish"))),
     request_body(
-        description = "The tenant, the scope (FEE_SCOPE_TENANT, _BRAND or _STORE), the id it is \
+        content = FeeRuleRequest, description = "The tenant, the scope (FEE_SCOPE_TENANT, _BRAND or _STORE), the id it is \
                        for, and the rule without a fee_id: code, display_name and its \
                        translations, kind (FEE_KIND_PERCENT with a rate, or FEE_KIND_AMOUNT_PER_BILL \
                        or _PER_UNIT with an amount), channels, item_scope with menu_item_ids and \
@@ -43,7 +66,7 @@ use crate::routes::{FieldRefusal, load_tree_for_write};
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Created with a minted fee_id, and every store it reaches \
+        (status = 201, body = FeeWritten, description = "Created with a minted fee_id, and every store it reaches \
                                       republished. The body names the fee_id and lists each store \
                                       with FEE_PUBLISH_APPLIED and the new config version, \
                                       FEE_PUBLISH_UNCHANGED, FEE_PUBLISH_REFUSED with the rules it \
@@ -117,13 +140,13 @@ where
     security(("session_cookie" = [])),
     extensions(("x-permission" = json!("console.config.publish"))),
     request_body(
-        description = "As a POST, with the rule's fee_id: the fee to write at this scope. Written \
+        content = FeeRuleRequest, description = "As a POST, with the rule's fee_id: the fee to write at this scope. Written \
                        where it is, the rule replaces it; written at a narrower scope, it \
                        overrides the broader one for the stores that scope reaches",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Written, and every store it reaches republished, with the \
+        (status = 200, body = FeeWritten, description = "Written, and every store it reaches republished, with the \
                                       same per-store outcomes as a POST"),
         (status = 400, description = "As a POST, or the fee_id is absent", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -266,15 +289,7 @@ where
         Some(fee_publish_counts(&results)),
     )
     .await;
-    (
-        if minted {
-            StatusCode::CREATED
-        } else {
-            StatusCode::OK
-        },
-        Json(serde_json::json!({ "fee_id": fee_id.to_string(), "stores": results })),
-    )
-        .into_response()
+    FeeWritten::answer(minted, fee_id, results)
 }
 
 /// What a write changes: the tenant's rules before and after it, and the rule it writes, which a
@@ -442,4 +457,23 @@ pub(super) async fn fee_store_facts<Cfg: ConfigTreeStore>(
             &ConfigTree::from_state(store_id, CapabilityValidator, tree).effective(),
         )
     }))
+}
+
+#[cfg(test)]
+mod answer_tests {
+    //! [`FeeWritten`] serialises to the bytes the `json!` it replaced did.
+
+    use super::FeeWritten;
+
+    #[test]
+    fn a_fee_write_is_its_id_and_its_stores() {
+        let answer = FeeWritten {
+            fee_id: "01J0000000000000000000000F".to_owned(),
+            stores: Vec::new(),
+        };
+        assert_eq!(
+            serde_json::to_value(answer).expect("json"),
+            serde_json::json!({ "fee_id": "01J0000000000000000000000F", "stores": [] })
+        );
+    }
 }

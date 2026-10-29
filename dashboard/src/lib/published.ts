@@ -15,9 +15,9 @@
 import { createSignal } from "solid-js";
 
 import { api } from "../api/client";
-import type { ConfigNode, ConfigNodes } from "../api/types";
 import { onScopedContext } from "./scoped";
 import { storeId, tenantId } from "../state/session";
+import type { ConfigNode, ConfigNodes } from "../api/schemas";
 
 const EMPTY: ConfigNodes = { current_version_id: null, nodes: [] };
 

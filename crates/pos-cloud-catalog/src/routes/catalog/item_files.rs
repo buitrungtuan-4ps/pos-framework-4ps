@@ -31,7 +31,7 @@ use crate::{export, import};
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "`items.csv`, as a `text/csv` attachment: the header \
+        (status = 200, body = String, content_type = "text/csv", description = "`items.csv`, as a `text/csv` attachment: the header \
                                       `menu_item_id,name,status,tax_class_id,item_category_id,\
                                       item_subcategory_id,image_ref`, then one row per item. No \
                                       price, no translation and no course. A name a spreadsheet \
@@ -220,7 +220,7 @@ where
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
     ),
     request_body(
-        description = "The CSV `GET /admin/catalog/export/items` writes, with the same header, as \
+        content = String, description = "The CSV `GET /admin/catalog/export/items` writes, with the same header, as \
                        the raw request body. A row with a `menu_item_id` this tenant has updates \
                        that item; a row with none creates one; any other id is rejected, so a file \
                        cannot mint an item id. The format carries no price, translation or course, \
@@ -228,7 +228,7 @@ where
         content_type = "text/csv",
     ),
     responses(
-        (status = 200, description = "What the file would do, writing nothing: `rows`, one per data row in file order, each with its `key` and its `action`: `create`, `update`, or `reject` with a `reason`; and `create_count`, `update_count` and `reject_count`. A row \
+        (status = 200, body = import::ImportReport, description = "What the file would do, writing nothing: `rows`, one per data row in file order, each with its `key` and its `action`: `create`, `update`, or `reject` with a `reason`; and `create_count`, `update_count` and `reject_count`. A row \
                                       naming a tax class, category, sub-category or image the \
                                       tenant does not have is rejected here, by row. Not audited"),
         (status = 400, description = "tenant_id is absent or not a ULID, or the body is not CSV or \
@@ -300,7 +300,7 @@ where
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
     ),
     request_body(
-        description = "The CSV `GET /admin/catalog/export/items` writes, with the same header, as \
+        content = String, description = "The CSV `GET /admin/catalog/export/items` writes, with the same header, as \
                        the raw request body. A row with a `menu_item_id` this tenant has updates \
                        that item; a row with none creates one; any other id is rejected, so a file \
                        cannot mint an item id. The format carries no price, translation or course, \
@@ -308,7 +308,7 @@ where
         content_type = "text/csv",
     ),
     responses(
-        (status = 200, description = "Applied: the valid rows are written one at a time and the \
+        (status = 200, body = import::ImportReport, description = "Applied: the valid rows are written one at a time and the \
                                       report is the dry run's, with any row whose write failed \
                                       turned into a rejection naming why — `rows`, one per data row in file order, each with its `key` and its `action`: `create`, `update`, or `reject` with a `reason`; and `create_count`, `update_count` and `reject_count`. Not one \
                                       transaction: re-importing the same file after a fix is safe. \

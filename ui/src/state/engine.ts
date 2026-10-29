@@ -30,6 +30,7 @@ import { createSignal } from "solid-js";
 import { createStore } from "solid-js/store";
 
 import { ApiError, revalidate } from "../api/client";
+import type { EdgeUrlFor } from "../api/paths";
 import { type Restored, restoreSnapshot, saveSnapshot } from "./snapshot";
 
 // Configuration is what the store sells and how; live data is what it is doing and who is doing it
@@ -42,7 +43,7 @@ export interface Entry {
   readonly key: string;
   readonly kind: EntryKind;
   // Where it is read.
-  readonly path: () => string;
+  readonly path: () => EdgeUrlFor<"GET">;
   // A read of more than one route, in place of `path`. It names no tag, so it is always answered
   // in full.
   readonly read?: () => Promise<unknown>;

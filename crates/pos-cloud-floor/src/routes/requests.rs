@@ -27,7 +27,7 @@ pub(super) struct FloorTenantQuery {
 }
 
 /// Create a floor area.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateAreaRequest {
     pub(super) tenant_id: String,
     pub(super) store_id: String,
@@ -35,7 +35,7 @@ pub(super) struct CreateAreaRequest {
 }
 
 /// Rename an area and/or set its status.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct UpdateAreaRequest {
     pub(super) tenant_id: String,
     pub(super) name: String,
@@ -43,7 +43,7 @@ pub(super) struct UpdateAreaRequest {
 }
 
 /// Create a floor table.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateTableRequest {
     pub(super) tenant_id: String,
     pub(super) store_id: String,
@@ -58,7 +58,7 @@ pub(super) struct CreateTableRequest {
 }
 
 /// Update a table's area, label, seats, position, and status.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct UpdateTableRequest {
     pub(super) tenant_id: String,
     pub(super) area_id: String,
@@ -73,7 +73,7 @@ pub(super) struct UpdateTableRequest {
 }
 
 /// Create a kitchen station.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateStationRequest {
     pub(super) tenant_id: String,
     pub(super) store_id: String,
@@ -94,7 +94,7 @@ pub(super) struct CreateStationRequest {
 
 /// Update a station's name, backup, default flag, late threshold, ticket language, and status. Every
 /// field is the station's whole new state, so an absent threshold or language is the default again.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct UpdateStationRequest {
     pub(super) tenant_id: String,
     pub(super) name: String,
@@ -156,7 +156,7 @@ pub(super) fn station_ticket_language(
 }
 
 /// Create an item→station routing rule.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateRoutingRuleRequest {
     pub(super) tenant_id: String,
     pub(super) store_id: String,

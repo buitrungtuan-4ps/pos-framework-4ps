@@ -92,13 +92,16 @@ const RESTART_AFTER_ACTIVATION: core::time::Duration = core::time::Duration::fro
 
 /// A device presenting its activation code.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct ActivateRequest {
-    /// The `XXXX-XXXX-XXXX` code the operator typed, in any casing or spacing.
+    /// The `XXXX-XXXX-XXXX` code the operator typed, in any casing or spacing, with or without its
+    /// cell's prefix (`VN1-XXXX-XXXX-XXXX`, ADR-0181).
     code: String,
 }
 
 /// The identity a successful activation grants.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct ActivateAccepted {
     /// The device id the stored credential now authenticates as.
     device_id: String,
@@ -106,12 +109,14 @@ struct ActivateAccepted {
 
 /// This box's activation standing, for the boot gate and the UI.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct StandingResponse {
     /// `true` once a device credential is in the vault.
     activated: bool,
     /// Whether the store's state is closed to other local accounts (ADR-0174 decision 5). Absent
     /// from a router that was given no state directory, and from an edge older than the field.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     state_access: Option<StateAccess>,
 }
 
@@ -186,12 +191,12 @@ pub async fn boot_standing<V: KeyVault>(vault: &V) -> Result<ActivationStanding,
     security(),
     extensions(("x-public-reason" = json!("an activation code from the store's setup sheet (ADR-0050)"))),
     request_body(
-        description = "`code`, the activation code printed on the store's setup sheet, in any casing or \
+        content = ActivateRequest, description = "`code`, the activation code printed on the store's setup sheet, in any casing or \
                        spacing",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Activated: the `device_id` the stored credential authenticates as. The \
+        (status = 200, body = ActivateAccepted, description = "Activated: the `device_id` the stored credential authenticates as. The \
                                       edge restarts a moment later so its cloud loops start with the \
                                       credential"),
         (status = 400, description = "The code is malformed (`ACTIVATION_CODE_MALFORMED`)"),
@@ -220,7 +225,10 @@ where
     V: KeyVault + Send + Sync + 'static,
 {
     // A malformed code never named a real one, so refuse it locally: a plain client error, and a
-    // saved round-trip. `parse` normalises casing and spacing exactly as the cloud does.
+    // saved round-trip. `parse` normalises casing and spacing exactly as the cloud does. A code
+    // printed with its cell's prefix (ADR-0181) is presented as typed, so the cell it reaches reads
+    // the prefix too; this box does not yet act on the prefix itself, and presents every code to its
+    // configured cloud.
     if ActivationCode::parse(&request.code).is_err() {
         return refused(
             StatusCode::BAD_REQUEST,
@@ -306,7 +314,7 @@ async fn store_credential<V: KeyVault>(vault: &V, credential: &Secret) -> Result
     security(),
     extensions(("x-public-reason" = json!("nothing: it says only whether this box is activated yet"))),
     responses(
-        (status = 200, description = "`activated`: whether this box holds a device credential yet; and \
+        (status = 200, body = StandingResponse, description = "`activated`: whether this box holds a device credential yet; and \
                                       `state_access`, whether the store's state is closed to other local \
                                       accounts, where the edge reports it"),
         (status = 503, description = "The key vault could not be read (`ACTIVATION_UNAVAILABLE`)"),

@@ -6,29 +6,19 @@
 
 import type { JSX } from "solid-js";
 
-import type { EntityStatus, SalesChannel } from "../../api/types";
-import { SALES_CHANNELS } from "../../api/types";
-import { t, type MessageKey } from "../../i18n";
+import type { EntityStatus } from "../../api/types";
+import { t } from "../../i18n";
 import { StatusBadge } from "../../components/ui";
 import { apiMessage, isStale } from "../../lib/errors";
+import { SALES_CHANNELS } from "../../lib/channels";
 
-/** The i18n key for each sales channel's short label (used by the Menus placement editor). */
-export const CHANNEL_LABEL: Record<SalesChannel, MessageKey> = {
-  SALES_CHANNEL_DINE_IN: "channel.dineIn",
-  SALES_CHANNEL_TAKEAWAY: "channel.takeaway",
-  SALES_CHANNEL_DELIVERY: "channel.delivery",
-  SALES_CHANNEL_QR: "channel.qr",
-  SALES_CHANNEL_API: "channel.api",
-};
 
-/** A blank per-channel price sheet: every channel maps to `null` (not priced). Amounts are integer
+/** A blank per-channel price sheet: every known channel maps to `null` (not priced); a channel a
+ *  newer cloud sent is added when a placement that prices it is loaded, so its price is kept. Amounts are integer
  *  minor units — what `amount_minor` stores, and what `MoneyField` emits from a figure the operator
  *  typed as money ([ADR-0135](../../../../docs/adr/0135-the-console-reads-money-the-way-the-till-does.md)). */
-export const emptyPriceSheet = (): Record<SalesChannel, number | null> =>
-  Object.fromEntries(SALES_CHANNELS.map((channel) => [channel, null])) as Record<
-    SalesChannel,
-    number | null
-  >;
+export const emptyPriceSheet = (): Record<string, number | null> =>
+  Object.fromEntries(SALES_CHANNELS.map((channel) => [channel, null]));
 
 // Drops blank-key or blank-value entries from an edited per-locale name map and trims both sides, so a
 // row the operator left empty never ships as a `""` translation (ADR-0074). The server cleans too;

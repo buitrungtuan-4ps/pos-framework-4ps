@@ -1,7 +1,7 @@
 import { For, Show, createEffect, createSignal, on, onMount } from "solid-js";
 
 import { ApiError, api } from "../api/client";
-import type { ReprintResponse, SettledBill, TakingsResponse } from "../api/types";
+import type { ReprintResponse, SettledBill, TakingsResponse } from "../api/schemas";
 import { ReadFailed } from "../components/StoreData";
 import { PageHeader } from "../components/ui";
 import { type MessageKey, t } from "../i18n";

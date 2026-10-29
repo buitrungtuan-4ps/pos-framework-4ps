@@ -45,7 +45,7 @@ struct FloorPublishState<F, Cfg, A, C> {
 }
 
 /// A super-admin selects the (tenant, store) whose `floor`/`stations` nodes to compile and publish.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PublishFloorRequest {
     tenant_id: String,
     store_id: String,
@@ -170,12 +170,12 @@ where
     extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id` and `store_id`. What is published is the store's authored floor and \
+        content = PublishFloorRequest, description = "`tenant_id` and `store_id`. What is published is the store's authored floor and \
                        kitchen, never the body",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "The store's areas and tables are compiled into its `floor` node, \
+        (status = 200, body = PublishedConfig, description = "The store's areas and tables are compiled into its `floor` node, \
                                       and its stations and routing into its `stations` node, and both \
                                       are published on the Store layer, the store's other settings \
                                       kept. The body carries `config_version_id`. Audited with the \

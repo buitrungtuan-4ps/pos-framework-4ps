@@ -105,6 +105,8 @@ pub(crate) mod alerts;
 mod archives;
 mod authored_layer;
 pub(crate) mod campaigns;
+pub(crate) mod cell;
+pub(crate) mod cell_standing;
 mod chain;
 mod cloud_routes;
 pub(crate) mod config_nodes;
@@ -126,6 +128,7 @@ mod settings_confirm;
 mod store_groups;
 pub(crate) mod subjects;
 mod sync;
+pub mod well_known;
 
 // The console's OpenAPI document (`crate::openapi_admin`) names each documented handler by its
 // path here: the handler itself where this module calls it, and the `__path_*` item utoipa derives
@@ -156,6 +159,8 @@ pub use campaigns::{
     campaign_router, config_campaigns_router, scheduled_publish_router, voucher_router,
 };
 pub use catalog::{catalog_publish_router, catalog_router};
+pub use cell::cell_router;
+pub use cell_standing::cell_standing_router;
 pub(crate) use chain::__path_admin_chain_findings;
 pub use chain::chain_router;
 pub use config_nodes::{
@@ -166,11 +171,11 @@ pub(crate) use config_publish::{
     __path_admin_list_releases, __path_admin_read_release, __path_admin_schedule_release,
 };
 use config_publish::{
-    LoadedTree, ReleaseNodeRequest, ReleaseState, ScheduleReleaseRequest, admin_config_nodes,
-    admin_config_rollback, admin_config_version_effective, admin_config_versions,
-    config_redacted_for, if_match_config, load_tree_for_write, preview_config_node,
-    publish_config_nodes, publish_nodes, release_error_response, release_report_response,
-    release_target_stores, release_target_timezones, unresolvable_moment,
+    ConfigPreview, LoadedTree, ReleaseNodeRequest, ReleaseState, ScheduleReleaseRequest,
+    admin_config_nodes, admin_config_rollback, admin_config_version_effective,
+    admin_config_versions, config_redacted_for, if_match_config, load_tree_for_write,
+    preview_config_node, publish_config_nodes, publish_nodes, release_error_response,
+    release_report_response, release_target_stores, release_target_timezones, unresolvable_moment,
 };
 use config_publish::{admin_config_effective, admin_config_publish};
 pub use config_publish::{config_preview_router, config_release_router};

@@ -7,7 +7,7 @@ use serde::Deserialize;
 
 use crate::catalog::ChannelPrice;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateItemRequest {
     pub(super) tenant_id: String,
     pub(super) name: String,
@@ -29,7 +29,7 @@ pub(super) struct CreateItemRequest {
     pub(super) image_ref: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct UpdateItemRequest {
     pub(super) tenant_id: String,
     pub(super) name: String,
@@ -68,40 +68,40 @@ pub fn clean_name_translations(
         .collect()
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateTaxClassRequest {
     pub(super) tenant_id: String,
     pub(super) name: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct UpdateTaxClassRequest {
     pub(super) tenant_id: String,
     pub(super) name: String,
     pub(super) status: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateItemCategoryRequest {
     pub(super) tenant_id: String,
     pub(super) name: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct UpdateItemCategoryRequest {
     pub(super) tenant_id: String,
     pub(super) name: String,
     pub(super) status: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateItemSubcategoryRequest {
     pub(super) tenant_id: String,
     pub(super) item_category_id: String,
     pub(super) name: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct UpdateItemSubcategoryRequest {
     pub(super) tenant_id: String,
     pub(super) item_category_id: String,
@@ -109,27 +109,27 @@ pub(super) struct UpdateItemSubcategoryRequest {
     pub(super) status: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateDisplayCategoryRequest {
     pub(super) tenant_id: String,
     pub(super) name: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct UpdateDisplayCategoryRequest {
     pub(super) tenant_id: String,
     pub(super) name: String,
     pub(super) status: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateDisplaySubcategoryRequest {
     pub(super) tenant_id: String,
     pub(super) display_category_id: String,
     pub(super) name: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct UpdateDisplaySubcategoryRequest {
     pub(super) tenant_id: String,
     pub(super) display_category_id: String,
@@ -144,7 +144,7 @@ pub(super) struct UpdateDisplaySubcategoryRequest {
 /// flatten pulls in serde's buffering `Content` enum, whose `f32`/`f64` variants `clippy.toml` bans
 /// outright (`docs/adr/0013`: money is never a float). `into_write` keeps the two shapes from
 /// drifting instead.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateLayoutButtonRequest {
     pub(super) sales_channel: String,
     pub(super) menu_item_id: String,
@@ -176,7 +176,7 @@ impl CreateLayoutButtonRequest {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct SetLayoutButtonRequest {
     pub(super) tenant_id: String,
     pub(super) display_category_id: String,
@@ -191,7 +191,7 @@ pub(super) struct SetLayoutButtonRequest {
     pub(super) sort: i32,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateModifierGroupRequest {
     pub(super) tenant_id: String,
     pub(super) name: String,
@@ -205,7 +205,7 @@ pub(super) struct CreateModifierGroupRequest {
     pub(super) attached_item_ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct UpdateModifierGroupRequest {
     pub(super) tenant_id: String,
     pub(super) name: String,
@@ -220,14 +220,14 @@ pub(super) struct UpdateModifierGroupRequest {
     pub(super) status: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateMenuRequest {
     pub(super) tenant_id: String,
     pub(super) name: String,
     pub(super) parent_menu_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct UpdateMenuRequest {
     pub(super) tenant_id: String,
     pub(super) name: String,
@@ -235,7 +235,7 @@ pub(super) struct UpdateMenuRequest {
     pub(super) status: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct CreateMenuSectionRequest {
     pub(super) tenant_id: String,
     pub(super) name: String,
@@ -243,7 +243,7 @@ pub(super) struct CreateMenuSectionRequest {
     pub(super) sort: i32,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct UpdateMenuSectionRequest {
     pub(super) tenant_id: String,
     pub(super) name: String,
@@ -257,7 +257,7 @@ pub(super) struct UpdateMenuSectionRequest {
 /// `PUT` share one builder.
 ///
 /// Flat rather than `#[serde(flatten)]` for the same reason as [`CreateLayoutButtonRequest`].
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct CreatePlacementRequest {
     pub(super) menu_id: String,
     pub(super) menu_item_id: String,
@@ -280,7 +280,7 @@ impl CreatePlacementRequest {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct SetPlacementRequest {
     pub(super) tenant_id: String,
     #[serde(default)]

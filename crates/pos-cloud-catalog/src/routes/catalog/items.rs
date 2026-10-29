@@ -8,7 +8,9 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use pos_cloud_api::console::{audit_action, mint_ulid, require_permission};
+use pos_cloud_api::paged::ListOrPage;
 use pos_cloud_api::response::{api_error_with_details, parse_ulid_fields, ulid_refusal};
+use pos_cloud_api::version::Versioned;
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{CourseId, MenuItemId, TaxClassId, TenantId};
@@ -58,7 +60,7 @@ pub(super) fn parse_item_id_list(values: &[String]) -> Result<Vec<MenuItemId>, (
                                                        `limit`"),
     ),
     responses(
-        (status = 200, description = "Without `limit`, every item as an array; with it, a page: \
+        (status = 200, body = ListOrPage<Versioned<CatalogItem>>, description = "Without `limit`, every item as an array; with it, a page: \
                                       `items`, `total`, `limit` and `offset`. Each item has its \
                                       `etag`, and no price"),
         (status = 400, description = "tenant_id is absent or not a ULID; limit or offset is not an \
@@ -206,7 +208,7 @@ pub fn page_shaping_needs_a_limit_refusal(field: &str) -> Response {
     extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id`, `name`, `name_translations` (per-locale names by locale code, optional; `name` is the \
+        content = CreateItemRequest, description = "`tenant_id`, `name`, `name_translations` (per-locale names by locale code, optional; `name` is the \
                        fallback), `tax_class_id`, and optionally `item_category_id`, \
                        `item_subcategory_id`, `course_id` (ADR-0130) and `image_ref`, a media id \
                        (ADR-0075). An item carries no price: a price belongs to its placement on a \
@@ -214,7 +216,7 @@ pub fn page_shaping_needs_a_limit_refusal(field: &str) -> Response {
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Created, active, with the id minted here — the id an order \
+        (status = 201, body = Versioned<CatalogItem>, description = "Created, active, with the id minted here — the id an order \
                                       names the item by. The body is the record and the ETag carries \
                                       its version. Audited"),
         (status = 400, description = "tenant_id or tax_class_id is absent or not a ULID, or item_category_id, \
@@ -318,7 +320,7 @@ where
                                                      Required; a wildcard is refused"),
     ),
     request_body(
-        description = "`tenant_id`, `status` (`active` or `archived`), and `name`, `name_translations` (per-locale names by locale code, optional; `name` is the \
+        content = UpdateItemRequest, description = "`tenant_id`, `status` (`active` or `archived`), and `name`, `name_translations` (per-locale names by locale code, optional; `name` is the \
                        fallback), `tax_class_id`, and optionally `item_category_id`, \
                        `item_subcategory_id`, `course_id` (ADR-0130) and `image_ref`, a media id \
                        (ADR-0075). An item carries no price: a price belongs to its placement on a \
@@ -327,7 +329,7 @@ where
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Updated. The body is the record and the ETag carries its new \
+        (status = 200, body = Versioned<CatalogItem>, description = "Updated. The body is the record and the ETag carries its new \
                                       version. Audited"),
         (status = 400, description = "menu_item_id is not a ULID, tenant_id or tax_class_id is absent or not a ULID, or item_category_id, \
                                       item_subcategory_id, course_id or image_ref is not a ULID, status is not `active` or \

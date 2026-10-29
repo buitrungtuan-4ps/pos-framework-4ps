@@ -9,6 +9,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use pos_cloud_api::console::{audit_action, mint_ulid, require_permission};
 use pos_cloud_api::response::{parse_ulid_fields, ulid_refusal};
+use pos_cloud_api::version::Versioned;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::TenantId;
 
@@ -37,7 +38,7 @@ use crate::version::UpdateOutcome;
         ("tenant_id" = String, Query, description = "The tenant whose menus to list (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The tenant's menus, as an array, each with its \
+        (status = 200, body = [Versioned<Menu>], description = "The tenant's menus, as an array, each with its \
                                       `parent_menu_id` (absent for a menu that inherits from none) \
                                       and its `etag`"),
         (status = 400, description = "tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -84,12 +85,12 @@ where
     extensions(("x-permission" = json!("console.catalog.manage"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id`, the menu's `name`, and optionally `parent_menu_id`, a menu it \
+        content = CreateMenuRequest, description = "`tenant_id`, the menu's `name`, and optionally `parent_menu_id`, a menu it \
                        inherits its placements from",
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Created, active, with the id minted here. The body is the \
+        (status = 201, body = Versioned<Menu>, description = "Created, active, with the id minted here. The body is the \
                                       record and the ETag carries its version. Audited"),
         (status = 400, description = "tenant_id or parent_menu_id is not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -170,12 +171,12 @@ where
                                                      Required; a wildcard is refused"),
     ),
     request_body(
-        description = "`tenant_id`, and the menu's `name`, `parent_menu_id` (absent clears it) and \
+        content = UpdateMenuRequest, description = "`tenant_id`, and the menu's `name`, `parent_menu_id` (absent clears it) and \
                        `status` (`active` or `archived`) as they should now stand",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Updated. The body is the record and the ETag carries its new \
+        (status = 200, body = Versioned<Menu>, description = "Updated. The body is the record and the ETag carries its new \
                                       version. Audited"),
         (status = 400, description = "menu_id, tenant_id or parent_menu_id is not a ULID, status is \
                                       not `active` or `archived`, or If-Match is absent, malformed, \
@@ -284,7 +285,7 @@ where
         ("tenant_id" = String, Query, description = "The tenant that owns it (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The menu's sections, as an array, each with its `sort` and \
+        (status = 200, body = [Versioned<MenuSection>], description = "The menu's sections, as an array, each with its `sort` and \
                                       `etag`"),
         (status = 400, description = "tenant_id or menu_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -335,12 +336,12 @@ where
         ("menu_id" = String, Path, description = "The menu (a 26-character ULID)"),
     ),
     request_body(
-        description = "`tenant_id`, the section's `name`, and `sort`, where it falls on the menu, \
+        content = CreateMenuSectionRequest, description = "`tenant_id`, the section's `name`, and `sort`, where it falls on the menu, \
                        ascending (absent is 0)",
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Created, active, with the id minted here. The body is the \
+        (status = 201, body = Versioned<MenuSection>, description = "Created, active, with the id minted here. The body is the \
                                       record and the ETag carries its version. Audited"),
         (status = 400, description = "tenant_id or menu_id is not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -422,12 +423,12 @@ where
                                                      Required; a wildcard is refused"),
     ),
     request_body(
-        description = "`tenant_id`, and the section's `name`, `sort` and `status` (`active` or \
+        content = UpdateMenuSectionRequest, description = "`tenant_id`, and the section's `name`, `sort` and `status` (`active` or \
                        `archived`) as they should now stand",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Updated. The body is the record and the ETag carries its new \
+        (status = 200, body = Versioned<MenuSection>, description = "Updated. The body is the record and the ETag carries its new \
                                       version. Audited"),
         (status = 400, description = "An id is not a ULID, status is not `active` or `archived`, or \
                                       If-Match is absent, malformed, or a wildcard", body = pos_cloud_api::error_schema::ErrorResponse),

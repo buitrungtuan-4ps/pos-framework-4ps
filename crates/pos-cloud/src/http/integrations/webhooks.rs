@@ -23,7 +23,7 @@ use crate::webhook::{
 // --- Webhook endpoint administration (`/admin/webhooks`) ----------------------------------------
 
 /// A super-admin request to register a webhook endpoint for a tenant.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(in crate::http) struct RegisterWebhookRequest {
     /// The tenant the endpoint belongs to (a 26-character ULID).
     tenant_id: String,
@@ -37,7 +37,7 @@ pub(in crate::http) struct RegisterWebhookRequest {
 /// The one-time response to a registration: the id, the normalized URL, and the signing secret shown
 /// **exactly once** — the tenant needs it to verify the HMAC signature on every delivery, and the
 /// cloud keeps only its own copy thereafter.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct RegisterWebhookResponse {
     /// The endpoint's public id (a ULID).
     id: String,
@@ -61,13 +61,13 @@ pub(in crate::http) struct WebhookTenantQuery {
     extensions(("x-permission" = json!("console.webhooks.manage"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id`, `store_id`, the store whose events the endpoint is sent, and \
+        content = RegisterWebhookRequest, description = "`tenant_id`, `store_id`, the store whose events the endpoint is sent, and \
                        `url`: `https`, carrying no credentials, and resolving only to public \
                        addresses (ADR-0032). The URL is checked before anything is stored",
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Registered. The body carries the endpoint's `id`, the \
+        (status = 201, body = RegisterWebhookResponse, description = "Registered. The body carries the endpoint's `id`, the \
                                       normalised `url` that was stored, and the `signing_secret` \
                                       every delivery is signed with. The secret is returned exactly \
                                       once"),
@@ -192,7 +192,7 @@ where
         ("tenant_id" = String, Query, description = "The tenant whose endpoints to list (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The tenant's endpoints, as an array: each with `id`, \
+        (status = 200, body = [WebhookSummary], description = "The tenant's endpoints, as an array: each with `id`, \
                                       `store_id`, `url`, `cursor` (the last event delivered, absent \
                                       before the first) and `disabled`. Never the signing secret"),
         (status = 400, description = "tenant_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),

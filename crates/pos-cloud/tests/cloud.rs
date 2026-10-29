@@ -32,6 +32,8 @@ mod catalog_menus;
 mod catalog_publish;
 #[path = "cloud/catalog_taxonomy.rs"]
 mod catalog_taxonomy;
+#[path = "cloud/cell_standing.rs"]
+mod cell_standing;
 #[path = "cloud/chain.rs"]
 mod chain;
 #[path = "cloud/config_nodes.rs"]
@@ -70,6 +72,8 @@ mod fees;
 mod fleet;
 #[path = "cloud/floor.rs"]
 mod floor;
+#[path = "cloud/hq_rollups.rs"]
+mod hq_rollups;
 #[path = "cloud/integrations.rs"]
 mod integrations;
 #[path = "cloud/inventory.rs"]

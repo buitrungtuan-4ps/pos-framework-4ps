@@ -28,7 +28,9 @@ use terminals::{admin_set_terminal_float, admin_set_terminal_receipt, create_ter
 use crate::audit::AuditRecorder;
 use crate::auth::admin::{AdminContext, AdminStore};
 use crate::auth::apikey::ApiKeyStore;
-use crate::devices::{DeviceProposalId, DeviceProposalStore, DeviceWriteOutcome};
+use crate::devices::{
+    DeviceProposalId, DeviceProposalStatus, DeviceProposalStore, DeviceWriteOutcome,
+};
 use pos_cloud_api::conditional::version_mismatch;
 use pos_cloud_api::refusal::not_found;
 
@@ -40,7 +42,7 @@ mod publish;
 mod revoke;
 mod terminals;
 
-pub use activation::activation_router;
+pub use activation::{ActivationCell, activation_router, activation_router_in_cell};
 pub use claims::{CLAIM_PATH, claim_router};
 pub use publish::device_publish_router;
 pub use revoke::device_revoke_router;
@@ -147,7 +149,7 @@ where
 }
 
 /// A store's proposal of a discovered device.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct ProposeDeviceRequest {
     /// `printer` or `kds`.
     kind: String,
@@ -158,12 +160,12 @@ struct ProposeDeviceRequest {
 }
 
 /// The id and status of a freshly-proposed device (always `pending`).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct ProposeDeviceResponse {
     /// The proposal's id (a ULID).
     id: String,
     /// The status — `pending` until an operator resolves it.
-    status: String,
+    status: DeviceProposalStatus,
 }
 
 /// The tenant a device listing or resolution is scoped to (the super-admin is global).

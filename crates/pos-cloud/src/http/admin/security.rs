@@ -24,7 +24,7 @@ use crate::http::{CloudApp, Json, RECOVERY_CODE_COUNT};
 
 /// A request to re-enrol TOTP: the current password, re-confirming the knowledge factor before the
 /// possession factor is rotated. [`fmt::Debug`] redacts it.
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, utoipa::ToSchema)]
 pub(crate) struct ReenrolTotpRequest {
     /// The current super-admin password.
     password: String,
@@ -41,7 +41,7 @@ impl fmt::Debug for ReenrolTotpRequest {
 
 /// The freshly-generated recovery codes, returned exactly once. [`fmt::Debug`] redacts the codes so
 /// they cannot reach a log — they exist in the response body and nowhere else.
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone, serde::Serialize, utoipa::ToSchema)]
 struct RecoveryCodesResponse {
     /// The plaintext codes, shown this once; only their hashes are stored.
     codes: Vec<String>,
@@ -60,7 +60,7 @@ impl fmt::Debug for RecoveryCodesResponse {
 }
 
 /// How many unused recovery codes the acting admin has left — the codes themselves are never listed.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct RecoveryCodesStatus {
     /// The number of unused recovery codes.
     remaining: u64,
@@ -78,12 +78,12 @@ struct RecoveryCodesStatus {
     path = "/admin/totp",
     security(("session_cookie" = [])),
     request_body(
-        description = "The acting administrator's current password — re-asked so a session-only \
+        content = ReenrolTotpRequest, description = "The acting administrator's current password — re-asked so a session-only \
                        attacker cannot rotate the second factor and lock the owner out",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Re-enrolled. The new one-time enrolment (QR payload and \
+        (status = 200, body = pos_cloud_api::auth::enrol::Enrolment, description = "Re-enrolled. The new one-time enrolment (QR payload and \
                                       base32 secret) is returned once; existing sessions stay \
                                       valid and the next sign-in uses the new authenticator"),
         (status = 401, description = "No live session, or the password is wrong", body = crate::openapi_admin::ErrorResponse),
@@ -160,7 +160,7 @@ where
     path = "/admin/recovery-codes",
     security(("session_cookie" = [])),
     responses(
-        (status = 200, description = "A fresh set of one-time recovery codes, returned exactly \
+        (status = 200, body = RecoveryCodesResponse, description = "A fresh set of one-time recovery codes, returned exactly \
                                       once. Only their hashes are stored, and any previous set is \
                                       replaced"),
         (status = 401, description = "No live session", body = crate::openapi_admin::ErrorResponse),
@@ -233,7 +233,7 @@ where
     path = "/admin/recovery-codes",
     security(("session_cookie" = [])),
     responses(
-        (status = 200, description = "How many unused recovery codes remain — never the codes \
+        (status = 200, body = RecoveryCodesStatus, description = "How many unused recovery codes remain — never the codes \
                                       themselves — so a console can prompt a regeneration before \
                                       the supply runs out"),
         (status = 401, description = "No live session", body = crate::openapi_admin::ErrorResponse),

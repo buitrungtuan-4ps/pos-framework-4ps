@@ -170,10 +170,12 @@ pub struct PublishedFee {
     /// `Ratio::percent(5)` and 2.5 % is `Ratio::basis_points(250)`; never a float. Ignored for the
     /// amount kinds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub rate: Option<Ratio>,
     /// For [`FeeKind::AmountPerBill`] and [`FeeKind::AmountPerUnit`]: the charge, an integer in the
     /// currency's minor unit. Ignored for a percentage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub amount: Option<Money>,
     /// The sales channels the fee applies on. Empty, which is what an absent field reads as, means
     /// every channel. Each is wrapped in [`Open`] so a channel from a newer cloud round-trips; one
@@ -205,6 +207,7 @@ pub struct PublishedFee {
     pub tax: Open<FeeTax>,
     /// For [`FeeTax::TaxClass`]: the class the fee is taxed at. Ignored otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub tax_class_id: Option<TaxClassId>,
     /// Whether staff may take the fee off one bill. Absent means `false`, as the owner confirmed.
     /// Waiving is an act on a bill, under its own permission and with a reason

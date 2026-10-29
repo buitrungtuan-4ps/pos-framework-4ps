@@ -24,6 +24,7 @@
 use pos_cloud_api::{audit, auth, health, paging, version};
 use pos_cloud_config::{config_tree, registry, settings, store_groups};
 
+mod assignment_schema;
 pub mod people;
 pub mod people_compiler;
 pub mod people_readiness;

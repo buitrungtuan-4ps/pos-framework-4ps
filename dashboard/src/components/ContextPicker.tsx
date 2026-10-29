@@ -8,7 +8,6 @@ import { createEffect, createSignal, For, Show } from "solid-js";
 import { useLocation, useNavigate } from "@solidjs/router";
 
 import { api, ApiError } from "../api/client";
-import type { Store, Tenant } from "../api/types";
 import { locale, t } from "../i18n";
 import { useClickOutside } from "../lib/dismiss";
 import { useEscape } from "../lib/escape";
@@ -31,6 +30,7 @@ import {
   specOf,
 } from "../state/screens";
 import { Button, Skeleton } from "./ui";
+import type { Store, Tenant } from "../api/schemas";
 
 export function ContextPicker() {
   const navigate = useNavigate();

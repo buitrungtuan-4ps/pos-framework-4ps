@@ -162,6 +162,7 @@ From [`docs/openapi-admin.json`](../openapi-admin.json).
 | PATCH | `/admin/catalog/tax-classes/{tax_class_id}` | `admin_update_tax_class` | `session_cookie` | `console.catalog.manage` | [`crates/pos-cloud-catalog/src/routes/catalog/tax_classes.rs`](../../crates/pos-cloud-catalog/src/routes/catalog/tax_classes.rs) |
 | GET | `/admin/catalog/tax-rates` | `admin_list_tax_rates` | `session_cookie` | `console.data.read` | [`crates/pos-cloud-catalog/src/routes/tax_rates.rs`](../../crates/pos-cloud-catalog/src/routes/tax_rates.rs) |
 | PUT | `/admin/catalog/tax-rates` | `admin_set_tax_rates` | `session_cookie` | `console.catalog.manage` | [`crates/pos-cloud-catalog/src/routes/tax_rates.rs`](../../crates/pos-cloud-catalog/src/routes/tax_rates.rs) |
+| GET | `/admin/cell` | `admin_get_cell` | `session_cookie` | `console.data.read` | [`crates/pos-cloud/src/http/cell.rs`](../../crates/pos-cloud/src/http/cell.rs) |
 | GET | `/admin/chain-findings` | `admin_chain_findings` | `session_cookie` | `console.data.read` | [`crates/pos-cloud/src/http/chain.rs`](../../crates/pos-cloud/src/http/chain.rs) |
 | POST | `/admin/claims/bind` | `admin_bind_claim` | `session_cookie` | `console.devices.manage` | [`crates/pos-cloud-devices/src/routes/claims.rs`](../../crates/pos-cloud-devices/src/routes/claims.rs) |
 | GET | `/admin/config-releases` | `admin_list_releases` | `session_cookie` | `console.data.read` | [`crates/pos-cloud/src/http/config_publish/release_actions.rs`](../../crates/pos-cloud/src/http/config_publish/release_actions.rs) |
@@ -239,6 +240,7 @@ From [`docs/openapi-admin.json`](../openapi-admin.json).
 | GET | `/admin/floor/tables/{table_id}` | `admin_get_table` | `session_cookie` | `console.data.read` | [`crates/pos-cloud-floor/src/routes/tables.rs`](../../crates/pos-cloud-floor/src/routes/tables.rs) |
 | PATCH | `/admin/floor/tables/{table_id}` | `admin_update_table` | `session_cookie` | `console.floor.manage` | [`crates/pos-cloud-floor/src/routes/tables.rs`](../../crates/pos-cloud-floor/src/routes/tables.rs) |
 | GET | `/admin/health/tasks` | `admin_task_health` | `session_cookie` | `console.data.read` | [`crates/pos-cloud/src/http/health.rs`](../../crates/pos-cloud/src/http/health.rs) |
+| GET | `/admin/hq/rollups` | `admin_hq_rollups` | `session_cookie` | `console.data.read` | [`crates/pos-cloud/src/cell/hq.rs`](../../crates/pos-cloud/src/cell/hq.rs) |
 | GET | `/admin/integrations/connections` | `admin_list_connections` | `session_cookie` | `console.data.read` | [`crates/pos-cloud/src/http/integrations/connections.rs`](../../crates/pos-cloud/src/http/integrations/connections.rs) |
 | POST | `/admin/integrations/connections` | `admin_create_connection` | `session_cookie` | `console.integrations.manage` | [`crates/pos-cloud/src/http/integrations/connections.rs`](../../crates/pos-cloud/src/http/integrations/connections.rs) |
 | GET | `/admin/integrations/connections/{connection_id}` | `admin_get_connection` | `session_cookie` | `console.data.read` | [`crates/pos-cloud/src/http/integrations/connections.rs`](../../crates/pos-cloud/src/http/integrations/connections.rs) |
@@ -321,6 +323,8 @@ From [`docs/openapi-admin.json`](../openapi-admin.json).
 | POST | `/admin/stores` | `admin_create_store` | `session_cookie` | `console.stores.manage` | [`crates/pos-cloud/src/http/registry/stores.rs`](../../crates/pos-cloud/src/http/registry/stores.rs) |
 | PATCH | `/admin/stores/{store_id}` | `admin_update_store` | `session_cookie` | `console.stores.manage` | [`crates/pos-cloud/src/http/registry/stores.rs`](../../crates/pos-cloud/src/http/registry/stores.rs) |
 | GET | `/admin/stores/{store_id}/archives` | `admin_list_store_archives` | `session_cookie` | `console.data.read` | [`crates/pos-cloud/src/http/archives/console.rs`](../../crates/pos-cloud/src/http/archives/console.rs) |
+| POST | `/admin/stores/{store_id}/cell-acknowledgement` | `admin_acknowledge_cell` | `session_cookie` | `console.stores.manage` | [`crates/pos-cloud/src/http/cell_standing.rs`](../../crates/pos-cloud/src/http/cell_standing.rs) |
+| GET | `/admin/stores/{store_id}/cell-standing` | `admin_cell_standing` | `session_cookie` | `console.data.read` | [`crates/pos-cloud/src/http/cell_standing.rs`](../../crates/pos-cloud/src/http/cell_standing.rs) |
 | GET | `/admin/stores/{store_id}/config` | `admin_config_effective` | `session_cookie` | `console.data.read` | [`crates/pos-cloud/src/http/config_publish/store_config.rs`](../../crates/pos-cloud/src/http/config_publish/store_config.rs) |
 | GET | `/admin/stores/{store_id}/config/nodes` | `admin_config_nodes` | `session_cookie` | `console.data.read` | [`crates/pos-cloud/src/http/config_publish/versions.rs`](../../crates/pos-cloud/src/http/config_publish/versions.rs) |
 | POST | `/admin/stores/{store_id}/config/rollback` | `admin_config_rollback` | `session_cookie` | `console.config.publish` | [`crates/pos-cloud/src/http/config_publish/versions.rs`](../../crates/pos-cloud/src/http/config_publish/versions.rs) |
@@ -366,6 +370,7 @@ From [`docs/openapi-device.json`](../openapi-device.json).
 
 | Method | Path | Handler | Who | Permission | File |
 |---|---|---|---|---|---|
+| GET | `/.well-known/pos-cell` | `well_known_cell` | public: asked before any credential exists, by a box being set up or by anyone finding a tenant's cell; it says only what the PII-free cell directory says (ADR-0179) | — | [`crates/pos-cloud/src/http/well_known.rs`](../../crates/pos-cloud/src/http/well_known.rs) |
 | POST | `/activate` | `exchange_activation_code` | public: a single-use activation code from the store's setup sheet | — | [`crates/pos-cloud-devices/src/routes/activation.rs`](../../crates/pos-cloud-devices/src/routes/activation.rs) |
 | POST | `/claim` | `open_claim` | public: nothing: its code works only once the console binds it | — | [`crates/pos-cloud-devices/src/routes/claims.rs`](../../crates/pos-cloud-devices/src/routes/claims.rs) |
 | POST | `/claim/{claim_id}/collect` | `collect_claim` | public: the secret the claim was opened with | — | [`crates/pos-cloud-devices/src/routes/claims.rs`](../../crates/pos-cloud-devices/src/routes/claims.rs) |

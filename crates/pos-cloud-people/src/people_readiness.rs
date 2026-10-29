@@ -38,7 +38,7 @@ use crate::people::{Assignment, Employee, EmployeeId, RoleTemplate, RoleTemplate
 use crate::registry::EntityStatus;
 
 /// One catalogue permission a role grants neither directly nor with approval.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct MissingPermission {
     /// The permission's `domain.resource.action` id.
     pub id: &'static str,
@@ -49,7 +49,7 @@ pub struct MissingPermission {
 }
 
 /// One active role held at the store, and what it does not grant.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct RoleReadiness {
     /// The role.
     pub role_template_id: RoleTemplateId,

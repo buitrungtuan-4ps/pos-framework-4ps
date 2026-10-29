@@ -53,6 +53,7 @@ pub(crate) struct CounterDeps<S, Q> {
 
 /// One line of an order, for a cashier to recognise what they are charging for.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct CounterLineResponse {
     display_name: String,
     quantity: Quantity,
@@ -60,17 +61,20 @@ struct CounterLineResponse {
 
 /// One counter order awaiting payment.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct CounterOrderResponse {
     order_id: String,
     /// The daily number staff shouted. Absent for an order that was never given one, which is why
     /// the route reads the number rather than allocating it.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     queue_number: Option<u64>,
     items: Vec<CounterLineResponse>,
     total_due: Money,
     /// A bill already open on this order. The screen settles **this** bill rather than opening a
     /// second one, which the domain refuses.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     bill_id: Option<String>,
 }
 
@@ -79,7 +83,7 @@ struct CounterOrderResponse {
     path = "/api/orders/open",
     security(("till_session" = [])),
     responses(
-        (status = 200, description = "Every counter order still owing money, with its queue number where it \
+        (status = 200, body = Vec<CounterOrderResponse>, description = "Every counter order still owing money, with its queue number where it \
                                       was given one, its lines, `total_due`, and any bill open on it"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
         (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
@@ -125,14 +129,17 @@ where
 /// One of today's settled bills, as the till lists it to print a copy from
 /// ([ADR-0164](../../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct SettledBillResponse {
     bill_id: BillId,
     order_id: OrderId,
     /// The table it was paid at, which the till shows by the floor's label. Absent for a counter
     /// order, which shows its queue number instead.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     table_id: Option<TableId>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     queue_number: Option<u64>,
     receipt_number: u64,
     total_due: Money,
@@ -141,6 +148,7 @@ struct SettledBillResponse {
     /// as it is: a till's own clock may keep another zone, and the list is today's, so the date
     /// would say nothing. Absent in the one case the calendar cannot read the instant.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     settle_clock: Option<String>,
     /// How many copies have been printed.
     copies: u32,
@@ -157,7 +165,7 @@ pub(super) fn wall_clock(instant: Timestamp, zone: &StoreTimeZone) -> Option<Str
     path = "/api/bills/settled",
     security(("till_session" = [])),
     responses(
-        (status = 200, description = "Today's settled bills, newest first and capped: each with its order, \
+        (status = 200, body = Vec<SettledBillResponse>, description = "Today's settled bills, newest first and capped: each with its order, \
                                       table or queue number, receipt number, total, settle time and the \
                                       shop's clock at it, and how many copies were printed"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
@@ -212,6 +220,7 @@ where
 /// walk-in channel, `counter.walk_in_channel`: takeaway, the ordinary counter order, unless the store
 /// sets its walk-ins to be eaten in (ADR-0160 decision 2).
 #[derive(Debug, Default, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(super) struct OpenOrderRequest {
     #[serde(default)]
     channel: Option<Open<SalesChannel>>,
@@ -219,6 +228,7 @@ pub(super) struct OpenOrderRequest {
 
 /// A walk-in order the counter has just opened, with the number the guest will be called by.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct OpenedOrderResponse {
     order_id: String,
     queue_number: u64,
@@ -231,12 +241,12 @@ struct OpenedOrderResponse {
     security(("till_session" = [])),
     extensions(("x-permission" = json!("sales.line.add"))),
     request_body(
-        description = "Optional `channel`, a `SALES_CHANNEL_*` token. Without one the order takes the \
+        content = OpenOrderRequest, description = "Optional `channel`, a `SALES_CHANNEL_*` token. Without one the order takes the \
                        store's walk-in channel. The body may be left out",
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Opened: the `order_id`, the day's `queue_number` it is called by, and \
+        (status = 201, body = OpenedOrderResponse, description = "Opened: the `order_id`, the day's `queue_number` it is called by, and \
                                       its `business_date`"),
         (status = 400, description = "The channel is not a sales channel this edge knows"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
@@ -301,6 +311,7 @@ where
 /// A line as the counter adds it to an order by id: what the guest chose, and no price — the
 /// edge prices it at the order's own channel (ADR-0146).
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(super) struct OrderLineRequest {
     menu_item_id: MenuItemId,
     quantity: Quantity,
@@ -327,13 +338,13 @@ pub(super) struct OrderLineRequest {
         ("id" = String, Path, description = "The order's id, a ULID"),
     ),
     request_body(
-        description = "What the guest chose: `menu_item_id` and `quantity` (in thousandths), with optional \
+        content = OrderLineRequest, description = "What the guest chose: `menu_item_id` and `quantity` (in thousandths), with optional \
                        `modifier_menu_item_ids`, `seat`, `course_id` and `note`. No price: the edge prices \
                        the line at the order's channel",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "The line: `order_id`, `order_line_id`, its `state`, and `station_id` \
+        (status = 200, body = LineResponse, description = "The line: `order_id`, `order_line_id`, its `state`, and `station_id` \
                                       once fired"),
         (status = 400, description = "The id is not a ULID, or a note longer than 200 characters or with a \
                                       control character"),

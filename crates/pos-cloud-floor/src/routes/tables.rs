@@ -7,7 +7,9 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use pos_cloud_api::console::{audit_action, mint_ulid, require_permission};
+use pos_cloud_api::response::CreatedId;
 use pos_cloud_api::response::{api_error_with_details, parse_ulid_fields};
+use pos_cloud_api::version::Versioned;
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{AreaId, StoreId, TableId, TenantId};
@@ -21,7 +23,7 @@ use super::{
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::catalog::CatalogStore;
-use crate::floorplan::{NewTable, TableStore, TableUpdate};
+use crate::floorplan::{NewTable, Table, TableStore, TableUpdate};
 use crate::registry::EntityStatus;
 use crate::version::UpdateOutcome;
 use axum::Json;
@@ -39,7 +41,7 @@ use pos_cloud_config::route::{entity_status_refusal, parse_entity_status};
         ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The store's tables, active and archived, as an array, each with its `etag`"),
+        (status = 200, body = [Versioned<Table>], description = "The store's tables, active and archived, as an array, each with its `etag`"),
         (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -89,7 +91,7 @@ where
         ("tenant_id" = String, Query, description = "The tenant the record belongs to (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The table. The ETag carries the version it was read at"),
+        (status = 200, body = Versioned<Table>, description = "The table. The ETag carries the version it was read at"),
         (status = 400, description = "table_id or tenant_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -142,14 +144,14 @@ where
     extensions(("x-permission" = json!("console.floor.manage"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id`, `store_id` and `area_id`; the table's `name`, the label a host reads, which may \
+        content = CreateTableRequest, description = "`tenant_id`, `store_id` and `area_id`; the table's `name`, the label a host reads, which may \
                        not be blank; optionally `seats`, `0` or absent when unspecified; and optionally \
                        `grid_column` and `grid_row`, its place in the floor editor, which count only \
                        when both are given",
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Created, active, with the id minted here. The body carries `id`, and the ETag carries \
+        (status = 201, body = CreatedId, description = "Created, active, with the id minted here. The body carries `id`, and the ETag carries \
                                       its version. Audited"),
         (status = 400, description = "tenant_id, store_id or area_id is absent or not a ULID, or name is blank", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -236,11 +238,7 @@ where
             )
             .await;
             with_etag(
-                (
-                    StatusCode::CREATED,
-                    Json(serde_json::json!({ "id": table_id.to_string() })),
-                )
-                    .into_response(),
+                (StatusCode::CREATED, Json(CreatedId::new(table_id))).into_response(),
                 &version,
             )
         }
@@ -259,7 +257,7 @@ where
                                                      Required; a wildcard is refused"),
     ),
     request_body(
-        description = "`tenant_id`, and the table's `area_id`, `name`, `seats`, `grid_column`, `grid_row` and `status` \
+        content = UpdateTableRequest, description = "`tenant_id`, and the table's `area_id`, `name`, `seats`, `grid_column`, `grid_row` and `status` \
                        (`active` or `archived`) as they should now stand. A position counts only when \
                        both coordinates are given",
         content_type = "application/json",

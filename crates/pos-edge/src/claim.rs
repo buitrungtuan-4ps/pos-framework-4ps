@@ -59,6 +59,7 @@ const CLAIMED_GRACE: Duration = Duration::from_secs(3);
 
 /// What the claim page shows, as `GET /api/claim` answers it.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(tag = "state", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ClaimStatus {
     /// Asking the cloud for a claim.
@@ -350,7 +351,7 @@ fn page_router(status: tokio::sync::watch::Receiver<ClaimStatus>) -> Router {
     security(),
     extensions(("x-public-reason" = json!("nothing: only a box that belongs to no store yet serves it"))),
     responses(
-        (status = 200, description = "What the claim page shows, by `state`: `CONNECTING` with the `cloud`; \
+        (status = 200, body = ClaimStatus, description = "What the claim page shows, by `state`: `CONNECTING` with the `cloud`; \
                                       `WAITING` with the `user_code` a person binds at the console, its \
                                       `expires_at_ms` and the `cloud`; `UNREACHABLE` with the `cloud`; or \
                                       `CLAIMED` with the `store_id`. Served only by `pos-edge claim`, on the \

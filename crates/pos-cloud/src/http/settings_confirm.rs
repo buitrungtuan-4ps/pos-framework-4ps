@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 /// A catalogue entry's `confirm`: the value that needs confirming, and the translation key of the
 /// notice the Settings screen shows beside it.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub(super) struct CatalogueConfirm {
     value: &'static str,
     notice: &'static str,

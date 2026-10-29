@@ -30,7 +30,7 @@ use crate::catalog_compiler::{compile_layout_book, compile_menu};
 use crate::config_tree::{ConfigLevel, ConfigTreeStore};
 use crate::fees::FeeRuleStore;
 use crate::registry::RegistryStore;
-use crate::routes::fees::{FeePublishResult, TenantFeeRules};
+use crate::routes::fees::{FeePublishOutcome, FeePublishResult, TenantFeeRules};
 use crate::routes::publish_config_nodes_with;
 use crate::version::records;
 
@@ -100,7 +100,7 @@ where
     clippy::struct_field_names,
     reason = "tenant_id/store_id/menu_id are the wire field names; the shared _id postfix is the ULID naming convention (docs/naming-and-api.md), not a smell"
 )]
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PublishMenuRequest {
     /// The tenant that owns the catalog and the store (a 26-character ULID).
     tenant_id: String,
@@ -202,7 +202,7 @@ where
 }
 
 /// What a menu publish answers: the version it produced, and how the store's fees went with it.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct PublishedMenu {
     /// The new config version id (a ULID).
     config_version_id: String,
@@ -218,12 +218,12 @@ struct PublishedMenu {
     extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id`, the `store_id` to publish to, and the `menu_id` to compile, with \
+        content = PublishMenuRequest, description = "`tenant_id`, the `store_id` to publish to, and the `menu_id` to compile, with \
                        the menus it inherits from",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Published: the menu's price book and the till layout are \
+        (status = 200, body = PublishedMenu, description = "Published: the menu's price book and the till layout are \
                                       written to the store's `menu` and `layout` nodes in one \
                                       configuration version, with its `fees` node where that \
                                       changes (ADR-0159). The body carries `config_version_id` and \
@@ -385,7 +385,7 @@ where
     )
     .await?;
     let fees = composed.map_or_else(
-        || FeePublishResult::of(store_id, "FEE_PUBLISH_FAILED"),
+        || FeePublishResult::of(store_id, FeePublishOutcome::Failed),
         |on_tree| on_tree.result(store_id, Some(id)),
     );
     Ok((id, fees))

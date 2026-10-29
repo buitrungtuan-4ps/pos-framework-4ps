@@ -83,11 +83,11 @@ pub(super) async fn read_one_artifact_blob<B: BlobStore>(
         ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
     ),
     request_body(
-        description = "`release`, the release tag, and `arch`, the target the store runs",
+        content = ArtifactRequest, description = "`release`, the release tag, and `arch`, the target the store runs",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "The release's binary as `application/octet-stream`, its detached \
+        (status = 200, body = pos_cloud_api::body_schema::Binary, content_type = "application/octet-stream", description = "The release's binary as `application/octet-stream`, its detached \
                                       signature in the `X-Pos-Artifact-Signature` header as lowercase hex \
                                       (ADR-0092). The edge verifies both before it installs anything"),
         (status = 400, description = "store_id is not a ULID, or release or arch is not well formed", body = pos_cloud_api::error_schema::ErrorResponse),

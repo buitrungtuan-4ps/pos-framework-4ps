@@ -32,7 +32,7 @@ pub(super) use config_releases::{
     ReleaseNodeRequest, ReleaseState, ScheduleReleaseRequest, release_error_response,
 };
 pub(super) use if_match::{if_match_config, if_match_lease};
-pub(super) use preview::preview_config_node;
+pub(super) use preview::{ConfigPreview, preview_config_node};
 pub(super) use redaction::config_redacted_for;
 pub(super) use release_actions::release_report_response;
 // The raw config-tree write and read the main router mounts.

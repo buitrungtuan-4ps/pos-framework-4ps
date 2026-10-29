@@ -7,6 +7,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use pos_cloud_api::console::{audit_action, mint_ulid, require_permission};
+use pos_cloud_api::response::CreatedId;
 use pos_cloud_api::response::{api_error_with_details, parse_ulid_fields, ulid_refusal};
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
@@ -33,7 +34,7 @@ use pos_cloud_catalog::routes::catalog::catalog_error_response;
         ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The store's routing rules, as an array: each names its station, the menu item or the \
+        (status = 200, body = [RoutingRule], description = "The store's routing rules, as an array: each names its station, the menu item or the \
                                       course it matches, and its sort"),
         (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -80,12 +81,12 @@ where
     extensions(("x-permission" = json!("console.floor.manage"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id`, `store_id` and `station_id`; exactly one of `menu_item_id` and `course_id`, \
+        content = CreateRoutingRuleRequest, description = "`tenant_id`, `store_id` and `station_id`; exactly one of `menu_item_id` and `course_id`, \
                        what the rule matches; and optionally `sort`",
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Created, with the id minted here. The body carries `id`. Audited"),
+        (status = 201, body = CreatedId, description = "Created, with the id minted here. The body carries `id`. Audited"),
         (status = 400, description = "tenant_id, store_id, station_id, menu_item_id or course_id is not a ULID; the rule \
                                       names both an item and a course, or neither; or the course is one the tenant \
                                       does not carry, or has archived", body = pos_cloud_api::error_schema::ErrorResponse),
@@ -169,11 +170,7 @@ where
     match RoutingRuleStore::create(&state.floor, rule).await {
         Ok(()) => {
             record_routing_create(state, context, rule).await;
-            (
-                StatusCode::CREATED,
-                Json(serde_json::json!({ "id": rule.rule_id.to_string() })),
-            )
-                .into_response()
+            (StatusCode::CREATED, Json(CreatedId::new(rule.rule_id))).into_response()
         }
         Err(error) => floor_error_response(&error),
     }

@@ -12,6 +12,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
 use pos_cloud_api::console::{audit_action, require_permission};
+use pos_cloud_api::response::StoresPublished;
 use pos_cloud_api::response::{parse_ulid_fields, service_unavailable};
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{ConfigVersionId, StoreId, TenantId};
@@ -78,7 +79,7 @@ where
 }
 
 /// A super-admin selects the (tenant, store) whose `permissions` node to compile and publish.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PublishPermissionsRequest {
     tenant_id: String,
     store_id: String,
@@ -155,12 +156,12 @@ where
     security(("session_cookie" = [])),
     extensions(("x-permission" = json!("console.config.publish"))),
     request_body(
-        description = "`tenant_id` and `store_id`: the store whose people, roles and assignments to \
+        content = PublishPermissionsRequest, description = "`tenant_id` and `store_id`: the store whose people, roles and assignments to \
                        compile into its `permissions` node",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Published. The body is `{ \"config_version_id\": … }`, the \
+        (status = 200, body = PublishedConfig, description = "Published. The body is `{ \"config_version_id\": … }`, the \
                                       configuration version the store syncs. The node carries each \
                                       assigned person's PIN hash for the store to verify against; \
                                       the audit entry records only the version and the staff count"),
@@ -434,11 +435,7 @@ where
         cause: (&'static str, &str),
     ) -> Response {
         let results = self.publish_all(context, tenant_id, stores, cause).await;
-        (
-            StatusCode::OK,
-            Json(serde_json::json!({ "stores": results })),
-        )
-            .into_response()
+        (StatusCode::OK, Json(StoresPublished { stores: results })).into_response()
     }
 
     /// Publishes to every store a write reached, in turn, and reports how each went, for a write
@@ -463,14 +460,14 @@ where
             results.push(match published {
                 Ok(id) => PermissionsPublishResult {
                     store_id: store_id.to_string(),
-                    outcome: "PERMISSIONS_PUBLISH_APPLIED",
+                    outcome: PermissionsPublishOutcome::Applied,
                     config_version_id: Some(id.to_string()),
                 },
                 Err(_refused) => {
                     tracing::warn!(%store_id, "a store's permissions node could not be published");
                     PermissionsPublishResult {
                         store_id: store_id.to_string(),
-                        outcome: "PERMISSIONS_PUBLISH_FAILED",
+                        outcome: PermissionsPublishOutcome::Failed,
                         config_version_id: None,
                     }
                 }
@@ -512,12 +509,51 @@ where
     .await
 }
 
+/// How one store's `permissions` publish went, as its token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+pub(super) enum PermissionsPublishOutcome {
+    /// The store's `permissions` node was written in a new version.
+    #[serde(rename = "PERMISSIONS_PUBLISH_APPLIED")]
+    Applied,
+    /// The publish could not be written; it is retried with `POST /admin/people/publish`.
+    #[serde(rename = "PERMISSIONS_PUBLISH_FAILED")]
+    Failed,
+}
+
 /// How one store's `permissions` publish went, as a write that publishes at once reports it.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct PermissionsPublishResult {
     store_id: String,
-    /// `PERMISSIONS_PUBLISH_APPLIED` or `PERMISSIONS_PUBLISH_FAILED`.
-    outcome: &'static str,
+    /// How it went.
+    outcome: PermissionsPublishOutcome,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     config_version_id: Option<String>,
+}
+
+#[cfg(test)]
+mod outcome_tests {
+    //! The outcome serialises as the token it replaced.
+
+    use super::PermissionsPublishOutcome;
+
+    #[test]
+    fn each_outcome_is_its_token() {
+        let tokens = [
+            (
+                PermissionsPublishOutcome::Applied,
+                "PERMISSIONS_PUBLISH_APPLIED",
+            ),
+            (
+                PermissionsPublishOutcome::Failed,
+                "PERMISSIONS_PUBLISH_FAILED",
+            ),
+        ];
+        for (outcome, token) in tokens {
+            assert_eq!(
+                serde_json::to_value(outcome).expect("json"),
+                serde_json::json!(token)
+            );
+        }
+    }
 }

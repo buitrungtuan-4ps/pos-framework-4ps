@@ -561,17 +561,19 @@ pub trait ApiKeyAdminStore {
 
 /// A key's metadata for a listing — everything but the secret and its hash, which never leave the
 /// store. Serialises to the `/admin/api-keys` list response.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
 pub struct ApiKeySummary {
     /// The public id (the ULID half of the token).
     pub id: String,
     /// The store this key is bound to, or `None` for a tenant-wide key (S1).
+    #[schema(required = true)]
     pub store_id: Option<String>,
     /// The granted scopes, as their wire names, sorted.
     pub scopes: Vec<String>,
     /// Whether the key has been revoked.
     pub revoked: bool,
     /// When the key expires, in milliseconds since the Unix epoch, if ever.
+    #[schema(required = true)]
     pub expires_at_ms: Option<i64>,
 }
 

@@ -349,6 +349,27 @@ mod tests {
         }
     }
 
+    /// Every success answer with a body names its schema, and so does every request body
+    /// (ADR-0177 decision 3).
+    #[test]
+    fn every_edge_body_has_a_schema() {
+        for (route, operation) in operations() {
+            for (status, response) in operation["responses"].as_object().into_iter().flatten() {
+                let body = status.starts_with('2') && status != "204";
+                assert!(
+                    !body || response.get("content").is_some(),
+                    "{route} answers {status} with no schema: add `body = …` to its response"
+                );
+            }
+            if let Some(request) = operation.get("requestBody") {
+                assert!(
+                    request["content"]["application/json"]["schema"].is_object(),
+                    "{route}'s request body names no schema: add `content = …` to request_body"
+                );
+            }
+        }
+    }
+
     /// Each `operationId` is its handler's name, so two handlers may not share one (ADR-0177
     /// decision 4).
     #[test]

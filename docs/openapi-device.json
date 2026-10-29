@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Pizza 4P's POS Store Box API",
-    "description": "What a store's edge calls on its cloud: the store-facing `/sync` surface, and `/activate` and `/claim`, the two ways a box first comes to hold a credential. Generated from the handlers (ADR-0177). Every failure carries the AIP-193 `ErrorResponse` envelope, and the whole surface is rate-limited per client before any credential is read.",
+    "description": "What a store's edge calls on its cloud: the store-facing `/sync` surface, `/activate` and `/claim`, the two ways a box first comes to hold a credential, and `/.well-known/pos-cell`, which says which cell to ask. Generated from the handlers (ADR-0177). Every failure carries the AIP-193 `ErrorResponse` envelope. Every route but `/.well-known/pos-cell`, which answers from memory, is rate-limited per client before any credential is read.",
     "license": {
       "name": "LicenseRef-Proprietary",
       "identifier": "LicenseRef-Proprietary"
@@ -10,6 +10,70 @@
     "version": "1.0.0"
   },
   "paths": {
+    "/.well-known/pos-cell": {
+      "get": {
+        "tags": [
+          "cells"
+        ],
+        "summary": "Anyone asks which cell this is and, optionally, where a tenant is homed.",
+        "operationId": "well_known_cell",
+        "parameters": [
+          {
+            "name": "tenant",
+            "in": "query",
+            "description": "A tenant slug: 1 to 63 lower-case letters, digits or `-`, not starting or ending with `-`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "This cell: `cell_id`, `base_url`, `country_alias`, `home_country` and the `directory_version` it answers from. With `tenant`, also `tenant`: the tenant's home `cell_id`, that cell's `base_url`, and whether it is `here`. Never a redirect. May be cached for 60 seconds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WellKnownCell"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`tenant` is not a tenant slug",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The directory this cell holds does not list the tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This cell is configured for a signed directory and holds none yet, so it can name no tenant's home; ask again later",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [],
+        "x-public-reason": "asked before any credential exists, by a box being set up or by anyone finding a tenant's cell; it says only what the PII-free cell directory says (ADR-0179)"
+      }
+    },
     "/activate": {
       "post": {
         "tags": [
@@ -20,12 +84,24 @@
         "requestBody": {
           "description": "`code`, the activation code from the store's setup sheet, and optionally the `store_id` the box expects to belong to",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExchangeRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
-            "description": "Activated: the `device_id`, and the device `credential`, returned this once; the cloud keeps only its hash (ADR-0050)"
+            "description": "Activated: the `device_id`, and the device `credential`, returned this once; the cloud keeps only its hash (ADR-0050)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExchangeResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "The code or the store id is malformed",
@@ -38,7 +114,7 @@
             }
           },
           "403": {
-            "description": "Refused: a spent, revoked, unknown or raced code, or one issued for another store, all answer the same",
+            "description": "Refused: a spent, revoked, unknown or raced code, or one issued for another store, all answer the same. A code whose cell prefix names another cell says so too: a `code` detail `OTHER_CELL`, with the directory's base URL for that cell in the message, or `UNKNOWN_CELL` when the directory does not list it (ADR-0181)",
             "content": {
               "application/json": {
                 "schema": {
@@ -81,7 +157,14 @@
         "operationId": "open_claim",
         "responses": {
           "201": {
-            "description": "A claim: its `claim_id`, the `user_code` the box shows, the `secret` it keeps to collect with, when it expires, and how often to poll (ADR-0148)"
+            "description": "A claim: its `claim_id`, the `user_code` the box shows, the `secret` it keeps to collect with, when it expires, and how often to poll (ADR-0148)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenedClaim"
+                }
+              }
+            }
           },
           "429": {
             "description": "Too many activation attempts from this client: `Retry-After` says when to try again",
@@ -129,15 +212,34 @@
         "requestBody": {
           "description": "`secret`, the one the claim was opened with",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollectClaimRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Bound: the box's `tenant_id`, `store_id` and `device_id`, and its device `credential`, returned this once"
+            "description": "Bound: the box's `tenant_id`, `store_id` and `device_id`, and its device `credential`, returned this once",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectedClaim"
+                }
+              }
+            }
           },
           "202": {
-            "description": "Nobody has bound the code yet: `status` is `PENDING`, and the box asks again"
+            "description": "Nobody has bound the code yet: `status` is `PENDING`, and the box asks again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimPending"
+                }
+              }
+            }
           },
           "400": {
             "description": "claim_id is not a ULID",
@@ -226,12 +328,24 @@
         "requestBody": {
           "description": "The sealed archive's bytes, as `pos-edge archive` writes them. The cloud checks the header and cannot open the rest",
           "content": {
-            "application/json": {}
-          }
+            "application/octet-stream": {
+              "schema": {
+                "$ref": "#/components/schemas/Binary"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "Stored: the archive's `object_key`, `size_bytes` and `sha256`, for the store to log"
+            "description": "Stored: the archive's `object_key`, `size_bytes` and `sha256`, for the store to log",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArchiveAcceptedResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "store_id is not a ULID, taken_at is not a positive time, or the body is not a store archive",
@@ -334,7 +448,14 @@
         ],
         "responses": {
           "200": {
-            "description": "`key`: the key this store seals its archives with, minted on the first ask (ADR-0124)"
+            "description": "`key`: the key this store seals its archives with, minted on the first ask (ADR-0124)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArchiveKeyResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "store_id is not a ULID",
@@ -428,12 +549,24 @@
         "requestBody": {
           "description": "`release`, the release tag, and `arch`, the target the store runs",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArtifactRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "The release's binary as `application/octet-stream`, its detached signature in the `X-Pos-Artifact-Signature` header as lowercase hex (ADR-0092). The edge verifies both before it installs anything"
+            "description": "The release's binary as `application/octet-stream`, its detached signature in the `X-Pos-Artifact-Signature` header as lowercase hex (ADR-0092). The edge verifies both before it installs anything",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/Binary"
+                }
+              }
+            }
           },
           "400": {
             "description": "store_id is not a ULID, or release or arch is not well formed",
@@ -545,7 +678,14 @@
         ],
         "responses": {
           "200": {
-            "description": "`status`: `up_to_date`, or `update` with the snapshot or collapsed delta that brings the store to the current version (ADR-0039)"
+            "description": "`status`: `up_to_date`, or `update` with the snapshot or collapsed delta that brings the store to the current version (ADR-0039)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigSyncResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "store_id is not a ULID, or held_version is not a ULID",
@@ -637,7 +777,17 @@
         ],
         "responses": {
           "200": {
-            "description": "The store's approved devices, never a raw discovery"
+            "description": "The store's approved devices, never a raw discovery",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DeviceProposalSummary"
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "store_id is not a ULID",
@@ -718,12 +868,24 @@
         "requestBody": {
           "description": "A device the store discovered: `kind` (`printer` or `kds`), `name` and `address` (ADR-0041)",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProposeDeviceRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "201": {
-            "description": "Proposed: its `id`, and `status` pending until an operator approves it at the console"
+            "description": "Proposed: its `id`, and `status` pending until an operator approves it at the console",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposeDeviceResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "store_id is not a ULID, kind is not a known device kind, or name or address is blank",
@@ -807,12 +969,24 @@
         "requestBody": {
           "description": "`events`: the store's committed event envelopes, oldest first, at most 256 and 4 MiB, each naming this store (ADR-0143)",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishedEvents"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "`accepted`: how many envelopes the cloud holds, which is the whole batch. Ingest is idempotent, so a batch published twice is stored once"
+            "description": "`accepted`: how many envelopes the cloud holds, which is the whole batch. Ingest is idempotent, so a batch published twice is stored once",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedEventsAccepted"
+                }
+              }
+            }
           },
           "400": {
             "description": "store_id is not a ULID, the body is not a batch of events, or it carries more than 256",
@@ -905,12 +1079,24 @@
         "requestBody": {
           "description": "The store's protocol `Hello`, naming this store and the protocol versions it speaks (ADR-0024)",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Hello"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "The negotiation's outcome, an agreed version or a refusal. A refusal is an answer, not an error, and the store keeps trading on it"
+            "description": "The negotiation's outcome, an agreed version or a refusal. A refusal is an answer, not an error, and the store keeps trading on it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HelloOutcome"
+                }
+              }
+            }
           },
           "400": {
             "description": "store_id is not a ULID, or the body is not a hello",
@@ -993,8 +1179,13 @@
         "requestBody": {
           "description": "Optional: `outbox_depth`, `lease_generation` and `print_agents`, each left out when the store cannot say. An empty body is a bare ping",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HeartbeatBody"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "204": {
@@ -1080,7 +1271,17 @@
         ],
         "responses": {
           "200": {
-            "description": "The store's pending relayed orders, each with its `queued_id` and the `order`. Held open for a bounded wait while there are none, and empty if none arrives"
+            "description": "The store's pending relayed orders, each with its `queued_id` and the `order`. Held open for a bounded wait while there are none, and empty if none arrives",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PendingOrderDto"
+                  }
+                }
+              }
+            }
           },
           "400": {
             "description": "store_id is not a ULID",
@@ -1182,8 +1383,13 @@
         "requestBody": {
           "description": "The store's `outcome`: `accepted`, with the store's order id, its total and its queue number where the channel issues one; or `rejected`, with the refusal's `status` and `message`",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StoreOutcome"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "204": {
@@ -1281,12 +1487,24 @@
         "requestBody": {
           "description": "`event_ids`: the ids of events the store holds, each a ULID",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StoreReconcileRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "`missing`: the ids the cloud does not hold, for the store to publish again"
+            "description": "`missing`: the ids the cloud does not hold, for the store to publish again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconcileResponse"
+                }
+              }
+            }
           },
           "400": {
             "description": "store_id is not a ULID, or an event id is not a ULID",
@@ -1370,8 +1588,13 @@
         "requestBody": {
           "description": "`installed`, the release the store now runs, and `self_test_passed` where it has run its post-install self-test (ADR-0078)",
           "content": {
-            "application/json": {}
-          }
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StoreReportRequest"
+              }
+            }
+          },
+          "required": true
         },
         "responses": {
           "204": {
@@ -1440,6 +1663,476 @@
   },
   "components": {
     "schemas": {
+      "AcceptanceRecord": {
+        "type": "object",
+        "description": "A serializable [`OrderAcceptance`] — what the store reports and the relay records and replays.",
+        "required": [
+          "order_id",
+          "created",
+          "total",
+          "repriced",
+          "awaiting_staff_confirmation"
+        ],
+        "properties": {
+          "awaiting_staff_confirmation": {
+            "type": "boolean",
+            "description": "Whether staff must confirm before the kitchen sees it."
+          },
+          "created": {
+            "type": "boolean",
+            "description": "Whether the store's call created it (vs an idempotent repeat)."
+          },
+          "order_id": {
+            "type": "string",
+            "description": "The store's order id."
+          },
+          "queue_number": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The queue number, for a channel that issues one.",
+            "minimum": 0
+          },
+          "repriced": {
+            "type": "boolean",
+            "description": "Whether the store's price differed from the caller's quote."
+          },
+          "total": {
+            "$ref": "#/components/schemas/MoneyPayload",
+            "description": "The store's authoritative total."
+          }
+        }
+      },
+      "ArchiveAcceptedResponse": {
+        "type": "object",
+        "description": "What the cloud recorded, echoed so a store can log what it shipped.",
+        "required": [
+          "object_key",
+          "size_bytes",
+          "sha256"
+        ],
+        "properties": {
+          "object_key": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ArchiveKeyResponse": {
+        "type": "object",
+        "description": "The key a store seals with, as it comes back over `/sync`.",
+        "required": [
+          "key"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          }
+        }
+      },
+      "ArtifactRequest": {
+        "type": "object",
+        "description": "What a store asks for: a release tag, and the architecture it runs.\n\n`arch` is the additive field [ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md)\nCorrection 2 added. R1's workflow cross-compiles two targets, so a request without one cannot say\nwhich binary it means — and guessing would hand an `aarch64` box an `x86_64` executable that fails\nits self-test after the install, which is the expensive place to find out.",
+        "required": [
+          "release",
+          "arch"
+        ],
+        "properties": {
+          "arch": {
+            "type": "string"
+          },
+          "release": {
+            "type": "string"
+          }
+        }
+      },
+      "Binary": {
+        "type": "string",
+        "format": "binary"
+      },
+      "BrandId": {
+        "type": "string",
+        "description": "A `BrandId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "BusinessDate": {
+        "type": "string",
+        "description": "A business date, YYYY-MM-DD, by the store's own cutoff",
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+      },
+      "ChainHash": {
+        "type": "string",
+        "description": "A chain hash, as 64 lowercase hexadecimal characters.\n\nA string rather than `[u8; 32]` because it crosses the wire inside the envelope and is\nread by humans in a diagnostic; the cost is 32 bytes a record, and the benefit is that\na chain break can be pasted into a bug report."
+      },
+      "ChainLink": {
+        "type": "object",
+        "description": "Where a record sits in its store's chain.\n\n`seq` is a per-store counter starting at one, with no gaps — and it, not `event_id`, is\nwhat orders the chain ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md)\ndecision 6). Events sort by ULID elsewhere, and\n[ADR-0026](../../../docs/adr/0026-port-shapes.md) §3 already records why that is unsafe\nas a cursor once writers are concurrent: a chain built on ULID order would re-link\nitself the first time two transactions interleaved.",
+        "required": [
+          "seq",
+          "prev_hash"
+        ],
+        "properties": {
+          "prev_hash": {
+            "$ref": "#/components/schemas/ChainHash",
+            "description": "The hash of the record before it, or [`ChainHash::genesis`] for the first."
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "This record's position in its store's chain. The first record is one.",
+            "minimum": 0
+          }
+        }
+      },
+      "ClaimPending": {
+        "type": "object",
+        "description": "What collecting a claim nobody has bound yet answers: that it is pending.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/PendingStatus",
+            "description": "Always `PENDING`."
+          }
+        }
+      },
+      "CollectClaimRequest": {
+        "type": "object",
+        "description": "A box presents its secret to collect.",
+        "required": [
+          "secret"
+        ],
+        "properties": {
+          "secret": {
+            "type": "string"
+          }
+        }
+      },
+      "CollectedClaim": {
+        "type": "object",
+        "description": "What a collection answers once: the box's slot and its device credential.",
+        "required": [
+          "tenant_id",
+          "store_id",
+          "device_id",
+          "credential"
+        ],
+        "properties": {
+          "credential": {
+            "type": "string",
+            "description": "The `posdev_<id>_<secret>` token, shown this once; only its hash is kept."
+          },
+          "device_id": {
+            "type": "string"
+          },
+          "store_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ConfigDelta": {
+        "type": "object",
+        "description": "A change from one version to the next.\n\n`from_config_version_id` is what makes a delta safe to apply: a store holding a\ndifferent version must reject it rather than apply it out of order, because\nconfiguration is a tree and an out-of-order patch produces a document nobody\nauthored.",
+        "required": [
+          "from_config_version_id",
+          "to_config_version_id",
+          "store_id",
+          "patch"
+        ],
+        "properties": {
+          "from_config_version_id": {
+            "$ref": "#/components/schemas/ConfigVersionId",
+            "description": "The version this delta expects the store to be holding."
+          },
+          "patch": {
+            "$ref": "#/components/schemas/ConfigDocument",
+            "description": "The change, in whatever patch format P7 settles on."
+          },
+          "store_id": {
+            "$ref": "#/components/schemas/StoreId",
+            "description": "The store it applies to."
+          },
+          "to_config_version_id": {
+            "$ref": "#/components/schemas/ConfigVersionId",
+            "description": "The version the store reaches by applying it."
+          }
+        }
+      },
+      "ConfigDocument": {
+        "type": "object",
+        "description": "Free-form JSON: a configuration document, or a patch to one, keyed by config node. The port carries it uninterpreted, so a store keeps keys it does not know. Each node's shape is its `pos-proto` type"
+      },
+      "ConfigSnapshot": {
+        "type": "object",
+        "description": "A complete configuration document at a version.",
+        "required": [
+          "config_version_id",
+          "store_id",
+          "document"
+        ],
+        "properties": {
+          "config_version_id": {
+            "$ref": "#/components/schemas/ConfigVersionId",
+            "description": "Which version this is."
+          },
+          "document": {
+            "$ref": "#/components/schemas/ConfigDocument",
+            "description": "The document."
+          },
+          "store_id": {
+            "$ref": "#/components/schemas/StoreId",
+            "description": "The store it applies to."
+          }
+        }
+      },
+      "ConfigSyncResponse": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "The store already holds the current version; it applies nothing.",
+            "required": [
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "up_to_date"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The store should apply this snapshot or delta.",
+            "required": [
+              "update",
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "update"
+                ]
+              },
+              "update": {
+                "$ref": "#/components/schemas/ConfigUpdate",
+                "description": "The snapshot or collapsed delta to apply ([ADR-0033](../../../docs/adr/0033-config-tree.md))."
+              }
+            }
+          }
+        ],
+        "description": "What a store should do to reach the current configuration — the wire form of a\n[`SyncOutcome`](crate::config_tree::SyncOutcome)."
+      },
+      "ConfigUpdate": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ConfigSnapshot",
+                "description": "Replace everything. Always applicable, whatever version the store holds."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "update_kind"
+                ],
+                "properties": {
+                  "update_kind": {
+                    "type": "string",
+                    "enum": [
+                      "snapshot"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Replace everything. Always applicable, whatever version the store holds."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ConfigDelta",
+                "description": "Patch forward by one version. Applicable only from the stated version."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "update_kind"
+                ],
+                "properties": {
+                  "update_kind": {
+                    "type": "string",
+                    "enum": [
+                      "delta"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Patch forward by one version. Applicable only from the stated version."
+          }
+        ],
+        "description": "What the cloud sent."
+      },
+      "ConfigVersionId": {
+        "type": "string",
+        "description": "A `ConfigVersionId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "DeviceId": {
+        "type": "string",
+        "description": "A `DeviceId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "DeviceProposalStatus": {
+        "type": "string",
+        "description": "Where a proposal sits in the approval workflow.",
+        "enum": [
+          "pending",
+          "approved",
+          "rejected"
+        ]
+      },
+      "DeviceProposalSummary": {
+        "type": "object",
+        "description": "A proposal as listed — the durable facts plus its status.",
+        "required": [
+          "id",
+          "store_id",
+          "kind",
+          "name",
+          "address",
+          "connection",
+          "station_id",
+          "agent_device_id",
+          "drawer_attached",
+          "paper_width",
+          "cuts_paper",
+          "receipt_printer_id",
+          "receipt_language",
+          "receipt_second_language",
+          "opening_float_minor",
+          "status",
+          "version"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The device's network address."
+          },
+          "agent_device_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The `terminal` device whose transport reaches this printer, if an operator has picked one\n([ADR-0112](../../../docs/adr/0112-print-agents.md)). `None` — the ordinary case — means the\nedge opens the address itself, exactly as it always has."
+          },
+          "connection": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "How the device is attached (`usb`/`network`/`serial`), as approval recorded it — `None` while\npending, because discovery cannot find this out ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md))."
+          },
+          "cuts_paper": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether an operator says this printer cuts its paper. `None` until somebody says, which the\nedge reads as `true`."
+          },
+          "drawer_attached": {
+            "type": "boolean",
+            "description": "Whether an operator has marked a cash drawer as wired to this printer\n([ADR-0165](../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).\n`false` until somebody does, which is what every store assumed before the mark existed."
+          },
+          "id": {
+            "type": "string",
+            "description": "The proposal id (a ULID string)."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`printer` or `kds`."
+          },
+          "name": {
+            "type": "string",
+            "description": "The device's name."
+          },
+          "opening_float_minor": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "On a `terminal`, the float an operator says this till's drawer opens with by default, in the\nstore currency's minor unit\n([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 4). `None`\nuntil somebody says, which is the store's `shift.opening_float_minor`."
+          },
+          "paper_width": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The paper an operator says this printer takes, as its wire token (`PAPER_WIDTH_…`,\n[ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)\ndecision 2). `None` until somebody says, which the edge reads as 80 mm paper: what every\nstore assumed before the field existed."
+          },
+          "receipt_language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "On a `terminal`, the language an operator says this till's receipts print in, as its wire\ntoken (`RECEIPT_LANGUAGE_…`). `None` until somebody says, which is the store's."
+          },
+          "receipt_printer_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "On a `terminal`, the printer an operator says this till's receipts, receipt copies and\npre-bills go to (a ULID string,\n[ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)\ndecision 4). `None` until somebody says, which is the store's receipt printer."
+          },
+          "receipt_second_language": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "On a `terminal`, the second language an operator says this till's receipts print in, as its\nwire token (`RECEIPT_SECOND_LANGUAGE_…`). `None` until somebody says, which is the store's."
+          },
+          "station_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The kitchen station this device serves, as approval recorded it. `None` for the counter's\nreceipt printer, which serves the bill rather than a station — and `None` while pending."
+          },
+          "status": {
+            "type": "string",
+            "description": "`pending`, `approved`, or `rejected`."
+          },
+          "store_id": {
+            "type": "string",
+            "description": "The store the device belongs to (a ULID string)."
+          },
+          "version": {
+            "type": "string",
+            "description": "The version the row was read at, for a conditional write\n([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: the adapter\nmints it from `xmin::text`, and nothing above this seam may assume that."
+          }
+        }
+      },
+      "EmployeeId": {
+        "type": "string",
+        "description": "A `EmployeeId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
       "ErrorBody": {
         "type": "object",
         "description": "The error body — the schema mirror of [`pos_proto::error::ErrorBody`].",
@@ -1503,6 +2196,745 @@
             "description": "The error."
           }
         }
+      },
+      "EventEnvelope_RawPayload": {
+        "type": "object",
+        "description": "The envelope carried by every event, on every channel.\n\n`D` is the payload: [`RawPayload`] on receipt, a typed value after decoding.\n\n`PartialEq` is derived rather than hand-written, so comparing two envelopes compares\ntheir payloads by whatever rule `D` defines. For [`RawPayload`] that is a textual\ncomparison of the JSON — see that type's implementation, which explains why it is not\nsemantic.",
+        "required": [
+          "event_id",
+          "event_type",
+          "event_time",
+          "business_date",
+          "schema_version",
+          "tenant_id",
+          "brand_id",
+          "store_id",
+          "device_id",
+          "data"
+        ],
+        "properties": {
+          "brand_id": {
+            "$ref": "#/components/schemas/BrandId",
+            "description": "Owning brand."
+          },
+          "business_date": {
+            "$ref": "#/components/schemas/BusinessDate",
+            "description": "The trading day it belongs to.\n\nNot derivable from `event_time` alone: it needs the store's timezone and\ncut-off hour, both of which are configuration and both of which change. So it\nis computed **once, at capture, on the device** and carried here. Recomputing\nit downstream would silently rewrite history the next time a store's cut-off\nwas edited."
+          },
+          "chain": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ChainLink",
+                "description": "Where this record sits in its store's hash chain, or `None` for one written before\nthe chain existed ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md)).\n\nAdditive, and `None` is a real answer rather than a defect: a store's chain begins\nat its first record after the migration, and everything earlier verifies as\n**unchained** rather than as broken. Backfilling would compute a chain over history\nnobody can vouch for, which is the false confidence the record rejects.\n\nIt rides on the envelope rather than in a store's own columns so that it crosses\nevery channel the envelope does — a cloud reader verifies the same bytes the store\nwrote, instead of taking the store's word for its own integrity."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "data": {
+            "type": "object",
+            "description": "An event payload exactly as it arrived, still undecoded.\n\nHolding the original bytes is what lets a node forward, store, checksum and\nreconcile an event whose payload contains fields it has never heard of. Decoding\neagerly and re-encoding would silently drop them."
+          },
+          "device_id": {
+            "$ref": "#/components/schemas/DeviceId",
+            "description": "Originating device."
+          },
+          "employee_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/EmployeeId",
+                "description": "The member of staff responsible, when there is one.\n\nAbsent for system-originated events: a published configuration version, a\ncompleted device activation, a fleet rollout. The envelope's *shape* is still\nidentical on every channel; this field is simply optional."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "event_id": {
+            "$ref": "#/components/schemas/EventId",
+            "description": "A ULID, which **doubles as the receiver's idempotency key**.\n\nA retry must reuse it. If a command minted a fresh identifier on each attempt,\nat-least-once delivery would become at-least-once *effect*, and a bill could be\nsettled twice. That is why a command carries a caller-supplied request\nidentifier which becomes this value."
+          },
+          "event_time": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "When it happened. RFC 3339, UTC."
+          },
+          "event_type": {
+            "$ref": "#/components/schemas/EventTypeRef",
+            "description": "`domain.resource.action`, action in the past tense."
+          },
+          "schema_version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The payload contract version for this `event_type`.\n\nIncreases only when a break is unavoidable. Adding an optional field does not\nbump it — that is what \"additive\" means.",
+            "minimum": 0
+          },
+          "shift_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ShiftId",
+                "description": "The cash shift, when the event occurred inside one."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "store_id": {
+            "$ref": "#/components/schemas/StoreId",
+            "description": "Originating store."
+          },
+          "tenant_id": {
+            "$ref": "#/components/schemas/TenantId",
+            "description": "Owning tenant."
+          }
+        }
+      },
+      "EventId": {
+        "type": "string",
+        "description": "A `EventId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "EventTypeRef": {
+        "type": "string",
+        "description": "An event type's dotted name, as the event catalogue writes it"
+      },
+      "ExchangeRequest": {
+        "type": "object",
+        "description": "A device presents its activation code. Unauthenticated: the code is the credential.",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The `XXXX-XXXX-XXXX` code the operator typed, in any casing or spacing, with or without its\ncell's prefix (`VN1-XXXX-XXXX-XXXX`, ADR-0181). Only its twelve symbols are looked up."
+          },
+          "store_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The store the box was installed for, from its `config.toml`. A code issued for another store\nis refused before it is spent. Optional, because an edge older than the field sends none."
+          }
+        }
+      },
+      "ExchangeResponse": {
+        "type": "object",
+        "description": "The device's minted credential and the device id it was activated as — shown once.",
+        "required": [
+          "device_id",
+          "credential"
+        ],
+        "properties": {
+          "credential": {
+            "type": "string",
+            "description": "The `posdev_<id>_<secret>` bearer token the device stores in its `KeyVault`."
+          },
+          "device_id": {
+            "type": "string",
+            "description": "The device id the credential authenticates as."
+          }
+        }
+      },
+      "HeartbeatBody": {
+        "type": "object",
+        "description": "What a heartbeat may carry beyond \"I am here\" ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md)).\n\nEvery field is optional and the whole body is optional, because the body is younger than the\nroute: a store running an older binary posts nothing at all, and must keep being recorded as\nalive rather than refused for sending the empty body it has always sent.",
+        "properties": {
+          "lease_generation": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The lease generation the box holds\n([ADR-0108](../../../docs/adr/0108-the-lease-generation-is-authority.md)), so the console can\ntell a store that has been *replaced* from one that is merely quiet. `None` when the store did\nnot say — an older edge, or one whose lease row could not be read — and that must not be\nrecorded as `0`, because `0` is a store's real first generation.",
+            "minimum": 0
+          },
+          "outbox_depth": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How many events the store has committed and not yet published — its own publish backlog, the\nopposite direction from the relay backlog the fleet row already carries. `None` when the store\ndid not say, which is a different answer from zero and leaves the recorded depth alone.",
+            "minimum": 0
+          },
+          "print_agents": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/PrintAgentStanding"
+            },
+            "description": "One standing per bound print agent ([ADR-0112](../../../docs/adr/0112-print-agents.md)), or\n`None` when the store said nothing about them — an older edge, or one whose record could not\nbe read.\n\nThe distinction between absent and empty is load-bearing and is why this is not a bare\n`Vec`. Absent leaves whatever the cloud last knew alone. Empty says *this store has no bound\nagent*, which a manager releasing the last terminal produces and which must replace the\nstored list — a console still showing an agent nobody is bound to is the stale answer this\nfield exists to prevent."
+          }
+        }
+      },
+      "Hello": {
+        "type": "object",
+        "description": "The first frame a store sends on connecting.",
+        "required": [
+          "protocol_version_min",
+          "protocol_version_max",
+          "product_version",
+          "store_id"
+        ],
+        "properties": {
+          "lease_token": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/LeaseToken",
+                "description": "The lease this machine holds, when it has one.\n\nAbsent during activation, before a lease has been issued."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "product_version": {
+            "$ref": "#/components/schemas/ReleaseTag",
+            "description": "The edge's product release.\n\n**It does not reach the fleet view** (production-readiness **R2**). There are two production\n[`MessageLink`](pos_ports::message_link::MessageLink)s, and neither records it:\n\n- `link-nats` is outbound-only by design\n  ([ADR-0089](../../../docs/adr/0089-edge-event-bus-transport.md)). There is no cloud responder,\n  so its `handshake` runs [`negotiate`] against its *own* compiled constants and this field is\n  never transmitted.\n- `cloud-sync-http`'s link\n  ([ADR-0143](../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md))\n  posts this frame to the cloud, which negotiates the version range against its own and reads\n  nothing else from it.\n\nThe console learns which binary a store runs from\n[`CloudSync::report`](pos_ports::cloud_sync::CloudSync::report) over `/sync`\n([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)), which is a different rail.\n\nThe field stays because the frame is the protocol's, not one transport's, and removing a\nmember from a wire type is a `PROTOCOL_VERSION` change made for no gain."
+          },
+          "protocol_version_max": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The newest protocol version this edge can speak.",
+            "minimum": 0
+          },
+          "protocol_version_min": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The oldest protocol version this edge can speak.",
+            "minimum": 0
+          },
+          "store_id": {
+            "$ref": "#/components/schemas/StoreId",
+            "description": "Which store is calling."
+          }
+        }
+      },
+      "HelloOutcome": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Agreed. Both sides speak this version for the life of the connection.",
+            "required": [
+              "protocol_version",
+              "outcome"
+            ],
+            "properties": {
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "accepted"
+                ]
+              },
+              "protocol_version": {
+                "type": "integer",
+                "format": "int32",
+                "description": "The negotiated version: the highest both sides support.",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "No overlap.\n\nThe edge keeps selling, keeps its outbox, backs off, and raises the condition.\nIt does **not** retry in a tight loop, and it does not stop trading.",
+            "required": [
+              "minimum_supported",
+              "maximum_supported",
+              "outcome"
+            ],
+            "properties": {
+              "maximum_supported": {
+                "type": "integer",
+                "format": "int32",
+                "description": "The newest version the cloud speaks.",
+                "minimum": 0
+              },
+              "minimum_supported": {
+                "type": "integer",
+                "format": "int32",
+                "description": "The oldest version the cloud speaks, so the edge can report what it needs.",
+                "minimum": 0
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "refused"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "What the cloud answers."
+      },
+      "LeaseToken": {
+        "type": "string",
+        "description": "An opaque proof that a machine is the single active server for its store.\n\nCarried on the handshake so single-active enforcement and version negotiation share\none round trip ([ADR-0003](../../../docs/adr/0003-cattle-not-pets.md)).\n\n`Debug` redacts the value. A lease token in a log line is a credential in a log line,\nand logs travel to the cloud."
+      },
+      "MoneyPayload": {
+        "type": "object",
+        "description": "A money value on the wire.",
+        "required": [
+          "currency_code",
+          "amount_minor"
+        ],
+        "properties": {
+          "amount_minor": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The amount in the currency's minor unit."
+          },
+          "currency_code": {
+            "type": "string",
+            "description": "ISO 4217 currency code."
+          }
+        }
+      },
+      "OpenedClaim": {
+        "type": "object",
+        "description": "What `POST /claim` answers. The box shows `user_code` and keeps `secret` to itself.",
+        "required": [
+          "claim_id",
+          "user_code",
+          "secret",
+          "expires_in_secs",
+          "poll_interval_secs"
+        ],
+        "properties": {
+          "claim_id": {
+            "type": "string"
+          },
+          "expires_in_secs": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "poll_interval_secs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "secret": {
+            "type": "string",
+            "description": "256 bits, as hex. Shown nowhere; presented only to collect."
+          },
+          "user_code": {
+            "type": "string",
+            "description": "The code to show, as `XXXX-XXXX`."
+          }
+        }
+      },
+      "PendingOrderDto": {
+        "type": "object",
+        "description": "One pending order on the wire, for the pull response.",
+        "required": [
+          "queued_id",
+          "order"
+        ],
+        "properties": {
+          "order": {
+            "$ref": "#/components/schemas/QueuedOrderPayload"
+          },
+          "queued_id": {
+            "type": "string"
+          }
+        }
+      },
+      "PendingStatus": {
+        "type": "string",
+        "description": "The one status a pending claim answers with.",
+        "enum": [
+          "PENDING"
+        ]
+      },
+      "PrintAgentStanding": {
+        "type": "object",
+        "description": "One bound print agent, as the store last reported it\n([ADR-0112](../../../docs/adr/0112-print-agents.md)).\n\nIds are kept as raw strings for the reason the config versions below are: the cloud did not mint\nthe paired device id — the store did — and one report the cloud cannot parse must not fail a\nwhole fleet read. The console shows what the store said.\n\nCarries no personal data by construction: two opaque identifiers and a duration. Nothing a ticket\n*says* helps diagnose a stalled agent, so nothing a ticket says is here.",
+        "required": [
+          "agent_device_id",
+          "paired_device_id"
+        ],
+        "properties": {
+          "agent_device_id": {
+            "type": "string",
+            "description": "The terminal a console admin created and a manager bound at the till."
+          },
+          "oldest_unacknowledged_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How long the oldest still-unacknowledged job has waited, or `None` when nothing is waiting.\n\n`None` is the healthy answer and is deliberately not zero: an agent with an empty queue and\none whose ticket arrived this instant are different states, and only one is about to become\nan alert.",
+            "minimum": 0
+          },
+          "paired_device_id": {
+            "type": "string",
+            "description": "The paired device answering for it."
+          }
+        }
+      },
+      "ProposeDeviceRequest": {
+        "type": "object",
+        "description": "A store's proposal of a discovered device.",
+        "required": [
+          "kind",
+          "name",
+          "address"
+        ],
+        "properties": {
+          "address": {
+            "type": "string",
+            "description": "The device's network address, as discovered (e.g. `192.168.1.50:9100`)."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`printer` or `kds`."
+          },
+          "name": {
+            "type": "string",
+            "description": "A human-readable name for the device."
+          }
+        }
+      },
+      "ProposeDeviceResponse": {
+        "type": "object",
+        "description": "The id and status of a freshly-proposed device (always `pending`).",
+        "required": [
+          "id",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The proposal's id (a ULID)."
+          },
+          "status": {
+            "$ref": "#/components/schemas/DeviceProposalStatus",
+            "description": "The status — `pending` until an operator resolves it."
+          }
+        }
+      },
+      "PublishedEvents": {
+        "type": "object",
+        "description": "`POST /sync/stores/{store_id}/events`'s body: the store's committed events, oldest first.",
+        "required": [
+          "events"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventEnvelope_RawPayload"
+            }
+          }
+        }
+      },
+      "PublishedEventsAccepted": {
+        "type": "object",
+        "description": "What a publish came to: how many envelopes, counted from the first, the cloud holds. Always the\nwhole batch on success, since ingest commits all of it or none (ADR-0143).",
+        "required": [
+          "accepted"
+        ],
+        "properties": {
+          "accepted": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "QueuedOrderLine": {
+        "type": "object",
+        "description": "One line of a [`QueuedOrderPayload`].",
+        "required": [
+          "menu_item_id",
+          "quantity_milli",
+          "modifier_menu_item_ids"
+        ],
+        "properties": {
+          "menu_item_id": {
+            "type": "string",
+            "description": "The menu item ordered."
+          },
+          "modifier_menu_item_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Chosen modifiers."
+          },
+          "note": {
+            "type": "string",
+            "description": "The guest's free-text note; stays at the store, never the event log."
+          },
+          "quantity_milli": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many, in thousandths."
+          },
+          "quoted_unit_price": {
+            "$ref": "#/components/schemas/MoneyPayload",
+            "description": "The price the caller quoted, advisory only."
+          }
+        }
+      },
+      "QueuedOrderPayload": {
+        "type": "object",
+        "description": "A queued order's payload, in a serializable wire form — what the queue stores and the store pulls.\nThe domain [`InboundOrder`] is not `Serialize` (its `GuestNote` cannot enter the event log), so\nthe relay carries this explicit shape; the guest note rides along to the store here (this is order\ndelivery, not the log) and never touches the event stream.",
+        "required": [
+          "external_reference",
+          "sales_channel",
+          "store_id",
+          "lines",
+          "placed_at_ms"
+        ],
+        "properties": {
+          "external_reference": {
+            "type": "string",
+            "description": "The caller's reference — the idempotency key, scoped by channel."
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QueuedOrderLine"
+            },
+            "description": "The requested lines."
+          },
+          "placed_at_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When the caller says it was placed (ms since the Unix epoch)."
+          },
+          "sales_channel": {
+            "type": "string",
+            "description": "The channel the order arrived on (an open enum's wire token)."
+          },
+          "store_id": {
+            "type": "string",
+            "description": "The store to make it."
+          },
+          "subject_id": {
+            "type": "string",
+            "description": "The recipient side-table id, when there is one."
+          },
+          "table_id": {
+            "type": "string",
+            "description": "The table, for a QR order."
+          }
+        }
+      },
+      "ReconcileResponse": {
+        "type": "object",
+        "description": "The ids the cloud is missing from the manifest — what the edge should re-push.",
+        "required": [
+          "missing"
+        ],
+        "properties": {
+          "missing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The subset of the manifest the cloud's event log does not contain (ULID strings)."
+          }
+        }
+      },
+      "ReleaseTag": {
+        "type": "string",
+        "description": "A release identifier, such as `v1.4.0`.\n\nAdmissible in an event payload: it names a build, not a person. Fleet rollout\nevents carry it so the dashboard can show which store runs which version."
+      },
+      "ShiftId": {
+        "type": "string",
+        "description": "A `ShiftId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "StoreId": {
+        "type": "string",
+        "description": "A `StoreId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "StoreOutcome": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AcceptanceRecord",
+                "description": "The store accepted (or idempotently matched) the order."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "outcome"
+                ],
+                "properties": {
+                  "outcome": {
+                    "type": "string",
+                    "enum": [
+                      "accepted"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "The store accepted (or idempotently matched) the order."
+          },
+          {
+            "type": "object",
+            "description": "The store refused it — an unknown item, a closed store, a rate limit. `status` is the\n[`pos_proto::error::ErrorStatus`] wire name so the caller sees the same class the port defines.",
+            "required": [
+              "status",
+              "message",
+              "outcome"
+            ],
+            "properties": {
+              "message": {
+                "type": "string",
+                "description": "A human-readable reason."
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "rejected"
+                ]
+              },
+              "status": {
+                "type": "string",
+                "description": "The refusal class (`invalid_argument`, `failed_precondition`, …)."
+              }
+            }
+          }
+        ],
+        "description": "What a store reported for a pulled order: an acceptance, or a refusal it decided locally."
+      },
+      "StoreReconcileRequest": {
+        "type": "object",
+        "description": "A store's own reconciliation manifest: just the ids, because the tenant and the store come from\nthe key it presented and the path it called (production-readiness **R3**).\n\nDeliberately **not** [`ReconcileRequest`] with two ignored members: a body that carries a\n`tenant_id` the server discards is a body a caller will eventually believe is honoured.",
+        "required": [
+          "event_ids"
+        ],
+        "properties": {
+          "event_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The event ids this store holds over the window it is reconciling."
+          }
+        }
+      },
+      "StoreReportRequest": {
+        "type": "object",
+        "description": "What a **store** reports about itself ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)),\non the `/sync` route that replaced the `/internal` one for store-originated reporting\n([ADR-0097](../../../docs/adr/0097-internal-route-authentication.md)).\n\nNo `tenant_id` and no `store_id`: the tenant comes from the scoped key and the store from the\npath. That is the entire point of the move — the `/internal` shape took both in the body, so it\ntrusted the caller's claim about which store it was, and a shared secret could change *who could\nreach* the route without making a report attributable.",
+        "required": [
+          "installed"
+        ],
+        "properties": {
+          "installed": {
+            "type": "string",
+            "description": "The release the store is now running."
+          },
+          "self_test_passed": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the post-install self-test passed; absent when the store has never self-tested\n(ADR-0078 Amendment 1)."
+          }
+        }
+      },
+      "TenantHomeView": {
+        "type": "object",
+        "description": "A tenant's home cell.",
+        "required": [
+          "tenant_slug",
+          "cell_id",
+          "base_url",
+          "here"
+        ],
+        "properties": {
+          "base_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "That cell's origin. Null only when it is this cell and its base URL is not configured."
+          },
+          "cell_id": {
+            "type": "string",
+            "description": "The tenant's home cell id."
+          },
+          "here": {
+            "type": "boolean",
+            "description": "Whether that cell is this one."
+          },
+          "tenant_slug": {
+            "type": "string",
+            "description": "The tenant slug asked about."
+          }
+        }
+      },
+      "TenantId": {
+        "type": "string",
+        "description": "A `TenantId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "Timestamp": {
+        "type": "string",
+        "format": "date-time",
+        "description": "An instant in UTC, as RFC 3339"
+      },
+      "WellKnownCell": {
+        "type": "object",
+        "description": "This cell, as anyone may know it.",
+        "required": [
+          "cell_id",
+          "base_url",
+          "country_alias",
+          "home_country",
+          "directory_version"
+        ],
+        "properties": {
+          "base_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The origin this cell answers on. Null when it is not configured."
+          },
+          "cell_id": {
+            "type": "string",
+            "description": "This cell's id (`vn1`), or `default` for a cloud with no `[cell]` section."
+          },
+          "country_alias": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "This cell's country alias (`vn`), when one is configured."
+          },
+          "directory_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The version of the signed directory this cell answers from. Null when it holds none.",
+            "minimum": 0
+          },
+          "home_country": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The country this cell's tenants are homed by. Null when it is not configured."
+          },
+          "tenant": {
+            "$ref": "#/components/schemas/TenantHomeView",
+            "description": "The asked-for tenant's home. Present only when `tenant` was asked."
+          }
+        }
       }
     },
     "securitySchemes": {
@@ -1541,6 +2973,10 @@
     {
       "name": "box activation",
       "description": "How a box first comes to hold its device credential: an activation code from the setup sheet, or a claim the console binds (ADR-0050, ADR-0148)."
+    },
+    {
+      "name": "cells",
+      "description": "Which cell this cloud is, and which cell is a tenant's home, from the signed, PII-free cell directory. Asked once by a box being set up, which then keeps its `cloud_url` (ADR-0179)."
     }
   ]
 }

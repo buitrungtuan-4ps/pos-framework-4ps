@@ -26,14 +26,22 @@ use crate::releases::{ReleaseStatus, ReleaseStore};
 use crate::scheduling::{ScheduledPublishStatus, ScheduledPublishStore};
 use crate::store_groups::StoreGroupStore;
 
+/// What the release list answers: the tenant's releases, newest first.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+struct ReleaseList {
+    /// Each release, as its own read reports it.
+    releases: Vec<ReleaseView>,
+}
+
 #[utoipa::path(
     post,
     path = "/admin/config-releases/{release_id}/schedule",
     security(("session_cookie" = [])),
     extensions(("x-permission" = json!("console.config.publish"))),
     params(("release_id" = String, Path, description = "The draft to schedule")),
+    request_body(content = ScheduleReleaseRequest, content_type = "application/json"),
     responses(
-        (status = 200, description = "The release is scheduled, and the body is its node × store \
+        (status = 200, body = ReleaseReport, description = "The release is scheduled, and the body is its node × store \
                                       report. Every pair is `PENDING` until its instant arrives"),
         (status = 400, description = "An id is not a ULID, the node is not one of the batchable \
                                       kinds, or a pair would make its store run a value that \
@@ -135,8 +143,9 @@ where
     security(("session_cookie" = [])),
     extensions(("x-permission" = json!("console.config.publish"))),
     params(("release_id" = String, Path, description = "The release to withdraw")),
+    request_body(content = ReleaseTenantRequest, content_type = "application/json"),
     responses(
-        (status = 200, description = "The still-pending pairs are cancelled and the body is the \
+        (status = 200, body = ReleaseReport, description = "The still-pending pairs are cancelled and the body is the \
                                       report. Applied pairs are left alone — they are config \
                                       versions now"),
         (status = 400, description = "An id is not a ULID", body = crate::openapi_admin::ErrorResponse),
@@ -254,7 +263,7 @@ where
     extensions(("x-permission" = json!("console.data.read"))),
     params(("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)")),
     responses(
-        (status = 200, description = "The tenant's releases, newest first, each with its stored \
+        (status = 200, body = ReleaseList, description = "The tenant's releases, newest first, each with its stored \
                                       roll-up state"),
         (status = 400, description = "tenant_id is not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
@@ -295,7 +304,7 @@ where
     match state.releases.list_for_tenant(tenant_id).await {
         Ok(rows) => {
             let views: Vec<ReleaseView> = rows.iter().map(ReleaseView::of).collect();
-            Json(serde_json::json!({ "releases": views })).into_response()
+            Json(ReleaseList { releases: views }).into_response()
         }
         Err(error) => release_error_response(&error),
     }
@@ -311,7 +320,7 @@ where
         ("tenant_id" = String, Query, description = "The tenant (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The release and one row per (node, store) pair, each with its \
+        (status = 200, body = ReleaseReport, description = "The release and one row per (node, store) pair, each with its \
                                       status, its instant, the version it published as, and why it \
                                       last failed. Snapshotted node values are deliberately not \
                                       returned"),
@@ -400,4 +409,19 @@ where
             .collect(),
     })
     .into_response()
+}
+
+#[cfg(test)]
+mod answer_tests {
+    //! Each answer serialises to the bytes the `json!` it replaced did.
+
+    use super::ReleaseList;
+
+    #[test]
+    fn the_release_list_is_its_releases() {
+        let answer = serde_json::to_value(ReleaseList {
+            releases: Vec::new(),
+        });
+        assert_eq!(answer.expect("json"), serde_json::json!({ "releases": [] }));
+    }
 }

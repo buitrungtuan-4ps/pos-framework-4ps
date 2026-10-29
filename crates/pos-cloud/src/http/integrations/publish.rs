@@ -44,7 +44,7 @@ struct ConfigIntegrationsState<S, Rg, Cfg, A, C> {
 
 /// A `PUT /admin/config/integrations` body: the store to publish to. What goes on it is resolved
 /// from the tenant's connections, never sent.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PublishIntegrationsRequest {
     tenant_id: String,
     store_id: String,
@@ -98,19 +98,28 @@ where
         })
 }
 
+/// What an integrations publish answers: the version it made, and how many connections it carries.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+struct IntegrationsPublished {
+    /// The new config version, a ULID.
+    config_version_id: String,
+    /// How many connections the store's node now names.
+    integrations: usize,
+}
+
 #[utoipa::path(
     put,
     path = "/admin/config/integrations",
     security(("session_cookie" = [])),
     extensions(("x-permission" = json!("console.config.publish"))),
     request_body(
-        description = "The tenant and the store to publish to. The node's content is resolved from \
+        content = PublishIntegrationsRequest, description = "The tenant and the store to publish to. The node's content is resolved from \
                        the tenant's connections: the store's own, then its brand's, then the \
                        tenant's, with one per e-invoice and ERP family",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Published. The body names the config version and how many \
+        (status = 200, body = IntegrationsPublished, description = "Published. The body names the config version and how many \
                                       connections the store now has"),
         (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
@@ -175,10 +184,10 @@ where
     .await;
     (
         StatusCode::OK,
-        Json(serde_json::json!({
-            "config_version_id": id.to_string(),
-            "integrations": summary.connections.len(),
-        })),
+        Json(IntegrationsPublished {
+            config_version_id: id.to_string(),
+            integrations: summary.connections.len(),
+        }),
     )
         .into_response()
 }
@@ -279,4 +288,23 @@ where
         vec![("integrations".to_owned(), value)],
     )
     .await
+}
+
+#[cfg(test)]
+mod answer_tests {
+    //! Each answer serialises to the bytes the `json!` it replaced did.
+
+    use super::IntegrationsPublished;
+
+    #[test]
+    fn an_integrations_publish_answers_its_version_and_count() {
+        let answer = IntegrationsPublished {
+            config_version_id: "01J0000000000000000000000V".to_owned(),
+            integrations: 2,
+        };
+        assert_eq!(
+            serde_json::to_value(answer).expect("json"),
+            serde_json::json!({ "config_version_id": "01J0000000000000000000000V", "integrations": 2 })
+        );
+    }
 }

@@ -23,6 +23,7 @@
 
 pub mod audit;
 pub mod auth;
+pub mod body_schema;
 pub mod conditional;
 pub mod console;
 pub mod csv_file;

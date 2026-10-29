@@ -29,6 +29,7 @@ use crate::printing::{DrawerOutcome, Printers};
 /// A paid in or a paid out: how much, in minor units, and why (ADR-0165 decision 1), and the
 /// approver for a drawer assigned to somebody else.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct MovementRequest {
     amount_minor: i64,
     reason_code_id: ReasonCodeId,
@@ -40,6 +41,7 @@ pub(crate) struct MovementRequest {
 
 /// Opening the drawer outside a sale: why, and the manager whose PIN allows it (ADR-0165 decision 3).
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct OpenDrawerRequest {
     reason_code_id: ReasonCodeId,
     #[serde(default)]
@@ -56,9 +58,34 @@ impl OpenDrawerRequest {
 
 /// What a no-sale opening reports: the opening is recorded, and this is whether the drawer sprang.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct OpenDrawerResponse {
     /// `OPENED`, `NO_DRAWER` or `DRAWER_UNAVAILABLE`.
+    #[cfg_attr(feature = "openapi", schema(value_type = DrawerOutcomeSchema))]
     drawer_open: &'static str,
+}
+
+// A schema only: a `drawer_open` is `DrawerOutcome::as_wire`'s string on the wire, and this names its
+// three tokens so the till's type is them rather than any string. `drawer_outcome_schema_tests`
+// holds the two to one another.
+/// What came of opening the cash drawer (ADR-0165). `NO_DRAWER` is a store with no drawer marked,
+/// the ordinary case; `DRAWER_UNAVAILABLE` is a drawer that should have opened and did not.
+#[cfg(feature = "openapi")]
+#[derive(utoipa::ToSchema)]
+#[expect(
+    dead_code,
+    reason = "a schema only: the wire value is `DrawerOutcome::as_wire`'s string"
+)]
+pub(crate) enum DrawerOutcomeSchema {
+    /// The kick went to the drawer printer, or its print agent acknowledged it.
+    #[schema(rename = "OPENED")]
+    Opened,
+    /// No printer this edge may open a drawer through: the ordinary state of a store with no drawer.
+    #[schema(rename = "NO_DRAWER")]
+    NoDrawer,
+    /// The drawer printer was chosen and did not take the kick, which the cashier has to hear about.
+    #[schema(rename = "DRAWER_UNAVAILABLE")]
+    Unavailable,
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(
@@ -70,13 +97,13 @@ struct OpenDrawerResponse {
         ("id" = String, Path, description = "The shift's id, a ULID"),
     ),
     request_body(
-        description = "`amount_minor`, greater than zero, and `reason_code_id`, with `approver_code` and \
+        content = MovementRequest, description = "`amount_minor`, greater than zero, and `reason_code_id`, with `approver_code` and \
                        `approver_pin` for a drawer assigned to somebody else. Both are secrets and are never \
                        logged",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Recorded: the shift, with `drawer_open` saying whether the drawer \
+        (status = 200, body = ShiftResponse, description = "Recorded: the shift, with `drawer_open` saying whether the drawer \
                                       opened for the cash"),
         (status = 400, description = "The id is not a ULID, or the amount is not greater than zero"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
@@ -115,13 +142,13 @@ where
         ("id" = String, Path, description = "The shift's id, a ULID"),
     ),
     request_body(
-        description = "`amount_minor`, greater than zero, and `reason_code_id`, with `approver_code` and \
+        content = MovementRequest, description = "`amount_minor`, greater than zero, and `reason_code_id`, with `approver_code` and \
                        `approver_pin` for a drawer assigned to somebody else. Both are secrets and are never \
                        logged",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Recorded: the shift, with `drawer_open` saying whether the drawer \
+        (status = 200, body = ShiftResponse, description = "Recorded: the shift, with `drawer_open` saying whether the drawer \
                                       opened for the cash"),
         (status = 400, description = "The id is not a ULID, or the amount is not greater than zero"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
@@ -208,12 +235,12 @@ where
     security(("till_session" = [])),
     extensions(("x-permission" = json!(["cash.drawer.open_no_sale", "cash.drawer.override_assignment"]))),
     request_body(
-        description = "`reason_code_id`, with `approver_code` and `approver_pin` of the manager allowing the \
+        content = OpenDrawerRequest, description = "`reason_code_id`, with `approver_code` and `approver_pin` of the manager allowing the \
                        opening. Both are secrets and are never logged",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Recorded: `drawer_open` says whether the drawer opened (`OPENED`, \
+        (status = 200, body = OpenDrawerResponse, description = "Recorded: `drawer_open` says whether the drawer opened (`OPENED`, \
                                       `NO_DRAWER` or `DRAWER_UNAVAILABLE`)"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
         (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; a no-sale \
@@ -275,5 +302,35 @@ where
                 .await
         }
         None => DrawerOutcome::NoDrawer,
+    }
+}
+
+#[cfg(all(test, feature = "openapi"))]
+mod drawer_outcome_schema_tests {
+    //! [`DrawerOutcomeSchema`] names exactly the tokens [`DrawerOutcome::as_wire`] sends.
+
+    use utoipa::PartialSchema as _;
+
+    use super::DrawerOutcomeSchema;
+    use crate::printing::DrawerOutcome;
+
+    #[test]
+    fn the_schema_names_every_wire_token_and_no_other() {
+        let schema = serde_json::to_value(DrawerOutcomeSchema::schema()).expect("schema");
+        let named: Vec<&str> = schema["enum"]
+            .as_array()
+            .expect("an enum of tokens")
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect();
+        let sent: Vec<&str> = [
+            DrawerOutcome::Opened,
+            DrawerOutcome::NoDrawer,
+            DrawerOutcome::Unavailable,
+        ]
+        .into_iter()
+        .map(DrawerOutcome::as_wire)
+        .collect();
+        assert_eq!(named, sent);
     }
 }

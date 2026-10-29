@@ -45,7 +45,7 @@ struct ScheduledPublishState<Sch, Camp, A, C> {
 
 /// A `POST /admin/config/campaigns/schedule` body: the `(tenant, store)` and the future instant the
 /// snapshot should publish, Unix milliseconds.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct ScheduleCampaignsRequest {
     tenant_id: String,
     store_id: String,
@@ -54,7 +54,7 @@ struct ScheduleCampaignsRequest {
 
 /// A scheduled publish as listed — metadata only; the snapshotted node value is not returned (it can
 /// be large, and the console shows what and when, not the payload).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct ScheduledPublishView {
     id: String,
     node_key: String,
@@ -112,19 +112,28 @@ where
         })
 }
 
+/// What scheduling a campaign publish answers: the scheduled publish and when it takes effect.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+struct CampaignsScheduled {
+    /// The scheduled publish's id, a ULID.
+    id: String,
+    /// When it publishes, in Unix milliseconds.
+    effective_at_ms: i64,
+}
+
 #[utoipa::path(
     post,
     path = "/admin/config/campaigns/schedule",
     extensions(("x-permission" = json!("console.config.publish"))),
     security(("session_cookie" = [])),
     request_body(
-        description = "`tenant_id` and `store_id`, and `effective_at_ms`, the instant to publish, \
+        content = ScheduleCampaignsRequest, description = "`tenant_id` and `store_id`, and `effective_at_ms`, the instant to publish, \
                        in Unix milliseconds, which must be in the future. The campaigns are taken \
                        as authored now: later edits do not reach this publish",
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Scheduled: the compiled `campaigns` node is held until its \
+        (status = 201, body = CampaignsScheduled, description = "Scheduled: the compiled `campaigns` node is held until its \
                                       time, when the scheduler publishes it. The body carries `id`, \
                                       what a cancel names, and `effective_at_ms`. Audited with the \
                                       number of campaigns and the instant"),
@@ -221,10 +230,10 @@ where
             .await;
             (
                 StatusCode::CREATED,
-                Json(serde_json::json!({
-                    "id": publish.id,
-                    "effective_at_ms": request.effective_at_ms,
-                })),
+                Json(CampaignsScheduled {
+                    id: publish.id,
+                    effective_at_ms: request.effective_at_ms,
+                }),
             )
                 .into_response()
         }
@@ -242,7 +251,7 @@ where
         ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The store's publishes still waiting for their time, soonest \
+        (status = 200, body = [ScheduledPublishView], description = "The store's publishes still waiting for their time, soonest \
                                       first: for each, `id`, `node_key`, the node it will publish, \
                                       `effective_at_ms`, `status` and `created_at_ms`. The node's \
                                       value is not returned"),
@@ -376,4 +385,23 @@ pub(in crate::http) fn scheduled_error_response(error: &ScheduledPublishError) -
         ErrorStatus::Unavailable,
         "the scheduling service is unavailable",
     )
+}
+
+#[cfg(test)]
+mod answer_tests {
+    //! Each answer serialises to the bytes the `json!` it replaced did.
+
+    use super::CampaignsScheduled;
+
+    #[test]
+    fn a_schedule_answers_its_id_and_moment() {
+        let answer = CampaignsScheduled {
+            id: "01J0000000000000000000000P".to_owned(),
+            effective_at_ms: 1_700_000_000_000,
+        };
+        assert_eq!(
+            serde_json::to_value(answer).expect("json"),
+            serde_json::json!({ "id": "01J0000000000000000000000P", "effective_at_ms": 1_700_000_000_000_i64 })
+        );
+    }
 }
