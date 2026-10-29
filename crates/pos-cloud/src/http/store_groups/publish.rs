@@ -23,7 +23,7 @@ use super::batch::{
 };
 use super::batch_node::{BatchNode, BatchNodePlan};
 use super::{StoreGroupState, store_group_error_response};
-use crate::auth::admin::AdminStore;
+use crate::auth::admin::{AdminContext, AdminStore};
 use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::ConfigTreeStore;
 use crate::http::{not_found, registry_error_response};
@@ -36,9 +36,12 @@ use crate::store_groups::{
 #[utoipa::path(
     post,
     path = "/admin/store-groups/{group_id}/publish",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.config.publish"))),
     params(("group_id" = String, Path, description = "The cohort to publish to (a 26-character ULID)")),
+    request_body(content = PublishToStoreGroupRequest, content_type = "application/json"),
     responses(
-        (status = 200, description = "The batch ran and every member has an outcome — `applied`, \
+        (status = 200, body = BatchReport, description = "The batch ran and every member has an outcome — `applied`, \
                                       `skipped` or `failed`. A `200` does **not** mean every store \
                                       succeeded: a batch is deliberately not atomic (ADR-0122 §5), \
                                       and the per-store report is the answer"),
@@ -85,97 +88,182 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    let (tenant_id, group_id) =
-        match parse_ulid_fields([("tenant_id", &request.tenant_id), ("group_id", &group_id)]) {
-            Ok([tenant_id, group_id]) => (TenantId::new(tenant_id), StoreGroupId::new(group_id)),
-            Err(refusal) => return refusal,
-        };
+    let read = match read_batch_request(&state, &group_id, &request) {
+        Ok(read) => read,
+        Err(refusal) => return refusal,
+    };
+    let members = match publishable_membership(&state.groups, read.tenant_id, read.group_id).await {
+        Ok(members) => members,
+        Err(refusal) => return refusal,
+    };
+    // Compile the instruction once, before anything is written. A refusal here is the request's
+    // own — an unknown flag, a menu that will not compile — and would be the answer at every
+    // member, so it refuses the batch rather than being recorded 200 times.
+    let plan = match read.node.plan(read.tenant_id, read.arguments).await {
+        Ok(plan) => plan,
+        Err(refusal) => return refusal,
+    };
+    let (statuses, batch) = match open_batch(&state, &context, &read).await {
+        Ok(opened) => opened,
+        Err(refusal) => return refusal,
+    };
+    let report = match run_batch(
+        &state,
+        plan.as_ref(),
+        read.node,
+        &batch,
+        &members,
+        &statuses,
+    )
+    .await
+    {
+        Ok(report) => report,
+        Err(refusal) => return refusal,
+    };
+    record_batch_publish(&state, &context, &batch, read.node, plan.summary(), &report).await;
+    (StatusCode::OK, Json(report)).into_response()
+}
+
+/// What a batch publish reads from its request: the tenant, the group, the node and its arguments.
+struct BatchRequest<'a> {
+    tenant_id: TenantId,
+    group_id: StoreGroupId,
+    node: &'a Arc<dyn BatchNode>,
+    arguments: &'a serde_json::Value,
+}
+
+/// The ids, then the node, refused in that order.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it is the refusal the caller returns"
+)]
+fn read_batch_request<'a, Grp, Reg, Cfg, A, C>(
+    state: &'a StoreGroupState<Grp, Reg, Cfg, A, C>,
+    group_id: &str,
+    request: &'a PublishToStoreGroupRequest,
+) -> Result<BatchRequest<'a>, Response> {
+    let [tenant_id, group_id] =
+        parse_ulid_fields([("tenant_id", &request.tenant_id), ("group_id", group_id)])?;
     let Some(node) = state
         .nodes
         .iter()
         .find(|candidate| candidate.key() == request.node)
     else {
-        return unknown_batch_node(&state.nodes, &request.node);
+        return Err(unknown_batch_node(&state.nodes, &request.node));
     };
+    Ok(BatchRequest {
+        tenant_id: TenantId::new(tenant_id),
+        group_id: StoreGroupId::new(group_id),
+        node,
+        arguments: &request.arguments,
+    })
+}
 
-    let members = match publishable_membership(&state.groups, tenant_id, group_id).await {
-        Ok(members) => members,
-        Err(refusal) => return refusal,
-    };
-
-    // Compile the instruction once, before anything is written. A refusal here is the request's
-    // own — an unknown flag, a menu that will not compile — and would be the answer at every
-    // member, so it refuses the batch rather than being recorded 200 times.
-    let plan = match node.plan(tenant_id, &request.arguments).await {
-        Ok(plan) => plan,
-        Err(refusal) => return refusal,
-    };
-
-    // One registry read for the whole batch. The alternative — a read per member — turns the
-    // protective check into the batch's dominant cost at the 200-store cap.
-    let statuses = match state.registry.list_stores(tenant_id).await {
+/// Reads every store's status, then mints and records the batch, before any member is written.
+///
+/// One registry read for the whole batch. The alternative — a read per member — turns the
+/// protective check into the batch's dominant cost at the 200-store cap.
+async fn open_batch<Grp, Reg, Cfg, A, C>(
+    state: &StoreGroupState<Grp, Reg, Cfg, A, C>,
+    context: &AdminContext,
+    read: &BatchRequest<'_>,
+) -> Result<
+    (
+        std::collections::BTreeMap<StoreId, EntityStatus>,
+        ConfigBatch,
+    ),
+    Response,
+>
+where
+    Grp: StoreGroupStore,
+    Reg: RegistryStore,
+    C: ClockSource,
+{
+    let statuses = match state.registry.list_stores(read.tenant_id).await {
         Ok(rows) => rows
             .into_iter()
             .map(|row| (row.record.store_id, row.record.status))
             .collect::<std::collections::BTreeMap<_, _>>(),
-        Err(error) => return registry_error_response(&error),
+        Err(error) => return Err(registry_error_response(&error)),
     };
-
     let started_at_ms = state.clock.now().as_milliseconds_since_epoch();
     let Some(batch_id) = mint_ulid(started_at_ms).map(ConfigBatchId::new) else {
-        return service_unavailable("store groups");
+        return Err(service_unavailable("store groups"));
     };
     let batch = ConfigBatch {
         batch_id,
-        tenant_id,
-        group_id,
-        node: node.key().to_owned(),
-        arguments: request.arguments.clone(),
+        tenant_id: read.tenant_id,
+        group_id: read.group_id,
+        node: read.node.key().to_owned(),
+        arguments: read.arguments.clone(),
         actor_email: context.admin.email.clone(),
         started_at_ms,
         finished_at_ms: None,
     };
     if let Err(error) = state.groups.start_batch(&batch).await {
-        return store_group_error_response(&error);
+        return Err(store_group_error_response(&error));
     }
+    Ok((statuses, batch))
+}
 
-    let results =
-        match fan_out_batch(&state, plan.as_ref(), node, &batch, &members, &statuses).await {
-            Ok(results) => results,
-            Err(refusal) => return refusal,
-        };
-
+/// Publishes to every member, closes the batch, and answers the whole report.
+async fn run_batch<Grp, Reg, Cfg, A, C>(
+    state: &StoreGroupState<Grp, Reg, Cfg, A, C>,
+    plan: &dyn BatchNodePlan,
+    node: &Arc<dyn BatchNode>,
+    batch: &ConfigBatch,
+    members: &[StoreId],
+    statuses: &std::collections::BTreeMap<StoreId, EntityStatus>,
+) -> Result<BatchReport, Response>
+where
+    Grp: StoreGroupStore + Clone + Send + Sync + 'static,
+    Reg: RegistryStore + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let results = fan_out_batch(state, plan, node, batch, members, statuses).await?;
     let finished_at_ms = state.clock.now().as_milliseconds_since_epoch();
-    if let Err(error) = state
+    state
         .groups
-        .finish_batch(tenant_id, batch_id, finished_at_ms)
+        .finish_batch(batch.tenant_id, batch.batch_id, finished_at_ms)
         .await
-    {
-        return store_group_error_response(&error);
-    }
+        .map_err(|error| store_group_error_response(&error))?;
+    Ok(batch_report(batch, Some(finished_at_ms), &results))
+}
 
-    let report = batch_report(&batch, Some(finished_at_ms), &results);
+/// Records the batch against its group: its id, the node and the node's own audit action, what the
+/// instruction was, and how many members applied, skipped and failed.
+async fn record_batch_publish<Grp, Reg, Cfg, A, C>(
+    state: &StoreGroupState<Grp, Reg, Cfg, A, C>,
+    context: &AdminContext,
+    batch: &ConfigBatch,
+    node: &Arc<dyn BatchNode>,
+    summary: serde_json::Value,
+    report: &BatchReport,
+) where
+    C: ClockSource,
+{
     audit_action(
         &state.audit,
         &state.clock,
-        &context,
-        Some(tenant_id),
+        context,
+        Some(batch.tenant_id),
         "store_group.publish",
         "store_group",
-        &group_id.to_string(),
+        &batch.group_id.to_string(),
         None,
         Some(serde_json::json!({
-            "batch_id": batch_id.to_string(),
+            "batch_id": batch.batch_id.to_string(),
             "node": node.key(),
             "audit_action": node.audit_action(),
-            "summary": plan.summary(),
+            "summary": summary,
             "applied": report.applied,
             "skipped": report.skipped,
             "failed": report.failed,
         })),
     )
     .await;
-    (StatusCode::OK, Json(report)).into_response()
 }
 
 /// Walks a cohort's membership, publishing to each member and recording what happened.
@@ -323,7 +411,7 @@ pub(super) fn batch_report(
             .iter()
             .map(|result| BatchResultView {
                 store_id: result.store_id.to_string(),
-                outcome: result.outcome.as_wire().to_owned(),
+                outcome: result.outcome,
                 detail: result.detail.clone(),
                 config_version_id: result.version_id.clone(),
                 at_ms: result.at_ms,

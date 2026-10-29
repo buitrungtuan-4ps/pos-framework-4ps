@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! A tenant's vendor connections over PostgreSQL
-//! ([ADR-0153](../../../docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)).
+//! ([ADR-0153](../../../../docs/adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)).
 //!
 //! One row per `(tenant, entity_id)`; the `doc` column is the whole connection record as `jsonb`
 //! (`integration_connections`, migration 0070), its secret fields already sealed by `pos-cloud`.

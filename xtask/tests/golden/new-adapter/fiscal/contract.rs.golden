@@ -1,0 +1,38 @@
+// Copyright (c) 2026 Pizza 4P's. All rights reserved.
+// Proprietary and confidential. Internal use only. See LICENSE.
+
+//! `fiscal-sandbox` against the shared `Fiscalization` contract suite.
+//!
+//! `disconnect` and `reconnect` are no-ops: the sandbox contacts no authority, so it is always in
+//! the disconnected state the suite tests. A provider adapter's harness flips a flag on its
+//! transport instead, and the same suite then checks the same obligations against something that
+//! can be unreachable.
+
+use fiscal_sandbox::SandboxEInvoice;
+use pos_contract_tests::harness::{FiscalizationHarness, Setup};
+use pos_fakes::executor::run_ready;
+use pos_proto::{StoreId, Ulid};
+
+struct Harness;
+
+impl FiscalizationHarness for Harness {
+    type Fiscal = SandboxEInvoice;
+
+    async fn fresh(&self) -> Setup<Self::Fiscal> {
+        Ok(SandboxEInvoice::new())
+    }
+
+    async fn disconnect(&self, _fiscal: &Self::Fiscal) -> Setup<()> {
+        Ok(())
+    }
+
+    async fn reconnect(&self, _fiscal: &Self::Fiscal) -> Setup<()> {
+        Ok(())
+    }
+
+    fn store_id(&self) -> StoreId {
+        StoreId::new(Ulid::from_u128(1))
+    }
+}
+
+pos_contract_tests::fiscalization_suite!(Harness, run_ready);

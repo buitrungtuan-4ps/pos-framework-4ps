@@ -6,7 +6,7 @@
 //! The Windows installer waits for `POS_EDGE_PAIRING_FILE` to appear before it prints the pairing
 //! URL and opens `/setup`, so the file must not exist before the port is bound. A box that cannot
 //! bind must not write one at all: it would be a code for a server that is already exiting, printed
-//! to a technician in place of the log line that says why.
+//! to a technician in place of the log line that says why. A box that binds writes one.
 //!
 //! This runs the real binary, because the order that matters is inside `serve_until`, between
 //! opening the store and handing the listener to axum, and no seam short of the process shows it.
@@ -81,4 +81,63 @@ async fn a_box_that_cannot_bind_writes_no_pairing_file() {
          print as the URL of a server that is exiting"
     );
     drop(taken);
+}
+
+#[tokio::test]
+async fn a_box_that_binds_writes_its_pairing_file() {
+    // A port that was free a moment ago, released for the edge to bind.
+    let port = {
+        let probe = TcpListener::bind("127.0.0.1:0").expect("a free port");
+        probe.local_addr().expect("its address").port()
+    };
+    let dir = tempfile::tempdir().expect("a scratch directory");
+    let config = dir.path().join("config.toml");
+    let pairing = dir.path().join("pairing-url.txt");
+    // LAN-only, so nothing here reaches for a keyring or a cloud.
+    std::fs::write(
+        &config,
+        format!(
+            "store_id = \"01M2MQ2BH6PKH6W4SEN2YVP9VT\"\n\
+             bind = \"127.0.0.1:{port}\"\n\
+             store_path = '{}'\n",
+            dir.path().join("store.sqlite").display()
+        ),
+    )
+    .expect("write the config");
+
+    let mut edge = Command::new(pos_edge_bin())
+        .env("POS_EDGE_CONFIG", &config)
+        .env("POS_EDGE_PAIRING_FILE", &pairing)
+        .env("RUST_LOG", "warn")
+        .current_dir(dir.path())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start pos-edge");
+
+    // Bounded, so a regression that never announces fails here rather than holding the job.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    while !pairing.exists() {
+        if tokio::time::Instant::now() > deadline
+            || edge.try_wait().expect("poll pos-edge").is_some()
+        {
+            let _killed = edge.kill();
+            panic!("pos-edge bound port {port} but wrote no pairing file within 60 seconds");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let _killed = edge.kill();
+    let _reaped = edge.wait();
+    // The file may be caught between being created and being written; what it says once written
+    // is a code to pair with.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut written = String::new();
+    while !written.contains("pair?code=") && tokio::time::Instant::now() < deadline {
+        written = std::fs::read_to_string(&pairing).unwrap_or_default();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        written.contains("pair?code="),
+        "the pairing file names a code to pair with: {written:?}"
+    );
 }

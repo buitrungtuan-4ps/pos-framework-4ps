@@ -68,8 +68,28 @@ impl PartialEq for ConfigDocument {
     }
 }
 
+/// A configuration document's schema: a JSON object the port carries uninterpreted, keyed by
+/// config node, so the schema names no node (ADR-0180 D-T3).
+#[cfg(feature = "openapi")]
+impl utoipa::PartialSchema for ConfigDocument {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        utoipa::openapi::ObjectBuilder::new()
+            .schema_type(utoipa::openapi::schema::Type::Object)
+            .description(Some(
+                "Free-form JSON: a configuration document, or a patch to one, keyed by config node. \
+                 The port carries it uninterpreted, so a store keeps keys it does not know. Each \
+                 node's shape is its `pos-proto` type",
+            ))
+            .into()
+    }
+}
+
+#[cfg(feature = "openapi")]
+impl utoipa::ToSchema for ConfigDocument {}
+
 /// A complete configuration document at a version.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct ConfigSnapshot {
     /// Which version this is.
@@ -87,6 +107,7 @@ pub struct ConfigSnapshot {
 /// configuration is a tree and an out-of-order patch produces a document nobody
 /// authored.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct ConfigDelta {
     /// The version this delta expects the store to be holding.
@@ -101,6 +122,7 @@ pub struct ConfigDelta {
 
 /// What the cloud sent.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(tag = "update_kind", rename_all = "snake_case")]
 pub enum ConfigUpdate {
     /// Replace everything. Always applicable, whatever version the store holds.
@@ -230,5 +252,83 @@ mod tests {
             patch: document(r#"{"service_charge_enabled":false}"#),
         };
         assert_ne!(delta.from_config_version_id, delta.to_config_version_id);
+    }
+
+    /// Each update serialises as the `oneOf` branch its `update_kind` names: the same fields, all
+    /// of them required (ADR-0180 D-T2).
+    #[cfg(feature = "openapi")]
+    #[test]
+    fn each_update_is_the_schema_branch_its_kind_names() {
+        use serde_json::Value;
+        use utoipa::PartialSchema as _;
+
+        /// The names a JSON list or object holds, sorted.
+        fn names(value: Option<&Value>) -> Vec<String> {
+            let mut names: Vec<String> = match value {
+                Some(Value::Object(object)) => object.keys().cloned().collect(),
+                Some(Value::Array(array)) => array
+                    .iter()
+                    .filter_map(|name| name.as_str().map(str::to_owned))
+                    .collect(),
+                _ => Vec::new(),
+            };
+            names.sort();
+            names
+        }
+
+        let schema = serde_json::to_value(ConfigUpdate::schema()).expect("schema");
+        let branches = schema
+            .pointer("/oneOf")
+            .and_then(Value::as_array)
+            .expect("a oneOf");
+        let store_id = StoreId::new(Ulid::from_u128(3));
+        let updates = [
+            ConfigUpdate::Snapshot(ConfigSnapshot {
+                config_version_id: ConfigVersionId::new(Ulid::from_u128(9)),
+                store_id,
+                document: document(r#"{"locale":{}}"#),
+            }),
+            ConfigUpdate::Delta(ConfigDelta {
+                from_config_version_id: ConfigVersionId::new(Ulid::from_u128(9)),
+                to_config_version_id: ConfigVersionId::new(Ulid::from_u128(10)),
+                store_id,
+                patch: document(r#"{"locale":null}"#),
+            }),
+        ];
+        for update in updates {
+            let sent = serde_json::to_value(&update).expect("serialise");
+            let kind = sent
+                .pointer("/update_kind")
+                .cloned()
+                .expect("an update_kind");
+            let branch = branches
+                .iter()
+                .find(|branch| {
+                    branch.pointer("/allOf/1/properties/update_kind/enum/0") == Some(&kind)
+                })
+                .unwrap_or_else(|| panic!("no branch for {kind}"));
+            let named = branch
+                .pointer("/allOf/0/$ref")
+                .and_then(Value::as_str)
+                .expect("a $ref");
+            let body = match named.rsplit('/').next() {
+                Some("ConfigSnapshot") => ConfigSnapshot::schema(),
+                Some("ConfigDelta") => ConfigDelta::schema(),
+                _ => panic!("{kind}: an unexpected branch {named}"),
+            };
+            let body = serde_json::to_value(body).expect("schema");
+            let mut sent_names = names(Some(&sent));
+            sent_names.retain(|name| name != "update_kind");
+            assert_eq!(
+                sent_names,
+                names(body.get("properties")),
+                "{kind}: the fields sent"
+            );
+            assert_eq!(
+                sent_names,
+                names(body.get("required")),
+                "{kind}: always sent"
+            );
+        }
     }
 }

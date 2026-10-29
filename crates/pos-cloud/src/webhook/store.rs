@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The seam that persists webhook endpoints ([ADR-0032](../../../docs/adr/0032-webhooks.md)).
+//! The seam that persists webhook endpoints ([ADR-0032](../../../../docs/adr/0032-webhooks.md)).
 //!
 //! The delivery engine ([`super::dispatch`]) holds an endpoint as in-memory runtime state; this is
 //! where the durable facts of a subscription live — which store it follows, where to `POST`, the
@@ -9,7 +9,7 @@
 //! `store-postgres`; a fake in tests.
 //!
 //! The signing secret **is** stored (unlike an API-key secret, which the cloud stores only as a hash,
-//! [ADR-0037](../../../docs/adr/0037-api-keys.md)): the cloud signs each outgoing delivery with it, so
+//! [ADR-0037](../../../../docs/adr/0037-api-keys.md)): the cloud signs each outgoing delivery with it, so
 //! it must be recoverable. It is shown to the tenant once at registration and kept server-side
 //! thereafter — the same posture a webhook signing secret has anywhere.
 
@@ -58,7 +58,7 @@ pub struct PersistedWebhook {
     pub tenant_id: TenantId,
     /// The store whose event log this endpoint follows.
     pub store_id: StoreId,
-    /// The vetted destination URL (re-vetted before each delivery, [ADR-0032](../../../docs/adr/0032-webhooks.md)).
+    /// The vetted destination URL (re-vetted before each delivery, [ADR-0032](../../../../docs/adr/0032-webhooks.md)).
     pub url: String,
     /// The per-endpoint HMAC signing secret the cloud signs deliveries with.
     pub secret: SigningSecret,
@@ -69,7 +69,7 @@ pub struct PersistedWebhook {
 }
 
 /// An endpoint's metadata for a listing — everything but the secret, which never leaves the store.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
 pub struct WebhookSummary {
     /// The endpoint id (a ULID string).
     pub id: String,
@@ -78,6 +78,7 @@ pub struct WebhookSummary {
     /// The destination URL.
     pub url: String,
     /// The cursor position (an event-id ULID string), or `null` if nothing has been delivered.
+    #[schema(required = true)]
     pub cursor: Option<String>,
     /// Whether the endpoint is auto-disabled.
     pub disabled: bool,

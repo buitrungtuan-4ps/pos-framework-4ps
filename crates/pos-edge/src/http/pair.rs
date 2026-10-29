@@ -13,13 +13,14 @@
 //! # Two different gates, on purpose
 //!
 //! `POST /api/pair` is **ungated** — it has to be, because the device presenting a code holds no
-//! credential yet. [`this_device`] and [`devices`] sit behind the paired-device gate alone.
-//! [`this_device`] is POS Station's "is my token still accepted" probe, asked with nobody signed in,
-//! which the signed-in gate would answer `403`. [`devices`] stays there because a Station older than
-//! that probe reads the list as its probe instead, until none is left in the fleet. [`mint`] and
-//! [`revoke`] sit behind **both** gates: a paired device *and* a signed-in person whose role grants
-//! `admin.device.manage`, because admitting a device and retiring one are the same managerial act and
-//! the store has a published roster to check that against
+//! credential yet. [`this_device`] and [`paired_devices`] sit behind the paired-device gate alone.
+//! [`this_device`] is POS Station's "is my token still accepted" probe, asked with nobody signed
+//! in, which the signed-in gate would answer `403`. [`paired_devices`] stays there because a
+//! Station older than that probe reads the list as its probe instead, until none is left in the
+//! fleet. [`mint_pairing_code`] and [`revoke_paired_device`] sit behind **both** gates: a paired
+//! device *and* a signed-in person whose role grants `admin.device.manage`, because admitting a
+//! device and retiring one are the same managerial act and the store has a published roster to
+//! check that against
 //! ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
 //! decision 8). See [`manager_routes`].
 
@@ -47,6 +48,7 @@ use crate::state::AppState;
 
 /// A device presenting a pairing code.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct PairRequest {
     /// The six-digit code the operator read from the edge.
     code: String,
@@ -54,11 +56,31 @@ pub(crate) struct PairRequest {
 
 /// The token issued to a successfully paired device.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct PairAccepted {
     /// The opaque bearer token the device presents on later requests.
     device_token: String,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/pair",
+    security(),
+    extensions(("x-public-reason" = json!("a pairing code a manager minted, spent once (ADR-0030)"))),
+    request_body(
+        content = PairRequest, description = "`code`, the six-digit pairing code a manager minted",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = PairAccepted, description = "Paired: the body carries `device_token`, the bearer token the device presents \
+                                      from now on"),
+        (status = 400, description = "The code is not six digits"),
+        (status = 403, description = "The code is unknown or has expired"),
+        (status = 429, description = "Too many attempts: wait and try again"),
+        (status = 503, description = "The pairing could not be recorded"),
+    ),
+    tag = "pairing",
+))]
 /// Redeems a pairing code.
 pub(crate) async fn pair(
     State(state): State<AppState>,
@@ -112,6 +134,7 @@ pub(crate) async fn pair(
 
 /// The state of this store's device pairing, for the operator console.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct PairingState {
     /// How many devices the store has admitted.
     devices: usize,
@@ -124,6 +147,7 @@ pub(crate) struct PairingState {
 
 /// One paired device as the console sees it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct PairedDeviceView {
     /// The device id — what `POST /api/pair/revoke` takes back.
     device_id: String,
@@ -135,6 +159,17 @@ pub(crate) struct PairedDeviceView {
     this_device: bool,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/pair/devices",
+    security(("till_session" = [])),
+    responses(
+        (status = 200, body = PairingState, description = "How many devices are paired, whether pairings survive a restart, and each \
+                                      device's id, when it paired and whether it is the caller. No token digest"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+    ),
+    tag = "pairing",
+))]
 /// `GET /api/pair/devices` — which devices are paired, when each paired, and whether that survives a
 /// restart.
 ///
@@ -147,7 +182,7 @@ pub(crate) struct PairedDeviceView {
 ///
 /// The token digest is never returned: it correlates a device across restarts and buys the console
 /// nothing the id does not.
-pub(crate) async fn devices(
+pub(crate) async fn paired_devices(
     State(state): State<AppState>,
     caller: Option<Extension<DeviceId>>,
 ) -> Response {
@@ -174,6 +209,7 @@ pub(crate) async fn devices(
 
 /// The calling device, as [`this_device`] answers for it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct ThisDevice {
     /// Always `true`. A token the edge does not accept never gets this far: it is refused `401`.
     /// Carried so the answer says what it means, and so a caller can tell it apart from the
@@ -185,15 +221,25 @@ pub(crate) struct ThisDevice {
     pair_time: Timestamp,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/pair/this_device",
+    security(("till_session" = [])),
+    responses(
+        (status = 200, body = ThisDevice, description = "The calling token is accepted: `accepted`, its `device_id` and `pair_time`"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+    ),
+    tag = "pairing",
+))]
 /// `GET /api/pair/this_device` — whether the calling token is still accepted, and which device it
 /// belongs to.
 ///
 /// POS Station's token probe
 /// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
 /// decision 8, step 1). It answers for the calling token **alone**: its device id and when it
-/// paired, and nothing about any other device. [`devices`] answered the same question by handing
-/// every paired device the id of every other, which a probe has no use for and which decision 8
-/// stops once no Station that reads the list is left.
+/// paired, and nothing about any other device. [`paired_devices`] answered the same question by
+/// handing every paired device the id of every other, which a probe has no use for and which
+/// decision 8 stops once no Station that reads the list is left.
 ///
 /// Behind the paired-device gate alone, for the reason the list is: Station asks with nobody signed
 /// in. The route never reaches the signed-in gate, which is the only code that reads or touches a
@@ -218,16 +264,36 @@ pub(crate) async fn this_device(
     .into_response()
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/pair/revoke",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("admin.device.manage"))),
+    request_body(
+        content = RevokeRequest, description = "Optional `device_id`, the device to retire. Absent retires every paired device",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 204, description = "Retired"),
+        (status = 400, description = "`device_id` is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or the \
+                                      person's role does not grant managing devices"),
+        (status = 503, description = "The device registry could not be written, so the device may still be \
+                                      paired"),
+    ),
+    tag = "pairing",
+))]
 /// `POST /api/pair/revoke` — retire one device, or every device.
 ///
-/// Behind both gates, as [`mint`] is: a paired device **and** a signed-in person whose own role
-/// grants `admin.device.manage`
+/// Behind both gates, as [`mint_pairing_code`] is: a paired device **and** a signed-in person whose
+/// own role grants `admin.device.manage`
 /// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
 /// decision 8). It used to need a paired device alone, on the reasoning that the edge had no
 /// operator identity offline; it has one now — the staff roster the cloud publishes, checked here
 /// with no network — and retiring every till in the store is too strong an act to leave to any
 /// tablet in the shop. Every retirement is still recorded in the log.
-pub(crate) async fn revoke<S>(
+pub(crate) async fn revoke_paired_device<S>(
     State(deps): State<Arc<ManagerDeps<S>>>,
     Extension(actor): Extension<Actor>,
     Json(request): Json<RevokeRequest>,
@@ -272,14 +338,15 @@ where
 
 /// Which device to retire. An absent `device_id` means every device.
 #[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct RevokeRequest {
     /// The device to retire, or `None` for all of them.
     #[serde(default)]
     device_id: Option<String>,
 }
 
-/// What [`mint`] and [`revoke`] need: the roster to check standing against, and the pairing state
-/// to mint into or retire from.
+/// What [`mint_pairing_code`] and [`revoke_paired_device`] need: the roster to check standing
+/// against, and the pairing state to mint into or retire from.
 ///
 /// Its own sub-router state rather than [`AppState`], for the reason `counter` and `print_agent`
 /// have theirs: these routes need the *application* [`Edge`] — the published roster lives on its
@@ -321,13 +388,14 @@ where
     S: EventStore + Send + Sync + 'static,
 {
     Router::new()
-        .route("/api/pair/codes", post(mint::<S>))
-        .route("/api/pair/revoke", post(revoke::<S>))
+        .route("/api/pair/codes", post(mint_pairing_code::<S>))
+        .route("/api/pair/revoke", post(revoke_paired_device::<S>))
         .with_state(Arc::new(ManagerDeps { edge, pairing }))
 }
 
 /// The minted code, and when it stops working.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct MintedCode {
     /// The six digits the next device presents. **This response body is the only place it exists** —
     /// it is not written to a file and not logged, so a caller that loses this reply mints another.
@@ -337,6 +405,22 @@ pub(crate) struct MintedCode {
     expires_at_ms: i64,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/pair/codes",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("admin.device.manage"))),
+    responses(
+        (status = 200, body = MintedCode, description = "The six-digit `code` the next device presents, replacing any live one, \
+                                      and `expires_at_ms`. This reply is the only place the code exists: it \
+                                      is neither written to a file nor logged"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or the \
+                                      person's role does not grant managing devices"),
+        (status = 503, description = "The OS entropy source is unavailable, so no code was minted"),
+    ),
+    tag = "pairing",
+))]
 /// Mints the code for the next device, replacing whatever code was live.
 ///
 /// # Why this route exists
@@ -367,7 +451,7 @@ pub(crate) struct MintedCode {
 /// from is named on the cloud-bound `device.admission.granted` event, and the **employee** signed in
 /// on it is written to the store's own `paired_devices` row and goes no further. Both facts are
 /// known only here, at mint time — the tablet that redeems presents six digits and nothing else.
-async fn mint<S>(
+pub(crate) async fn mint_pairing_code<S>(
     State(deps): State<Arc<ManagerDeps<S>>>,
     Extension(actor): Extension<Actor>,
 ) -> Response

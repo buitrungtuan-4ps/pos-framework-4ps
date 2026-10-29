@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use pos_cloud::audit::NoopAuditRecorder;
+use pos_cloud::audit::{AuditRecorder, AuditSink, NoopAuditRecorder};
 use pos_cloud::auth::admin::AdminRole;
 use pos_cloud::auth::apikey::Scope;
 use pos_cloud::release_source::{
@@ -19,10 +19,10 @@ use pos_fakes::FakeStore;
 use tower::ServiceExt;
 
 use crate::{
-    FakeAdmin, FakeBlobs, FakeConfigTrees, FakeKeys, FakeOtaArtifacts, FakeRollups, FakeWebhooks,
-    TEST_TARGET, admin_cookie, app_all, artifact_body, clock, get_with_cookie, issue_store_key,
-    json_body, ota_app_hosting, post_json_bearer, post_with_cookie, provisioned_admin,
-    put_with_cookie, role_session_cookie, store_id, tenant,
+    FakeAdmin, FakeAudit, FakeBlobs, FakeConfigTrees, FakeKeys, FakeOtaArtifacts, FakeRollups,
+    FakeWebhooks, TEST_TARGET, admin_cookie, app_all, artifact_body, clock, get_with_cookie,
+    issue_store_key, json_body, ota_app_hosting, post_json_bearer, post_with_cookie,
+    provisioned_admin, put_with_cookie, role_session_cookie, store_id, tenant,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -31,7 +31,7 @@ use crate::{
 
 /// A well-formed minisign signature line: the 74-byte blob (`algorithm ∥ key_id ∥ ed25519`) as
 /// base64, which is what line 2 of a `.minisig` holds. The bytes are arbitrary — the cloud never
-/// verifies, it only checks the shape ([ADR-0088](../../docs/adr/0088-ota-artifact-hosting.md)).
+/// verifies, it only checks the shape ([ADR-0088](../../../../docs/adr/0088-ota-artifact-hosting.md)).
 fn minisig_line() -> String {
     use base64::Engine as _;
     base64::engine::general_purpose::STANDARD.encode(minisig_bytes())
@@ -62,6 +62,18 @@ fn release_app_with_source<S>(admin: FakeAdmin, source: Option<S>) -> (axum::Rou
 where
     S: ReleaseSource + Clone + Send + Sync + 'static,
 {
+    release_app_recording(admin, source, Arc::new(NoopAuditRecorder))
+}
+
+/// [`release_app_with_source`], with the fetch route recording to `audit`.
+fn release_app_recording<S>(
+    admin: FakeAdmin,
+    source: Option<S>,
+    audit: Arc<dyn AuditRecorder>,
+) -> (axum::Router, FakeKeys)
+where
+    S: ReleaseSource + Clone + Send + Sync + 'static,
+{
     let blobs = FakeBlobs::default();
     let releases = FakeOtaArtifacts::default();
     let keys = FakeKeys::default();
@@ -86,7 +98,7 @@ where
             releases.clone(),
             admin,
             clock(),
-            Arc::new(NoopAuditRecorder),
+            audit,
             source,
         ))
         .merge(http::ota_artifact_router(
@@ -821,4 +833,91 @@ async fn promoting_a_version_the_cloud_does_not_host_is_refused() {
     assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
     let body = json_body(refused).await;
     assert_eq!(body["error"]["details"][0]["field"], "target_version");
+}
+
+// --- pinned before `admin_fetch_ota_release` is split (ADR-0170 decision 7) ---------------------
+
+/// A fetch answers the release under its trimmed spelling, each artifact it hosted, and records the
+/// same artifacts with the forge's tag, against the release and no tenant.
+#[tokio::test]
+async fn a_fetch_answers_and_records_each_artifact_it_hosted() {
+    let audit = FakeAudit::default();
+    let (router, _keys) = release_app_recording(
+        provisioned_admin(),
+        Some(FakeReleaseSource::holding(
+            "v1.6.0",
+            &[TEST_TARGET],
+            b"fetched",
+        )),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let cookie = admin_cookie(&router).await;
+    let fetched = router
+        .oneshot(fetch_request(" 1.6.0 ", &cookie))
+        .await
+        .expect("route the fetch");
+    assert_eq!(fetched.status(), StatusCode::OK);
+    let body = json_body(fetched).await;
+    assert_eq!(body["release"], "1.6.0");
+    let artifact = &body["artifacts"][0];
+    assert_eq!(artifact["arch"], TEST_TARGET);
+    assert_eq!(artifact["size_bytes"], 7);
+    assert_eq!(artifact["outcome"], "recorded");
+    assert_eq!(
+        artifact["asset"],
+        format!("pos-edge-v1.6.0-{TEST_TARGET}.bin")
+    );
+    assert_eq!(artifact["sha256"].as_str().map(str::len), Some(64));
+
+    let entries = audit.entries.lock().expect("lock").clone();
+    let [entry] = entries.as_slice() else {
+        panic!("one audit entry: {entries:?}");
+    };
+    assert_eq!(entry.action, "release.fetch");
+    assert_eq!(entry.entity_type, "release_artifact");
+    assert_eq!(entry.entity_id, "1.6.0");
+    assert_eq!(entry.tenant_id, None);
+    assert_eq!(
+        entry.after,
+        Some(serde_json::json!({ "tag": "v1.6.0", "artifacts": body["artifacts"] }))
+    );
+}
+
+/// The source is checked before the release is read, and a release that could not be a storage
+/// key is refused before the source is asked; neither records anything.
+#[tokio::test]
+async fn a_fetch_is_refused_for_a_missing_source_before_a_bad_release() {
+    let audit = FakeAudit::default();
+    let (router, _keys) = release_app_recording(
+        provisioned_admin(),
+        None::<FakeReleaseSource>,
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let cookie = admin_cookie(&router).await;
+    let unconfigured = router
+        .oneshot(fetch_request("../etc", &cookie))
+        .await
+        .expect("route the fetch");
+    assert_eq!(unconfigured.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        json_body(unconfigured).await["error"]["details"][0]["field"],
+        "release_source"
+    );
+
+    let (router, _keys) = release_app_recording(
+        provisioned_admin(),
+        Some(FakeReleaseSource::holding("v1.6.0", &[TEST_TARGET], b"x")),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let cookie = admin_cookie(&router).await;
+    let refused = router
+        .oneshot(fetch_request("../etc", &cookie))
+        .await
+        .expect("route the fetch");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(refused).await["error"]["details"][0]["field"],
+        "release"
+    );
+    assert!(audit.entries.lock().expect("lock").is_empty());
 }

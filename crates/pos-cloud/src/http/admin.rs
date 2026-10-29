@@ -34,13 +34,27 @@ pub(crate) use security::{
 };
 pub(super) use sessions::{admin_list_sessions, admin_revoke_other_sessions, admin_revoke_session};
 // The handlers the console's OpenAPI document names.
+pub(crate) use admins::{
+    __path_admin_list_admins, __path_admin_set_admin_role, __path_admin_set_admin_status,
+};
+pub(crate) use api_keys::{
+    __path_admin_create_api_key, __path_admin_list_api_keys, __path_admin_revoke_api_key,
+};
+pub(crate) use audit::__path_admin_list_audit;
 pub(crate) use auth::{
     __path_admin_login, __path_admin_logout, __path_admin_session, __path_admin_setup,
     __path_admin_whoami,
 };
+pub(crate) use invites::{
+    __path_admin_accept_invite, __path_admin_invite_admin, __path_admin_list_invites,
+    __path_admin_revoke_invite,
+};
 pub(crate) use security::{
     __path_admin_generate_recovery_codes, __path_admin_recovery_codes_status,
     __path_admin_reenrol_totp,
+};
+pub(crate) use sessions::{
+    __path_admin_list_sessions, __path_admin_revoke_other_sessions, __path_admin_revoke_session,
 };
 
 // --- Console admin management and invitations ([ADR-0067]) --------------------------------------

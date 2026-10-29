@@ -168,92 +168,12 @@ fn chain_hash(envelope: &EventEnvelope<RawPayload>, link: &ChainLink) -> ChainHa
 impl TxContext for FakeTx {
     async fn commit(self) -> Result<(), PortError> {
         let mut state = lock(&self.state);
-
-        // Check the intake key BEFORE mutating anything, so a conflict leaves the whole transaction
-        // with no effect — the same atomicity the real store gets from rolling back on the plain
-        // insert's constraint violation (ADR-0064). A committed intake row therefore always has its
-        // order, and a second order on the same key never lands.
-        if let Some((store_id, sales_channel, external_reference, _)) = &self.intake
-            && state.intake.contains_key(&(
-                *store_id,
-                sales_channel.clone(),
-                external_reference.clone(),
-            ))
-        {
-            return Err(PortError::already_exists(
-                PortName::IntakeLedger,
-                "an order already exists for this reference",
-            ));
-        }
-
+        refuse_a_taken_intake_key(&state, self.intake.as_ref())?;
         for envelope in self.events {
-            let store_id = envelope.store_id;
-            if state
-                .events
-                .get(&store_id)
-                .is_some_and(|stored| stored.contains_key(&envelope.event_id))
-            {
-                // Idempotent by identifier, and the *stored* copy wins. Not compared: a byte
-                // difference at the same identifier is a sender bug a store cannot fix, and silently
-                // preferring the newer one would make the log depend on delivery order.
-                continue;
-            }
-
-            // Chain it, as the real store does (ADR-0131 decision 5: the fakes are held to the
-            // contract too). A fake that answered "no chain" would let the edge's own tests pass
-            // while the anchor they are supposed to exercise never fired — which is precisely the
-            // shape of failure this whole line of work exists to stop.
-            //
-            // Only a record that actually lands takes a sequence number, so a replayed event does
-            // not leave a gap. The `continue` above is what enforces that here.
-            let head = state
-                .chain
-                .entry(store_id)
-                .or_insert_with(ChainAnchorState::empty);
-            let link = head.next_link();
-            let hash = chain_hash(&envelope, &link);
-            let envelope = EventEnvelope {
-                chain: Some(link.clone()),
-                ..envelope
-            };
-            *head = ChainAnchorState {
-                seq: link.seq,
-                head: hash,
-            };
-
-            state
-                .events
-                .entry(store_id)
-                .or_default()
-                .insert(envelope.event_id, envelope.clone());
-
-            // No depth check, as in the real store: a deep outbox is a store that has been offline
-            // for a while, and it keeps selling (ADR-0137).
-            state.next_position = state.next_position.saturating_add(1);
-            let position = OutboxPosition::new(state.next_position);
-            state
-                .outbox
-                .entry(store_id)
-                .or_default()
-                .push(OutboxRecord { position, envelope });
+            land(&mut state, envelope);
         }
-
         if let Some(update) = self.config {
-            let snapshot = match update {
-                ConfigUpdate::Snapshot(snapshot) => snapshot,
-                ConfigUpdate::Delta(delta) => {
-                    // A delta's target document is its patch: the fake does not merge, because the
-                    // patch format is P7's decision and inventing one here would make the fake
-                    // disagree with the real store in a way no case could catch.
-                    ConfigSnapshot {
-                        config_version_id: delta.to_config_version_id,
-                        store_id: delta.store_id,
-                        document: delta.patch,
-                    }
-                }
-            };
-            state.current.insert(snapshot.store_id, snapshot.clone());
-            state.last_known_good.insert(snapshot.store_id, snapshot);
+            apply_config(&mut state, update);
         }
 
         if let Some((store_id, sales_channel, external_reference, record)) = self.intake {
@@ -275,6 +195,101 @@ impl TxContext for FakeTx {
         // where the writes were.
         Ok(())
     }
+}
+
+/// Checks the intake key BEFORE anything is mutated, so a conflict leaves the whole transaction
+/// with no effect — the same atomicity the real store gets from rolling back on the plain
+/// insert's constraint violation (ADR-0064). A committed intake row therefore always has its
+/// order, and a second order on the same key never lands.
+fn refuse_a_taken_intake_key(
+    state: &StoreState,
+    intake: Option<&(StoreId, String, String, IntakeRecord)>,
+) -> Result<(), PortError> {
+    if let Some((store_id, sales_channel, external_reference, _)) = intake
+        && state.intake.contains_key(&(
+            *store_id,
+            sales_channel.clone(),
+            external_reference.clone(),
+        ))
+    {
+        return Err(PortError::already_exists(
+            PortName::IntakeLedger,
+            "an order already exists for this reference",
+        ));
+    }
+    Ok(())
+}
+
+/// Lands one committed event: chained, stored, and queued in the outbox.
+fn land(state: &mut StoreState, envelope: EventEnvelope<RawPayload>) {
+    let store_id = envelope.store_id;
+    if state
+        .events
+        .get(&store_id)
+        .is_some_and(|stored| stored.contains_key(&envelope.event_id))
+    {
+        // Idempotent by identifier, and the *stored* copy wins. Not compared: a byte
+        // difference at the same identifier is a sender bug a store cannot fix, and silently
+        // preferring the newer one would make the log depend on delivery order.
+        return;
+    }
+
+    // Chain it, as the real store does (ADR-0131 decision 5: the fakes are held to the
+    // contract too). A fake that answered "no chain" would let the edge's own tests pass
+    // while the anchor they are supposed to exercise never fired — which is precisely the
+    // shape of failure this whole line of work exists to stop.
+    //
+    // Only a record that actually lands takes a sequence number, so a replayed event does
+    // not leave a gap. The `return` above is what enforces that here.
+    let head = state
+        .chain
+        .entry(store_id)
+        .or_insert_with(ChainAnchorState::empty);
+    let link = head.next_link();
+    let hash = chain_hash(&envelope, &link);
+    let envelope = EventEnvelope {
+        chain: Some(link.clone()),
+        ..envelope
+    };
+    *head = ChainAnchorState {
+        seq: link.seq,
+        head: hash,
+    };
+
+    state
+        .events
+        .entry(store_id)
+        .or_default()
+        .insert(envelope.event_id, envelope.clone());
+
+    // No depth check, as in the real store: a deep outbox is a store that has been offline
+    // for a while, and it keeps selling (ADR-0137).
+    state.next_position = state.next_position.saturating_add(1);
+    let position = OutboxPosition::new(state.next_position);
+    state
+        .outbox
+        .entry(store_id)
+        .or_default()
+        .push(OutboxRecord { position, envelope });
+}
+
+/// Makes a committed configuration current and the last known good.
+fn apply_config(state: &mut StoreState, update: ConfigUpdate) {
+    let snapshot = match update {
+        ConfigUpdate::Snapshot(snapshot) => snapshot,
+        ConfigUpdate::Delta(delta) => {
+            // A delta's target document is its patch: the fake does not merge, because the
+            // patch format is P7's decision and inventing one here would make the fake
+            // disagree with the real store in a way no case could catch.
+            ConfigSnapshot {
+                config_version_id: delta.to_config_version_id,
+                store_id: delta.store_id,
+                document: delta.patch,
+            }
+        }
+    };
+    state.current.insert(snapshot.store_id, snapshot.clone());
+    state.last_known_good.insert(snapshot.store_id, snapshot);
 }
 
 impl Transactional for FakeStore {

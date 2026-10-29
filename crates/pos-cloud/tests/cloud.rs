@@ -32,6 +32,8 @@ mod catalog_menus;
 mod catalog_publish;
 #[path = "cloud/catalog_taxonomy.rs"]
 mod catalog_taxonomy;
+#[path = "cloud/cell_standing.rs"]
+mod cell_standing;
 #[path = "cloud/chain.rs"]
 mod chain;
 #[path = "cloud/config_nodes.rs"]
@@ -70,6 +72,8 @@ mod fees;
 mod fleet;
 #[path = "cloud/floor.rs"]
 mod floor;
+#[path = "cloud/hq_rollups.rs"]
+mod hq_rollups;
 #[path = "cloud/integrations.rs"]
 mod integrations;
 #[path = "cloud/inventory.rs"]
@@ -3054,13 +3058,6 @@ fn device_app(admin: FakeAdmin, keys: FakeKeys, devices: FakeDevices) -> axum::R
     ))
 }
 
-/// The approved devices compile into the `devices` config node, and only the approved ones
-/// (**ADR-0100**, C2 slice 2b).
-///
-/// The store learns where its printers are through the config-pull it already runs, which is what
-/// makes the knowledge survive a reboot with the WAN down. Asserted end to end — propose, approve,
-/// publish, read the tree — because the value of this slice is precisely that the three sit on one
-/// path; each half passing in isolation would prove nothing about the join.
 /// The propose+approve surface and the publish surface over one device store and one config tree —
 /// production's two `merge`s, in a test.
 fn device_publish_app(keys: &FakeKeys, trees: FakeConfigTrees) -> axum::Router {
@@ -7406,7 +7403,7 @@ async fn a_malformed_ota_report_is_refused_and_records_nothing() {
     );
 }
 
-/// The router with the OTA levers merged in ([ADR-0052](../../docs/adr/0052-ota-rollout-config.md),
+/// The router with the OTA levers merged in ([ADR-0052](../../../docs/adr/0052-ota-rollout-config.md),
 /// ADR-0078) — the rollout publish/halt/read and the placement publish/read.
 fn ota_app(admin: FakeAdmin, config_trees: FakeConfigTrees) -> axum::Router {
     ota_app_hosting(admin, config_trees, &["1.4.0"])
@@ -7414,7 +7411,7 @@ fn ota_app(admin: FakeAdmin, config_trees: FakeConfigTrees) -> axum::Router {
 
 /// The OTA levers, with `hosted` releases already in the registry.
 ///
-/// A rollout naming a version the cloud does not host is refused ([ADR-0088](../../docs/adr/0088-ota-artifact-hosting.md)
+/// A rollout naming a version the cloud does not host is refused ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md)
 /// Amendment 2), so a test about *publishing* has to host its version first. Pass an empty slice to
 /// exercise the refusal itself.
 fn ota_app_hosting(
@@ -10646,10 +10643,12 @@ fn store_group_app(
         config_trees,
         catalog,
         InMemoryFeeRules::new(),
+        Arc::new(NoopAuditRecorder),
     )
 }
 
-/// [`store_group_app`] over a tenant's fee rules, which a menu batch brings to each member.
+/// [`store_group_app`] over a tenant's fee rules, which a menu batch brings to each member, with
+/// the group routes recording to `audit`.
 fn store_group_app_with_fees(
     admin: FakeAdmin,
     groups: FakeStoreGroups,
@@ -10657,6 +10656,7 @@ fn store_group_app_with_fees(
     config_trees: FakeConfigTrees,
     catalog: FakeCatalog,
     fee_rules: InMemoryFeeRules,
+    audit: Arc<dyn AuditRecorder>,
 ) -> axum::Router {
     let app = app_all(
         Cloud::new(FakeStore::new()),
@@ -10692,7 +10692,7 @@ fn store_group_app_with_fees(
             people,
             admin.clone(),
             clock(),
-            Arc::new(NoopAuditRecorder),
+            audit,
         ))
         .merge(http::config_preview_router(
             config_trees,

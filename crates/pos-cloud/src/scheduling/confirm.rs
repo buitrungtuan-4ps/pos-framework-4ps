@@ -3,7 +3,7 @@
 
 //! What a scheduled node makes a store run, and whether that is a value that needs a recorded
 //! confirmation the store does not run now
-//! ([ADR-0169](../../../../../docs/adr/0169-a-setting-value-can-require-a-recorded-confirmation.md)
+//! ([ADR-0169](../../../../docs/adr/0169-a-setting-value-can-require-a-recorded-confirmation.md)
 //! decision 3).
 
 use pos_proto::settings::Setting;
@@ -105,7 +105,29 @@ mod tests {
     };
     use super::super::{NewScheduledPublish, ScheduledPublishStatus, ScheduledPublishStore};
     use crate::config_tree::ConfigTreeStore;
-    use crate::confirmed_values::tests::confirming_register;
+    use pos_proto::settings::{Confirm, Setting, SettingScope, SettingShape};
+
+    /// A register with one setting whose `OWNER_ONE_PERSON` needs confirming: the fixture
+    /// `pos_cloud_config::confirmed_values`' own tests build, repeated here because a dependency's
+    /// test code is not compiled into this crate's tests.
+    fn confirming_register() -> Vec<Setting> {
+        vec![Setting {
+            node: "example",
+            field: "drawer_owner",
+            shape: SettingShape::Choice {
+                values: vec!["OWNER_SHARED", "OWNER_ONE_PERSON"],
+                default: "OWNER_SHARED",
+                preset: None,
+            },
+            scopes: &[SettingScope::Tenant, SettingScope::Store],
+            since: "0.15.0",
+            confirm: Some(Confirm {
+                value: "OWNER_ONE_PERSON",
+                notice: "settings.item.example.drawer_owner.confirm",
+            }),
+            summary: "Whose a drawer is.",
+        }]
+    }
 
     /// A scheduled `example` node setting the drawer's owner, which [`confirming_register`] says needs
     /// a recorded confirmation.

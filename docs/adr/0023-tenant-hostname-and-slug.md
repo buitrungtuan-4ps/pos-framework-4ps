@@ -1,6 +1,6 @@
 # ADR-0023 — Tenant hostnames: flat per-tenant subdomains, DNS as the uniqueness ledger
 
-**Status** Accepted · **Owner** @maintainers-cloud · **Last reviewed** 2026-08-19
+**Status** Accepted; superseded in part by [ADR-0179](0179-cells-the-directory-and-the-front-door.md) at levels 0 and 1 (per-host HTTP-01 certificates, not wildcard or DNS-01; the cell directory, not Cloudflare DNS, is the slug ledger) · **Owner** @maintainers-cloud · **Last reviewed** 2026-08-19
 **Relates to** [ADR-0011](0011-country-in-hostname.md) · [ADR-0003](0003-cattle-not-pets.md)
 **Resolves** spec-gap: ADR-0011 and the frozen archive contradict on the tenant hostname model.
 

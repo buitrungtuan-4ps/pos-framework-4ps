@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The backup loop, end to end against a real database
-//! ([ADR-0124](../../docs/adr/0124-a-store-that-can-be-restored.md)).
+//! ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)).
 //!
 //! `store_archive.rs` proves the *format* — a sealed archive restores to a working store. This
 //! proves the *loop*: that one round of [`BackupClient`] takes the key the cloud issued, snapshots

@@ -30,7 +30,7 @@ use crate::ota::ArtifactStore;
 /// you mean" — one store has at most one in flight — it is the caller stating *which machine* they
 /// checked. A settle that took no number would let a stale console close a handover the operator
 /// never looked at.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct SettleHandoverRequest {
     tenant_id: String,
     store_id: String,
@@ -42,12 +42,35 @@ pub(super) struct SettleHandoverRequest {
 /// No generation, and that asymmetry with settle is deliberate. Settle is an attestation about one
 /// named machine's disk; retire is a decision about the handover the row currently describes, and
 /// the row's own preconditions — settled, and not already retired — are what make it unambiguous.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct RetireHandoverRequest {
     tenant_id: String,
     store_id: String,
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/config/lease/settle",
+    extensions(("x-permission" = json!("console.stores.manage"))),
+    security(("session_cookie" = [])),
+    request_body(
+        content = SettleHandoverRequest, description = "`tenant_id`, `store_id`, and `superseded_generation`, the machine the caller \
+                       attests holds no events: a box already powered off, or one whose disk was read \
+                       directly. Publishes nothing",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 204, description = "Settled. Audited as an attestation, with who made it"),
+        (status = 400, description = "tenant_id or store_id is not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.stores.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The store has never been issued a lease", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "The handover in flight is not on the generation named, naming \
+                                      the one that is, or none is in flight", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The lease store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "lease",
+)]
 /// `POST /admin/config/lease/settle` — a person attests that a superseded machine holds no events,
 /// closing a handover that will never close itself. Behind [`ConsolePermission::ManageStores`].
 ///
@@ -131,6 +154,32 @@ where
     StatusCode::NO_CONTENT.into_response()
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/config/lease/retire",
+    extensions(("x-permission" = json!("console.stores.manage"))),
+    security(("session_cookie" = [])),
+    request_body(
+        content = RetireHandoverRequest, description = "`tenant_id` and `store_id`: the store whose settled handover's outgoing \
+                       machine, its database and its hosting are no longer needed. A decision no \
+                       fact in the system implies (ADR-0110). Publishes nothing",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 204, description = "Retired. Audited with who decided and when"),
+        (status = 400, description = "tenant_id or store_id is not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.stores.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The store has never been issued a lease", body = crate::openapi_admin::ErrorResponse),
+        (status = 409, description = "The handover moved while it was being retired: re-read and \
+                                      retry", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "The handover is still in flight and must be settled first; it \
+                                      has already been retired; or the store has never handed over \
+                                      to another machine", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The lease store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "lease",
+)]
 /// `POST /admin/config/lease/retire` — a person decides a settled handover's outgoing machine, its
 /// database and its hosting are no longer needed. Behind [`ConsolePermission::ManageStores`].
 ///

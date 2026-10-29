@@ -17,13 +17,6 @@
 import { createEffect, createSignal, For, Show } from "solid-js";
 
 import { api, ApiError } from "../api/client";
-import {
-  SALES_CHANNELS,
-  type SalesChannel,
-  type TaxClass,
-  type TaxComponent,
-  type TaxRate,
-} from "../api/types";
 import { type MessageKey, t } from "../i18n";
 import { createAdminResource, failureOf } from "../lib/resource";
 import { RequireContext } from "../lib/scoped";
@@ -35,21 +28,15 @@ import { apiMessage, isStale } from "../lib/errors";
 import { addToRelease, describePublish, previewNode } from "../lib/publish-copy";
 import { usePublishedNodes } from "../lib/published";
 import { isTaxComponentName } from "../lib/tax-components";
+import { CHANNEL_LABEL, SALES_CHANNELS, type KnownSalesChannel } from "../lib/channels";
+import type { TaxClass, TaxComponent, TaxRate } from "../api/schemas";
 
-/** The already-defined per-channel labels (shared with the Catalog price editor). */
-const CHANNEL_LABEL: Record<SalesChannel, MessageKey> = {
-  SALES_CHANNEL_DINE_IN: "channel.dineIn",
-  SALES_CHANNEL_TAKEAWAY: "channel.takeaway",
-  SALES_CHANNEL_DELIVERY: "channel.delivery",
-  SALES_CHANNEL_QR: "channel.qr",
-  SALES_CHANNEL_API: "channel.api",
-};
 
 /** The highest rate the server accepts, in basis points (100%). */
 const MAX_BPS = 10_000;
 
 /** A grid cell's key: the tax class and the channel it prices. */
-function cellKey(taxClassId: string, channel: SalesChannel): string {
+function cellKey(taxClassId: string, channel: string): string {
   return `${taxClassId}|${channel}`;
 }
 
@@ -211,7 +198,7 @@ export function TaxRates() {
 
   // Load on open and whenever the tenant changes — never with an empty context (F0).
 
-  const setCell = (taxClassId: string, channel: SalesChannel, value: string) => {
+  const setCell = (taxClassId: string, channel: KnownSalesChannel, value: string) => {
     setCells({ ...cells(), [cellKey(taxClassId, channel)]: value });
   };
 
@@ -223,7 +210,7 @@ export function TaxRates() {
   // operator correcting the middle of a breakdown is not thrown to its end on every key.
   const setBreakdown = (
     taxClassId: string,
-    channel: SalesChannel,
+    channel: KnownSalesChannel,
     typed: string,
     input: HTMLInputElement,
   ) => {
@@ -237,7 +224,7 @@ export function TaxRates() {
   };
 
   /** Whether the read marked this cell and the operator has not changed its breakdown since. */
-  const stillMarked = (taxClassId: string, channel: SalesChannel): boolean => {
+  const stillMarked = (taxClassId: string, channel: KnownSalesChannel): boolean => {
     const key = cellKey(taxClassId, channel);
     const read = marked()[key];
     return read !== undefined && read === (breakdowns()[key] ?? "");
@@ -250,7 +237,7 @@ export function TaxRates() {
    * `CGST 2.5, SGST 2` should not have to press Save to find out — and because a breakdown that does
    * not add up is the one way this feature produces a document an auditor rejects.
    */
-  const breakdownProblem = (taxClassId: string, channel: SalesChannel): MessageKey | null => {
+  const breakdownProblem = (taxClassId: string, channel: KnownSalesChannel): MessageKey | null => {
     const key = cellKey(taxClassId, channel);
     const text = breakdowns()[key] ?? "";
     if (text.trim() === "") {

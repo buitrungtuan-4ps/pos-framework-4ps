@@ -16,6 +16,14 @@ updates:
     labels:
       - dependencies
     groups:
+      # pos-render's shaper and outline reader, which must resolve one `read-fonts`: proposed
+      # alone, either bump adds a second one and fails `cargo deny` (crates/pos-render/Cargo.toml).
+      # First, so it claims the two before `cargo-minor` does, and for every update type, since a
+      # `0.x` minor is the one that moves `read-fonts`.
+      fontations:
+        patterns:
+          - harfrust
+          - skrifa
       cargo-minor:
         update-types:
           - minor

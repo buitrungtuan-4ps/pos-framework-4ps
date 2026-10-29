@@ -40,6 +40,7 @@ use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 use pos_proto::ids::TenantId;
+use pos_proto::locale::CountryCode;
 use pos_providers::Settings;
 
 use crate::archive::{hex_bytes, to_hex};
@@ -215,7 +216,7 @@ pub fn open(
 ///
 /// The tree's own layers ([ADR-0033](../../../docs/adr/0033-config-tree.md)), so a connection is
 /// inherited the way every other setting is: a store uses its own, or its brand's, or the tenant's.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub enum ScopeLevel {
     /// Every store the tenant runs.
     #[serde(rename = "CONNECTION_SCOPE_TENANT")]
@@ -254,6 +255,11 @@ pub struct Connection {
     /// Each secret field's sealed value, by field key.
     #[serde(default)]
     pub sealed_secrets: BTreeMap<String, String>,
+    /// The country the vendor processes this connection's data in, as an upper-case ISO 3166-1
+    /// alpha-2 code, when the tenant has recorded it (ADR-0179 C7). Compared with the cell's home
+    /// country to warn, never to refuse. Absent on a connection stored before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub processing_country: Option<String>,
 }
 
 impl Connection {
@@ -265,24 +271,36 @@ impl Connection {
 }
 
 /// A connection as the API answers it: the record without its sealed values.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 pub struct ConnectionView {
     connection_id: String,
     provider_id: String,
     scope_level: ScopeLevel,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     scope_id: Option<String>,
     display_name: String,
     enabled: bool,
     settings: Settings,
     /// Which secret fields have a value. The values themselves are never returned.
     secrets_set: Vec<String>,
+    /// The country the vendor processes this connection's data in, when recorded.
+    #[schema(required = true)]
+    processing_country: Option<String>,
+    /// Whether that country is known and differs from the cell's home country. A warning, never a
+    /// refusal (ADR-0179 C7).
+    processing_outside_cell: bool,
 }
 
 impl ConnectionView {
-    /// Drops the sealed values from a record.
+    /// Drops the sealed values from a record, and compares its processing country with the cell's
+    /// home country, when both are known.
     #[must_use]
-    pub fn of(connection: &Connection) -> Self {
+    pub fn of(connection: &Connection, cell_country: Option<CountryCode>) -> Self {
+        let processing_outside_cell = match (&connection.processing_country, cell_country) {
+            (Some(processing), Some(home)) => processing != home.as_str(),
+            _ => false,
+        };
         Self {
             connection_id: connection.connection_id.clone(),
             provider_id: connection.provider_id.clone(),
@@ -292,6 +310,8 @@ impl ConnectionView {
             enabled: connection.enabled,
             settings: connection.settings.clone(),
             secrets_set: connection.secrets_set().into_iter().collect(),
+            processing_country: connection.processing_country.clone(),
+            processing_outside_cell,
         }
     }
 }
@@ -429,6 +449,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use pos_proto::ids::TenantId;
+    use pos_proto::locale::CountryCode;
     use pos_proto::ulid::Ulid;
     use pos_providers::SettingValue;
 
@@ -543,6 +564,7 @@ mod tests {
                 SettingValue::Text("192.0.2.40".to_owned()),
             )]),
             sealed_secrets: BTreeMap::from([("api_key".to_owned(), "00ff".to_owned())]),
+            processing_country: None,
         }
     }
 
@@ -649,8 +671,14 @@ mod tests {
                 SettingValue::Text("https://api.example".to_owned()),
             )]),
             sealed_secrets: BTreeMap::from([("api_key".to_owned(), "deadbeef".to_owned())]),
+            processing_country: Some("SG".to_owned()),
         };
-        let view = serde_json::to_value(ConnectionView::of(&connection)).expect("serializes");
+        let view = serde_json::to_value(ConnectionView::of(&connection, None)).expect("serializes");
+        assert_eq!(view["processing_country"], "SG");
+        assert_eq!(
+            view["processing_outside_cell"], false,
+            "a cell with no home country compares with nothing"
+        );
         assert_eq!(view["secrets_set"], serde_json::json!(["api_key"]));
         assert_eq!(view["scope_level"], "CONNECTION_SCOPE_STORE");
         assert!(view.get("sealed_secrets").is_none());
@@ -660,5 +688,42 @@ mod tests {
         let stored = serde_json::to_string(&connection).expect("serializes");
         let back: Connection = serde_json::from_str(&stored).expect("parses");
         assert_eq!(back, connection);
+    }
+
+    /// A connection's processing country is compared with the cell's home country: a warning when
+    /// both are known and differ, and nothing otherwise (ADR-0179 C7).
+    #[test]
+    fn processing_outside_the_cell_is_flagged_only_when_both_are_known() {
+        let mut connection = connection("01P", "courier.ahamove", (ScopeLevel::Tenant, None), true);
+        let flag = |connection: &Connection, cell| {
+            serde_json::to_value(ConnectionView::of(connection, cell)).expect("serializes")
+                ["processing_outside_cell"]
+                .clone()
+        };
+        assert_eq!(
+            flag(&connection, Some(CountryCode::VN)),
+            false,
+            "not recorded"
+        );
+        connection.processing_country = Some("VN".to_owned());
+        assert_eq!(
+            flag(&connection, Some(CountryCode::VN)),
+            false,
+            "the same country"
+        );
+        connection.processing_country = Some("SG".to_owned());
+        assert_eq!(
+            flag(&connection, Some(CountryCode::VN)),
+            true,
+            "another country"
+        );
+        assert_eq!(flag(&connection, None), false, "no cell country");
+
+        // A document stored before the field existed still reads, as not recorded.
+        let mut old = serde_json::to_value(&connection).expect("serializes");
+        old.as_object_mut()
+            .map(|object| object.remove("processing_country"));
+        let back: Connection = serde_json::from_value(old).expect("an older document parses");
+        assert_eq!(back.processing_country, None);
     }
 }

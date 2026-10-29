@@ -12,7 +12,8 @@
 //   device to pair and a `403` to sign in, as every other call does.
 // - **Revalidation.** Each read names the tag of the copy it holds, and an unchanged copy costs a
 //   bodiless `304`.
-// - **When it reads again.** On a reconnect of the live link; on a `resync`, the live entries; and
+// - **When it reads again.** On a `resync`, every entry: the edge's answer to a live link that
+//   cannot be resumed, which is every link that holds no position, its first connect included; and
 //   on `config_applied`, only the entries that derive from the nodes the frame names, or every one
 //   where it names none.
 // - **The boot gate.** Once the store's load starts, the till is drawn when every required entry
@@ -29,6 +30,7 @@ import { createSignal } from "solid-js";
 import { createStore } from "solid-js/store";
 
 import { ApiError, revalidate } from "../api/client";
+import type { EdgeUrlFor } from "../api/paths";
 import { type Restored, restoreSnapshot, saveSnapshot } from "./snapshot";
 
 // Configuration is what the store sells and how; live data is what it is doing and who is doing it
@@ -41,7 +43,7 @@ export interface Entry {
   readonly key: string;
   readonly kind: EntryKind;
   // Where it is read.
-  readonly path: () => string;
+  readonly path: () => EdgeUrlFor<"GET">;
   // A read of more than one route, in place of `path`. It names no tag, so it is always answered
   // in full.
   readonly read?: () => Promise<unknown>;
@@ -81,6 +83,8 @@ let entries: readonly Entry[] = [];
 const etags = new Map<string, string>();
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
 const inFlight = new Map<string, Promise<void>>();
+// The entries whose fresh read waits behind the one out.
+const queued = new Set<string>();
 // What the snapshot held at this start, until the edge confirms or replaces each entry.
 const restored = new Map<string, Restored>();
 let restoring: Promise<void> | null = null;
@@ -195,27 +199,51 @@ async function read(found: Entry): Promise<void> {
 }
 
 // Reads one entry now, unless a read of it is already on its way, or it is not wanted.
-export function load(key: string): Promise<void> {
+//
+// `fresh` asks for a read that starts now: one already on its way may have been answered before
+// what the caller needs it to include, so a fresh read follows it rather than joining it. At most
+// one read waits behind the one out, so the reads of an entry stay bounded.
+export function load(key: string, fresh = false): Promise<void> {
   const found = entry(key);
   if (found === undefined || (found.when !== undefined && !found.when())) {
     return Promise.resolve();
   }
   const pending = inFlight.get(key);
-  if (pending !== undefined) {
+  if (pending !== undefined && (!fresh || queued.has(key))) {
     return pending;
   }
-  const next = read(found).finally(() => inFlight.delete(key));
+  let start = read;
+  if (pending !== undefined) {
+    queued.add(key);
+    start = async (each) => {
+      // `read` handles its own failures and does not reject, but a read out that did must not
+      // leave this entry marked queued: every later fresh read would join instead of following.
+      try {
+        await pending;
+      } catch {
+        // Its failure is its own; this read is made regardless.
+      } finally {
+        queued.delete(key);
+      }
+      await read(each);
+    };
+  }
+  const next = start(found).finally(() => {
+    if (inFlight.get(key) === next) {
+      inFlight.delete(key);
+    }
+  });
   inFlight.set(key, next);
   return next;
 }
 
 // Reads every entry but those in `except`: the store's load at the boot gate and at sign-in, and a
-// reconnect, where each read that names a tag costs a `304` when nothing changed.
-export async function loadAll(except: readonly string[] = []): Promise<void> {
+// `resync`, where each read that names a tag costs a `304` when nothing changed.
+export async function loadAll(except: readonly string[] = [], fresh = false): Promise<void> {
   setStarted(true);
   await restore();
   await Promise.all(
-    entries.filter((each) => !except.includes(each.key)).map((each) => load(each.key)),
+    entries.filter((each) => !except.includes(each.key)).map((each) => load(each.key, fresh)),
   );
 }
 
@@ -235,7 +263,8 @@ export function prime(key: string, body: unknown): void {
 // again, once the store's load has started, and an unchanged copy costs a `304`.
 export async function readAgain(): Promise<void> {
   if (started()) {
-    await loadAll();
+    // Fresh, because a read already out may have been answered before what this one must include.
+    await loadAll([], true);
   }
 }
 

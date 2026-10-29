@@ -45,6 +45,11 @@ says; the configuration tree overrides it.** The store's timezone is not here (i
 fact), and neither is whether a tax code is *registered* (that is a network call, and keeping it out
 is what lets a cashier take a corporate customer's code offline).
 
+## Conformance
+
+[`CONFORMANCE.md`](CONFORMANCE.md) lists the legal requirements a person must confirm, and the golden
+bills in [`tests/conformance.rs`](tests/conformance.rs) that exercise them.
+
 ## Depends on / used by
 
 - **Depends on** (workspace crates): `pos-country`, `pos-ports`, `pos-proto`; in tests, `pos-contract-tests`, `pos-fakes`.

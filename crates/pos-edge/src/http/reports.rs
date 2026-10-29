@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! What the store has taken today, for the Today screen's tile
-//! ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+//! ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 //! decision 2).
 //!
 //! One read, `GET /api/reports/takings`: the sum of the bills settled in the current business day
@@ -34,6 +34,7 @@ use crate::http::{ERROR_REASON_HEADER, error_response};
 
 /// What the store has taken today, as the Today screen's tile shows it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct TakingsResponse {
     /// The business day the figure is for.
     business_date: BusinessDate,
@@ -43,6 +44,20 @@ pub(crate) struct TakingsResponse {
     bill_count: u32,
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/reports/takings",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("reports.takings.view"))),
+    responses(
+        (status = 200, body = TakingsResponse, description = "The current business day, what its settled bills came to, and how many \
+                                      there were. The store's figure only: no person, till or shift"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in, or the person's own role lacks \
+                                      reports.takings.view (`pos-error-reason: PERMISSION_DENIED`)"),
+    ),
+    tag = "status",
+))]
 /// `GET /api/reports/takings` — what the store has taken in the current business day.
 ///
 /// `403` with `PERMISSION_DENIED` for a person whose own role does not grant

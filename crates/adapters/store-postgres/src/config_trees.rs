@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The configuration-tree table over PostgreSQL (P7, [ADR-0033](../../../docs/adr/0033-config-tree.md)).
+//! The configuration-tree table over PostgreSQL (P7, [ADR-0033](../../../../docs/adr/0033-config-tree.md)).
 //!
 //! One row per `(tenant, store)`; the row's `state` column is the whole `ConfigTreeState` — the four
 //! authored layers and the published version history — held as `jsonb`. This adapter keeps only the
@@ -117,7 +117,7 @@ pub enum StoredRetire {
 /// The two travel together because one statement wrote them, and a caller that took only the
 /// generation would have to read the placement back in a second query — reopening exactly the
 /// A store's recorded answer to its region difference, exactly as the row holds it
-/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+/// ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
 ///
 /// Every field is the column's own type, un-validated: reconstructing a `CountryCode` from two
 /// letters is the caller's job, and a row this build cannot read must not stop it being returned
@@ -456,84 +456,11 @@ impl PostgresConfigTrees {
         expected_generation: Option<i64>,
     ) -> Result<BumpOutcome, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        // `$4` is NULL for a bump that names no placement. On insert the column falls to its schema
-        // default (`IN_STORE`, what every store in the fleet already is); on conflict `COALESCE`
-        // keeps the stored value. Reading the placement back out of `RETURNING` rather than echoing
-        // the argument is deliberate: the caller audits what the store *now is*, which for a
-        // no-placement bump is a value it never sent.
-        //
-        // **Two CTEs, not an upsert, and that is a correction rather than a preference.** The
-        // obvious shape — one `INSERT … ON CONFLICT DO UPDATE` with the preconditions on the
-        // conflict branch — cannot express this. Guarding the insert with `WHERE $6 IS NULL` gates
-        // the *whole statement*: with a numbered `If-Match` the SELECT yields no row, so there is
-        // nothing to insert, so no conflict arises, so `DO UPDATE` never runs, and every bump after
-        // a store's first is silently refused. Only a real database showed that — the shape
-        // type-checks and reads correctly.
-        //
-        // So the update is its own statement, conditional on both preconditions, and the insert is
-        // a second one conditional on the caller having claimed there is no row (`If-Match: *`).
-        // Exactly one can produce a row, so the union yields one row or none, and none is
-        // unambiguously a refusal.
-        //
-        // `superseded_generation = generation` records the number this bump displaces (ADR-0110).
-        // Every `SET` expression in one `UPDATE` reads the *pre-update* row — the same fact
-        // `generation = generation + 1` beside it depends on — so the recorded value is exact by
-        // construction, with nothing to race. The insert writes NULL explicitly: a store's first
-        // lease supersedes nobody.
-        //
-        // `DO NOTHING` covers two callers creating one store at once: the loser returns no row and
-        // is reported as a version mismatch, which is true — somebody else issued the lease — rather
-        // than a unique-violation 503 that would invite the same losing retry.
-        //
-        // Why the column is needed at all: `store_liveness` holds one row per store, so the instant
-        // the incoming machine heartbeats, the outgoing machine's final `outbox_depth` is gone. This
-        // is the cloud's only durable memory of the question \"has N drained?\".
-        //
-        // `retired_at`/`retired_by` are cleared in the same breath, and that is not tidiness. They
-        // describe *this* store's current handover, and a bump starts a new one with a new outgoing
-        // machine. Left in place they would say a machine still in the shop had been decided
-        // unnecessary. Every retirement's history is the audit trail's, which keeps it.
         let requested = edge_placement.map(ToOwned::to_owned);
-        // `$7` says whether this bump *decided* the region; `$8`/`$9` are what it decided. A swap in
-        // place sends `false` and the `CASE` leaves both columns exactly as they are, which is what
-        // keeps every bump written before these columns existed behaving identically. On the insert
-        // branch there is nothing to keep — a store with no lease row has no region — so the pair
-        // goes in directly, and `Keep` puts NULL there, which is the truth for a first-ever lease.
-        //
-        // Both columns are always written together. There is no statement anywhere that touches one
-        // without the other, which is what makes "a hosted placement always has a region, an
-        // in-store one never does" a property of the schema's *writes* rather than a rule a reader
-        // has to trust.
         let (region_decided, region_country, region_label) = region.parameters();
         let row = connection
             .query_opt(
-                "WITH bumped AS ( \
-                     UPDATE store_lease SET \
-                     generation = generation + 1, \
-                     superseded_generation = generation, \
-                     retired_at = NULL, \
-                     retired_by = NULL, \
-                     issued_at = $3, \
-                     edge_placement = COALESCE($4, edge_placement), \
-                     region_country = CASE WHEN $7 THEN $8 ELSE region_country END, \
-                     region_label = CASE WHEN $7 THEN $9 ELSE region_label END \
-                     WHERE tenant_id = $1 AND store_id = $2 \
-                       AND generation = $6::bigint \
-                       AND (superseded_generation IS NULL \
-                            OR superseded_generation = $5::bigint) \
-                     RETURNING generation, edge_placement, superseded_generation, \
-                               region_country, region_label \
-                 ), issued AS ( \
-                     INSERT INTO store_lease \
-                     (tenant_id, store_id, generation, issued_at, edge_placement, \
-                      superseded_generation, region_country, region_label) \
-                     SELECT $1, $2, 0, $3, COALESCE($4, 'EDGE_PLACEMENT_IN_STORE'), NULL, $8, $9 \
-                     WHERE $6::bigint IS NULL \
-                     ON CONFLICT (tenant_id, store_id) DO NOTHING \
-                     RETURNING generation, edge_placement, superseded_generation, \
-                               region_country, region_label \
-                 ) \
-                 SELECT * FROM bumped UNION ALL SELECT * FROM issued",
+                BUMP_STORE_LEASE,
                 &[
                     &tenant.to_string(),
                     &store_id.to_string(),
@@ -551,43 +478,8 @@ impl PostgresConfigTrees {
 
         let Some(row) = row else {
             // No row came back, so nothing was written — both branches of the statement are
-            // conditional. Which refusal it was is not encoded in the absence, so read the row once
-            // to choose the message. Racy by construction: another admin can bump between the
-            // refusal and this read. That is acceptable because the *decision* was already made,
-            // atomically, by the statement's own `WHERE`; this only picks what to say about it.
-            let probe = connection
-                .query_opt(
-                    "SELECT generation, superseded_generation FROM store_lease \
-                     WHERE tenant_id = $1 AND store_id = $2",
-                    &[&tenant.to_string(), &store_id.to_string()],
-                )
-                .await
-                .map_err(unavailable)?;
-            let Some(probe) = probe else {
-                // No lease row at all, and the caller named a generation rather than `*` — the
-                // insert's own `WHERE` refused it. `*` would have inserted.
-                return Ok(BumpOutcome::VersionMismatch { current: None });
-            };
-            let current: i64 = probe.get(0);
-            let superseded: Option<i64> = probe.get(1);
-            // Order matters, and this is the order the statement itself evaluates: the generation
-            // check comes first, so a caller holding a stale read is told *that* rather than being
-            // sent to acknowledge a handover it has not seen yet.
-            if Some(current) != expected_generation {
-                return Ok(BumpOutcome::VersionMismatch {
-                    current: Some(current),
-                });
-            }
-            return Ok(match superseded {
-                Some(superseded) => BumpOutcome::Undrained { superseded },
-                // The row satisfies both conditions now, so the refusal was a race that has since
-                // resolved. Report it as a version mismatch: the caller re-reads and retries, which
-                // is the correct next move either way, and claiming a handover that is not there
-                // would send them to acknowledge nothing.
-                None => BumpOutcome::VersionMismatch {
-                    current: Some(current),
-                },
-            });
+            // conditional.
+            return refused_bump(&connection, tenant, store_id, expected_generation).await;
         };
 
         Ok(BumpOutcome::Issued(StoredBump {
@@ -650,7 +542,7 @@ impl PostgresConfigTrees {
     }
 
     /// Records a person's answer to a store's region difference, replacing any answer it had
-    /// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+    /// ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
     ///
     /// An upsert rather than an insert, because this row holds *what is currently answered* and not
     /// the history of answers — the audit trail holds that, and nothing overwrites it. The two
@@ -910,4 +802,130 @@ impl PostgresConfigTrees {
             .map_err(unavailable)?;
         Ok(())
     }
+}
+
+/// The bump: one statement, so two admins bumping at once serialise on the row rather than racing
+/// to the same number.
+///
+/// `$4` is NULL for a bump that names no placement. On insert the column falls to its schema
+/// default (`IN_STORE`, what every store in the fleet already is); on conflict `COALESCE`
+/// keeps the stored value. Reading the placement back out of `RETURNING` rather than echoing
+/// the argument is deliberate: the caller audits what the store *now is*, which for a
+/// no-placement bump is a value it never sent.
+///
+/// **Two CTEs, not an upsert, and that is a correction rather than a preference.** The
+/// obvious shape — one `INSERT … ON CONFLICT DO UPDATE` with the preconditions on the
+/// conflict branch — cannot express this. Guarding the insert with `WHERE $6 IS NULL` gates
+/// the *whole statement*: with a numbered `If-Match` the SELECT yields no row, so there is
+/// nothing to insert, so no conflict arises, so `DO UPDATE` never runs, and every bump after
+/// a store's first is silently refused. Only a real database showed that — the shape
+/// type-checks and reads correctly.
+///
+/// So the update is its own statement, conditional on both preconditions, and the insert is
+/// a second one conditional on the caller having claimed there is no row (`If-Match: *`).
+/// Exactly one can produce a row, so the union yields one row or none, and none is
+/// unambiguously a refusal.
+///
+/// `superseded_generation = generation` records the number this bump displaces (ADR-0110).
+/// Every `SET` expression in one `UPDATE` reads the *pre-update* row — the same fact
+/// `generation = generation + 1` beside it depends on — so the recorded value is exact by
+/// construction, with nothing to race. The insert writes NULL explicitly: a store's first
+/// lease supersedes nobody.
+///
+/// `DO NOTHING` covers two callers creating one store at once: the loser returns no row and
+/// is reported as a version mismatch, which is true — somebody else issued the lease — rather
+/// than a unique-violation 503 that would invite the same losing retry.
+///
+/// Why the column is needed at all: `store_liveness` holds one row per store, so the instant
+/// the incoming machine heartbeats, the outgoing machine's final `outbox_depth` is gone. This
+/// is the cloud's only durable memory of the question \"has N drained?\".
+///
+/// `retired_at`/`retired_by` are cleared in the same breath, and that is not tidiness. They
+/// describe *this* store's current handover, and a bump starts a new one with a new outgoing
+/// machine. Left in place they would say a machine still in the shop had been decided
+/// unnecessary. Every retirement's history is the audit trail's, which keeps it.
+///
+/// `$7` says whether this bump *decided* the region; `$8`/`$9` are what it decided. A swap in
+/// place sends `false` and the `CASE` leaves both columns exactly as they are, which is what
+/// keeps every bump written before these columns existed behaving identically. On the insert
+/// branch there is nothing to keep — a store with no lease row has no region — so the pair
+/// goes in directly, and `Keep` puts NULL there, which is the truth for a first-ever lease.
+///
+/// Both columns are always written together. There is no statement anywhere that touches one
+/// without the other, which is what makes "a hosted placement always has a region, an
+/// in-store one never does" a property of the schema's *writes* rather than a rule a reader
+/// has to trust.
+const BUMP_STORE_LEASE: &str = "WITH bumped AS ( \
+     UPDATE store_lease SET \
+     generation = generation + 1, \
+     superseded_generation = generation, \
+     retired_at = NULL, \
+     retired_by = NULL, \
+     issued_at = $3, \
+     edge_placement = COALESCE($4, edge_placement), \
+     region_country = CASE WHEN $7 THEN $8 ELSE region_country END, \
+     region_label = CASE WHEN $7 THEN $9 ELSE region_label END \
+     WHERE tenant_id = $1 AND store_id = $2 \
+       AND generation = $6::bigint \
+       AND (superseded_generation IS NULL \
+            OR superseded_generation = $5::bigint) \
+     RETURNING generation, edge_placement, superseded_generation, \
+               region_country, region_label \
+ ), issued AS ( \
+     INSERT INTO store_lease \
+     (tenant_id, store_id, generation, issued_at, edge_placement, \
+      superseded_generation, region_country, region_label) \
+     SELECT $1, $2, 0, $3, COALESCE($4, 'EDGE_PLACEMENT_IN_STORE'), NULL, $8, $9 \
+     WHERE $6::bigint IS NULL \
+     ON CONFLICT (tenant_id, store_id) DO NOTHING \
+     RETURNING generation, edge_placement, superseded_generation, \
+               region_country, region_label \
+ ) \
+ SELECT * FROM bumped UNION ALL SELECT * FROM issued";
+
+/// The refusal a bump that wrote nothing earned, read back once to choose the message.
+///
+/// Which refusal it was is not encoded in the absence, so the row is read once. Racy by
+/// construction: another admin can bump between the refusal and this read. That is acceptable
+/// because the *decision* was already made, atomically, by the statement's own `WHERE`; this only
+/// picks what to say about it.
+async fn refused_bump(
+    connection: &deadpool_postgres::Client,
+    tenant: TenantId,
+    store_id: StoreId,
+    expected_generation: Option<i64>,
+) -> Result<BumpOutcome, PortError> {
+    let probe = connection
+        .query_opt(
+            "SELECT generation, superseded_generation FROM store_lease \
+                 WHERE tenant_id = $1 AND store_id = $2",
+            &[&tenant.to_string(), &store_id.to_string()],
+        )
+        .await
+        .map_err(unavailable)?;
+    let Some(probe) = probe else {
+        // No lease row at all, and the caller named a generation rather than `*` — the
+        // insert's own `WHERE` refused it. `*` would have inserted.
+        return Ok(BumpOutcome::VersionMismatch { current: None });
+    };
+    let current: i64 = probe.get(0);
+    let superseded: Option<i64> = probe.get(1);
+    // Order matters, and this is the order the statement itself evaluates: the generation
+    // check comes first, so a caller holding a stale read is told *that* rather than being
+    // sent to acknowledge a handover it has not seen yet.
+    if Some(current) != expected_generation {
+        return Ok(BumpOutcome::VersionMismatch {
+            current: Some(current),
+        });
+    }
+    Ok(match superseded {
+        Some(superseded) => BumpOutcome::Undrained { superseded },
+        // The row satisfies both conditions now, so the refusal was a race that has since
+        // resolved. Report it as a version mismatch: the caller re-reads and retries, which
+        // is the correct next move either way, and claiming a handover that is not there
+        // would send them to acknowledge nothing.
+        None => BumpOutcome::VersionMismatch {
+            current: Some(current),
+        },
+    })
 }

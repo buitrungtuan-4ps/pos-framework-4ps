@@ -2127,7 +2127,7 @@ async fn a_paired_device_with_no_one_signed_in_can_only_sign_in() {
 }
 
 /// The session read tells the till what the signed-in person may do, and whether the store enforces
-/// it ([ADR-0158](../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 6),
+/// it ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 6),
 /// so the till can hide a control and ask for an approver before it sends.
 #[tokio::test]
 async fn the_session_read_says_what_the_signed_in_person_may_do() {
@@ -2238,7 +2238,7 @@ async fn the_session_read_says_what_float_the_shift_screen_fills_in() {
 }
 
 /// The PIN lockout counts against the store's own numbers from its `session` node
-/// ([ADR-0160](../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)),
+/// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)),
 /// read from the live configuration at each attempt: a number published while the store trades
 /// applies from the next attempt, with no restart.
 #[tokio::test]

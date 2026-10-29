@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use axum::http::StatusCode;
 use pos_cloud::audit::{AuditRecorder, AuditSink, NoopAuditRecorder};
+use pos_cloud::auth::admin::AdminRole;
 use pos_cloud::fleet::FleetRow;
 use pos_cloud::lease::{Region, StorePlacement};
 use pos_cloud::registry::EntityStatus;
@@ -18,7 +19,7 @@ use tower::ServiceExt;
 use crate::{
     FakeAudit, FakeConfigTrees, FakeFleet, NOW_MS, admin_cookie, fleet_app, fleet_app_with_audit,
     fleet_app_with_config, get, get_with_cookie, json_body, post_with_cookie, provisioned_admin,
-    seen_ago, store_id, store_in_handover, tenant,
+    role_session_cookie, seen_ago, store_id, store_in_handover, tenant,
 };
 
 /// The two fleet rows the listing test reads: one healthy, one that is offline, drifted, backed up
@@ -89,14 +90,14 @@ fn drifted_fleet(online_store: StoreId, offline_store: StoreId) -> FakeFleet {
 }
 
 /// The handover state reaches the console as a word, and `null` really is one of the answers
-/// ([ADR-0110](docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
+/// ([ADR-0110](../../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
 ///
 /// The `null` cases are the ones worth a route test rather than only a unit test: they are what the
 /// console renders for most of the fleet, and reading ADR-0110's `taking-over` definition literally
 /// would have put a mid-handover badge on every one of them.
 /// The single-store read compares a store's region against the country it publishes, and says
 /// "country not recorded" rather than letting absence read as agreement
-/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+/// ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
 ///
 /// Three answers and no fourth, derived on the server so the console never re-implements the rule.
 /// The third is the one that matters: a store that has never published a country has *nothing* to
@@ -158,7 +159,7 @@ async fn the_single_store_read_compares_the_region_against_the_stores_own_countr
 }
 
 /// A person can answer the region warning, the answer reaches the read, and the trail records who
-/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+/// ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
 ///
 /// The whole point of the record: a mismatch that warns forever with no way to say why it is correct
 /// is a warning people learn to ignore. Three things have to be true together — the row is written,
@@ -258,7 +259,7 @@ async fn a_region_difference_can_be_answered_and_the_answer_is_audited() {
 }
 
 /// An answer is about **one** difference: it stops standing the moment either country moves
-/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+/// ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
 ///
 /// This is the property the stored country pair exists for, and it is the one a simpler design
 /// would get wrong: a boolean "acknowledged" flag would silence the warning for a store that has
@@ -347,7 +348,7 @@ async fn an_answer_stops_standing_when_the_store_moves_somewhere_else() {
 }
 
 /// The reason is required, bounded, and counted in characters
-/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+/// ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
 ///
 /// A warning silenced with no explanation is a warning deleted. The ceiling is counted in Unicode
 /// scalar values so a Vietnamese or Japanese reason is measured the way the person who typed it
@@ -431,7 +432,7 @@ async fn the_reason_is_required_and_its_ceiling_counts_characters() {
 }
 
 /// A store with nothing to answer cannot be acknowledged
-/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+/// ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
 ///
 /// Refused rather than stored, because a row saying somebody approved a transfer that is not
 /// happening is a record of a decision nobody made — and a fleet that accumulates them teaches its
@@ -485,7 +486,7 @@ async fn a_store_with_no_difference_has_nothing_to_acknowledge() {
 }
 
 /// An in-store store has no region, so there is nothing to compare and no badge to draw
-/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+/// ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
 ///
 /// `null` here is a real answer and deliberately *not* `agrees`: an in-store machine and a hosted
 /// machine that happens to be in the right country are different facts, and only one of them is a
@@ -524,7 +525,7 @@ async fn a_store_with_no_region_reports_no_agreement_rather_than_agreeing() {
 }
 
 /// Where a store's data rests reaches the console on the read it already runs
-/// ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
+/// ([ADR-0114](../../../../docs/adr/0114-region-is-required-recorded-visible.md)).
 ///
 /// The fleet page is where somebody is already looking when the question is asked, and the region
 /// rides the `LEFT JOIN store_lease` the placement beside it already uses — so this costs no extra
@@ -871,4 +872,121 @@ async fn fleet_needs_a_session() {
         StatusCode::UNAUTHORIZED,
         "the fleet view is behind the admin session guard"
     );
+}
+
+// --- pinned before `admin_acknowledge_region` is split (ADR-0170 decision 7) ---------------------
+
+/// A store whose locale says VN and whose region rests in SG, under `admin`, recording to `audit`.
+fn differing_store(admin: crate::FakeAdmin, audit: &FakeAudit) -> axum::Router {
+    let mut row = store_in_handover(store_id(), Some(1), None, None);
+    row.region = Region::stored("SG", "ap-southeast-1");
+    let fleet = FakeFleet::default().with_row(tenant(), row);
+    let trees = FakeConfigTrees::default();
+    trees.seed_store_layer(
+        tenant(),
+        store_id(),
+        serde_json::json!({ "locale": { "country_code": "VN" } }),
+    );
+    fleet_app_with_audit(admin, fleet, trees, Arc::new(AuditSink::new(audit.clone())))
+}
+
+/// An answer is the acknowledgement as stored: both codes, the reason as typed, and when.
+#[tokio::test]
+async fn an_answer_is_the_acknowledgement_as_stored() {
+    let audit = FakeAudit::default();
+    let router = differing_store(provisioned_admin(), &audit);
+    let cookie = admin_cookie(&router).await;
+    let answered = router
+        .oneshot(post_with_cookie(
+            &format!("/admin/stores/{}/region-acknowledgement", store_id()),
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "profile_country": "VN",
+                "region_country": "SG",
+                "reason": "Consent recorded.",
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the acknowledgement");
+    assert_eq!(answered.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(answered).await,
+        serde_json::json!({
+            "profile_country": "VN",
+            "region_country": "SG",
+            "reason": "Consent recorded.",
+            "acknowledged_at_ms": NOW_MS,
+        })
+    );
+    let entries = audit.entries.lock().expect("lock").clone();
+    let [entry] = entries.as_slice() else {
+        panic!("one audit entry: {entries:?}");
+    };
+    assert_eq!(entry.tenant_id, Some(tenant()));
+    assert_eq!(
+        entry.after,
+        Some(serde_json::json!({
+            "profile_country": "VN",
+            "region_country": "SG",
+            "reason": "Consent recorded.",
+        }))
+    );
+}
+
+/// An answer is refused before anything is recorded: a role that may not manage stores, an id
+/// that is not a ULID, and country codes that are not two letters, each naming its fields.
+#[tokio::test]
+async fn an_answer_is_refused_before_it_is_recorded() {
+    let admin = provisioned_admin();
+    let audit = FakeAudit::default();
+    let router = differing_store(admin.clone(), &audit);
+    // The owner logs in first: the login names no email, so it is the only admin when it does.
+    let cookie = admin_cookie(&router).await;
+    let body = |profile: &str| {
+        serde_json::json!({
+            "tenant_id": tenant().as_ulid().to_string(),
+            "profile_country": profile,
+            "region_country": "SG",
+            "reason": "Consent recorded.",
+        })
+    };
+    let url = format!("/admin/stores/{}/region-acknowledgement", store_id());
+
+    let ops = role_session_cookie(&admin, AdminRole::Ops, "ops-token").await;
+    let by_ops = router
+        .clone()
+        .oneshot(post_with_cookie(&url, &body("VN"), &ops))
+        .await
+        .expect("route the acknowledgement");
+    assert_eq!(by_ops.status(), StatusCode::FORBIDDEN);
+
+    for (target, sent, fields) in [
+        (
+            "/admin/stores/not-a-ulid/region-acknowledgement".to_owned(),
+            body("Vietnam"),
+            vec!["store_id"],
+        ),
+        (
+            url.clone(),
+            body("Vietnam"),
+            vec!["profile_country", "region_country"],
+        ),
+    ] {
+        let refused = router
+            .clone()
+            .oneshot(post_with_cookie(&target, &sent, &cookie))
+            .await
+            .expect("route the acknowledgement");
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{target}");
+        let refusal = json_body(refused).await;
+        let named: Vec<&str> = refusal["error"]["details"]
+            .as_array()
+            .expect("details")
+            .iter()
+            .filter_map(|detail| detail["field"].as_str())
+            .collect();
+        assert_eq!(named, fields, "{target}: {refusal}");
+    }
+    assert!(audit.entries.lock().expect("lock").is_empty());
 }

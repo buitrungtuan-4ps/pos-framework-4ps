@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! Operational alerts over PostgreSQL ([ADR-0073](../../../docs/adr/0073-alerting.md), Track O2).
+//! Operational alerts over PostgreSQL ([ADR-0073](../../../../docs/adr/0073-alerting.md), Track O2).
 //!
 //! One row per alert with an open→resolved lifecycle (`alerts`, migration 0027). This adapter keeps
 //! only the SQL and returns plain rows; `pos-cloud` implements its `AlertStore` seam over this type.

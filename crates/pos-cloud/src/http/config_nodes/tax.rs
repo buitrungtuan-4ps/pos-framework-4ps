@@ -38,7 +38,7 @@ struct ConfigTaxState<Tax, Cfg, A, C> {
 
 /// A super-admin publishes a tenant's authored tax rates to one of its stores: the `(tenant, store)`.
 /// The rates come from the authored table, not the body — publishing is "push what is authored".
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PublishTaxRequest {
     tenant_id: String,
     store_id: String,
@@ -102,6 +102,32 @@ where
     Ok((vec![("tax".to_owned(), tax_value)], count))
 }
 
+#[utoipa::path(
+    put,
+    path = "/admin/config/tax",
+    extensions(("x-permission" = json!("console.config.publish"))),
+    security(("session_cookie" = [])),
+    request_body(
+        content = PublishTaxRequest, description = "`tenant_id` and `store_id`, then nothing else: the tenant's whole tax-rate table, as `GET /admin/catalog/tax-rates` shows it, is \
+                       compiled into the node",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = PublishedConfig, description = "Published as the store's `tax` node on its \
+                                      Store layer. The body carries `config_version_id`, which the \
+                                      store pulls on its next sync. Audited"),
+        (status = 400, description = "tenant_id or store_id is not a ULID, or a value needs \
+                                      a recorded confirmation first (ADR-0169)", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "Every attempt to write the store's configuration lost a race \
+                                      with another publish: try again", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "The store's configuration would not validate with the \
+                                      node", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The tax rate store or the configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config nodes",
+)]
 /// Assembles a tenant's authored rates into a `TaxRateTable`, writes it as the store's `tax` node, and
 /// versions it — the same load→merge→publish→version shape as the other node publishes.
 async fn admin_publish_tax<Tax, Cfg, A, C>(

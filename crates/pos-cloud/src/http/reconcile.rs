@@ -44,7 +44,7 @@ struct ReconcileState<Rec, A, C, K> {
     keys: K,
 }
 
-/// Builds the reconciliation sub-router, stated independently of [`CloudApp`].
+/// Builds the reconciliation sub-router, stated independently of [`CloudApp`](crate::http::CloudApp).
 ///
 /// Reconciliation is the cloud's half of ADR-0040's missing-id diff: a store sends the ids it holds
 /// over some window, and the cloud answers with the subset it lacks — the ids to re-push. Every diff
@@ -115,14 +115,14 @@ struct ReconcileRequest {
 ///
 /// Deliberately **not** [`ReconcileRequest`] with two ignored members: a body that carries a
 /// `tenant_id` the server discards is a body a caller will eventually believe is honoured.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct StoreReconcileRequest {
     /// The event ids this store holds over the window it is reconciling.
     event_ids: Vec<String>,
 }
 
 /// The ids the cloud is missing from the manifest — what the edge should re-push.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct ReconcileResponse {
     /// The subset of the manifest the cloud's event log does not contain (ULID strings).
     missing: Vec<String>,
@@ -158,6 +158,31 @@ where
     run_reconcile(&state, tenant_id, store_id, &request.event_ids).await
 }
 
+#[utoipa::path(
+    post,
+    path = "/sync/stores/{store_id}/reconcile",
+    security(("device_credential" = ["read_config"])),
+    params(
+        ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
+    ),
+    request_body(
+        content = StoreReconcileRequest, description = "`event_ids`: the ids of events the store holds, each a ULID",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = ReconcileResponse, description = "`missing`: the ids the cloud does not hold, for the store to publish \
+                                      again"),
+        (status = 400, description = "store_id is not a ULID, or an event id is not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No credential, or one the cloud does not accept: one answer for every \
+                                      credential problem", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The credential lacks the `read_config` scope, or belongs to another \
+                                      store", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 429, description = "Too many requests to the store sync surface: `Retry-After` says when \
+                                      to try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The credential store, or the reconciliation store, is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "events",
+)]
 /// `POST /sync/stores/{store_id}/reconcile` — the **store's** door onto the same diff.
 ///
 /// Identity comes from the scoped key the box presents, not from a body it writes: the tenant is the
@@ -283,7 +308,7 @@ struct ReconcileHistoryQuery {
 
 /// One reconciliation run on the wire ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)):
 /// counts and a timestamp, never event contents or a customer identifier.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct ReconcileRunView {
     /// The run's id (a ULID string; chronological).
     run_id: String,
@@ -309,6 +334,28 @@ impl ReconcileRunView {
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/reconcile",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The tenant whose runs to list (a 26-character ULID)"),
+        ("store_id" = Option<String>, Query, description = "Only this store's runs (a 26-character ULID)"),
+        ("limit" = Option<u32>, Query, description = "The most runs to return (default 100, at most 500)"),
+    ),
+    responses(
+        (status = 200, body = [ReconcileRunView], description = "The runs, newest first, as an array: each with `run_id`, \
+                                      `store_id`, `candidates_offered` (the events the store \
+                                      offered), `missing_found` (how many of them the cloud lacked \
+                                      and asked for again; zero is in sync) and `ran_at_ms`"),
+        (status = 400, description = "tenant_id is absent or not a ULID, or store_id is not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The reconciliation store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "operations",
+)]
 /// Lists a tenant's most recent reconciliation runs, newest first
 /// ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)) — so the console shows that
 /// reconciliation ran and what it caught. Tenant-scoped (a store's runs are its tenant's data), behind

@@ -311,7 +311,7 @@ pub(super) fn apply_pricing(session: &mut EdgeSession, document: &serde_json::Va
         session.recipe_thresholds = thresholds;
     }
     // The `reason_codes` node the reason-code publish writes
-    // ([ADR-0115](../../../docs/adr/0115-reason-codes-are-a-managed-list.md), roadmap B2.2): the
+    // ([ADR-0115](../../../../docs/adr/0115-reason-codes-are-a-managed-list.md), roadmap B2.2): the
     // managed list a void, a discount, a comp, a refund, an out-of-sale drawer opening, a staff
     // rejection, either cash movement and either stock correction must cite. `docs/pos-spec.md` §11
     // item 2 makes these reasons a fraud control, and until this node arrived a store could only
@@ -338,7 +338,7 @@ pub(super) fn apply_pricing(session: &mut EdgeSession, document: &serde_json::Va
 /// The `fees`, `channels` and `tender` nodes: what a bill may carry and how it is paid
 /// (ADR-0159).
 pub(super) fn apply_bill_rules(session: &mut EdgeSession, document: &serde_json::Value) {
-    // The `fees` node ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 1):
+    // The `fees` node ([ADR-0159](../../../../docs/adr/0159-a-fee-is-configuration.md) decision 1):
     // every fee rule a bill may apply. Absent means no rule, as for a node of settings: the cloud
     // sends the whole document, so a node it no longer sends is fees somebody removed, and an empty
     // list is the same answer. An unparseable node keeps the rules the store had, as every node

@@ -1,10 +1,10 @@
-import { Show, onCleanup, onMount, type ParentProps } from "solid-js";
+import { Show, onCleanup, onMount, type Component, type ParentProps } from "solid-js";
 import { Route, Router } from "@solidjs/router";
 
 import { ApiError, api, deviceToken } from "./api/client";
 import { MINIMUM_EDGE_VERSION, edgeIsBehind, edgeVersion } from "./api/edgeVersion";
 import { edgeIsSuperseded, edgeLeaseIsAhead } from "./api/leaseStanding";
-import { LiveLink, type LinkStatus } from "./api/live";
+import { LiveLink } from "./api/live";
 import { IdleLock } from "./components/IdleLock";
 import { StatusBar } from "./components/StatusBar";
 import { t } from "./i18n";
@@ -26,6 +26,7 @@ import { locked } from "./state/session";
 import { StoreGate, StoreDataBanner } from "./components/StoreData";
 import { prime, readAgain } from "./state/engine";
 import { loadConfiguration, loadStore } from "./state/registry";
+import { SCREENS, SCREEN_IDS, type ScreenId } from "./state/screens";
 import { fold, setLink } from "./state/store";
 
 // Shown when this app is newer than the store server answering it (ADR-0111). It names both
@@ -113,6 +114,25 @@ function Shell(props: ParentProps) {
   );
 }
 
+// Every routed screen, by id. A `Record<ScreenId, …>` rather than a list, so a screen added to
+// `SCREENS` without a component here does not compile: the router cannot fall behind the table.
+const COMPONENTS: Record<ScreenId, Component> = {
+  floor: Floor,
+  tableOrder: Order,
+  tablePay: Pay,
+  kds: Kds,
+  expo: Expo,
+  counter: Takeaway,
+  counterOrder: Order,
+  guests: Confirm,
+  today: Today,
+  shift: Shift,
+  pair: Pairing,
+  devices: Devices,
+  setup: Setup,
+  signIn: SignIn,
+};
+
 // Send the browser somewhere without stacking a history entry, and without looping when it is already
 // there — the boot gate's one way of moving the operator on.
 function sendTo(path: string): void {
@@ -134,27 +154,20 @@ export function App() {
     );
   }
 
-  let lastStatus: LinkStatus = "connecting";
   const link = new LiveLink({
     onEvent: fold,
-    onResync: () => {
+    onResync: () =>
       // A resync says this client fell behind, so what it holds may be stale — and the events it
       // missed are exactly the ones it will never be sent. Re-reading is the answer: the same reads
       // the boot gate makes, merged over whatever the fold has since established. What it missed
       // may include a new configuration, so every entry is read again (ADR-0173).
-      void readAgain();
-    },
+      readAgain(),
     // A new configuration is live on the edge: read again what it changed, without a new sign-in
     // (ADR-0160, ADR-0173).
     onConfigApplied: (changed) => void loadConfiguration(changed),
-    onStatus: (status) => {
-      // Back after a drop: everything held is revalidated, and what did not change costs a `304`.
-      if (status === "open" && lastStatus === "closed") {
-        void readAgain();
-      }
-      lastStatus = status;
-      setLink(status);
-    },
+    // What a link that was down missed comes back on the link itself: the edge replays it after the
+    // position the link names, or says `resync`, which reads everything again (`./api/live`).
+    onStatus: setLink,
   });
   // The device half of the boot gate, once the store server itself is known to be usable: pair, then
   // sign in, then draw the store.
@@ -214,21 +227,9 @@ export function App() {
 
   return (
     <Router root={Shell}>
-      <Route path="/" component={Floor} />
-      <Route path="/table/:id" component={Order} />
-      <Route path="/table/:id/pay" component={Pay} />
-      <Route path="/kds" component={Kds} />
-      <Route path="/expo" component={Expo} />
-      <Route path="/counter" component={Takeaway} />
-      <Route path="/order/:id" component={Order} />
-      {/* The staff-confirmation queue (ADR-0116) — the screen the QR hold had no way to reach. */}
-      <Route path="/guests" component={Confirm} />
-      <Route path="/today" component={Today} />
-      <Route path="/shift" component={Shift} />
-      <Route path="/pair" component={Pairing} />
-      <Route path="/devices" component={Devices} />
-      <Route path="/setup" component={Setup} />
-      <Route path="/signin" component={SignIn} />
+      {SCREEN_IDS.map((id) => (
+        <Route path={SCREENS[id].path} component={COMPONENTS[id]} />
+      ))}
     </Router>
   );
 }

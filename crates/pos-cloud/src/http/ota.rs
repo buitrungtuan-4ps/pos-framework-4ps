@@ -28,6 +28,14 @@ mod report;
 pub use release_fetch::ota_release_fetch_router;
 pub use release_upload::ota_release_admin_router;
 
+// The handlers the console's OpenAPI document names.
+pub(crate) use installer::__path_admin_download_installer;
+pub(crate) use release_fetch::__path_admin_fetch_ota_release;
+pub(crate) use release_upload::{__path_admin_list_ota_release, __path_admin_upload_ota_release};
+// And the ones the device document names (ADR-0177).
+pub(crate) use artifacts::__path_serve_ota_artifact;
+pub(crate) use report::__path_receive_store_report;
+
 /// The state the OTA-report ingest carries: the write seam and the server clock that stamps the
 /// report's arrival instant.
 #[derive(Clone)]
@@ -68,7 +76,7 @@ struct OtaReportRequest {
 /// path. That is the entire point of the move — the `/internal` shape took both in the body, so it
 /// trusted the caller's claim about which store it was, and a shared secret could change *who could
 /// reach* the route without making a report attributable.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct StoreReportRequest {
     /// The release the store is now running.
     installed: String,
@@ -79,7 +87,7 @@ struct StoreReportRequest {
 }
 
 /// Builds the OTA-report ingest sub-router ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)),
-/// stated independently of [`CloudApp`] like [`reconcile_router`].
+/// stated independently of [`CloudApp`](crate::http::CloudApp) like [`reconcile_router`](crate::http::reconcile_router).
 ///
 /// `POST /internal/ota/report` records the version a store is running and its last self-test outcome
 /// onto the fleet-liveness read model, so the cloud can see rollout-ring progress. Internal,
@@ -135,16 +143,16 @@ struct ArtifactState<K, C, B, L> {
 /// Correction 2 added. R1's workflow cross-compiles two targets, so a request without one cannot say
 /// which binary it means — and guessing would hand an `aarch64` box an `x86_64` executable that fails
 /// its self-test after the install, which is the expensive place to find out.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct ArtifactRequest {
     release: String,
     arch: String,
 }
 
-/// Builds the OTA artifact sub-router, stated independently of [`CloudApp`]
+/// Builds the OTA artifact sub-router, stated independently of [`CloudApp`](crate::http::CloudApp)
 /// ([ADR-0088](../../../docs/adr/0088-ota-artifact-hosting.md) Amendment 1).
 ///
-/// Like [`device_router`], it carries its own state and is merged into the main router rather than
+/// Like [`device_router`](crate::http::device_router), it carries its own state and is merged into the main router rather than
 /// adding more `CloudApp` generics for two collaborators one route uses.
 ///
 /// **On `/sync`, not `/internal`.** [ADR-0054](../../../docs/adr/0054-edge-cloud-http-client.md)

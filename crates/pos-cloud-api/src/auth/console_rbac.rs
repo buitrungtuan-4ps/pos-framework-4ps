@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! Console role-based access control — the fixed permission catalogue and the role→permission
-//! templates ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md)).
+//! templates ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md)).
 //!
 //! This mirrors the compile-forced registry pattern `pos-core` uses for store permissions
 //! (`docs/pos-spec.md` §9), adapted to the console. A permission exists only as an entry in the

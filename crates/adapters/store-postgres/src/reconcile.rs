@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The reconciliation membership query over the event log (P7,
-//! [ADR-0040](../../../docs/adr/0040-reconciliation.md)).
+//! [ADR-0040](../../../../docs/adr/0040-reconciliation.md)).
 //!
 //! Reconciliation asks "which of these candidate ids does the cloud already hold?" for one store; the
 //! caller returns the complement as the ids to re-push. This adapter answers only the SQL —
@@ -55,7 +55,7 @@ impl PostgresReconcile {
         Ok(rows.iter().map(|row| row.get(0)).collect())
     }
 
-    /// Records one reconciliation run into the history ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)):
+    /// Records one reconciliation run into the history ([ADR-0078](../../../../docs/adr/0078-sync-and-ota-closure.md)):
     /// how many ids the edge offered, how many the cloud was missing, and when. Append-only.
     ///
     /// # Errors

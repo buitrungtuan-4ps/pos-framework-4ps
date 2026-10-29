@@ -1,0 +1,141 @@
+// Copyright (c) 2026 Pizza 4P's. All rights reserved.
+// Proprietary and confidential. Internal use only. See LICENSE.
+
+//! `card-sandbox` against the shared `PaymentTerminal` contract suite.
+//!
+//! The harness puts an in-memory acquirer behind the adapter's transport. It keeps attempts by
+//! payment identifier, as an idempotency key does, counts the times money actually moved, and can
+//! stage the next attempt's status. The adapter's futures never suspend, so the suite runs under
+//! `run_ready`, a one-poll executor.
+
+#![allow(
+    clippy::expect_used,
+    reason = "test scaffolding: a poisoned lock in the acquirer is an unrecoverable test fault"
+)]
+
+use std::sync::Mutex;
+
+use card_sandbox::{Reply, SandboxTerminal, Status, Transport, Unreachable};
+use pos_contract_tests::harness::{PaymentTerminalHarness, Setup};
+use pos_fakes::executor::run_ready;
+use pos_proto::PaymentOutcome;
+use pos_proto::Timestamp;
+use pos_proto::ids::PaymentId;
+use pos_proto::money::Money;
+
+/// An in-memory acquirer.
+#[derive(Debug, Default)]
+struct Acquirer {
+    state: Mutex<State>,
+}
+
+#[derive(Debug, Default)]
+struct State {
+    replies: Vec<Reply>,
+    staged: Option<Status>,
+    moved: u32,
+}
+
+impl Acquirer {
+    fn state(&self) -> std::sync::MutexGuard<'_, State> {
+        self.state.lock().expect("acquirer lock")
+    }
+}
+
+impl Transport for Acquirer {
+    fn charge(&self, payment_id: PaymentId, amount: &Money) -> Result<Reply, Unreachable> {
+        let mut state = self.state();
+        if let Some(first) = state.replies.iter().find(|r| r.payment_id == payment_id) {
+            return Ok(first.clone());
+        }
+        let status = state.staged.take().unwrap_or(Status::Approved);
+        state.moved = state.moved.saturating_add(1);
+        let reply = Reply {
+            payment_id,
+            reference: format!("sandbox-{payment_id}"),
+            status,
+            amount: *amount,
+            at: Timestamp::EPOCH,
+        };
+        state.replies.push(reply.clone());
+        Ok(reply)
+    }
+
+    fn query(&self, reference: &str) -> Result<Option<Reply>, Unreachable> {
+        Ok(self
+            .state()
+            .replies
+            .iter()
+            .find(|r| r.reference == reference)
+            .cloned())
+    }
+
+    fn reverse(&self, reference: &str) -> Result<Option<Reply>, Unreachable> {
+        let mut state = self.state();
+        let reply = state.replies.iter_mut().find(|r| r.reference == reference);
+        Ok(reply.map(|reply| {
+            reply.status = Status::Declined;
+            reply.clone()
+        }))
+    }
+}
+
+struct Harness;
+
+impl PaymentTerminalHarness for Harness {
+    type Terminal = SandboxTerminal<Acquirer>;
+
+    async fn fresh(&self) -> Setup<Self::Terminal> {
+        Ok(SandboxTerminal::new(Acquirer::default()))
+    }
+
+    async fn stage_outcome(&self, terminal: &Self::Terminal, outcome: PaymentOutcome) -> Setup<()> {
+        terminal.transport().state().staged = Some(match outcome {
+            PaymentOutcome::Declined => Status::Declined,
+            PaymentOutcome::Unknown => Status::Pending,
+            PaymentOutcome::Captured | PaymentOutcome::Unspecified => Status::Approved,
+        });
+        Ok(())
+    }
+
+    async fn stage_unknown(&self, terminal: &Self::Terminal) -> Setup<()> {
+        terminal.transport().state().staged = Some(Status::Pending);
+        Ok(())
+    }
+
+    async fn authorisation_count(&self, terminal: &Self::Terminal) -> Setup<u32> {
+        Ok(terminal.transport().state().moved)
+    }
+}
+
+mod payment_terminal {
+    use super::{Harness, run_ready};
+    pos_contract_tests::payment_terminal_suite!(Harness, run_ready);
+}
+
+/// The port's void rule the shared suite does not reach: a settled capture is refunded by the
+/// domain, never voided by the terminal, and an unsettled attempt is.
+#[test]
+fn a_settled_capture_is_not_voided_and_an_unsettled_one_is() {
+    use pos_ports::{PaymentRequest, PaymentTerminal};
+    use pos_proto::error::ErrorStatus;
+    use pos_proto::money::CurrencyCode;
+    use pos_proto::{BillId, PaymentMethod, StoreId, Ulid};
+
+    let request = |seed: u128| PaymentRequest {
+        payment_id: PaymentId::new(Ulid::from_u128(seed)),
+        store_id: StoreId::new(Ulid::from_u128(1)),
+        bill_id: BillId::new(Ulid::from_u128(1)),
+        amount: Money::new(CurrencyCode::USD, 1_000),
+        method: PaymentMethod::Card,
+    };
+    let terminal = SandboxTerminal::new(Acquirer::default());
+    let captured = run_ready(terminal.authorize(&request(1))).expect("captured");
+    let refused = run_ready(terminal.void(&captured.reference)).expect_err("a settled capture");
+    assert_eq!(refused.status(), ErrorStatus::FailedPrecondition);
+
+    terminal.transport().state().staged = Some(Status::Pending);
+    let pending = run_ready(terminal.authorize(&request(2))).expect("pending");
+    let voided = run_ready(terminal.void(&pending.reference)).expect("voided");
+    assert_eq!(voided.outcome.known(), PaymentOutcome::Declined);
+}

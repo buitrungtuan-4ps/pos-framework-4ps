@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! Dashboards answered from **materialised** rollups (P7 exit,
-//! [ADR-0036](../../../docs/adr/0036-materialised-rollups.md)).
+//! [ADR-0036](../../../../docs/adr/0036-materialised-rollups.md)).
 //!
 //! The event log is the source of truth, but scanning it on every dashboard view is O(events) and
 //! cannot meet the P7 exit criterion of a sub-10 ms answer. So the rollup is maintained as a

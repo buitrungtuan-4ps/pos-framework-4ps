@@ -11,7 +11,7 @@ use pos_proto::ids::{StoreId, TenantId};
 use crate::types::DailyCash;
 
 /// The names a store's published configuration gives the tills among a day's cash drawers, by
-/// `terminal_device_id` ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)
+/// `terminal_device_id` ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)
 /// decision 13), for the X/Z report to show beside each drawer.
 ///
 /// The reports need this one fact from the configuration tree, which the rest of the cloud owns.

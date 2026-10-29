@@ -32,8 +32,11 @@ use crate::store_groups::{StoreGroupId, StoreGroupStore};
 #[utoipa::path(
     post,
     path = "/admin/config-releases",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.config.publish"))),
+    request_body(content = CreateReleaseRequest, content_type = "application/json"),
     responses(
-        (status = 201, description = "The release exists as a draft. It carries no nodes and no \
+        (status = 201, body = ReleaseView, description = "The release exists as a draft. It carries no nodes and no \
                                       pairs yet; `/schedule` adds both"),
         (status = 400, description = "An id is not a ULID, the name is empty, or the moment is \
                                       half-given (a date without a time) or doubly-given (a \

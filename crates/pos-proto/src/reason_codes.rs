@@ -127,6 +127,7 @@ impl ReasonAction {
 /// (`docs/pos-spec.md` §11 item 3 compares void and discount rates per employee) and so a CSV
 /// export is readable.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(transparent)]
 pub struct ReasonCode(Box<str>);
 
@@ -152,6 +153,7 @@ impl core::fmt::Display for ReasonCode {
 
 /// One entry in the managed list: what it is called, and what it may be given for.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct PublishedReasonCode {
     /// Its stable id — the value an event's `reason_code_id` carries.
@@ -264,6 +266,7 @@ impl PublishedReasonCode {
 /// edge starts from [`framework_default`](Self::framework_default), and a published node replaces
 /// it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub struct PublishedReasonCodes {
     #[serde(default)]

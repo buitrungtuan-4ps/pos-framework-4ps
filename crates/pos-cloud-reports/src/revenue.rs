@@ -2,8 +2,8 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The revenue read and its CSV exports: daily totals, fees by code
-//! ([ADR-0159](../../../../docs/adr/0159-a-fee-is-configuration.md)) and tax by component
-//! ([ADR-0168](../../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md)). Revenue is
+//! ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md)) and tax by component
+//! ([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md)). Revenue is
 //! T2, so every route here needs `console.reports.revenue`.
 
 use axum::Json;
@@ -28,6 +28,37 @@ use pos_cloud_api::console::require_permission;
 use pos_cloud_api::response::parse_ulid_fields;
 use pos_cloud_api::response::{api_error, csv_download_response};
 
+#[utoipa::path(
+    get,
+    path = "/admin/stores/{store_id}/revenue/daily",
+    extensions(("x-permission" = json!("console.reports.revenue"))),
+    security(("session_cookie" = [])),
+    params(
+        ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The tenant that store belongs to (a 26-character ULID)"),
+        ("from" = Option<String>, Query, description = "The first trading day, `YYYY-MM-DD`, inclusive"),
+        ("to" = Option<String>, Query, description = "The last trading day, `YYYY-MM-DD`, inclusive"),
+        ("limit" = Option<usize>, Query, description = "The most trading days to cover, the \
+                                                       newest in range: 90 when absent, and \
+                                                       never more than 366"),
+    ),
+    responses(
+        (status = 200, body = [DailyRevenue], description = "The store's takings for each trading day in the window, \
+                                      oldest first, as an array: `business_date`, \
+                                      `currency_code`, `bills`, `gross`, `reductions`, \
+                                      `service_charge`, `tax`, `net`, and the day's product mix, \
+                                      fees by code and tax by component. Amounts are integers in \
+                                      the currency's minor units. No customer or employee \
+                                      identifier"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID, a date is \
+                                      not `YYYY-MM-DD`, `from` is after `to`, or `limit` is \
+                                      zero", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.reports.revenue", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The rollup store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "reports",
+)]
 /// The materialised **revenue** rollup for one store, windowed exactly as
 /// [`admin_daily_rollups`](crate::rollups::admin_daily_rollups).
 ///
@@ -149,6 +180,36 @@ where
     csv_download_response(file.name, body)
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/stores/{store_id}/revenue/export",
+    extensions(("x-permission" = json!("console.reports.revenue"))),
+    security(("session_cookie" = [])),
+    params(
+        ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The tenant that store belongs to (a 26-character ULID)"),
+        ("from" = Option<String>, Query, description = "The first trading day, `YYYY-MM-DD`, inclusive"),
+        ("to" = Option<String>, Query, description = "The last trading day, `YYYY-MM-DD`, inclusive"),
+        ("limit" = Option<usize>, Query, description = "The most trading days to cover, the \
+                                                       newest in range: 90 when absent, and \
+                                                       never more than 366"),
+    ),
+    responses(
+        (status = 200, body = String, content_type = "text/csv", description = "`revenue.csv`, as a `text/csv` attachment: the header \
+                                      `business_date,currency_code,bills,gross,reductions,\
+                                      service_charge,tax,net`, then one row per trading day, \
+                                      oldest first, in the currency's minor units. The audit entry \
+                                      records how many rows, never what they held"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID, a date is \
+                                      not `YYYY-MM-DD`, `from` is after `to`, or `limit` is \
+                                      zero", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.reports.revenue", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 500, description = "The CSV could not be built", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The rollup store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "reports",
+)]
 /// Exports a store's daily revenue rollups as a CSV download, one row per trading day (ADR-0081,
 /// Track O4).
 pub async fn admin_export_revenue<R, K, C, A, T>(
@@ -177,6 +238,8 @@ where
 #[utoipa::path(
     get,
     path = "/admin/stores/{store_id}/revenue/fees/export",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.reports.revenue"))),
     params(
         ("store_id" = String, Path, description = "The store whose fees to export (a 26-character ULID)"),
         ("tenant_id" = String, Query, description = "The tenant that store belongs to (a 26-character ULID)"),
@@ -187,7 +250,7 @@ where
                                                        never more than 366"),
     ),
     responses(
-        (status = 200, description = "`revenue-fees.csv`, as a `text/csv` attachment. The header \
+        (status = 200, body = String, content_type = "text/csv", description = "`revenue-fees.csv`, as a `text/csv` attachment. The header \
                                       is `business_date,currency_code,fee_code,fee_name,bills,\
                                       amount,tax`, then one row per trading day per fee code the \
                                       day's settled bills charged, oldest day first and then by \
@@ -241,6 +304,8 @@ where
 #[utoipa::path(
     get,
     path = "/admin/stores/{store_id}/revenue/tax/export",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.reports.revenue"))),
     params(
         ("store_id" = String, Path, description = "The store whose tax to export (a 26-character ULID)"),
         ("tenant_id" = String, Query, description = "The tenant that store belongs to (a 26-character ULID)"),
@@ -251,7 +316,7 @@ where
                                                        never more than 366"),
     ),
     responses(
-        (status = 200, description = "`revenue-tax.csv`, as a `text/csv` attachment. The header \
+        (status = 200, body = String, content_type = "text/csv", description = "`revenue-tax.csv`, as a `text/csv` attachment. The header \
                                       is `business_date,currency_code,component_name,\
                                       rate_basis_points,tax`, then one row per trading day per \
                                       tax component name and rate the day's settled bills \

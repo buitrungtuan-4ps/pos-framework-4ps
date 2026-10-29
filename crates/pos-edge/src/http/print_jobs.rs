@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The two routes a print agent lives on
-//! ([ADR-0112](../../../docs/adr/0112-print-agents.md)).
+//! ([ADR-0112](../../../../docs/adr/0112-print-agents.md)).
 //!
 //! `GET /api/print/jobs` hands out at most one job per printer the agent owns;
 //! `POST /api/print/jobs/{job_id}/ack` says the job is written. There is no third route and no
@@ -24,7 +24,7 @@
 //! # A kick goes only to an agent that says it carries one
 //!
 //! A claim says what the agent carries, `?kicks_drawer=true`
-//! ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6), and the claim
+//! ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 6), and the claim
 //! records it on [`Printers`], where opening a drawer reads it. An agent built before kicks says
 //! nothing, so no kick is queued for it, and one queued before it said otherwise is never handed to
 //! it: it could not read the answer, and would print nothing at all. The acknowledgement of a kick
@@ -46,7 +46,7 @@
 //!
 //! # Subscribe, then read, then wait
 //!
-//! [ADR-0062](../../../docs/adr/0062-the-relay-wake.md)'s rule, and this module is where it is
+//! [ADR-0062](../../../../docs/adr/0062-the-relay-wake.md)'s rule, and this module is where it is
 //! obeyed: the loop takes a wake subscription, *then* claims, *then* parks. A job enqueued between
 //! the read and the park is already accounted for, and a missed signal here is a ticket sitting in
 //! the queue while a guest waits at a table.
@@ -96,12 +96,13 @@ pub(crate) struct PrintJobDeps<S, A, Q, W> {
 
 /// One leased job, as the agent receives it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct LeasedJob {
     /// The printer to open. Not on the job — a [`PrintJob`] names a *station*, and a receipt has
     /// none at all.
     printer_device_id: String,
     /// Where to open it: a host and port for a network printer, a device path for a directly
-    /// attached one ([ADR-0103](../../../docs/adr/0103-directly-attached-printers.md)).
+    /// attached one ([ADR-0103](../../../../docs/adr/0103-directly-attached-printers.md)).
     address: String,
     /// Which of those it is. The agent picks its transport from this and nothing else.
     connection: PrinterConnection,
@@ -117,6 +118,7 @@ struct LeasedJob {
 
 /// What a claim returned. Always present, possibly empty: an empty park is the ordinary answer.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct LeasedJobs {
     jobs: Vec<LeasedJob>,
 }
@@ -130,10 +132,10 @@ where
     W: PrintWake + 'static,
 {
     Router::new()
-        .route("/api/print/jobs", get(claim::<S, A, Q, W>))
+        .route("/api/print/jobs", get(claim_print_jobs::<S, A, Q, W>))
         .route(
             "/api/print/jobs/{job_id}/ack",
-            post(acknowledge::<S, A, Q, W>),
+            post(acknowledge_print_job::<S, A, Q, W>),
         )
         .with_state(Arc::new(PrintJobDeps {
             edge,
@@ -262,8 +264,28 @@ where
         .collect())
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/print/jobs",
+    security(("till_session" = [])),
+    params(
+        ("kicks_drawer" = Option<bool>, Query, description = "`true` when the agent carries a drawer kick. \
+                                                              Anything else reads as no"),
+    ),
+    responses(
+        (status = 200, body = LeasedJobs, description = "`jobs`: at most one per printer the agent owns, each with the \
+                                      printer's address, connection and capabilities, when its lease lapses, \
+                                      and the document. Empty when nothing arrived while the request was \
+                                      parked"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 409, description = "This device answers for no print agent; a manager binds one at the \
+                                      till"),
+        (status = 503, description = "The binding or the print queue could not be read"),
+    ),
+    tag = "printing",
+))]
 /// An agent asks for work, parking for up to [`AGENT_PARK`] if there is none.
-async fn claim<S, A, Q, W>(
+pub(super) async fn claim_print_jobs<S, A, Q, W>(
     State(deps): State<Arc<PrintJobDeps<S, A, Q, W>>>,
     Extension(device): Extension<DeviceId>,
     RawQuery(query): RawQuery,
@@ -350,8 +372,25 @@ where
     }
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/print/jobs/{job_id}/ack",
+    security(("till_session" = [])),
+    params(
+        ("job_id" = String, Path, description = "The print job's id, a ULID"),
+    ),
+    responses(
+        (status = 204, description = "Acknowledged: the job is written"),
+        (status = 400, description = "`job_id` is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 409, description = "This device answers for no print agent; a manager binds one at the \
+                                      till"),
+        (status = 503, description = "The binding or the print queue could not be read"),
+    ),
+    tag = "printing",
+))]
 /// An agent reports a job written.
-async fn acknowledge<S, A, Q, W>(
+pub(super) async fn acknowledge_print_job<S, A, Q, W>(
     State(deps): State<Arc<PrintJobDeps<S, A, Q, W>>>,
     Extension(device): Extension<DeviceId>,
     Path(job_id): Path<String>,

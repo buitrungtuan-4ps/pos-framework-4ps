@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! The retention sweep and its daily runner
-//! ([ADR-0035](../../../docs/adr/0035-retention-and-pii-masking.md)).
+//! ([ADR-0035](../../../../docs/adr/0035-retention-and-pii-masking.md)).
 //!
 //! [`sweep`] reads the subject store's records that are past retention, masks each ([`SubjectRecord`]
 //! masking), and writes them back — in bounded pages, so a large backlog does not load the whole
@@ -51,7 +51,7 @@ pub trait SubjectStore {
     ) -> impl Future<Output = Result<u64, RetentionError>> + Send;
 
     /// One subject by id, scoped to `tenant` — the deliberate, per-subject read behind the PDPD/GDPR
-    /// subject-request tooling ([ADR-0076](../../../docs/adr/0076-subject-request-tooling.md)), distinct
+    /// subject-request tooling ([ADR-0076](../../../../docs/adr/0076-subject-request-tooling.md)), distinct
     /// from the cron. Returns `None` when no such subject belongs to `tenant`, so the tool cannot reach
     /// across tenants. The returned record carries its real `masked_at`, so a caller can tell whether it
     /// still holds personal data.

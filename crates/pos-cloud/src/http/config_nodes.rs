@@ -44,8 +44,19 @@ mod tax;
 mod vendors;
 
 pub use locale::config_locale_router;
+// The handlers the console's OpenAPI document names.
+pub(crate) use channels::{
+    __path_admin_publish_channels, __path_admin_publish_origins, __path_admin_publish_tender,
+    __path_admin_read_channels, __path_admin_read_origins, __path_admin_read_tender,
+};
+pub(crate) use locale::__path_admin_publish_locale;
+pub(crate) use qr::{__path_admin_publish_qr, __path_admin_read_qr};
+pub(crate) use retention::{__path_admin_publish_retention, __path_admin_read_retention};
+pub(crate) use store_profile::__path_admin_publish_store_profile;
 pub use store_profile::config_store_profile_router;
+pub(crate) use tax::__path_admin_publish_tax;
 pub use tax::config_tax_router;
+pub(crate) use vendors::{__path_admin_publish_vendors, __path_admin_read_vendors};
 // What the batch fan-out compiles each store's nodes with.
 pub(super) use compilers::{
     QrGuardrailFields, channels_node, origins_node, qr_guardrail_node, tender_node,
@@ -73,7 +84,7 @@ struct ConfigNodeQuery {
 }
 
 /// A `PUT /admin/config/channels` body: the `(tenant, store)` and the enabled sales-channel tokens.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PublishChannelsRequest {
     tenant_id: String,
     store_id: String,
@@ -82,7 +93,7 @@ struct PublishChannelsRequest {
 }
 
 /// A `PUT /admin/config/tender` body: the `(tenant, store)` and the accepted payment-method tokens.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PublishTenderRequest {
     tenant_id: String,
     store_id: String,
@@ -96,7 +107,7 @@ struct PublishTenderRequest {
 ///
 /// The serving origin is never listed here and never needs to be: the edge compares it against the
 /// request's own `Host`, so a store that publishes nothing keeps serving its own UI.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PublishOriginsRequest {
     tenant_id: String,
     store_id: String,
@@ -184,8 +195,8 @@ where
 /// Builds the channels/tender settings sub-router ([ADR-0080](../../../docs/adr/0080-channels-and-payments.md), M7).
 ///
 /// `GET`/`PUT /admin/config/channels` and `.../tender`: read a store's current enabled channels /
-/// accepted tender, and publish new ones. Reads are behind [`ConsolePermission::Read`]; publishes are
-/// behind [`ConsolePermission::PublishConfig`] and audited — settings, not a CRUD master-data domain,
+/// accepted tender, and publish new ones. Reads are behind [`ConsolePermission::Read`](crate::auth::console_rbac::ConsolePermission::Read); publishes are
+/// behind [`ConsolePermission::PublishConfig`](crate::auth::console_rbac::ConsolePermission::PublishConfig) and audited — settings, not a CRUD master-data domain,
 /// so there is no dedicated authoring permission. The edge applies each node as a policy gate.
 pub fn config_channels_router<Cfg, A, C>(
     config_trees: Cfg,

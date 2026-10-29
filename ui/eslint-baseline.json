@@ -39,7 +39,7 @@
     "max-lines-per-function": 163
   },
   "src/state/store.ts": {
-    "max-lines": 1467,
+    "max-lines": 1459,
     "max-lines-per-function": 310
   }
 }

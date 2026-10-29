@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! What each state-changing edge route needs
-//! ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
+//! ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)
 //! decision 2).
 //!
 //! Every route that changes something names the permission a signed-in person must hold, or says
@@ -18,9 +18,9 @@
 //!
 //! A read route (`GET`) is here only where a permission decides who may see what it shows: the
 //! day's takings
-//! ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
+//! ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 //! decision 2), and which of the store's terminals this device or another holds, which the till's
-//! binding screen reads ([ADR-0112](../../../docs/adr/0112-print-agents.md)). Every other read
+//! binding screen reads ([ADR-0112](../../../../docs/adr/0112-print-agents.md)). Every other read
 //! changes nothing, and the signed-in gate covers it.
 
 use pos_core::permission::Permission;

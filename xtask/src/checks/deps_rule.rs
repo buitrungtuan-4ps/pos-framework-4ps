@@ -19,6 +19,11 @@
 //! Development dependencies are excluded on purpose: `proptest` and `insta` are
 //! not shipped, and are governed by `dev-allow` in the allow-list.
 //!
+//! An allow-list entry marked `optional-only` admits a crate only as an optional
+//! dependency that no default feature turns on: `utoipa` in `pos-proto`, behind its
+//! `openapi` feature ([ADR-0177](../../../docs/adr/0177-openapi-is-the-route-map.md)
+//! decision 3). Declaring it unconditionally, or enabling it from `default`, fails.
+//!
 //! # Two data sources, because neither alone is right
 //!
 //! The declared layer reads `cargo metadata`, which is the only place that reports
@@ -49,6 +54,8 @@ use serde::Deserialize;
 
 use super::{Error, repo_root};
 use crate::Finding;
+
+mod optional_only;
 
 /// Crates the rule applies to.
 const BACKBONE: [&str; 3] = ["pos-core", "pos-ports", "pos-proto"];
@@ -113,6 +120,9 @@ pub struct Package {
     pub dependencies: Vec<Dependency>,
     #[serde(default)]
     pub targets: Vec<Target>,
+    /// The manifest's `[features]`, each with what it enables.
+    #[serde(default)]
+    pub features: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -148,6 +158,9 @@ pub struct Dependency {
     pub uses_default_features: Option<bool>,
     #[serde(default)]
     pub features: Vec<String>,
+    /// Whether the dependency is `optional = true`.
+    #[serde(default)]
+    pub optional: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -170,6 +183,15 @@ impl Allowlist {
         // except where FORBIDDEN_EDGES says otherwise.
         BACKBONE.contains(&crate_name) || self.allow.contains_key(crate_name)
     }
+
+    /// Whether `crate_name` is admitted only as an optional dependency no default feature enables.
+    fn optional_only(&self, crate_name: &str) -> bool {
+        self.allow
+            .get(crate_name)
+            .and_then(|entry| entry.get("optional-only"))
+            .and_then(toml::Value::as_bool)
+            == Some(true)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -188,122 +210,157 @@ pub fn check(meta: &Metadata, allow: &Allowlist, closures: &Closures) -> Vec<Fin
         let Some(pkg) = meta.packages.iter().find(|p| p.name == name) else {
             continue; // Crate not created yet; earlier phases are allowed to lack it.
         };
-        let manifest = if pkg.manifest_path.is_empty() {
-            format!("crates/{name}/Cargo.toml")
-        } else {
-            relative(&pkg.manifest_path)
-        };
-
-        // -- Layer 1: declared normal dependencies. -------------------------
+        let manifest = manifest_of(pkg);
         for dep in pkg.dependencies.iter().filter(|d| d.kind.is_none()) {
-            // Same reasoning as the closure walk: a proc macro expands in the
-            // compiler and is never linked, so it is not an infrastructure
-            // dependency whether it is declared directly or reached transitively.
-            let declared_is_proc_macro = meta
-                .packages
-                .iter()
-                .find(|p| p.name == dep.name)
-                .is_some_and(Package::is_proc_macro);
-            if !declared_is_proc_macro && !allow.permits(&dep.name) {
-                findings.push(
-                    Finding::new(
-                        &manifest,
-                        "dependency-rule",
-                        format!(
-                            "`{name}` declares `{}`, which is not allow-listed",
-                            dep.name
-                        ),
-                    )
-                    .with_hint(
-                        "either drop the dependency, or add it to \
-                         tools/backbone-allowlist.toml with an ADR — that file needs an \
-                         architecture reviewer",
-                    ),
-                );
-            }
-
-            // A crate can be allow-listed and still be wrong: jiff's default
-            // features read $TZ and /usr/share/zoneinfo (ADR-0014).
-            if let Some(forbidden) = allow.forbidden_features.get(&dep.name) {
-                if dep.uses_default_features == Some(true)
-                    && forbidden.iter().any(|f| f == "default")
-                {
-                    findings.push(
-                        Finding::new(
-                            &manifest,
-                            "dependency-rule",
-                            format!(
-                                "`{name}` takes `{}` with default features, which are \
-                                 forbidden for this crate",
-                                dep.name
-                            ),
-                        )
-                        .with_hint("set `default-features = false` and list features explicitly"),
-                    );
-                }
-                for enabled in &dep.features {
-                    if forbidden.contains(enabled) {
-                        findings.push(Finding::new(
-                            &manifest,
-                            "dependency-rule",
-                            format!(
-                                "`{name}` enables `{}/{enabled}`, which is forbidden \
-                                 for this crate",
-                                dep.name
-                            ),
-                        ));
-                    }
-                }
+            findings.extend(declared_findings(meta, allow, name, &manifest, dep));
+            if allow.optional_only(&dep.name) {
+                findings.extend(optional_only::findings(pkg, &manifest, dep));
             }
         }
+        findings.extend(linked_findings(meta, allow, closures, pkg, &manifest));
+    }
+    findings.extend(forbidden_edge_findings(meta, closures));
 
-        // -- Layer 2: what is actually linked. ------------------------------
-        let empty = BTreeSet::new();
-        let activated = closures.get(name).unwrap_or(&empty);
-        for reached in linked_closure(meta, &pkg.id, activated) {
-            if reached == name {
-                continue;
-            }
-            if !allow.permits(&reached) {
-                findings.push(
-                    Finding::new(
-                        &manifest,
-                        "dependency-rule",
-                        format!("`{name}` links `{reached}`, which is not allow-listed"),
-                    )
-                    .with_hint(format!(
-                        "find the path with `cargo tree -p {name} -e normal --target all \
-                         --invert {reached}`"
-                    )),
-                );
-            }
-        }
+    findings.sort_by(|a, b| (&a.file, &a.message).cmp(&(&b.file, &b.message)));
+    findings.dedup();
+    findings
+}
+
+/// The manifest a finding about `pkg` names, relative to the repository root.
+fn manifest_of(pkg: &Package) -> String {
+    if pkg.manifest_path.is_empty() {
+        format!("crates/{}/Cargo.toml", pkg.name)
+    } else {
+        relative(&pkg.manifest_path)
+    }
+}
+
+/// Layer 1: one declared normal dependency of the backbone crate `name`.
+fn declared_findings(
+    meta: &Metadata,
+    allow: &Allowlist,
+    name: &str,
+    manifest: &str,
+    dep: &Dependency,
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    // Same reasoning as the closure walk: a proc macro expands in the
+    // compiler and is never linked, so it is not an infrastructure
+    // dependency whether it is declared directly or reached transitively.
+    let declared_is_proc_macro = meta
+        .packages
+        .iter()
+        .find(|p| p.name == dep.name)
+        .is_some_and(Package::is_proc_macro);
+    if !declared_is_proc_macro && !allow.permits(&dep.name) {
+        findings.push(
+            Finding::new(
+                manifest,
+                "dependency-rule",
+                format!(
+                    "`{name}` declares `{}`, which is not allow-listed",
+                    dep.name
+                ),
+            )
+            .with_hint(
+                "either drop the dependency, or add it to \
+                 tools/backbone-allowlist.toml with an ADR — that file needs an \
+                 architecture reviewer",
+            ),
+        );
     }
 
-    // -- Edges that are banned outright. ------------------------------------
+    // A crate can be allow-listed and still be wrong: jiff's default
+    // features read $TZ and /usr/share/zoneinfo (ADR-0014).
+    if let Some(forbidden) = allow.forbidden_features.get(&dep.name) {
+        findings.extend(forbidden_feature_findings(name, manifest, dep, forbidden));
+    }
+    findings
+}
+
+/// The features of `dep` its allow-list entry forbids, its defaults among them.
+fn forbidden_feature_findings(
+    name: &str,
+    manifest: &str,
+    dep: &Dependency,
+    forbidden: &[String],
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    if dep.uses_default_features == Some(true) && forbidden.iter().any(|f| f == "default") {
+        findings.push(
+            Finding::new(
+                manifest,
+                "dependency-rule",
+                format!(
+                    "`{name}` takes `{}` with default features, which are \
+                     forbidden for this crate",
+                    dep.name
+                ),
+            )
+            .with_hint("set `default-features = false` and list features explicitly"),
+        );
+    }
+    for enabled in &dep.features {
+        if forbidden.contains(enabled) {
+            findings.push(Finding::new(
+                manifest,
+                "dependency-rule",
+                format!(
+                    "`{name}` enables `{}/{enabled}`, which is forbidden \
+                     for this crate",
+                    dep.name
+                ),
+            ));
+        }
+    }
+    findings
+}
+
+/// Layer 2: what the backbone crate `pkg` actually links.
+fn linked_findings(
+    meta: &Metadata,
+    allow: &Allowlist,
+    closures: &Closures,
+    pkg: &Package,
+    manifest: &str,
+) -> Vec<Finding> {
+    let name = pkg.name.as_str();
+    let empty = BTreeSet::new();
+    let activated = closures.get(name).unwrap_or(&empty);
+    linked_closure(meta, &pkg.id, activated)
+        .into_iter()
+        .filter(|reached| reached != name && !allow.permits(reached))
+        .map(|reached| {
+            Finding::new(
+                manifest,
+                "dependency-rule",
+                format!("`{name}` links `{reached}`, which is not allow-listed"),
+            )
+            .with_hint(format!(
+                "find the path with `cargo tree -p {name} -e normal --target all \
+                 --invert {reached}`"
+            ))
+        })
+        .collect()
+}
+
+/// Edges that are banned outright, whatever the allow-list says.
+fn forbidden_edge_findings(meta: &Metadata, closures: &Closures) -> Vec<Finding> {
+    let mut findings = Vec::new();
     for (from, to, why) in FORBIDDEN_EDGES {
         let Some(pkg) = meta.packages.iter().find(|p| p.name == from) else {
             continue;
         };
-        let manifest = if pkg.manifest_path.is_empty() {
-            format!("crates/{from}/Cargo.toml")
-        } else {
-            relative(&pkg.manifest_path)
-        };
         let empty = BTreeSet::new();
         let activated = closures.get(from).unwrap_or(&empty);
-        let reaches = linked_closure(meta, &pkg.id, activated).contains(to);
-        if reaches {
+        if linked_closure(meta, &pkg.id, activated).contains(to) {
             findings.push(Finding::new(
-                &manifest,
+                manifest_of(pkg),
                 "dependency-rule",
                 format!("`{from}` must not depend on `{to}` — {why}"),
             ));
         }
     }
-
-    findings.sort_by(|a, b| (&a.file, &a.message).cmp(&(&b.file, &b.message)));
-    findings.dedup();
     findings
 }
 
@@ -475,6 +532,7 @@ mod tests {
             [allow]
             serde = { reason = "wire serialization" }
             jiff  = { reason = "zoned datetime arithmetic" }
+            utoipa = { reason = "schemas, behind a feature", optional-only = true }
 
             [forbidden-features]
             jiff = ["tz-system", "tzdb-zoneinfo", "default"]
@@ -491,6 +549,10 @@ mod tests {
         packages: Vec<(String, bool)>,
         /// Resolve-graph edges, by package name.
         edges: Vec<(String, String)>,
+        /// `pos-core`'s optional dependencies, by name.
+        optional: Vec<String>,
+        /// `pos-core`'s `[features]`.
+        features: Vec<(String, Vec<String>)>,
     }
 
     impl Fixture {
@@ -499,7 +561,24 @@ mod tests {
                 declared: Vec::new(),
                 packages: Vec::new(),
                 edges: Vec::new(),
+                optional: Vec::new(),
+                features: Vec::new(),
             }
+        }
+
+        /// Adds an optional dependency to `pos-core`'s manifest, which nothing activates.
+        fn declares_optional(mut self, name: &str) -> Self {
+            self.optional.push(name.to_owned());
+            self.declares(name, true, &[])
+        }
+
+        /// Adds a `[features]` entry to `pos-core`'s manifest.
+        fn feature(mut self, name: &str, enables: &[&str]) -> Self {
+            self.features.push((
+                name.to_owned(),
+                enables.iter().map(|entry| (*entry).to_owned()).collect(),
+            ));
+            self
         }
 
         /// Adds a normal dependency to `pos-core`'s manifest, and the matching edge.
@@ -541,15 +620,24 @@ mod tests {
                         .map(|f| format!("\"{f}\""))
                         .collect::<Vec<_>>()
                         .join(",");
+                    let optional = self.optional.contains(name);
                     format!(
-                        r#"{{"name":"{name}","kind":null,"uses_default_features":{defaults},"features":[{features}]}}"#
+                        r#"{{"name":"{name}","kind":null,"uses_default_features":{defaults},"features":[{features}],"optional":{optional}}}"#
                     )
                 })
                 .collect();
 
+            let features = serde_json::to_string(
+                &self
+                    .features
+                    .iter()
+                    .cloned()
+                    .collect::<BTreeMap<String, Vec<String>>>(),
+            )
+            .expect("fixture features serialize");
             let mut packages = vec![format!(
                 r#"{{"id":"pos-core-id","name":"pos-core","manifest_path":"",
-                     "dependencies":[{}],"targets":[{{"kind":["lib"]}}]}}"#,
+                     "dependencies":[{}],"targets":[{{"kind":["lib"]}}],"features":{features}}}"#,
                 deps.join(",")
             )];
             for (name, is_proc_macro) in &self.packages {
@@ -715,6 +803,70 @@ mod tests {
     }
 
     #[test]
+    fn a_procedural_macro_declared_directly_is_not_flagged() {
+        // The declared layer applies the closure walk's reasoning: a macro expands in the compiler
+        // and is never linked, whether pos-core names it or reaches it through serde.
+        let fixture =
+            Fixture::new()
+                .proc_macro("serde_derive")
+                .declares("serde_derive", false, &[]);
+        let findings = check(&fixture.metadata(), &allowlist(), &fixture.all_activated());
+        assert!(
+            findings.is_empty(),
+            "a declared proc macro was flagged: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn a_development_dependency_is_not_the_declared_layers_business() {
+        let fixture = Fixture::new();
+        let mut meta = fixture.metadata();
+        let core = meta
+            .packages
+            .iter_mut()
+            .find(|package| package.name == "pos-core")
+            .expect("the fixture is rooted at pos-core");
+        for kind in ["dev", "build"] {
+            core.dependencies.push(super::Dependency {
+                name: "tokio".to_owned(),
+                kind: Some(kind.to_owned()),
+                uses_default_features: Some(true),
+                features: Vec::new(),
+                optional: false,
+            });
+        }
+        let findings = check(&meta, &allowlist(), &fixture.all_activated());
+        assert!(
+            findings.is_empty(),
+            "a dev or build dependency was flagged: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn findings_are_sorted_by_file_and_message_and_reported_once() {
+        // Declared in the order tokio, reqwest, and tokio a second time (a target-specific
+        // table names a crate again): each finding is still reported once, alphabetically.
+        let fixture = Fixture::new()
+            .declares("tokio", false, &[])
+            .declares("reqwest", false, &[])
+            .declares("tokio", false, &[]);
+        let messages: Vec<String> =
+            check(&fixture.metadata(), &allowlist(), &fixture.all_activated())
+                .into_iter()
+                .map(|finding| finding.message)
+                .collect();
+        assert_eq!(
+            messages,
+            [
+                "`pos-core` declares `reqwest`, which is not allow-listed",
+                "`pos-core` declares `tokio`, which is not allow-listed",
+                "`pos-core` links `reqwest`, which is not allow-listed",
+                "`pos-core` links `tokio`, which is not allow-listed",
+            ]
+        );
+    }
+
+    #[test]
     fn does_not_traverse_into_a_procedural_macro() {
         // serde's `derive` feature pulls serde_derive, and through it syn. Both run
         // inside the compiler and neither is linked, so requiring the allow-list to
@@ -730,6 +882,73 @@ mod tests {
         assert!(
             findings.is_empty(),
             "the walk crossed a procedural-macro boundary: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn an_optional_only_crate_behind_a_feature_is_accepted() {
+        let fixture = Fixture::new()
+            .declares_optional("utoipa")
+            .feature("openapi", &["dep:utoipa"]);
+        let findings = check(
+            &fixture.metadata(),
+            &allowlist(),
+            &fixture.activated_without(&["utoipa"]),
+        );
+        assert!(
+            findings.is_empty(),
+            "an optional-only crate was refused: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn an_optional_only_crate_declared_unconditionally_is_refused() {
+        let fixture = Fixture::new().declares("utoipa", true, &[]);
+        let findings = check(&fixture.metadata(), &allowlist(), &fixture.all_activated());
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.message.contains("unconditionally")),
+            "a required optional-only crate passed: {findings:?}"
+        );
+    }
+
+    #[test]
+    fn an_optional_only_crate_a_default_feature_reaches_is_refused() {
+        // Through a feature `default` enables, and through `crate/feature`, which turns the
+        // dependency on too; a weak `crate?/feature` does not.
+        for (default, openapi) in [
+            (vec!["openapi"], vec!["dep:utoipa"]),
+            (vec!["utoipa/macros"], vec![]),
+            (vec!["dep:utoipa"], vec![]),
+        ] {
+            let fixture = Fixture::new()
+                .declares_optional("utoipa")
+                .feature("default", &default)
+                .feature("openapi", &openapi);
+            let findings = check(
+                &fixture.metadata(),
+                &allowlist(),
+                &fixture.activated_without(&["utoipa"]),
+            );
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f.message.contains("default features enable")),
+                "{default:?} turned it on unseen: {findings:?}"
+            );
+        }
+        let weak = Fixture::new()
+            .declares_optional("utoipa")
+            .feature("default", &["utoipa?/macros"]);
+        let findings = check(
+            &weak.metadata(),
+            &allowlist(),
+            &weak.activated_without(&["utoipa"]),
+        );
+        assert!(
+            findings.is_empty(),
+            "a weak feature was taken to enable: {findings:?}"
         );
     }
 }

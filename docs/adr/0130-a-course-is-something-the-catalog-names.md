@@ -36,7 +36,7 @@ This is the eighth time in this run of work that a facility has turned out to be
 
 5. **An archived course is not published**, and an entry naming a course the catalog does not carry is drawn ungrouped rather than refused — the same forgiving posture `MenuCatalog::groups_for` already takes for a modifier group, and for the same reason: a partial publish is a real state, and a till that stopped selling over a late-arriving grouping would be worse than one that groups a dish under nothing.
 
-6. **A routing rule's course must exist.** Once there is somewhere to look, `POST`/`PATCH` on a routing rule refuses a `course_id` no active course carries, the way the menu graph's cycle is refused at the write rather than at publish ([`would_cycle`](../../crates/pos-cloud/src/catalog_compiler.rs)). A rule that can never match is a rule an operator will never find out about.
+6. **A routing rule's course must exist.** Once there is somewhere to look, `POST`/`PATCH` on a routing rule refuses a `course_id` no active course carries, the way the menu graph's cycle is refused at the write rather than at publish ([`would_cycle`](../../crates/pos-cloud-catalog/src/catalog_compiler.rs)). A rule that can never match is a rule an operator will never find out about.
 
 7. **Firing by course is the existing command, given its argument.** `LineCommand::Fire { course }` and its `courses_enabled` gate are already written and tested; what is added is a route that fires every unfired line on one course of an order, and a control that offers the courses in `sort` order. **Fire-everything stays exactly as it is** — one button, one transaction — because that is what most orders are, on every store with the capability off and most with it on.
 

@@ -113,7 +113,7 @@ fn harness(code: &str) -> (Router, Arc<FakeKeyVault>, Arc<Edge<FakeStore>>) {
 }
 
 /// The same harness with a store that has published `origins`
-/// ([ADR-0111](../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+/// ([ADR-0111](../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
 fn harness_with_origins(
     code: &str,
     published: &[&str],
@@ -308,6 +308,51 @@ async fn a_malformed_code_is_rejected_locally() {
         .await
         .expect("vault readable");
     assert!(stored.is_none(), "a malformed code stores nothing");
+}
+
+/// A code printed with its cell's prefix (ADR-0181) passes the box's own check and reaches the cloud as
+/// typed, so the cell it reaches can read the prefix and say where it points. A prefix that is not a
+/// cell id is refused on the box, like any other malformed code.
+#[tokio::test]
+async fn a_code_with_a_cell_prefix_is_checked_here_and_presented_as_typed() {
+    let typed = format!("VN1-{}", valid_code());
+    let (router, vault, _edge) = harness(&typed);
+    let (status, body) = call(
+        router,
+        "POST",
+        "/api/activate",
+        &format!("{{\"code\":\"{typed}\"}}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    assert!(
+        vault
+            .load(SecretName::DeviceCredential)
+            .await
+            .expect("vault readable")
+            .is_some()
+    );
+
+    let (router, vault, _edge) = harness(&valid_code());
+    let (status, _) = call(
+        router,
+        "POST",
+        "/api/activate",
+        &format!("{{\"code\":\"1VN-{}\"}}", valid_code()),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "a prefix that is no cell id"
+    );
+    assert!(
+        vault
+            .load(SecretName::DeviceCredential)
+            .await
+            .expect("vault readable")
+            .is_none()
+    );
 }
 
 /// The origin a store published for a second front-end.

@@ -17,7 +17,7 @@ use pos_proto::ids::{StoreId, TenantId};
 use serde::{Deserialize, Serialize};
 
 use super::load_tree_for_write;
-use super::redaction::staff_redacted_for;
+use super::redaction::config_redacted_for;
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::merge::{diff, merge_layers};
@@ -29,10 +29,11 @@ use crate::http::{Json, unprocessable_violations};
 /// What publishing a candidate node *would* change, computed without minting a version or saving:
 /// the RFC 7386 merge patch from the store's current effective document to the candidate, so the
 /// console can show a real before/after before anyone commits ([ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md)).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub(in crate::http) struct ConfigPreview {
     /// The version the diff is computed against — the store's current version — or `null` when the
     /// store has no published configuration yet (the candidate is then entirely new).
+    #[schema(required = true)]
     pub(in crate::http) from_version_id: Option<String>,
     /// The RFC 7386 merge patch a publish would apply to the effective document. An empty object
     /// means the candidate composes to exactly today's effective document.
@@ -132,7 +133,7 @@ struct ConfigPreviewState<Cfg, A, C> {
 
 /// A `POST /admin/config/preview` body — the same `(node, arguments)` pair a batch publish takes,
 /// aimed at one store instead of a cohort.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PreviewNodeRequest {
     tenant_id: String,
     store_id: String,
@@ -145,19 +146,55 @@ struct PreviewNodeRequest {
 }
 
 /// What a preview answers with: the node it compiled, and the diff a publish of it would apply.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 struct NodePreview {
     /// Echoed back so a console that fired several previews can tell the answers apart.
     node: String,
     /// The version the diff is computed against, or `null` when the store has no tree yet.
+    #[schema(required = true)]
     from_version_id: Option<String>,
     /// The RFC 7386 merge patch the publish would apply to the store's effective document, with its
-    /// staff redacted for the caller's role ([`admin_preview_config_node`]).
+    /// staff and prices redacted for the caller's role ([`admin_preview_config_node`]).
     diff: serde_json::Value,
     /// True when nothing would change — there is nothing to publish.
     unchanged: bool,
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/config/preview",
+    extensions(("x-permission" = json!("console.config.publish"))),
+    security(("session_cookie" = [])),
+    request_body(
+        content = PreviewNodeRequest, description = "`tenant_id`, `store_id`, `node` (one of the nodes a batch publish can \
+                       compile), and `arguments`, that node's own publish body without the tenant \
+                       and store. Nothing is written",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = NodePreview, description = "What publishing the node would change: `node`; \
+                                      `from_version_id`, the version the diff is against, or `null` \
+                                      for a store never published to; `diff`, the merge patch \
+                                      (RFC 7386) the publish would apply; and `unchanged`. The node \
+                                      is compiled by the publish's own code, so the preview cannot \
+                                      differ from it. The diff never shows a staff PIN hash; \
+                                      shows a name or staff code only to a role holding \
+                                      console.people.read; and shows the priced nodes (`menu`, \
+                                      `campaigns`, `fees`) only to a role holding \
+                                      console.reports.revenue, so Ops, who may publish, is not \
+                                      shown prices. `unchanged` is computed before redaction. Not \
+                                      audited"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID, node is not one \
+                                      the batch publish knows, or the node's own publish would \
+                                      refuse the arguments — with that publish's own words", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "The publish would be refused, with its violations verbatim", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store or a store the node compiles from is \
+                                      unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config nodes",
+)]
 /// `POST /admin/config/preview` — what publishing this node to this store *would* change.
 ///
 /// # Why this exists when `/admin/config/campaigns/preview` already did
@@ -178,11 +215,17 @@ struct NodePreview {
 ///
 /// A `permissions` preview carries the store's roster: each member's name, staff code and PIN
 /// hash. Publishing that node shows nobody any of them, and `PublishConfig` is Ops's permission
-/// too, so the diff gets a config read's treatment ([`staff_redacted_for`]): never a PIN hash, and
+/// too, so the diff gets a config read's treatment ([`config_redacted_for`]): never a PIN hash, and
 /// a name or code only for a role holding [`ConsolePermission::ReadPeople`]
 /// ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md)). Every
 /// node's preview is redacted, not only that one's: a store with layers and no published version
 /// has nothing to diff against, so the diff of any node is the whole document, staff included.
+///
+/// # Whom the diff prices
+///
+/// A `menu` preview carries the store's price book, and a `campaigns` or `fees` one the promotions'
+/// and fees' amounts. `PublishConfig` is Ops's, `ReadRevenue` is not, and the config read already
+/// withholds those nodes from Ops (S8) — so the diff withholds them too ([`config_redacted_for`]).
 ///
 /// It is redacted *after* it is computed, never before. Diffing redacted documents would answer
 /// `unchanged: true` to a PIN reset or a rename, and an operator told that nothing would change
@@ -250,7 +293,7 @@ where
             Json(NodePreview {
                 node: request.node,
                 from_version_id: preview.from_version_id,
-                diff: staff_redacted_for(&preview.diff, context.admin.role),
+                diff: config_redacted_for(&preview.diff, context.admin.role),
                 unchanged: preview.unchanged,
             }),
         )

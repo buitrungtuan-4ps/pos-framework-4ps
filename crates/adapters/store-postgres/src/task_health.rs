@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! Background-task health over PostgreSQL ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md) slice 4).
+//! Background-task health over PostgreSQL ([ADR-0068](../../../../docs/adr/0068-fleet-liveness.md) slice 4).
 //!
 //! One row per named background loop (`task_health`), upserted at the end of every tick. This adapter
 //! keeps only the SQL and returns plain rows; `pos-cloud` implements its `TaskHealthStore` seam over

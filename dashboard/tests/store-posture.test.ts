@@ -12,7 +12,6 @@
 
 import { describe, expect, it } from "vitest";
 
-import type { DailyRollup } from "../src/api/types";
 import {
   configVerdict,
   neverInstalled,
@@ -20,6 +19,7 @@ import {
   stockAnswer,
   type StoreFacts,
 } from "../src/lib/posture";
+import type { DailyRollup } from "../src/api/schemas";
 
 /** A store that has never once checked in: created in the console, not yet installed. */
 const PROVISIONED: StoreFacts = {

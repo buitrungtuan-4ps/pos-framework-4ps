@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The layout read route ([ADR-0066](../../../docs/adr/0066-cloud-catalog.md),
+//! The layout read route ([ADR-0066](../../../../docs/adr/0066-cloud-catalog.md),
 //! production-readiness **C4**).
 //!
 //! `GET /api/layout` serves how the till should group and order its buttons: the display categories,
@@ -48,6 +48,7 @@ use crate::app::Edge;
 
 /// The store's presentation plan for this channel, as the in-store UI reads it.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct LayoutResponse {
     /// The display categories, in the order the console arranged them. Empty when nothing has been
     /// laid out, which the till reads as "draw the flat price book".
@@ -56,6 +57,7 @@ pub(crate) struct LayoutResponse {
 
 /// One display category: a tab or section on the till.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct CategoryResponse {
     display_category_id: DisplayCategoryId,
     /// The name to show on the tab.
@@ -68,6 +70,7 @@ pub(crate) struct CategoryResponse {
 
 /// One display sub-category: a second grouping level with its own buttons.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct SubcategoryResponse {
     display_subcategory_id: DisplaySubcategoryId,
     name: DisplayName,
@@ -76,6 +79,7 @@ pub(crate) struct SubcategoryResponse {
 
 /// One item's button.
 #[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct ButtonResponse {
     /// The item this button orders — the id the price book from `GET /api/menu` carries. Layout
     /// names the item; the price book prices it; the two meet only here.
@@ -85,9 +89,11 @@ pub(crate) struct ButtonResponse {
     /// The button's zero-based column on a fixed grid, absent for a flowing layout where order alone
     /// places it.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     column: Option<u16>,
     /// The button's zero-based row, absent for the same reason as `column`.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     row: Option<u16>,
 }
 
@@ -136,8 +142,26 @@ fn respond_with(plan: &DisplayPlan) -> LayoutResponse {
     }
 }
 
+#[cfg_attr(feature = "openapi", utoipa::path(
+    get,
+    path = "/api/layout",
+    security(("till_session" = [])),
+    params(
+        ("If-None-Match" = Option<String>, Header, description = "The ETag of the copy the till holds"),
+    ),
+    responses(
+        (status = 200, body = LayoutResponse, description = "How the till groups and orders its buttons: the display categories, their \
+                                      sub-categories, and each item's caption and grid slot. No prices. An \
+                                      empty plan means the till draws the flat price book. \
+                                      The ETag tags this body"),
+        (status = 304, description = "If-None-Match names the current ETag: nothing changed, and no body is sent"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+    ),
+    tag = "published configuration",
+))]
 /// `GET /api/layout` — the store's published presentation plan, read from the live session.
-pub(crate) async fn plan<S>(State(edge): State<Arc<Edge<S>>>) -> Response
+pub(crate) async fn layout_plan<S>(State(edge): State<Arc<Edge<S>>>) -> Response
 where
     S: EventStore + Send + Sync + 'static,
 {

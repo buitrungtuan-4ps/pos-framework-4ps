@@ -14,10 +14,10 @@ use pos_proto::ids::{ConfigVersionId, StoreId, TenantId};
 use serde::Deserialize;
 
 use super::if_match::if_match_config;
-use super::redaction::{staff_redacted_for, without_prices};
+use super::redaction::config_redacted_for;
 use super::{load_tree_for_write, strip_tree_version};
 use crate::auth::admin::AdminStore;
-use crate::auth::console_rbac::{ConsolePermission, role_grants};
+use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::{CapabilityValidator, ConfigTree, ConfigTreeStore};
 use crate::http::setting_refusal::save_if_confirmed;
 use crate::http::{
@@ -29,7 +29,7 @@ use crate::http::{
 
 /// One published config version as the console lists it: the version id, when it was published (from
 /// the ULID's own timestamp, Unix ms), and whether it is the store's current version.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct ConfigVersionView {
     version_id: String,
     at_ms: i64,
@@ -42,7 +42,7 @@ struct ConfigVersionView {
 /// last edited?" — and until now the only answer available was per tree: one version id covering
 /// thirteen nodes, so publishing a tax change made the menu look freshly published too. Every
 /// version now records which nodes it wrote ([`PublishedVersion::nodes`]), and this is that read.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct ConfigNodeView {
     /// The node key — `locale`, `tax`, `menu`, `permissions`, and so on.
     node: String,
@@ -51,8 +51,10 @@ struct ConfigNodeView {
     /// `null` is *not* "never published": the node is in the effective document, so it was. It means
     /// the version that put it there predates this field, or was a whole-layer replace that named
     /// nothing. The console says "published, when is not recorded" rather than inventing a date.
+    #[schema(required = true)]
     version_id: Option<String>,
     /// When that version was published (from its ULID's own timestamp, Unix ms), or `null` with it.
+    #[schema(required = true)]
     at_ms: Option<i64>,
 }
 
@@ -62,31 +64,31 @@ struct ConfigNodeView {
 /// version it *is* holding is on the fleet read (`GET /admin/fleet/stores/{id}`), which every screen
 /// that asks this question has already loaded — so it is not repeated here, and the comparison
 /// happens where both numbers already are.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct ConfigNodesView {
+    #[schema(required = true)]
     current_version_id: Option<String>,
     nodes: Vec<ConfigNodeView>,
 }
 
 /// A super-admin rolls a store's config back to a past version.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(in crate::http) struct RollbackConfigRequest {
     /// The version to restore (a ULID); its effective document becomes the new current version.
     version_id: String,
 }
 
-/// Lists a store's published config versions newest-first (super-admin only). The version history is
-/// the config tree's own append-only log; the `at` of each is read from its ULID id, so no separate
-/// timestamp column is needed. `404` if the store has no tree yet.
 #[utoipa::path(
     get,
     path = "/admin/stores/{store_id}/config/nodes",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     params(
         ("store_id" = String, Path, description = "The store whose published nodes to list (a 26-character ULID)"),
         ("tenant_id" = String, Query, description = "The tenant the store belongs to (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The tree's current version id and, per node of the effective \
+        (status = 200, body = ConfigNodesView, description = "The tree's current version id and, per node of the effective \
                                       document, the version that last published it and when. A \
                                       node whose version is null is published but by a version \
                                       that does not record which nodes it wrote"),
@@ -161,6 +163,30 @@ where
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/stores/{store_id}/config/versions",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    params(
+        ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, body = [ConfigVersionView], description = "Every configuration version the store has had, newest first, \
+                                      as an array: `version_id`, `at_ms` (read from the id) and \
+                                      `current`. The history only grows: a rollback adds a version"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "This store has never published a configuration", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config",
+)]
+/// Lists a store's published config versions newest-first (super-admin only). The version history is
+/// the config tree's own append-only log; the `at` of each is read from its ULID id, so no separate
+/// timestamp column is needed. `404` if the store has no tree yet.
 pub(in crate::http) async fn admin_config_versions<S, R, K, C, A, T, W>(
     State(app): State<CloudApp<S, R, K, C, A, T, W>>,
     headers: HeaderMap,
@@ -212,6 +238,30 @@ where
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/stores/{store_id}/config/versions/{version_id}",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    params(
+        ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
+        ("version_id" = String, Path, description = "The version (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, body = pos_cloud_api::body_schema::FreeFormJson, description = "That version's effective configuration, for comparing with \
+                                      another. Redacted for the reader: never a staff PIN hash, a person's name or staff code only for a role \
+                                      holding console.people.read, and prices only for a role \
+                                      holding console.reports.revenue: a past version is no less sensitive"),
+        (status = 400, description = "tenant_id, store_id or version_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The store has never published a configuration, or has no \
+                                      such version", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config",
+)]
 /// The effective (composed, validated) document of one past config version (super-admin only), for
 /// the console's diff view. `404` if the store or the named version is unknown.
 pub(in crate::http) async fn admin_config_version_effective<S, R, K, C, A, T, W>(
@@ -234,7 +284,6 @@ where
             Ok(context) => context,
             Err(denied) => return denied,
         };
-    let prices = role_grants(context.admin.role, ConsolePermission::ReadRevenue);
     let (tenant_id, store_id, version_id) = match parse_ulid_fields([
         ("tenant_id", &query.tenant_id),
         ("store_id", &store_id),
@@ -260,12 +309,7 @@ where
                 // past staff names (ADR-0158) and past prices (S8) — none is less sensitive for
                 // being last month's.
                 Some(effective) => {
-                    let document = staff_redacted_for(effective, context.admin.role);
-                    let document = if prices {
-                        document
-                    } else {
-                        without_prices(&document)
-                    };
+                    let document = config_redacted_for(effective, context.admin.role);
                     (StatusCode::OK, Json(document)).into_response()
                 }
                 None => not_found("config version"),
@@ -276,6 +320,39 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/stores/{store_id}/config/rollback",
+    extensions(("x-permission" = json!("console.config.publish"))),
+    security(("session_cookie" = [])),
+    params(
+        ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
+        ("If-Match" = String, Header, description = "The configuration version the rollback was \
+                                                     decided against (ADR-0095). Required"),
+    ),
+    request_body(
+        content = RollbackConfigRequest, description = "`version_id`, the past version to restore",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = PublishedConfig, description = "Restored as a new current version: the history is never \
+                                      rewritten. The body carries `config_version_id`, which the \
+                                      store pulls on its next sync. Audited with both versions"),
+        (status = 400, description = "An id is absent or not a ULID; If-Match is absent or \
+                                      malformed; or the restored version runs a value that needs a \
+                                      recorded confirmation first (ADR-0169)", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The store has never published a configuration, or has no \
+                                      such version", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "The store's configuration changed since you read it, or \
+                                      If-Match is `*` but the store has been published to: re-read \
+                                      it and try again", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store or the entropy source is unavailable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config",
+)]
 /// Rolls a store's config back to a past version (super-admin only). Append-only: the chosen version's
 /// effective document is re-published as a *new* current version, so nothing in the history is altered
 /// or removed and the store pulls the restored config on its next sync. The action is audited as

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The alert evaluator background loop ([ADR-0073](../../../docs/adr/0073-alerting.md), Track O2).
+//! The alert evaluator background loop ([ADR-0073](../../../../docs/adr/0073-alerting.md), Track O2).
 //!
 //! One more background loop, in the mould of the rollup projector and webhook dispatcher: each tick it
 //! gathers a read-model snapshot (per-tenant fleet rows and disabled webhook endpoints, the
@@ -10,7 +10,7 @@
 //! then records its own `task_health` tick, so the watcher is itself watched.
 //!
 //! The store→cloud JetStream capacity is read — and the fleet stream's ceiling *reconciled* — by the
-//! optional [`StreamCapacityProbe`] ([ADR-0087](../../../docs/adr/0087-edge-relay-and-event-publish.md)
+//! optional [`StreamCapacityProbe`] ([ADR-0087](../../../../docs/adr/0087-edge-relay-and-event-publish.md)
 //! Amendment 2). A deployment with no `[nats]` section has no probe and passes `None`, exactly as
 //! every deployment did before the probe existed; a probe that cannot read the stream logs and passes
 //! `None` too, because one unreachable broker must not stop the store-offline and webhook conditions
@@ -51,7 +51,7 @@ pub struct PassSummary {
     ///
     /// A failed delivery is deliberately *not* a failed pass: the alerts are already stored and
     /// already in the console before a channel is asked, so the evaluator did its job
-    /// ([ADR-0073](../../../docs/adr/0073-alerting.md)). It surfaces here so the tick's health detail
+    /// ([ADR-0073](../../../../docs/adr/0073-alerting.md)). It surfaces here so the tick's health detail
     /// can say "firing, and not arriving", which is a different fault from either half being down.
     pub delivery_error: Option<String>,
 }
@@ -227,7 +227,7 @@ where
 }
 
 /// Reconciles the fleet stream's ceiling and reads its fill, or `None` when there is nothing to read
-/// ([ADR-0087](../../../docs/adr/0087-edge-relay-and-event-publish.md) Amendment 2).
+/// ([ADR-0087](../../../../docs/adr/0087-edge-relay-and-event-publish.md) Amendment 2).
 ///
 /// **A probe failure is not a pass failure**, for the same reason a delivery failure is not: the
 /// other conditions are computed from the read model and do not need the broker. A cloud whose NATS
@@ -255,7 +255,7 @@ async fn stream_capacity<Pr: StreamCapacityProbe + Sync>(
 /// **The return type is the invariant.** `Option<String>` rather than `Result<(), _>` so there is no
 /// arrangement of the caller in which a `?` turns a failed push into a failed pass: the alerts are
 /// stored and in the console before this is called, and a channel that cannot be reached does not
-/// undo that ([ADR-0073](../../../docs/adr/0073-alerting.md)).
+/// undo that ([ADR-0073](../../../../docs/adr/0073-alerting.md)).
 ///
 /// An empty batch never reaches the channel. A channel asked every tick with nothing to say would
 /// deliver "all clear" a thousand times a day, which is how the one message that matters comes to be

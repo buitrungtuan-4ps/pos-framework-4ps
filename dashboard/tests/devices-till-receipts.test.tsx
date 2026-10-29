@@ -14,9 +14,9 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { DeviceProposalSummary } from "../src/api/types";
 import { Devices } from "../src/screens/Devices";
 import { selectStore, selectTenant } from "../src/state/session";
+import type { DeviceProposalSummary } from "../src/api/schemas";
 
 const TENANT = { id: "01M22190WCY5PS7KCA7ET7H679", name: "Pizza 4P's Vietnam" };
 const STORE = { id: "01STOREAAAAAAAAAAAAAAAAAAA", name: "Ben Thanh" };

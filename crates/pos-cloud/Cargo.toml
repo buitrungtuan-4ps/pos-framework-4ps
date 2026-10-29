@@ -41,14 +41,30 @@ path = "src/main.rs"
 
 [dependencies]
 # The backbone and the cloud store this binary composes. Paths, not versions.
-pos-ports = { path = "../pos-ports" }
-pos-proto = { path = "../pos-proto" }
+# `openapi`: the configuration update a store pulls names its schema (ADR-0180 D-T2).
+pos-ports = { path = "../pos-ports", features = ["openapi"] }
+# With `openapi`, so the wire types carry the schemas the OpenAPI documents describe responses
+# with (ADR-0177 decision 3).
+pos-proto = { path = "../pos-proto", features = ["openapi"] }
 # Authentication, the audit trail, paging and the error envelope every route module shares
 # (ADR-0170 decision 4). Re-exported, so `pos_cloud::auth` and the others keep their paths.
 pos-cloud-api = { path = "../pos-cloud-api" }
 # The reports: rollups, revenue, the X/Z report and their routes (ADR-0170 decision 4). Re-exported,
 # so `pos_cloud::dashboard`, the report types in `pos_cloud::cloud` and the CSV writers keep their paths.
 pos-cloud-reports = { path = "../pos-cloud-reports" }
+# The configuration base: the config tree, the publish every area writes through, the registry,
+# settings and QR ordering's switch (ADR-0170 decision 4). Re-exported, so `pos_cloud::config_tree`
+# and the others keep their paths.
+pos-cloud-config = { path = "../pos-cloud-config" }
+pos-cloud-catalog = { path = "../pos-cloud-catalog" }
+pos-cloud-floor = { path = "../pos-cloud-floor" }
+pos-cloud-people = { path = "../pos-cloud-people" }
+# The inventory: its records, routes and store (ADR-0170 decision 4). Re-exported, so
+# `pos_cloud::inventory` and the inventory routers keep their paths.
+pos-cloud-inventory = { path = "../pos-cloud-inventory" }
+# The devices: activation, claims, onboarding and their routes and stores (ADR-0170 decision 4).
+# Re-exported, so `pos_cloud::devices` and the device routers keep their paths.
+pos-cloud-devices = { path = "../pos-cloud-devices" }
 # The real cloud composes the PostgreSQL event store (ADR-0016); main.rs opens it. Tests compose
 # pos-fakes instead — the same ingest and rollup code runs against both (ADR-0026).
 store-postgres = { path = "../adapters/store-postgres" }
@@ -168,6 +184,11 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 # general" work ADR-0007 says to buy rather than hand-roll. Permissive-licensed (Unlicense OR MIT),
 # advisory-clean; pulls only `csv-core`/`itoa`/`ryu` beside `serde`, already in the tree.
 csv = "1"
+
+# The cell directory's minisign check (ADR-0179 C2), reusing the verifier the edge checks a release
+# with (ADR-0047). A workspace path crate whose subtree (ed25519-dalek, blake2) is already in the
+# lock, and verify-only: the cloud never holds or generates the directory's signing key.
+updater-minisign = { path = "../adapters/updater-minisign" }
 
 [dev-dependencies]
 # Exercise the router without a socket: build the Router and drive it with ServiceExt::oneshot.

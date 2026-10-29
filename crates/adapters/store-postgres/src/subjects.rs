@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The subject store over PostgreSQL — where personal data lives and is masked (P7, [ADR-0035](../../../docs/adr/0035-retention-and-pii-masking.md)).
+//! The subject store over PostgreSQL — where personal data lives and is masked (P7, [ADR-0035](../../../../docs/adr/0035-retention-and-pii-masking.md)).
 //!
 //! The retention cron sweeps this table fleet-wide (as the trusted role), so these queries carry no
 //! tenant: [`due_before`](PostgresSubjects::due_before) returns unmasked rows collected at or before a
@@ -81,7 +81,7 @@ impl PostgresSubjects {
     }
 
     /// One subject row by id, scoped to the tenant that owns it — the read behind the PDPD/GDPR
-    /// subject-request tooling ([ADR-0076](../../../docs/adr/0076-subject-request-tooling.md)). Returns
+    /// subject-request tooling ([ADR-0076](../../../../docs/adr/0076-subject-request-tooling.md)). Returns
     /// `None` when no such subject belongs to `tenant_id`, so an operator acting for one tenant can
     /// never read another's personal data even though `subject_id` is globally unique. Reports the real
     /// `masked_at` so the caller knows whether the row still holds data.

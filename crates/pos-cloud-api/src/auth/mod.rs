@@ -4,7 +4,7 @@
 //! Cloud authentication — two mechanisms for two kinds of caller (P7).
 //!
 //! The **super-admin** is a human signing in interactively
-//! ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)): the most privileged identity, so its
+//! ([ADR-0034](../../../../docs/adr/0034-super-admin-auth.md)): the most privileged identity, so its
 //! sign-in is two-factor and the second factor is not optional. [`SuperAdminCredential::authenticate`]
 //! accepts a login only when the [`password`] verifies *and* the [`totp`] code verifies and has not
 //! been used before; there is no password-only path, and the [`session`] cookie it leads to is scoped
@@ -16,7 +16,7 @@
 //! cookie carries.
 //!
 //! A **machine integrator** presents a scoped per-tenant [`apikey`] instead
-//! ([ADR-0037](../../../docs/adr/0037-api-keys.md)): a bearer token whose secret is stored only as a
+//! ([ADR-0037](../../../../docs/adr/0037-api-keys.md)): a bearer token whose secret is stored only as a
 //! hash, bound to one tenant and a deny-by-default scope set — the isolation and least-privilege
 //! controls for the public `/v1` surface. [`bearer`] is the HTTP seam over it: it reads the
 //! `Authorization` header, verifies the key against the clock, and yields the [`apikey::Grant`] a
@@ -92,7 +92,7 @@ impl SuperAdminCredential {
     /// Whether `password` verifies against the stored Argon2id hash — the knowledge factor on its own.
     ///
     /// Used where the second factor is not a TOTP code: the recovery-code sign-in
-    /// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6) pairs this with a
+    /// ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6) pairs this with a
     /// single-use recovery code, and TOTP re-enrolment pairs it with a fresh secret. The two-factor
     /// [`authenticate`](Self::authenticate) remains the only password+TOTP path.
     #[must_use]
@@ -102,7 +102,7 @@ impl SuperAdminCredential {
 
     /// The same credential with its TOTP secret replaced (the knowledge factor unchanged) — a TOTP
     /// re-enrolment rotating the possession factor
-    /// ([ADR-0067](../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6).
+    /// ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md) slice 6).
     #[must_use]
     pub fn with_totp(&self, totp: TotpSecret) -> Self {
         Self {

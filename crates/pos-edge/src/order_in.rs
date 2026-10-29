@@ -25,12 +25,13 @@ use pos_ports::intake_ledger::{IntakeLedger, IntakeRecord};
 use pos_ports::order_in::{ExternalReference, InboundOrder, OrderAcceptance, OrderIn};
 use pos_ports::{PortError, PortName};
 use pos_proto::error::ErrorStatus;
-use pos_proto::ids::DeviceId;
+use pos_proto::ids::{DeviceId, OrderId};
 use pos_proto::money::Money;
+use pos_proto::time::BusinessDate;
 use pos_proto::wire_enum::Open;
 use pos_proto::{SalesChannel, StoreId};
 
-use crate::app::{AppError, Edge, InboundOrderOpened, IntakeIntent};
+use crate::app::{AppError, Edge, EdgeSession, InboundOrderOpened, IntakeIntent};
 use crate::line_notes::NoteText;
 use crate::queue::QueueNumberAuthority;
 
@@ -100,71 +101,14 @@ where
             awaiting_staff_confirmation: record.awaiting_staff_confirmation,
         })
     }
-}
-
-impl<S, Q> OrderIn for EdgeOrderIn<S, Q>
-where
-    S: EventStore + IntakeLedger + Send + Sync,
-    Q: QueueNumberAuthority,
-{
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one linear intake flow: validate, dedupe, channel-gate, reprice each line, then \
-                  open the order and allocate the queue number in one transaction"
-    )]
-    async fn submit(&self, order: &InboundOrder) -> Result<OrderAcceptance, PortError> {
-        if order.lines.is_empty() {
-            return Err(PortError::invalid_argument(
-                PortName::OrderIn,
-                "an order must have at least one line",
-            ));
-        }
-        if order.store_id != self.edge.store_id() {
-            return Err(PortError::failed_precondition(
-                PortName::OrderIn,
-                "the order is addressed to another store",
-            ));
-        }
-
-        let channel_token = order.sales_channel.as_wire();
-        let reference = order.external_reference.as_str();
-
-        // A repeat — the caller's retry, or the relay's at-least-once delivery — returns the recorded
-        // acceptance and reports it did not create a second order.
-        if let Some(record) = self
-            .edge
-            .look_up_intake(channel_token, reference)
-            .await
-            .map_err(port_error_from_app)?
-        {
-            return self
-                .acceptance_from_record(order.store_id, &record, false)
-                .await;
-        }
-
-        let session = self.edge.session();
-        let channel = order.sales_channel.known();
-        // The store must accept this sales channel (ADR-0080, M7). A store with no `channels` node
-        // published has no restriction; once one is published, an order on a channel it does not list
-        // is refused up front rather than priced and opened.
-        if !session.channel_enabled(channel) {
-            return Err(PortError::failed_precondition(
-                PortName::OrderIn,
-                "this store does not accept orders on that sales channel",
-            ));
-        }
-        // QR ordering is one switch, the `qr_ordering_enabled` capability (ADR-0160 decision 5): a
-        // QR order is refused where the store's configuration switches it off, whether the guest
-        // page relayed it or a keyed caller sent it. A configuration that does not carry the switch
-        // decides by the channel list above alone, as this did before the switch, so an edge that
-        // updates before its cloud refuses nothing it took (`EdgeSession::qr_ordering_switched_off`).
-        if channel == SalesChannel::Qr && session.qr_ordering_switched_off() {
-            return Err(port_error_from_app(AppError::Domain(
-                DomainError::CapabilityDisabled {
-                    capability: Capability::QrOrdering.meta().key,
-                },
-            )));
-        }
+    /// Reprices each line against the store's menu for `channel`, refusing an item staff marked
+    /// sold out, and sums what the order owes.
+    fn price_lines(
+        &self,
+        session: &EdgeSession,
+        channel: SalesChannel,
+        order: &InboundOrder,
+    ) -> Result<PricedOrder, PortError> {
         let mut priced_lines: Vec<(PricedLine, Option<NoteText>)> =
             Vec::with_capacity(order.lines.len());
         let mut total = Money::zero(session.currency);
@@ -207,71 +151,138 @@ where
                 .and_then(|note| NoteText::lenient(note.as_str()));
             priced_lines.push((priced, note));
         }
-
-        // Open the order and record the idempotency row in ONE transaction: `sales.order.opened` +
-        // a line per priced line + the ledger row (ADR-0064). A concurrent second order on the same
-        // key loses the race at commit (`already_exists`) — resolve it by returning the winner.
-        let intent = IntakeIntent {
-            sales_channel: channel_token,
-            external_reference: reference,
+        Ok(PricedOrder {
+            lines: priced_lines,
             total,
             repriced,
-        };
-        let InboundOrderOpened {
-            order_id,
-            business_date,
-            awaiting_staff_confirmation,
-        } = match self
+        })
+    }
+
+    /// The acceptance a repeat of `order`'s reference is owed, if one was already accepted.
+    async fn recorded_acceptance(
+        &self,
+        order: &InboundOrder,
+    ) -> Result<Option<OrderAcceptance>, PortError> {
+        let channel_token = order.sales_channel.as_wire();
+        let reference = order.external_reference.as_str();
+        if let Some(record) = self
             .edge
+            .look_up_intake(channel_token, reference)
+            .await
+            .map_err(port_error_from_app)?
+        {
+            return self
+                .acceptance_from_record(order.store_id, &record, false)
+                .await
+                .map(Some);
+        }
+        Ok(None)
+    }
+
+    /// Opens the order and records the idempotency row in ONE transaction: `sales.order.opened` +
+    /// a line per priced line + the ledger row (ADR-0064).
+    async fn open(
+        &self,
+        order: &InboundOrder,
+        priced: &PricedOrder,
+    ) -> Result<InboundOrderOpened, AppError> {
+        let intent = IntakeIntent {
+            sales_channel: order.sales_channel.as_wire(),
+            external_reference: order.external_reference.as_str(),
+            total: priced.total,
+            repriced: priced.repriced,
+        };
+        self.edge
             .open_inbound_order(
                 self.device_id,
                 order.sales_channel.clone(),
                 order.table_id,
-                &priced_lines,
+                &priced.lines,
                 Some(intent),
             )
             .await
-        {
-            Ok(opened) => opened,
-            Err(AppError::Port(error)) if error.status() == ErrorStatus::AlreadyExists => {
-                // Another delivery of the same reference won the race and its record is now durable.
-                let record = self
-                    .edge
-                    .look_up_intake(channel_token, reference)
-                    .await
-                    .map_err(port_error_from_app)?
-                    .ok_or_else(|| {
-                        PortError::internal(
-                            PortName::OrderIn,
-                            "an order exists for this reference but its record is missing",
-                        )
-                    })?;
-                return self
-                    .acceptance_from_record(order.store_id, &record, false)
-                    .await;
-            }
-            Err(other) => return Err(port_error_from_app(other)),
-        };
+    }
 
-        // A tableless order (takeaway / delivery / public API) is called back by a daily queue
-        // number; a QR order names a table and is served there, so it gets none. The authority is
-        // durable and idempotent by order (ADR-0064).
-        let queue_number = if order.table_id.is_none() {
+    /// The acceptance another delivery of the same reference won the race with, whose record is
+    /// now durable.
+    async fn race_winner(&self, order: &InboundOrder) -> Result<OrderAcceptance, PortError> {
+        let channel_token = order.sales_channel.as_wire();
+        let reference = order.external_reference.as_str();
+        let record = self
+            .edge
+            .look_up_intake(channel_token, reference)
+            .await
+            .map_err(port_error_from_app)?
+            .ok_or_else(|| {
+                PortError::internal(
+                    PortName::OrderIn,
+                    "an order exists for this reference but its record is missing",
+                )
+            })?;
+        self.acceptance_from_record(order.store_id, &record, false)
+            .await
+    }
+
+    /// A tableless order (takeaway / delivery / public API) is called back by a daily queue
+    /// number; a QR order names a table and is served there, so it gets none. The authority is
+    /// durable and idempotent by order (ADR-0064).
+    async fn queue_number(
+        &self,
+        order: &InboundOrder,
+        business_date: BusinessDate,
+        order_id: OrderId,
+    ) -> Result<Option<u32>, PortError> {
+        if order.table_id.is_none() {
             let number = self
                 .queue
                 .allocate_queue_number(order.store_id, business_date, order_id)
                 .await?;
-            Some(u32::try_from(number).unwrap_or(u32::MAX))
+            Ok(Some(u32::try_from(number).unwrap_or(u32::MAX)))
         } else {
-            None
+            Ok(None)
+        }
+    }
+}
+
+impl<S, Q> OrderIn for EdgeOrderIn<S, Q>
+where
+    S: EventStore + IntakeLedger + Send + Sync,
+    Q: QueueNumberAuthority,
+{
+    async fn submit(&self, order: &InboundOrder) -> Result<OrderAcceptance, PortError> {
+        refuse_misaddressed(order, self.edge.store_id())?;
+        // A repeat — the caller's retry, or the relay's at-least-once delivery — returns the recorded
+        // acceptance and reports it did not create a second order.
+        if let Some(repeat) = self.recorded_acceptance(order).await? {
+            return Ok(repeat);
+        }
+
+        let session = self.edge.session();
+        let channel = order.sales_channel.known();
+        refuse_closed_channel(&session, channel)?;
+        let priced = self.price_lines(&session, channel, order)?;
+
+        // A concurrent second order on the same key loses the race at commit (`already_exists`) —
+        // resolve it by returning the winner.
+        let InboundOrderOpened {
+            order_id,
+            business_date,
+            awaiting_staff_confirmation,
+        } = match self.open(order, &priced).await {
+            Ok(opened) => opened,
+            Err(AppError::Port(error)) if error.status() == ErrorStatus::AlreadyExists => {
+                return self.race_winner(order).await;
+            }
+            Err(other) => return Err(port_error_from_app(other)),
         };
+        let queue_number = self.queue_number(order, business_date, order_id).await?;
 
         Ok(OrderAcceptance {
             order_id,
             created: true,
             queue_number,
-            total,
-            repriced,
+            total: priced.total,
+            repriced: priced.repriced,
             // Whether a QR order waits for staff (ADR-0057, and ADR-0080 M7 for the store's own
             // switch) was decided by `open_inbound_order` against the session snapshot this order
             // was priced on, and written to the ledger row in the same transaction. Taken from
@@ -303,6 +314,56 @@ where
             None => Ok(None),
         }
     }
+}
+
+/// An inbound order's lines, repriced, with what the order owes and whether any price moved.
+struct PricedOrder {
+    lines: Vec<(PricedLine, Option<NoteText>)>,
+    total: Money,
+    repriced: bool,
+}
+
+/// Refuses an order with no lines, or one addressed to another store.
+fn refuse_misaddressed(order: &InboundOrder, store_id: StoreId) -> Result<(), PortError> {
+    if order.lines.is_empty() {
+        return Err(PortError::invalid_argument(
+            PortName::OrderIn,
+            "an order must have at least one line",
+        ));
+    }
+    if order.store_id != store_id {
+        return Err(PortError::failed_precondition(
+            PortName::OrderIn,
+            "the order is addressed to another store",
+        ));
+    }
+    Ok(())
+}
+
+/// Refuses an order on a channel the store does not take.
+fn refuse_closed_channel(session: &EdgeSession, channel: SalesChannel) -> Result<(), PortError> {
+    // The store must accept this sales channel (ADR-0080, M7). A store with no `channels` node
+    // published has no restriction; once one is published, an order on a channel it does not list
+    // is refused up front rather than priced and opened.
+    if !session.channel_enabled(channel) {
+        return Err(PortError::failed_precondition(
+            PortName::OrderIn,
+            "this store does not accept orders on that sales channel",
+        ));
+    }
+    // QR ordering is one switch, the `qr_ordering_enabled` capability (ADR-0160 decision 5): a
+    // QR order is refused where the store's configuration switches it off, whether the guest
+    // page relayed it or a keyed caller sent it. A configuration that does not carry the switch
+    // decides by the channel list above alone, as this did before the switch, so an edge that
+    // updates before its cloud refuses nothing it took (`EdgeSession::qr_ordering_switched_off`).
+    if channel == SalesChannel::Qr && session.qr_ordering_switched_off() {
+        return Err(port_error_from_app(AppError::Domain(
+            DomainError::CapabilityDisabled {
+                capability: Capability::QrOrdering.meta().key,
+            },
+        )));
+    }
+    Ok(())
 }
 
 /// Maps a [`RepriceError`] to the `OrderIn` error class the contract fixes for it

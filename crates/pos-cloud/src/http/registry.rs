@@ -14,6 +14,7 @@ use axum::routing::get;
 use brands::{admin_create_brand, admin_list_brands, admin_update_brand};
 use devices::{admin_create_device, admin_list_devices, admin_update_device};
 use pos_cloud_api::response::api_error;
+use pos_cloud_config::route::registry_error_response;
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
 use serde::Deserialize;
@@ -22,13 +23,27 @@ use tenants::{admin_create_tenant, admin_list_tenants, admin_update_tenant};
 
 use crate::audit::AuditRecorder;
 use crate::auth::admin::AdminStore;
-use crate::registry::{RegistryStore, RegistryStoreError};
+use crate::registry::RegistryStore;
 use crate::starting_roles::StartingRoles;
 
 mod brands;
 mod devices;
 mod stores;
 mod tenants;
+
+// The handlers the console's OpenAPI document names.
+pub(crate) use brands::{
+    __path_admin_create_brand, __path_admin_list_brands, __path_admin_update_brand,
+};
+pub(crate) use devices::{
+    __path_admin_create_device, __path_admin_list_devices, __path_admin_update_device,
+};
+pub(crate) use stores::{
+    __path_admin_create_store, __path_admin_list_stores, __path_admin_update_store,
+};
+pub(crate) use tenants::{
+    __path_admin_create_tenant, __path_admin_list_tenants, __path_admin_update_tenant,
+};
 
 // --- Org registry (`/admin/tenants|brands|stores`, ADR-0065) ------------------------------------
 
@@ -51,7 +66,7 @@ struct RegistryState<Rg, A, C> {
 /// Every route is behind the super-admin session guard, and names a tenant the admin-is-global way
 /// ([ADR-0060](../../../docs/adr/0060-cloud-back-office-dashboard.md)): a `?tenant_id=` query for the
 /// listings, the request body for a create. Device routes nest under their store, so they never
-/// collide with the `/admin/devices/proposals` onboarding queue ([`device_router`]). A tenant created
+/// collide with the `/admin/devices/proposals` onboarding queue ([`device_router`](crate::http::device_router)). A tenant created
 /// here is given its six starting roles through `starting_roles`
 /// ([`crate::starting_roles`]).
 pub fn registry_router<Rg, A, C>(
@@ -108,7 +123,7 @@ where
         })
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct CreateTenantRequest {
     name: String,
     /// The language the tenant's starting roles are named in, a language tag such as `vi`. The
@@ -118,33 +133,33 @@ struct CreateTenantRequest {
     language: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct UpdateEntityRequest {
     name: String,
     status: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct CreateBrandRequest {
     tenant_id: String,
     name: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct UpdateBrandRequest {
     tenant_id: String,
     name: String,
     status: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct CreateStoreRequest {
     tenant_id: String,
     brand_id: Option<String>,
     name: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct UpdateStoreRequest {
     tenant_id: String,
     brand_id: Option<String>,
@@ -152,28 +167,19 @@ struct UpdateStoreRequest {
     status: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct CreateDeviceRequest {
     tenant_id: String,
     name: String,
     kind: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct UpdateDeviceRequest {
     tenant_id: String,
     name: String,
     kind: String,
     status: String,
-}
-
-/// Maps a registry store failure to a retryable `503`, logging the detail rather than leaking it.
-pub(in crate::http) fn registry_error_response(error: &RegistryStoreError) -> Response {
-    tracing::error!(%error, "a registry store operation failed");
-    api_error(
-        ErrorStatus::Unavailable,
-        "the registry service is unavailable",
-    )
 }
 
 /// The `503` returned when OS entropy is unavailable to mint an id.

@@ -63,8 +63,30 @@ struct ReleaseUploadQuery {
     arch: String,
 }
 
+/// What an artifact upload answers: the artifact it recorded.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+struct ArtifactUploaded {
+    /// The release it belongs to.
+    release: String,
+    /// The target it runs on.
+    arch: String,
+    /// Its size.
+    size_bytes: i64,
+    /// Its SHA-256, as lowercase hex.
+    sha256: String,
+}
+
+/// What a release's artifact list answers: the release and each artifact it hosts.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+struct ReleaseArtifacts {
+    /// The release.
+    release: String,
+    /// Each hosted artifact.
+    artifacts: Vec<HostedArtifactResponse>,
+}
+
 /// One hosted artifact, as the console reads it.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 struct HostedArtifactResponse {
     arch: String,
     size_bytes: i64,
@@ -75,7 +97,7 @@ struct HostedArtifactResponse {
 /// Builds the `/admin` release sub-router — the half that puts an artifact *into* the cloud, and
 /// hands a Windows store its one-file installer back out of it.
 ///
-/// Merged only when `[artifacts]` is configured, exactly like [`ota_artifact_router`]: without an
+/// Merged only when `[artifacts]` is configured, exactly like [`ota_artifact_router`](crate::http::ota_artifact_router): without an
 /// object store there is nowhere for the bytes to go, and a route that always answers `503` is worse
 /// than a route that is honestly absent.
 ///
@@ -348,6 +370,51 @@ fn already_hosted_refusal(error: ArtifactStoreError) -> Response {
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/ota/releases",
+    extensions(("x-permission" = json!("console.ota.publish"))),
+    security(("session_cookie" = [])),
+    params(
+        ("release" = String, Query, description = "The release the bytes are, spelled bare as a \
+                                                    rollout's `target_version` names it, without a \
+                                                    leading `v`. Required"),
+        ("arch" = String, Query, description = "The target triple the executable is built for. \
+                                                 Required"),
+        ("x-pos-minisig" = String, Header, description = "minisign's signature over these exact \
+                                                           bytes: the second line of the `.minisig` \
+                                                           file, as base64. Required"),
+    ),
+    request_body(
+        content = pos_cloud_api::body_schema::Binary,
+        description = "The bare release executable, not the release archive: the edge installs \
+                       the bytes it is handed, so the signature has to cover these (ADR-0088). \
+                       `docs/release-runbook.md` step 5 gives the exact request",
+        content_type = "application/octet-stream",
+    ),
+    responses(
+        (status = 200, body = ArtifactUploaded, description = "Already hosted with these exact bytes: the release is \
+                                      unchanged, so a re-run of a release step does not fail. The body is as for \
+                                      201. Audited"),
+        (status = 201, body = ArtifactUploaded, description = "Hosted: the signature, then the executable, are stored, and \
+                                      only then the release is recorded. The body carries \
+                                      `release`, `arch`, `size_bytes` and `sha256`. Audited"),
+        (status = 400, description = "release or arch is absent or unusable; the body is empty; or \
+                                      the signature header is absent, not base64, or not a minisign \
+                                      signature. An absent query parameter is refused by the \
+                                      framework, without the error envelope", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.ota.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 409, description = "This release is already hosted for this target with different \
+                                      bytes. A version a ring may have installed does not change", body = crate::openapi_admin::ErrorResponse),
+        (status = 413, description = "The executable is over 128 MiB. Answered by the server's body \
+                                      limit, without the error envelope"),
+        (status = 500, description = "The storage keys could not be composed", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The object store or the release registry is unreachable: send \
+                                      the same upload again later", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "release hosting",
+)]
 /// A super-admin uploads one release artifact: the bare executable, plus its minisign signature.
 ///
 /// Idempotent by [`admit_artifact`]'s rule — re-uploading the same release/target with identical
@@ -417,16 +484,36 @@ where
     };
     (
         status,
-        Json(serde_json::json!({
-            "release": artifact.release,
-            "arch": artifact.target.as_str(),
-            "size_bytes": artifact.size_bytes,
-            "sha256": artifact.sha256,
-        })),
+        Json(ArtifactUploaded {
+            release: artifact.release,
+            arch: artifact.target.as_str().to_owned(),
+            size_bytes: artifact.size_bytes,
+            sha256: artifact.sha256,
+        }),
     )
         .into_response()
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/ota/releases/{release}",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    params(
+        ("release" = String, Path, description = "The release, spelled bare, without a leading `v`"),
+    ),
+    responses(
+        (status = 200, body = ReleaseArtifacts, description = "`release` and `artifacts`: for each target it is hosted for, \
+                                      `arch`, `size_bytes`, `sha256` and `recorded_at_ms`. An empty \
+                                      list means the release is not hosted, and a rollout naming it \
+                                      is refused"),
+        (status = 400, description = "The release cannot name a hosted release", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The release registry is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "release hosting",
+)]
 /// Which targets a release is hosted for — what an operator checks before promoting it, and what the
 /// promote guard consults on their behalf.
 async fn admin_list_ota_release<B, L, A, C>(
@@ -458,9 +545,9 @@ where
         );
     }
     match state.releases.list_artifacts(&release).await {
-        Ok(artifacts) => Json(serde_json::json!({
-            "release": release,
-            "artifacts": artifacts
+        Ok(artifacts) => Json(ReleaseArtifacts {
+            release,
+            artifacts: artifacts
                 .into_iter()
                 .map(|artifact| HostedArtifactResponse {
                     arch: artifact.target.to_string(),
@@ -468,12 +555,50 @@ where
                     sha256: artifact.sha256,
                     recorded_at_ms: artifact.recorded_at.as_milliseconds_since_epoch(),
                 })
-                .collect::<Vec<_>>(),
-        }))
+                .collect(),
+        })
         .into_response(),
         Err(error) => {
             tracing::error!(%error, "listing a release's artifacts failed");
             service_unavailable("the release registry")
         }
+    }
+}
+
+#[cfg(test)]
+mod answer_tests {
+    //! Each answer serialises to the bytes the `json!` it replaced did.
+
+    use super::{ArtifactUploaded, ReleaseArtifacts};
+
+    #[test]
+    fn an_upload_answers_the_artifact_it_recorded() {
+        let answer = ArtifactUploaded {
+            release: "1.2.3".to_owned(),
+            arch: "x86_64-unknown-linux-gnu".to_owned(),
+            size_bytes: 42,
+            sha256: "ab".to_owned(),
+        };
+        assert_eq!(
+            serde_json::to_value(answer).expect("json"),
+            serde_json::json!({
+                "release": "1.2.3",
+                "arch": "x86_64-unknown-linux-gnu",
+                "size_bytes": 42,
+                "sha256": "ab",
+            })
+        );
+    }
+
+    #[test]
+    fn a_release_list_is_the_release_and_its_artifacts() {
+        let answer = ReleaseArtifacts {
+            release: "1.2.3".to_owned(),
+            artifacts: Vec::new(),
+        };
+        assert_eq!(
+            serde_json::to_value(answer).expect("json"),
+            serde_json::json!({ "release": "1.2.3", "artifacts": [] })
+        );
     }
 }

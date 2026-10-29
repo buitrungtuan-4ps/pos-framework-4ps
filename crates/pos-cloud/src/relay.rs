@@ -113,7 +113,7 @@ impl core::fmt::Display for OrderQueueId {
 /// The domain [`InboundOrder`] is not `Serialize` (its `GuestNote` cannot enter the event log), so
 /// the relay carries this explicit shape; the guest note rides along to the store here (this is order
 /// delivery, not the log) and never touches the event stream.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct QueuedOrderPayload {
     /// The caller's reference — the idempotency key, scoped by channel.
     pub external_reference: String,
@@ -123,9 +123,11 @@ pub struct QueuedOrderPayload {
     pub store_id: String,
     /// The table, for a QR order.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub table_id: Option<String>,
     /// The recipient side-table id, when there is one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub subject_id: Option<String>,
     /// The requested lines.
     pub lines: Vec<QueuedOrderLine>,
@@ -134,7 +136,7 @@ pub struct QueuedOrderPayload {
 }
 
 /// One line of a [`QueuedOrderPayload`].
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct QueuedOrderLine {
     /// The menu item ordered.
     pub menu_item_id: String,
@@ -142,17 +144,20 @@ pub struct QueuedOrderLine {
     pub quantity_milli: i64,
     /// Chosen modifiers.
     #[serde(default)]
+    #[schema(required = true)]
     pub modifier_menu_item_ids: Vec<String>,
     /// The price the caller quoted, advisory only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub quoted_unit_price: Option<MoneyPayload>,
     /// The guest's free-text note; stays at the store, never the event log.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     pub note: Option<String>,
 }
 
 /// A money value on the wire.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct MoneyPayload {
     /// ISO 4217 currency code.
     pub currency_code: String,
@@ -200,7 +205,7 @@ impl QueuedOrderLine {
 }
 
 /// A serializable [`OrderAcceptance`] — what the store reports and the relay records and replays.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 pub struct AcceptanceRecord {
     /// The store's order id.
     pub order_id: String,
@@ -253,7 +258,7 @@ impl AcceptanceRecord {
 }
 
 /// What a store reported for a pulled order: an acceptance, or a refusal it decided locally.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, utoipa::ToSchema)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum StoreOutcome {
     /// The store accepted (or idempotently matched) the order.
@@ -689,12 +694,35 @@ where
 }
 
 /// One pending order on the wire, for the pull response.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 struct PendingOrderDto {
     queued_id: String,
     order: QueuedOrderPayload,
 }
 
+#[utoipa::path(
+    get,
+    path = "/sync/stores/{store_id}/orders",
+    security(("device_credential" = ["relay_orders"])),
+    params(
+        ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
+    ),
+    responses(
+        (status = 200, body = [PendingOrderDto], description = "The store's pending relayed orders, each with its `queued_id` and the \
+                                      `order`. Held open for a bounded wait while there are none, and empty \
+                                      if none arrives"),
+        (status = 400, description = "store_id is not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No credential, or one the cloud does not accept: one answer for every \
+                                      credential problem", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The credential lacks the `relay_orders` scope, or belongs to another \
+                                      store", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 429, description = "Too many requests to the store sync surface: `Retry-After` says when \
+                                      to try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The credential store, or the order queue, is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 500, description = "The order queue failed", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "order relay",
+)]
 /// `GET /sync/stores/{store_id}/orders` — the store pulls its pending batch (bounded long-poll).
 async fn pull_orders<Q, K, C, W>(
     State(state): State<SyncState<Q, K, C, W>>,
@@ -761,6 +789,34 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/sync/stores/{store_id}/orders/{queued_id}/ack",
+    security(("device_credential" = ["relay_orders"])),
+    params(
+        ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
+        ("queued_id" = String, Path, description = "The queued order, a ULID"),
+    ),
+    request_body(
+        content = StoreOutcome, description = "The store's `outcome`: `accepted`, with the store's order id, its total and its queue \
+                       number where the channel issues one; or `rejected`, with the refusal's `status` and \
+                       `message`",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 204, description = "Recorded. A repeated acknowledgement also answers 204"),
+        (status = 400, description = "store_id or queued_id is not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No credential, or one the cloud does not accept: one answer for every \
+                                      credential problem", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The credential lacks the `relay_orders` scope, or belongs to another \
+                                      store", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 429, description = "Too many requests to the store sync surface: `Retry-After` says when \
+                                      to try again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The credential store, or the order queue, is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 500, description = "The order queue failed", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "order relay",
+)]
 /// `POST /sync/stores/{store_id}/orders/{queued_id}/ack` — the store reports an outcome.
 async fn ack_order<Q, K, C, W>(
     State(state): State<SyncState<Q, K, C, W>>,

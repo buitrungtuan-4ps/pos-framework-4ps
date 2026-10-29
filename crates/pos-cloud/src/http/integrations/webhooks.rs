@@ -23,7 +23,7 @@ use crate::webhook::{
 // --- Webhook endpoint administration (`/admin/webhooks`) ----------------------------------------
 
 /// A super-admin request to register a webhook endpoint for a tenant.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(in crate::http) struct RegisterWebhookRequest {
     /// The tenant the endpoint belongs to (a 26-character ULID).
     tenant_id: String,
@@ -37,7 +37,7 @@ pub(in crate::http) struct RegisterWebhookRequest {
 /// The one-time response to a registration: the id, the normalized URL, and the signing secret shown
 /// **exactly once** — the tenant needs it to verify the HMAC signature on every delivery, and the
 /// cloud keeps only its own copy thereafter.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct RegisterWebhookResponse {
     /// The endpoint's public id (a ULID).
     id: String,
@@ -55,6 +55,32 @@ pub(in crate::http) struct WebhookTenantQuery {
     tenant_id: String,
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/webhooks",
+    extensions(("x-permission" = json!("console.webhooks.manage"))),
+    security(("session_cookie" = [])),
+    request_body(
+        content = RegisterWebhookRequest, description = "`tenant_id`, `store_id`, the store whose events the endpoint is sent, and \
+                       `url`: `https`, carrying no credentials, and resolving only to public \
+                       addresses (ADR-0032). The URL is checked before anything is stored",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, body = RegisterWebhookResponse, description = "Registered. The body carries the endpoint's `id`, the \
+                                      normalised `url` that was stored, and the `signing_secret` \
+                                      every delivery is signed with. The secret is returned exactly \
+                                      once"),
+        (status = 400, description = "tenant_id or store_id is not a ULID, or the URL is refused. \
+                                      The refusal names the `url` field and does not say what this \
+                                      server's resolver found", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.webhooks.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The endpoint store, the URL check or the entropy source is \
+                                      unavailable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "integrator access",
+)]
 /// Registers a webhook endpoint and returns the one-time signing secret (super-admin only).
 ///
 /// Behind the session guard. The destination is SSRF-vetted before anything is stored: `https` only,
@@ -157,6 +183,25 @@ where
         .into_response()
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/webhooks",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The tenant whose endpoints to list (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, body = [WebhookSummary], description = "The tenant's endpoints, as an array: each with `id`, \
+                                      `store_id`, `url`, `cursor` (the last event delivered, absent \
+                                      before the first) and `disabled`. Never the signing secret"),
+        (status = 400, description = "tenant_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The endpoint store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "integrator access",
+)]
 /// Lists a tenant's webhook endpoints as metadata only — never a secret (super-admin only).
 pub(in crate::http) async fn admin_list_webhooks<S, R, K, C, A, T, W>(
     State(app): State<CloudApp<S, R, K, C, A, T, W>>,
@@ -190,6 +235,26 @@ where
     }
 }
 
+#[utoipa::path(
+    delete,
+    path = "/admin/webhooks/{id}",
+    extensions(("x-permission" = json!("console.webhooks.manage"))),
+    security(("session_cookie" = [])),
+    params(
+        ("id" = String, Path, description = "The endpoint's 26-character ULID"),
+        ("tenant_id" = String, Query, description = "The tenant that owns it (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 204, description = "The tenant has no endpoint with that id any more. Idempotent: \
+                                      the answer is the same whether one was found, and another \
+                                      tenant's endpoint is never removed"),
+        (status = 400, description = "tenant_id or id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.webhooks.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The endpoint store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "integrator access",
+)]
 /// Deletes a webhook endpoint by id within a tenant (super-admin only). `204` whether or not a live
 /// endpoint was found — deletion is idempotent, the tenant scope stops one tenant removing another's
 /// endpoint, and reporting which case it was is a needless enumeration signal.
@@ -231,6 +296,27 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/webhooks/{id}/enable",
+    extensions(("x-permission" = json!("console.webhooks.manage"))),
+    security(("session_cookie" = [])),
+    params(
+        ("id" = String, Path, description = "The endpoint's 26-character ULID"),
+        ("tenant_id" = String, Query, description = "The tenant that owns it (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 204, description = "Enabled. Delivery resumes from the endpoint's stored cursor, so \
+                                      nothing queued while it was disabled is skipped. Enabling an \
+                                      endpoint already enabled changes nothing"),
+        (status = 400, description = "tenant_id or id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.webhooks.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no endpoint with that id", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The endpoint store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "integrator access",
+)]
 /// Re-enables a webhook endpoint that a day of continuous failure had auto-disabled (super-admin
 /// only). Delivery resumes from the endpoint's stored cursor, so nothing that queued while it was
 /// down is skipped ([ADR-0032](../../../docs/adr/0032-webhooks.md)).

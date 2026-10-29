@@ -13,7 +13,7 @@ use crate::{
 };
 
 /// A course can be created, listed **in service order**, renamed, moved and archived
-/// ([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).
+/// ([ADR-0130](../../../../docs/adr/0130-a-course-is-something-the-catalog-names.md)).
 ///
 /// Every `course_id` in the tree pointed at nothing before this: `sales.order_line.added` carried
 /// one, a station routing rule matched on one and the edge honoured it, and there was no entity to

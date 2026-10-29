@@ -18,7 +18,14 @@ version = 2
 yanked = "deny"
 # Every entry needs an expiry date in a comment. An ignore with no end date is a
 # vulnerability with a note attached.
-ignore = []
+ignore = [
+    # Expires 2027-01-31, or as soon as async-nats moves past tokio-websockets 0.10. webpki-roots
+    # 0.26.11 is the semver-trick shim that re-exports webpki-roots 1, which this lockfile pins at
+    # 1.0.10, the release that removes the distrusted emSign root. The shim's own version is all the
+    # advisory matches; the roots it serves are the fixed ones. No 0.26 release newer than 0.26.11
+    # exists, and async-nats 0.50.0, the latest, reaches it through tokio-websockets 0.10.1.
+    { id = "RUSTSEC-2026-0381", reason = "webpki-roots 0.26.11 is a re-export of webpki-roots 1.0.10, which is fixed" },
+]
 
 [licenses]
 # NOTE: the v2 schema has no per-licence "warn" level — a licence is either in

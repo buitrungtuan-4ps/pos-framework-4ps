@@ -230,7 +230,7 @@ to new code, and existing names that break them are left alone until the code ar
 |---|---|
 | `as_` is a free borrow or copy, `to_` an allocating or costly conversion, `into_` consumes `self` | `Timestamp::as_milliseconds_since_epoch`, `as_wire` (`pos-proto/src/wire_enum.rs`), `EventEnvelope::into_typed` |
 | A getter is the field's name, with no `get_` | `PublishedSession::idle_lock_seconds`, `PublishedShift::opening_float_minor` |
-| A predicate starts `is_` or `has_` | `Sessions::is_durable`, `has_gone_idle` (`pos-edge/src/auth.rs`) |
+| A predicate starts `is_` or `has_` | `Sessions::is_durable`, `has_gone_idle` (`pos-edge-app/src/auth.rs`) |
 | An error type ends in `Error` | `PortError`, `BlobKeyError` (`pos-ports`), `TransitionError`, `ClockError` (`pos-core`) |
 
 **TypeScript** (`ui/`, `dashboard/`):
@@ -247,7 +247,7 @@ Two existing modules predate the rule and keep their names until they move:
 **Files and directories** are `kebab-case`: `crates/pos-core`, `crates/adapters/store-sqlite`,
 `templates/adapter-template`, `docs/guides/write-an-adapter.md`. The exception is a Rust module, whose
 file or directory is `snake_case` because the module path is its name: `pos-edge/src/http/route_permissions.rs`,
-`pos-cloud/src/config_tree/`.
+`pos-cloud-config/src/config_tree/`.
 
 **Standard codes**, for new fields and values:
 

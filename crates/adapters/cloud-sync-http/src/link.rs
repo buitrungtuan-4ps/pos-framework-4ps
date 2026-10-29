@@ -3,7 +3,7 @@
 
 //! The [`MessageLink`] adapter over an [`HttpTransport`]: a store publishes its events to the cloud's
 //! `/sync` surface
-//! ([ADR-0143](../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)).
+//! ([ADR-0143](../../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)).
 //!
 //! The second way events leave a store, beside `link-nats`. It needs no broker port open to the
 //! internet and no fleet-wide token: the transport carries the box's own credential, and the cloud

@@ -4,11 +4,11 @@
 //! ESC/POS thermal-printer adapter for the [`PrinterDriver`] port.
 //!
 //! This crate is the vendor protocol and nothing else
-//! ([`architecture.md`](../../../docs/architecture.md) §6.1): it encodes a [`PrintDocument`] into
+//! ([`architecture.md`](../../../../docs/architecture.md) §6.1): it encodes a [`PrintDocument`] into
 //! ESC/POS bytes and pushes them at a [`Transport`], applies the rules the port's contract fixes
 //! (idempotent by job id, a drawer only over USB, retryable failure when unreachable), and reports
 //! [`PrinterStatus`]. It decides nothing about *whether* a line is a bitmap — the framework already
-//! did, using the code page this adapter reports ([ADR-0026](../../../docs/adr/0026-port-shapes.md)
+//! did, using the code page this adapter reports ([ADR-0026](../../../../docs/adr/0026-port-shapes.md)
 //! §5).
 //!
 //! # The transport is the last mile
@@ -17,7 +17,7 @@
 //! needs real hardware to validate (roadmap A5), so it is behind the [`Transport`] trait. The
 //! contract suite runs against an in-memory transport that records what was sent. [`tcp`] is the
 //! network case and needs no hardware to exercise — a `TcpListener` in a test is indistinguishable
-//! from a printer to everything above the socket ([ADR-0100](../../../docs/adr/0100-receipt-and-ticket-printing.md)).
+//! from a printer to everything above the socket ([ADR-0100](../../../../docs/adr/0100-receipt-and-ticket-printing.md)).
 //! USB and serial stay with hardware bring-up.
 //!
 //! # The queue lives at the caller

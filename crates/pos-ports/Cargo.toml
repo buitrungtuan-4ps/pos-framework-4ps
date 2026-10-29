@@ -14,9 +14,20 @@ serde.workspace      = true
 # Configuration documents cross this boundary uninterpreted, so the port needs a JSON
 # value type but no JSON schema. `raw_value` is the whole reason it is here.
 serde_json.workspace = true
+# Schemas for the OpenAPI documents, for the port types that cross a route: the print job a print
+# agent claims and the configuration update a store pulls (ADR-0180 D-T2). Optional and enabled by
+# no default feature, which `cargo xtask deps-rule` holds, so the store binary's default build links
+# none of it.
+utoipa = { version = "6", optional = true }
+
+[features]
+# `utoipa::ToSchema` on the port types a route serves, and `pos-proto`'s schemas beneath them.
+openapi = ["dep:utoipa", "pos-proto/openapi"]
 
 [dev-dependencies]
 serde_json.workspace = true
+# This crate's own `openapi` feature, so `cargo test -p pos-ports` checks the schemas it publishes.
+pos-ports = { path = ".", features = ["openapi"] }
 
 [lints]
 workspace = true
@@ -24,5 +35,5 @@ workspace = true
 [package.metadata.pos]
 layer = "port"
 purpose = "The twenty traits between the framework and the outside world."
-adrs = [6, 13, 21, 26]
+adrs = [6, 13, 21, 26, 180]
 owners = ["@maintainers-architecture"]

@@ -14,6 +14,7 @@ use pos_proto::settings::SettingScope;
 use pos_proto::wire_enum::Open;
 use serde::Deserialize;
 
+use super::publish::SettingPublishResult;
 use super::publish::{TenantLayout, publish_settings_to};
 use super::{SettingsState, settings_store_error_response};
 use crate::auth::admin::AdminStore;
@@ -25,22 +26,33 @@ use crate::settings::SettingsStore;
 use crate::store_groups::StoreGroupStore;
 
 /// A store to publish settings to, or every store of the tenant.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct SettingsStoreRequest {
     pub(super) tenant_id: String,
     #[serde(default)]
     pub(super) store_id: Option<String>,
 }
 
+/// What applying a preset answers: the settings it wrote, and how publishing to the store went.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+struct PresetsApplied {
+    /// The setting keys the preset wrote.
+    applied: Vec<String>,
+    /// One result per store the write reached.
+    stores: Vec<SettingPublishResult>,
+}
+
 #[utoipa::path(
     post,
     path = "/admin/settings/presets",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.config.publish"))),
     request_body(
-        description = "The tenant and the store to give the new-store values",
+        content = SettingsStoreRequest, description = "The tenant and the store to give the new-store values",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Each setting with a new-store value that the store did not \
+        (status = 200, body = PresetsApplied, description = "Each setting with a new-store value that the store did not \
                                       already set is written at the store's own scope, and the \
                                       store republished. The body lists the settings written and \
                                       the store's publish outcome"),
@@ -143,7 +155,29 @@ where
     .await;
     (
         StatusCode::OK,
-        Json(serde_json::json!({ "applied": applied, "stores": results })),
+        Json(PresetsApplied {
+            applied,
+            stores: results,
+        }),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod answer_tests {
+    //! Each answer serialises to the bytes the `json!` it replaced did.
+
+    use super::PresetsApplied;
+
+    #[test]
+    fn a_preset_answers_what_it_applied_and_its_stores() {
+        let answer = PresetsApplied {
+            applied: vec!["session.idle_lock_seconds".to_owned()],
+            stores: Vec::new(),
+        };
+        assert_eq!(
+            serde_json::to_value(answer).expect("json"),
+            serde_json::json!({ "applied": ["session.idle_lock_seconds"], "stores": [] })
+        );
+    }
 }

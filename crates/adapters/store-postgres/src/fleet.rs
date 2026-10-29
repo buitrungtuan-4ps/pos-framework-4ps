@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The fleet read model over PostgreSQL ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md) slice 3).
+//! The fleet read model over PostgreSQL ([ADR-0068](../../../../docs/adr/0068-fleet-liveness.md) slice 3).
 //!
 //! The console's one-glance answer to "is the fleet there, and is it in sync?" is a join, not a
 //! table: a store's identity (`stores`), its liveness (`store_liveness`), its lease

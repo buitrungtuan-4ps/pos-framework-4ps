@@ -23,7 +23,22 @@ use crate::http::{
 };
 use crate::registry::{EntityStatus, RegistryStore, TenantRecord};
 use crate::version::UpdateOutcome;
+use crate::version::Versioned;
 
+#[utoipa::path(
+    get,
+    path = "/admin/tenants",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    responses(
+        (status = 200, body = [Versioned<TenantRecord>], description = "Every tenant, as an array: `tenant_id`, `name` and `status`, \
+                                      each with the `etag` its version is at"),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The registry store failed", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "registry",
+)]
 /// A super-admin lists every tenant.
 pub(super) async fn admin_list_tenants<Rg, A, C>(
     State(state): State<RegistryState<Rg, A, C>>,
@@ -50,6 +65,28 @@ where
     }
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/tenants",
+    extensions(("x-permission" = json!("console.orgs.manage"))),
+    security(("session_cookie" = [])),
+    request_body(
+        content = CreateTenantRequest, description = "The tenant's `name`, and optionally `language`, a language tag such as `vi` \
+                       that the tenant's starting roles are named in. Absent, or one the console's \
+                       language packs do not carry, names them in English",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 201, body = Versioned<TenantRecord>, description = "Created, active, with the id minted here. The body is the \
+                                      record and the ETag carries its version. The tenant is given \
+                                      its six starting roles (ADR-0158); if that fails the tenant \
+                                      still stands, with fewer roles"),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.orgs.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The registry store or the entropy source is unavailable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "registry",
+)]
 /// A super-admin creates a tenant; the id is minted here and returned once in the created record.
 ///
 /// The tenant then gets its six starting roles, one for each of `pos-core`'s built-in roles,
@@ -152,6 +189,33 @@ async fn seed_tenant_roles<Rg, A, C>(
     }
 }
 
+#[utoipa::path(
+    patch,
+    path = "/admin/tenants/{tenant_id}",
+    extensions(("x-permission" = json!("console.orgs.manage"))),
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Path, description = "The tenant (a 26-character ULID)"),
+        ("If-Match" = String, Header, description = "The ETag the record was read at (ADR-0094). \
+                                                     Required; a wildcard is refused"),
+    ),
+    request_body(
+        content = UpdateEntityRequest, description = "The `name` and `status` (`active` or `archived`) as they should now stand",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = Versioned<TenantRecord>, description = "Updated. The body is the record and the ETag carries its new \
+                                      version"),
+        (status = 400, description = "tenant_id is not a ULID, status is not `active` or \
+                                      `archived`, or If-Match is absent, malformed, or a wildcard", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.orgs.manage", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "There is no tenant with that id", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "The tenant changed since you read it: re-read it and try again", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The registry store failed", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "registry",
+)]
 /// A super-admin renames a tenant and/or sets its status.
 pub(super) async fn admin_update_tenant<Rg, A, C>(
     State(state): State<RegistryState<Rg, A, C>>,

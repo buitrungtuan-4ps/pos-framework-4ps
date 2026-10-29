@@ -1,5 +1,5 @@
 //! A vault key kept on disk under the operating system's own protection, created on first use
-//! ([ADR-0174](../../../docs/adr/0174-a-windows-store-keeps-its-state-to-its-own-service.md)
+//! ([ADR-0174](../../../../docs/adr/0174-a-windows-store-keeps-its-state-to-its-own-service.md)
 //! decision 3).
 //!
 //! On Linux a root helper unseals the vault key with `systemd-creds` before each start (ADR-0151),

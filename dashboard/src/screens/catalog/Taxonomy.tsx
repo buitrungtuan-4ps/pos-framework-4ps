@@ -8,7 +8,7 @@
 import { createMemo, createSignal, Show } from "solid-js";
 
 import { api } from "../../api/client";
-import type { ItemCategory, ItemSubcategory } from "../../api/types";
+import type { ItemCategory, ItemSubcategory } from "../../api/schemas";
 import { t } from "../../i18n";
 import { createAdminResource, failureOf } from "../../lib/resource";
 import { tenantId } from "../../state/session";

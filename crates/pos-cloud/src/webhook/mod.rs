@@ -2,7 +2,7 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! Webhooks: a cursor over the event log, delivered safely to tenant-controlled URLs (P7,
-//! [ADR-0032](../../../docs/adr/0032-webhooks.md)).
+//! [ADR-0032](../../../../docs/adr/0032-webhooks.md)).
 //!
 //! A tenant registers a URL and receives every new event for a store as a signed HTTPS POST. The
 //! design is deliberately boring where it can be and paranoid where it must be:

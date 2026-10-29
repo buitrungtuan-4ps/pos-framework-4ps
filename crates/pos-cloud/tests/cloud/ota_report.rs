@@ -227,7 +227,7 @@ async fn the_console_config_read_never_carries_a_staff_pin_hash() {
 }
 
 /// A store's config names its staff only to a role holding `console.people.read`
-/// ([ADR-0158](../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 9).
+/// ([ADR-0158](../../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 9).
 ///
 /// The `permissions` node lists every member of staff the store authorises, with their name and
 /// staff code. The config read needs only `console.data.read`, so without this a Viewer refused the

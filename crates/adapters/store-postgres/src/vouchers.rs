@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! Voucher instances over PostgreSQL (Track M3, [ADR-0077](../../../docs/adr/0077-campaigns-and-scheduling.md)).
+//! Voucher instances over PostgreSQL (Track M3, [ADR-0077](../../../../docs/adr/0077-campaigns-and-scheduling.md)).
 //!
 //! One row per minted voucher code (`vouchers`, migration 0033). This adapter keeps only the SQL and
 //! returns plain rows; `pos-cloud` implements its `VoucherStore` seam over this type. A batch inserts

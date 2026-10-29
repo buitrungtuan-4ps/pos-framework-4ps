@@ -24,7 +24,9 @@ use crate::paging::{Page, PageRequest};
 /// A voucher's lifecycle status. Minting creates it [`Active`](VoucherStatus::Active); the engine's
 /// online redemption (a later, runtime concern) moves it to [`Redeemed`](VoucherStatus::Redeemed), and
 /// an operator may [`Void`](VoucherStatus::Void) one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, utoipa::ToSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum VoucherStatus {
     /// Minted and not yet redeemed.

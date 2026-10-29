@@ -20,7 +20,28 @@ use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::ConfigTreeStore;
 use crate::http::{Json, read_store_node_as_run};
+use pos_proto::channels::{PublishedChannels, PublishedTender};
+use pos_proto::origins::PublishedOrigins;
 
+#[utoipa::path(
+    get,
+    path = "/admin/config/channels",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
+        ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, body = Option<PublishedChannels>, description = "The store's `channels` node as the store runs it — the sales channels it takes orders on — \
+                                      composed from all four layers, or `null` when it has none"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config nodes",
+)]
 /// A super-admin reads a store's current `channels` node (the enabled sales channels), or `null`.
 pub(super) async fn admin_read_channels<Cfg, A, C>(
     State(state): State<ConfigChannelsState<Cfg, A, C>>,
@@ -55,6 +76,30 @@ where
     }
 }
 
+#[utoipa::path(
+    put,
+    path = "/admin/config/channels",
+    extensions(("x-permission" = json!("console.config.publish"))),
+    security(("session_cookie" = [])),
+    request_body(
+        content = PublishChannelsRequest, description = "`tenant_id` and `store_id`, then `enabled`, the sales-channel tokens the store takes orders on (ADR-0080)",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = pos_cloud_config::route::PublishedConfig, description = "Published as the store's `channels` node on its Store layer. \
+                                      The body carries `config_version_id`, which the store pulls on \
+                                      its next sync. Audited with the node's value"),
+        (status = 400, description = "tenant_id or store_id is not a ULID, a token is not a sales channel, or a value needs \
+                                      a recorded confirmation first (ADR-0169)", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "Every attempt to write the store's configuration lost a race \
+                                      with another publish: try again", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "The store's configuration would not validate with the node", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config nodes",
+)]
 /// A super-admin publishes a store's enabled sales channels as its `channels` node.
 pub(super) async fn admin_publish_channels<Cfg, A, C>(
     State(state): State<ConfigChannelsState<Cfg, A, C>>,
@@ -100,6 +145,25 @@ where
     .await
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/config/tender",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
+        ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, body = Option<PublishedTender>, description = "The store's `tender` node as the store runs it — the payment methods it accepts — \
+                                      composed from all four layers, or `null` when it has none"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config nodes",
+)]
 /// A super-admin reads a store's current `tender` node (the accepted payment methods), or `null`.
 pub(super) async fn admin_read_tender<Cfg, A, C>(
     State(state): State<ConfigChannelsState<Cfg, A, C>>,
@@ -134,6 +198,30 @@ where
     }
 }
 
+#[utoipa::path(
+    put,
+    path = "/admin/config/tender",
+    extensions(("x-permission" = json!("console.config.publish"))),
+    security(("session_cookie" = [])),
+    request_body(
+        content = PublishTenderRequest, description = "`tenant_id` and `store_id`, then `accepted`, the payment-method tokens the store takes (ADR-0080)",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = pos_cloud_config::route::PublishedConfig, description = "Published as the store's `tender` node on its Store layer. \
+                                      The body carries `config_version_id`, which the store pulls on \
+                                      its next sync. Audited with the node's value"),
+        (status = 400, description = "tenant_id or store_id is not a ULID, a token is not a payment method, or a value needs \
+                                      a recorded confirmation first (ADR-0169)", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "Every attempt to write the store's configuration lost a race \
+                                      with another publish: try again", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "The store's configuration would not validate with the node", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config nodes",
+)]
 /// A super-admin publishes a store's accepted payment methods as its `tender` node.
 pub(super) async fn admin_publish_tender<Cfg, A, C>(
     State(state): State<ConfigChannelsState<Cfg, A, C>>,
@@ -179,6 +267,25 @@ where
     .await
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/config/origins",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = String, Query, description = "The store's tenant (a 26-character ULID)"),
+        ("store_id" = String, Query, description = "The store (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 200, body = Option<PublishedOrigins>, description = "The store's `origins` node as the store runs it — the origins its edge answers besides its own (ADR-0111) — \
+                                      composed from all four layers, or `null` when it has none"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config nodes",
+)]
 /// A super-admin reads a store's current `origins` node (the origins its edge answers), or `null`.
 pub(super) async fn admin_read_origins<Cfg, A, C>(
     State(state): State<ConfigChannelsState<Cfg, A, C>>,
@@ -213,6 +320,30 @@ where
     }
 }
 
+#[utoipa::path(
+    put,
+    path = "/admin/config/origins",
+    extensions(("x-permission" = json!("console.config.publish"))),
+    security(("session_cookie" = [])),
+    request_body(
+        content = PublishOriginsRequest, description = "`tenant_id` and `store_id`, then `allowed`, the origins the store's edge answers besides the one serving it, each checked by the rule the edge applies (ADR-0111). An empty list withdraws every second origin; the store's own UI is never affected",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = pos_cloud_config::route::PublishedConfig, description = "Published as the store's `origins` node on its Store layer. \
+                                      The body carries `config_version_id`, which the store pulls on \
+                                      its next sync. Audited with the node's value"),
+        (status = 400, description = "tenant_id or store_id is not a ULID, an origin is refused by that rule, or a value needs \
+                                      a recorded confirmation first (ADR-0169)", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
+        (status = 412, description = "Every attempt to write the store's configuration lost a race \
+                                      with another publish: try again", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "The store's configuration would not validate with the node", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The configuration store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "config nodes",
+)]
 /// A super-admin publishes the origins a store's edge answers as its `origins` node
 /// ([ADR-0111](../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
 ///

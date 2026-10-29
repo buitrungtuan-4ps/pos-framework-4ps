@@ -26,7 +26,7 @@ const DEFAULT_PORT: u16 = 8428;
 
 /// Where a flushed batch goes.
 ///
-/// The seam ([ADR-0031](../../../docs/adr/0031-cloud-adapter-transports.md)) that lets the port
+/// The seam ([ADR-0031](../../../../docs/adr/0031-cloud-adapter-transports.md)) that lets the port
 /// contract be verified in process against a capturing implementation while production uses
 /// [`HttpTransport`]. The risk in this adapter is the queueing above the transport, not the
 /// transport itself.
@@ -150,7 +150,7 @@ fn worker_gone() -> PortError {
 }
 
 /// A hand-rolled HTTP/1.1 client for `VictoriaMetrics`' JSON line import
-/// ([ADR-0031](../../../docs/adr/0031-cloud-adapter-transports.md)): one endpoint, one POST, no
+/// ([ADR-0031](../../../../docs/adr/0031-cloud-adapter-transports.md)): one endpoint, one POST, no
 /// client crate. Plain `http://` only — the cloud reaches its own `VictoriaMetrics` over the private
 /// network of its box, and any public path terminates TLS at the proxy (P8), not here.
 #[derive(Debug, Clone)]

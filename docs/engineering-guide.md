@@ -96,6 +96,10 @@ The two checks that turn architecture into law are the **dependency rule test** 
 
 Documentation rots silently, so three checks run in CI: **link checking** across `docs/` and the root markdown files; the **docs-touched gate** described above; and **generated-document drift** — the OpenAPI file, permission matrix, and event catalogue are regenerated and compared, so a hand-edit or a stale artefact fails the build.
 
+A fourth runs in `just preflight`: **guide truth**. `cargo xtask guides --check` reads the blocks a guide in `docs/guides/` marks, and fails when a `cargo xtask new` command it tells the reader to type is one the generator now refuses, when a step it says proves the result is anything but a `cargo test`, `cargo check` or `cargo xtask` command, or when code it quotes is no longer in its file verbatim. The markers are listed in [the guides' index](guides/README.md#how-a-guide-stays-true).
+
+`just guides` (`cargo xtask guides --run`) goes further: for each guide, in a scratch worktree of the last commit, it runs the guide's `cargo xtask new` commands and then its verify steps, and fails where the guide stops working. That catches what the golden files cannot, such as a generated adapter that no longer compiles after its port changed. It builds what the guides generate, so it is not part of preflight; run it after changing a generator, a template, a port or a guide. No CI job runs it yet: until one is wired, preflight's `--check` is the gate.
+
 Two habits carry the rest. Each document names an owner in `CODEOWNERS`, so review lands on someone accountable. And documents are written as **rules with reasons** rather than narrative: a reader should be able to check compliance without reconstructing the discussion that produced the rule.
 
 ## 5. Dependencies, licences, and independence
@@ -225,7 +229,7 @@ The seven standing code rules — integer money, clock and id through ports, no 
 **Logging:** structured `tracing` with spans; **PII is never logged**, because logs travel to the cloud.
 **API stability:** the three backbone crates keep a public-API snapshot in the repository. Changing the API means updating the snapshot **in the same pull request**, which makes every change visible and reviewable. Deprecate for at least two releases before removal; the MSRV is stated and only rises in a minor version.
 
-**Documentation has four tiers, each with one rule:** rustdoc is mandatory on public items of the backbone crates and doc examples must compile · every crate has a README following a four-part template (what it does, where it sits, how to test it, who owns it) · guides in `docs/guides/` are written for people *using* the framework (getting started, writing an adapter, adding a country module, running the simulator) · ADRs explain *why*.
+**Documentation has four tiers, each with one rule:** rustdoc is mandatory on public items of the backbone crates and doc examples must compile · every crate has a README following a four-part template (what it does, where it sits, how to test it, who owns it) · guides in `docs/guides/` are written for people *using* the framework (getting started, writing an adapter, adding a country module, a setting or a business area, running the simulator) · ADRs explain *why*.
 
 The rule that ties them together: **a behaviour change updates its documentation in the same pull request**, enforced by a checkbox reviewers verify.
 

@@ -18,6 +18,7 @@ use super::{
 };
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
+use crate::connections::ConnectionView;
 use crate::http::{
     Json, RegistryTenantQuery, already_exists, if_match, not_found, version_mismatch,
     versioned_created, versioned_ok,
@@ -27,14 +28,16 @@ use crate::version::{CreateOutcome, UpdateOutcome, Versioned};
 #[utoipa::path(
     get,
     path = "/admin/integrations/connections",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     params(("tenant_id" = String, Query, description = "The tenant whose connections to read (a 26-character ULID)")),
     responses(
-        (status = 200, description = "The tenant's connections in id order, each with the version \
+        (status = 200, body = [Versioned<ConnectionView>], description = "The tenant's connections in id order, each with the version \
                                       it was read at. A secret field's value is never returned: \
                                       `secrets_set` names the ones that have one"),
         (status = 400, description = "tenant_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
-        (status = 403, description = "The role lacks console.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
         (status = 503, description = "The connection store is unreachable", body = crate::openapi_admin::ErrorResponse),
     ),
     tag = "integrations",
@@ -71,7 +74,7 @@ where
             let views: Vec<Versioned<ConnectionView>> = rows
                 .into_iter()
                 .map(|row| Versioned {
-                    record: ConnectionView::of(&row.record),
+                    record: ConnectionView::of(&row.record, state.cell_country),
                     etag: row.etag,
                     updated_at_ms: row.updated_at_ms,
                 })
@@ -85,16 +88,18 @@ where
 #[utoipa::path(
     get,
     path = "/admin/integrations/connections/{connection_id}",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.data.read"))),
     params(
         ("connection_id" = String, Path, description = "The connection's 26-character ULID"),
         ("tenant_id" = String, Query, description = "The tenant that owns it (a 26-character ULID)"),
     ),
     responses(
-        (status = 200, description = "The connection without its secret values, with an ETag \
+        (status = 200, body = Versioned<ConnectionView>, description = "The connection without its secret values, with an ETag \
                                       carrying the version it was read at"),
         (status = 400, description = "tenant_id or connection_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
-        (status = 403, description = "The role lacks console.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
         (status = 404, description = "The tenant has no connection with that id", body = crate::openapi_admin::ErrorResponse),
         (status = 503, description = "The connection store is unreachable", body = crate::openapi_admin::ErrorResponse),
     ),
@@ -132,7 +137,10 @@ where
         Err(refusal) => return refusal,
     };
     match state.connections.get(tenant_id, &connection_id).await {
-        Ok(Some(row)) => versioned_ok(ConnectionView::of(&row.record), &row.etag),
+        Ok(Some(row)) => versioned_ok(
+            ConnectionView::of(&row.record, state.cell_country),
+            &row.etag,
+        ),
         Ok(None) => not_found("connection"),
         Err(error) => connection_error_response(&error),
     }
@@ -141,15 +149,17 @@ where
 #[utoipa::path(
     post,
     path = "/admin/integrations/connections",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.integrations.manage"))),
     request_body(
-        description = "The tenant, the provider id, the scope (`scope_level` and, for a brand or \
+        content = ConnectionRequest, description = "The tenant, the provider id, the scope (`scope_level` and, for a brand or \
                        a store, `scope_id`), a display name, `enabled`, the provider's `settings`, \
                        and its `secrets`. The id is server-minted. Secrets are sealed on arrival \
                        and never returned",
         content_type = "application/json",
     ),
     responses(
-        (status = 201, description = "Created. The body is the connection without its secret \
+        (status = 201, body = Versioned<ConnectionView>, description = "Created. The body is the connection without its secret \
                                       values, including the id the server minted"),
         (status = 400, description = "The name is blank or too long, the provider is unknown, the \
                                       scope is malformed, or a setting does not match the \
@@ -225,7 +235,10 @@ where
                 serde_json::to_value(ConnectionAuditSummary::of(&connection)).ok(),
             )
             .await;
-            versioned_created(ConnectionView::of(&connection), &version)
+            versioned_created(
+                ConnectionView::of(&connection, state.cell_country),
+                &version,
+            )
         }
         Ok(CreateOutcome::AlreadyExists) => already_exists("connection"),
         Err(error) => connection_error_response(&error),
@@ -235,19 +248,21 @@ where
 #[utoipa::path(
     put,
     path = "/admin/integrations/connections/{connection_id}",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.integrations.manage"))),
     params(
         ("connection_id" = String, Path, description = "The connection's 26-character ULID"),
         ("If-Match" = String, Header, description = "The ETag the connection was read at \
                                                      (ADR-0094). Required; a wildcard is refused"),
     ),
     request_body(
-        description = "The connection as it should now stand. A secret left out of `secrets` keeps \
+        content = ConnectionRequest, description = "The connection as it should now stand. A secret left out of `secrets` keeps \
                        its stored value; `clear_secrets` removes one; a changed `provider_id` drops \
                        them all. Switching vendor is this route",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Updated. The body is the connection without its secret \
+        (status = 200, body = Versioned<ConnectionView>, description = "Updated. The body is the connection without its secret \
                                       values, and the ETag carries its new version"),
         (status = 400, description = "A field is wrong, each named in `details`, or If-Match is \
                                       absent, malformed, or a wildcard", body = crate::openapi_admin::ErrorResponse),
@@ -339,7 +354,10 @@ where
                 serde_json::to_value(ConnectionAuditSummary::of(&connection)).ok(),
             )
             .await;
-            versioned_ok(ConnectionView::of(&connection), &version)
+            versioned_ok(
+                ConnectionView::of(&connection, state.cell_country),
+                &version,
+            )
         }
         Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
         Ok(UpdateOutcome::NotFound) => not_found("connection"),
@@ -350,6 +368,8 @@ where
 #[utoipa::path(
     delete,
     path = "/admin/integrations/connections/{connection_id}",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.integrations.manage"))),
     params(
         ("connection_id" = String, Path, description = "The connection's 26-character ULID"),
         ("tenant_id" = String, Query, description = "The tenant that owns it (a 26-character ULID)"),

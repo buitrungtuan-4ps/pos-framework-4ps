@@ -3,7 +3,7 @@
 
 //! The daily rollup reads (`/v1` by API key, `/admin` by session), their CSV export, and the reset
 //! that makes the projector rebuild a store's rollup
-//! ([ADR-0036](../../../../docs/adr/0036-materialised-rollups.md)).
+//! ([ADR-0036](../../../docs/adr/0036-materialised-rollups.md)).
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -39,7 +39,7 @@ use pos_cloud_api::response::{api_error, csv_download_response, parse_ulid_field
     get,
     path = "/v1/stores/{store_id}/rollups/daily",
     params(("store_id" = String, Path, description = "The store's 26-character ULID")),
-    security(("api_key" = [])),
+    security(("api_key" = ["read_rollups"])),
     responses(
         (status = 200, description = "Daily activity rollups, oldest day first", body = Vec<DailyRollup>),
         (status = 400, description = "The store id is not a ULID"),
@@ -109,10 +109,39 @@ impl RollupWindowQuery {
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/stores/{store_id}/rollups/daily",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    params(
+        ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The tenant that store belongs to (a 26-character ULID)"),
+        ("from" = Option<String>, Query, description = "The first trading day, `YYYY-MM-DD`, inclusive"),
+        ("to" = Option<String>, Query, description = "The last trading day, `YYYY-MM-DD`, inclusive"),
+        ("limit" = Option<usize>, Query, description = "The most trading days to cover, the \
+                                                       newest in range: 90 when absent, and \
+                                                       never more than 366"),
+    ),
+    responses(
+        (status = 200, body = [DailyRollup], description = "The store's activity for each trading day in the window, \
+                                      oldest first, as an array: `business_date`, `total_events` \
+                                      and `by_type`, the count of each kind of event. Counts only, \
+                                      no amounts and no person. Read from the materialised rollup; \
+                                      a store not yet projected reads back empty"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID, a date is \
+                                      not `YYYY-MM-DD`, `from` is after `to`, or `limit` is \
+                                      zero", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The rollup store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "reports",
+)]
 /// The daily rollup for a store, read under the super-admin session (ADR-0060). The `/v1` rollup
 /// read is bearer-authed and tenant-scoped by the key; the dashboard carries the admin session, not
 /// a tenant key, so this reads the same rollup while naming the tenant with `?tenant_id=`. The
-/// super-admin is global ([ADR-0034](../../../../docs/adr/0034-super-admin-auth.md)) — it already reads
+/// super-admin is global ([ADR-0034](../../../docs/adr/0034-super-admin-auth.md)) — it already reads
 /// any tenant's configuration — so this is the same trust boundary, and it is a read: nothing is
 /// mutated.
 pub async fn admin_daily_rollups<R, K, C, A, T>(
@@ -167,6 +196,35 @@ pub struct AdminRollupWindowQuery {
     pub limit: Option<usize>,
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/stores/{store_id}/rollups/export",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    params(
+        ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The tenant that store belongs to (a 26-character ULID)"),
+        ("from" = Option<String>, Query, description = "The first trading day, `YYYY-MM-DD`, inclusive"),
+        ("to" = Option<String>, Query, description = "The last trading day, `YYYY-MM-DD`, inclusive"),
+        ("limit" = Option<usize>, Query, description = "The most trading days to cover, the \
+                                                       newest in range: 90 when absent, and \
+                                                       never more than 366"),
+    ),
+    responses(
+        (status = 200, body = String, content_type = "text/csv", description = "`rollups.csv`, as a `text/csv` attachment: the header \
+                                      `business_date,total_events`, then one row per trading day, \
+                                      oldest first. The audit entry records how many rows, never \
+                                      what they held"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID, a date is \
+                                      not `YYYY-MM-DD`, `from` is after `to`, or `limit` is \
+                                      zero", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 500, description = "The CSV could not be built", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The rollup store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "reports",
+)]
 /// Exports a store's daily activity rollups (counts) as a CSV download, windowed like the read
 /// (ADR-0081, Track O4; reuses the ADR-0075 rail). Counts only, so `console.data.read`; audited by
 /// row count.
@@ -219,10 +277,31 @@ where
     csv_download_response("rollups.csv", body)
 }
 
+#[utoipa::path(
+    post,
+    path = "/admin/stores/{store_id}/rollups/reset",
+    extensions(("x-permission" = json!("console.config.publish"))),
+    security(("session_cookie" = [])),
+    params(
+        ("store_id" = String, Path, description = "The store (a 26-character ULID)"),
+        ("tenant_id" = String, Query, description = "The tenant that store belongs to (a 26-character ULID)"),
+    ),
+    responses(
+        (status = 204, description = "Reset. The store's rollup is emptied and its cursor cleared, \
+                                      so the projector's next pass rebuilds it from the event log \
+                                      (ADR-0036). Until then the store's reports read back empty. \
+                                      Nothing in the event log changes"),
+        (status = 400, description = "tenant_id or store_id is absent or not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.config.publish", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The rollup store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "reports",
+)]
 /// Resets a store's materialised rollup so the projector rebuilds it from the event log
 /// (super-admin only). Saving the empty default clears the per-store cursor, and the next projector
 /// pass re-folds every event from the start — the "reset-cursor-and-replay" that rebuilds the cloud's
-/// read model from the durable log (`docs/roadmap.md` P7, [ADR-0036](../../../../docs/adr/0036-materialised-rollups.md)).
+/// read model from the durable log (`docs/roadmap.md` P7, [ADR-0036](../../../docs/adr/0036-materialised-rollups.md)).
 /// `204` regardless — a store with no rollup yet is simply reset to the same empty state.
 pub async fn admin_rollups_reset<R, K, C, A, T>(
     State(app): State<ReportsState<R, K, C, A, T>>,

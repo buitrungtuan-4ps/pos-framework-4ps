@@ -43,7 +43,7 @@ struct ConfigReasonCodeState<R, Cfg, A, C> {
 
 /// A `PUT /admin/config/reason-codes` body: the `(tenant, store)` to push the tenant's authored list
 /// to. Like every other node publish, the entries come from what is authored, not from the body.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 struct PublishReasonCodesRequest {
     tenant_id: String,
     store_id: String,
@@ -205,16 +205,31 @@ where
     Ok((vec![("reason_codes".to_owned(), node_value)], summary))
 }
 
+/// What a reason-code publish answers: the version it made, and what the store now holds.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+struct ReasonCodesPublished {
+    /// The new config version, a ULID.
+    config_version_id: String,
+    /// How many reason codes were published.
+    published: usize,
+    /// How many of them are active.
+    active: usize,
+    /// The actions no active reason code covers, which nobody can now record.
+    uncovered_actions: Vec<String>,
+}
+
 #[utoipa::path(
     put,
     path = "/admin/config/reason-codes",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.config.publish"))),
     request_body(
-        description = "The tenant and the store to publish to. The entries come from what the \
+        content = PublishReasonCodesRequest, description = "The tenant and the store to publish to. The entries come from what the \
                        tenant has authored, never from this body",
         content_type = "application/json",
     ),
     responses(
-        (status = 200, description = "Published. The body carries the new config version, how many \
+        (status = 200, body = ReasonCodesPublished, description = "Published. The body carries the new config version, how many \
                                       entries went on (retired ones included, so a historic event \
                                       still resolves), how many staff may pick, and \
                                       `uncovered_actions` — the acts this list leaves with no \
@@ -296,12 +311,38 @@ where
     // say "published, and nobody can now record a cash paid-in" in the same breath as the success.
     (
         StatusCode::OK,
-        Json(serde_json::json!({
-            "config_version_id": id.to_string(),
-            "published": summary.published,
-            "active": summary.active,
-            "uncovered_actions": summary.uncovered_actions,
-        })),
+        Json(ReasonCodesPublished {
+            config_version_id: id.to_string(),
+            published: summary.published,
+            active: summary.active,
+            uncovered_actions: summary.uncovered_actions,
+        }),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod answer_tests {
+    //! Each answer serialises to the bytes the `json!` it replaced did.
+
+    use super::ReasonCodesPublished;
+
+    #[test]
+    fn a_reason_code_publish_answers_its_version_and_counts() {
+        let answer = ReasonCodesPublished {
+            config_version_id: "01J0000000000000000000000V".to_owned(),
+            published: 3,
+            active: 2,
+            uncovered_actions: vec!["CASH_PAID_IN".to_owned()],
+        };
+        assert_eq!(
+            serde_json::to_value(answer).expect("json"),
+            serde_json::json!({
+                "config_version_id": "01J0000000000000000000000V",
+                "published": 3,
+                "active": 2,
+                "uncovered_actions": ["CASH_PAID_IN"],
+            })
+        );
+    }
 }

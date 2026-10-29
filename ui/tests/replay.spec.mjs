@@ -30,6 +30,8 @@
 //   a counter order could only arrive over a relay the example does not run; since the counter
 //   starts its own orders (ADR-0146), each sets one up as a cashier would.)
 
+import { readFileSync } from "node:fs";
+
 import { expect, test } from "@playwright/test";
 
 import { TASKS } from "../scripts/step-tasks.mjs";
@@ -1223,8 +1225,12 @@ test("a kitchen board that drops its link gets the food fired meanwhile, without
     await expect(board.getByText("Store connected")).toBeVisible();
     await seatTable(till);
     await addItem(till);
-    await expect.poll(() => link.heard[0].length).toBeGreaterThan(0);
-    const seen = JSON.parse(link.heard[0][0]);
+    // The board's first socket named no position, so the edge first said `resync`; the frames after
+    // it are the stream's.
+    const events = () =>
+      link.heard[0].map((frame) => JSON.parse(frame)).filter((frame) => frame.type === "event");
+    await expect.poll(() => events().length).toBeGreaterThan(0);
+    const seen = events()[0];
     expect(typeof seen.stream_id, "every frame says which stream it is on").toBe("string");
     expect(typeof seen.sequence, "and where on it").toBe("number");
     await expect(board.locator('[data-outcome="ticket-waiting"]')).toHaveCount(0);
@@ -1265,7 +1271,10 @@ test("a kitchen board that drops its link before it heard anything reloads, and 
     await board.goto(`${edge.baseURL}/kds`);
     await expect(board.getByText("Store connected")).toBeVisible();
     await expect.poll(link.reads).toBeGreaterThan(0);
-    expect(link.heard[0], "the board has heard nothing it could name").toHaveLength(0);
+    const named = link.heard[0]
+      .map((frame) => JSON.parse(frame))
+      .filter((frame) => typeof frame.sequence === "number");
+    expect(named, "the board has heard nothing it could name").toHaveLength(0);
 
     await link.drop();
     await seatTable(till);
@@ -1282,6 +1291,136 @@ test("a kitchen board that drops its link before it heard anything reloads, and 
       "resync",
     );
     expect(link.readsSinceRestore(), "so the board reloaded").toBeGreaterThan(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A till that has just paired can be on the floor before its live link is up, and what happens
+// meanwhile still reaches it.
+//
+// The link's first attempt is refused until the device pairs, and the retry that succeeds can come
+// after the sign-in has read the store. Here that retry is held while a second screen seats a table
+// and starts its order. The till names no position it does not have: the edge answers `resync` once
+// the socket is subscribed, and the till reads again what is open, so its floor shows the table
+// taken — with no reload of the page. Before, it asked for the live stream alone, and showed the
+// table free until something reloaded it.
+test("a till whose link opens after it reached the floor still hears what happened meanwhile", async ({
+  context,
+}) => {
+  const edge = await startEdge();
+  try {
+    const till = await context.newPage();
+    let open = () => {};
+    const opened = new Promise((resolve) => {
+      open = resolve;
+    });
+    const sockets = [];
+    // Only a paired device's socket is held: the refusal before pairing reaches the edge as before.
+    await till.routeWebSocket(
+      (url) => url.pathname === "/ws",
+      async (socket) => {
+        if (socket.protocols().length > 1) {
+          sockets.push(socket);
+          await opened;
+        }
+        socket.connectToServer();
+      },
+    );
+    let loads = 0;
+    till.on("load", () => {
+      loads += 1;
+    });
+    await pair(till, edge);
+    await signIn(till, edge);
+    await expect.poll(() => sockets.length).toBeGreaterThan(0);
+    const firstDot = till.locator('[data-step="onCard"]').first().locator("span.rounded-full");
+    await expect(firstDot).not.toHaveClass(/bg-occupied/);
+    const loadsBefore = loads;
+
+    // Another screen on the store takes the first table while the till's link is down.
+    const other = await context.newPage();
+    await other.goto(`${edge.baseURL}/`);
+    await seatTable(other);
+    await addItem(other);
+
+    open();
+    await expect(firstDot).toHaveClass(/bg-occupied/);
+    const asked = new URL(sockets[0].url()).searchParams;
+    expect(asked.get("stream_id"), "it has no position to name").toBeNull();
+    expect(asked.get("after_sequence")).toBe("0");
+    expect(loads, "read again, not reloaded").toBe(loadsBefore);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// What a till hears while it reads again after a `resync` is applied after the read, never under it.
+//
+// The read can be answered before a change the link then carries; applied in arrival order, the
+// older answer would put the table back to free. Here the till's link opens late, as above, and the
+// floor read its `resync` starts is answered at once but held back from the till while a second
+// screen seats the first table. The till has heard the seating before the read lands, and still
+// shows the table taken after it.
+test("a till reading again after a resync does not undo what it heard meanwhile", async ({
+  context,
+}) => {
+  const edge = await startEdge();
+  try {
+    const till = await context.newPage();
+    let open = () => {};
+    const opened = new Promise((resolve) => {
+      open = resolve;
+    });
+    const carried = [];
+    await till.routeWebSocket(
+      (url) => url.pathname === "/ws",
+      async (socket) => {
+        if (socket.protocols().length > 1) {
+          await opened;
+        }
+        socket.connectToServer().onMessage((message) => {
+          carried.push(JSON.parse(String(message)).event_type);
+          socket.send(message);
+        });
+      },
+    );
+    await pair(till, edge);
+    await signIn(till, edge);
+    const firstDot = till.locator('[data-step="onCard"]').first().locator("span.rounded-full");
+    await expect(firstDot).not.toHaveClass(/bg-occupied/);
+
+    // From here on, the floor read is answered by the edge at once and handed to the till later.
+    let release = () => {};
+    const released = new Promise((resolve) => {
+      release = resolve;
+    });
+    let reached = () => {};
+    const answered = new Promise((resolve) => {
+      reached = resolve;
+    });
+    await till.route("**/api/floor", async (route) => {
+      const response = await fetchWhole(route);
+      reached();
+      await released;
+      await route.fulfill({ response });
+    });
+    open();
+    await answered;
+
+    const other = await context.newPage();
+    await other.goto(`${edge.baseURL}/`);
+    await seatTable(other);
+    await expect.poll(() => carried.includes("sales.table.opened")).toBe(true);
+
+    const landed = till.waitForResponse(
+      (response) => new URL(response.url()).pathname === "/api/floor",
+    );
+    release();
+    await landed;
+    // One turn of the page's own loop, so the answer it was handed is applied before this looks.
+    await till.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    await expect(firstDot).toHaveClass(/bg-occupied/);
   } finally {
     await edge.stop();
   }
@@ -2701,6 +2840,69 @@ test("a store's float is filled in, the cashier changes it, and the count shows 
     await page.locator('[data-step="closeShift"]').click();
     const closed = page.locator('[data-outcome="shift-closed"]');
     await expect(closed.locator(".text-ok")).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// The till that opened a shift can hear its own `cash.shift.opened` after the edge's answer. The
+// event carries no figures, so it must move the shift it already holds to open and keep what the
+// answer said the drawer should hold, rather than replace it with a shift that says nothing. The
+// live link holds the event, and every frame after it, until the answer is on screen.
+test("a till that hears its own opened shift after the answer still shows what the drawer should hold", async ({
+  page,
+}) => {
+  const edge = await startEdge("shift-settings");
+  try {
+    let link = null;
+    let holding = false;
+    let heard = false;
+    const held = [];
+    await page.routeWebSocket(
+      (url) => url.pathname === "/ws",
+      (socket) => {
+        link = socket;
+        socket.connectToServer().onMessage((message) => {
+          const frame = JSON.parse(String(message));
+          if (!heard && frame.event_type === "cash.shift.opened") {
+            heard = true;
+            holding = true;
+          }
+          if (holding) {
+            held.push(message);
+          } else {
+            socket.send(message);
+          }
+        });
+      },
+    );
+    await pair(page, edge);
+    await signIn(page, edge);
+    // The event reaches the till only on a link that is open when the shift opens.
+    await expect(page.getByText("Store connected")).toBeVisible();
+    await navigateTo(page, "/shift");
+    await page.locator("#float").fill("450000");
+    await page.locator('[data-step="openShift"]').click();
+    await expect(page.locator('[data-outcome="shift-open"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="shift-expected"]')).toHaveText(
+      "The drawer should hold 450,000₫.",
+    );
+    await expect.poll(() => heard).toBe(true);
+
+    // The event lands after the answer. Hearing it reads the drawers again, so that read is the
+    // moment the event has been applied.
+    const applied = page.waitForRequest(
+      (request) => request.method() === "GET" && new URL(request.url()).pathname === "/api/shifts",
+    );
+    holding = false;
+    for (const message of held.splice(0)) {
+      link.send(message);
+    }
+    await applied;
+    await expect(page.locator('[data-outcome="shift-open"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="shift-expected"]')).toHaveText(
+      "The drawer should hold 450,000₫.",
+    );
   } finally {
     await edge.stop();
   }
@@ -5001,4 +5203,65 @@ test("every flow is replayed except the ones that say why they cannot be", () =>
     );
   }
   expect(replayed.length + skipped.length).toBe(TASKS.length);
+});
+
+// Every route the till declares opens its own screen, and a path it does not declare opens none.
+// Each screen is recognised by something only it draws on a fresh store, so a route pointed at the
+// wrong screen fails here as surely as a route that went missing.
+const SCREEN_TITLES = JSON.parse(
+  readFileSync(new URL("../src/i18n/en.json", import.meta.url), "utf8"),
+);
+const ROUTED_SCREENS = [
+  { path: "/", shows: '[data-outcome="floor"]' },
+  {
+    path: "/table/t1",
+    shows: '[data-outcome="order-open"] >> nth=0',
+    also: '[data-step="releaseTable"]',
+  },
+  { path: "/table/t1/pay", shows: '[data-step="splitEvenly"] >> nth=0' },
+  { path: "/kds", shows: '[data-outcome="board-clear"]' },
+  { path: "/expo", shows: '[data-outcome="pass-clear"]' },
+  { path: "/counter", shows: '[data-outcome="counter"]' },
+  {
+    path: "/order/o1",
+    shows: '[data-outcome="order-open"] >> nth=0',
+    also: '[data-step="takePayment"]',
+  },
+  { path: "/guests", title: "confirm.title" },
+  { path: "/today", shows: '[data-outcome="today-takings"]' },
+  { path: "/shift", shows: '[data-step="openShift"]' },
+  { path: "/devices", shows: '[data-outcome="till"]' },
+  { path: "/setup", title: "setup.title" },
+];
+
+test("every route the till declares opens its own screen, and an undeclared one opens none", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await page.goto(`${edge.baseURL}/pair`);
+    await expect(page.locator("#pair-submit")).toBeVisible();
+    await pair(page, edge);
+    await expect(page.locator('[data-step="submit"]')).toBeVisible();
+    await signIn(page, edge);
+    for (const screen of ROUTED_SCREENS) {
+      await page.goto(`${edge.baseURL}${screen.path}`);
+      await expect(page, `${screen.path} stays where it is`).toHaveURL(
+        (url) => url.pathname === screen.path,
+      );
+      const main = page.locator("main");
+      if (screen.title !== undefined) {
+        await expect(main.locator("h1"), screen.path).toHaveText(SCREEN_TITLES[screen.title]);
+      } else {
+        await expect(main.locator(screen.shows), screen.path).toBeVisible();
+      }
+      if (screen.also !== undefined) {
+        await expect(main.locator(screen.also), screen.path).toBeVisible();
+      }
+    }
+    await page.goto(`${edge.baseURL}/no-such-screen`);
+    await expect(page.locator("main")).toBeEmpty();
+  } finally {
+    await edge.stop();
+  }
 });

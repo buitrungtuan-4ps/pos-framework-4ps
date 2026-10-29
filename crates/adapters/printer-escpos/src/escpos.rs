@@ -4,9 +4,9 @@
 //! The ESC/POS byte encoder.
 //!
 //! Turns a [`PrintDocument`] into the command bytes a thermal printer understands. This is the
-//! vendor protocol and nothing else ([`architecture.md`](../../../docs/architecture.md) §6.1): the
+//! vendor protocol and nothing else ([`architecture.md`](../../../../docs/architecture.md) §6.1): the
 //! decision of whether a line goes out as text or as a bitmap was already made by the framework
-//! ([ADR-0026](../../../docs/adr/0026-port-shapes.md) §5), so a [`PrintBlock::Text`] is sent as text
+//! ([ADR-0026](../../../../docs/adr/0026-port-shapes.md) §5), so a [`PrintBlock::Text`] is sent as text
 //! and a [`PrintBlock::Bitmap`] as a raster image, here, without re-deciding.
 //!
 //! The exact bytes are validated against real hardware in P4's pilot (roadmap A5); the contract

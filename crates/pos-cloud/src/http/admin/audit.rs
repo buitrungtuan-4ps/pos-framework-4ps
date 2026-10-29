@@ -23,6 +23,7 @@ use crate::http::{
     Json, enum_refusal, offset_without_limit_refusal, page_bound_refusal, paged_ok, present_param,
 };
 use crate::paging::{Page, PageRequest, PageRequestError};
+use pos_cloud_api::paged::ListOrPage;
 
 // --- Console audit read (`GET /admin/audit`, ADR-0069 slice 4) ----------------------------------
 
@@ -79,9 +80,10 @@ struct AuditReadQuery {
 
 /// One audit entry as the console reads it: ids as strings (the screen shows names/labels, not raw
 /// ULIDs front-and-centre), the actor snapshot flattened, and the instant as Unix ms.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub(in crate::http) struct AuditEntryView {
     id: String,
+    #[schema(required = true)]
     tenant_id: Option<String>,
     actor_admin_id: String,
     actor_email: String,
@@ -89,8 +91,11 @@ pub(in crate::http) struct AuditEntryView {
     action: String,
     entity_type: String,
     entity_id: String,
+    #[schema(required = true)]
     before: Option<serde_json::Value>,
+    #[schema(required = true)]
     pub(in crate::http) after: Option<serde_json::Value>,
+    #[schema(required = true)]
     request_id: Option<String>,
     at_ms: i64,
 }
@@ -138,6 +143,49 @@ where
         })
 }
 
+#[utoipa::path(
+    get,
+    path = "/admin/audit",
+    extensions(("x-permission" = json!("console.data.read"))),
+    security(("session_cookie" = [])),
+    params(
+        ("tenant_id" = Option<String>, Query, description = "One tenant's entries (a 26-character \
+                                                           ULID). Absent, the fleet-wide trail, \
+                                                           tenant-global entries included"),
+        ("entity_type" = Option<String>, Query, description = "Only entries about this kind of \
+                                                             record, such as `store`"),
+        ("entity_id" = Option<String>, Query, description = "Only entries about this record"),
+        ("action" = Option<String>, Query, description = "Only entries with this action, such as \
+                                                        `store.update`"),
+        ("actor_admin_id" = Option<String>, Query, description = "Only entries by this administrator"),
+        ("since_ms" = Option<i64>, Query, description = "Only entries at or after this instant (Unix ms)"),
+        ("until_ms" = Option<i64>, Query, description = "Only entries at or before this instant (Unix ms)"),
+        ("limit" = Option<String>, Query, description = "Without `offset`, the most recent this many \
+                                                       entries (default 200, larger values read as \
+                                                       500). With `offset`, the page size, 1 to 500, \
+                                                       refused rather than clamped"),
+        ("offset" = Option<String>, Query, description = "Asks for a page: how many entries to skip, \
+                                                        0 to 100000"),
+        ("order" = Option<String>, Query, description = "`newest` (the default) or `oldest`. Only \
+                                                       with `offset`"),
+    ),
+    responses(
+        (status = 200, body = ListOrPage<AuditEntryView>, description = "Without `offset`, the newest matching entries as an array; \
+                                      with it, a page: `items`, `total`, `limit` and `offset`. Each \
+                                      entry has `id`, `tenant_id`, the acting administrator's id, \
+                                      email and role, `action`, `entity_type`, `entity_id`, \
+                                      `before`, `after`, `request_id` and `at_ms`. An entry about an \
+                                      employee carries the person's staff code only for a role \
+                                      holding console.people.read (ADR-0158 decision 9)"),
+        (status = 400, description = "tenant_id is not a ULID; limit or offset is not an integer \
+                                      in range; or order is sent without offset or is not one the \
+                                      route accepts", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.data.read", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The audit store is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "audit",
+)]
 /// A super-admin (any console role) reads the audit trail, filtered by the query string.
 async fn admin_list_audit<Au, A, C>(
     State(state): State<AuditReadState<Au, A, C>>,

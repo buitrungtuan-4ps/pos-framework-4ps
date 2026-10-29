@@ -14,6 +14,11 @@
 // Whenever that cannot be done completely the answer is the reload a `resync` already makes: the
 // edge says `resync` when it cannot replay from the position (the device was away too long, or the
 // edge restarted), and this treats as a gap any frame that does not continue the stream it holds.
+//
+// A socket that holds no position — every first connect, and a reconnect before the first frame —
+// asks for the same answer, because it cannot know what was published before it was subscribed: a
+// till that has just paired may reach the floor, seat a table and add a line while its link is
+// still retrying, and those events were sent to no one.
 
 import { deviceToken, liveSocketUrl } from "./credentials";
 
@@ -29,7 +34,9 @@ export type LinkStatus = "connecting" | "open" | "closed";
 
 export interface LiveLinkHandlers {
   onEvent: (event: ServerEvent) => void;
-  onResync: () => void;
+  // Reads again what is open. The frames that arrive meanwhile are held and applied once it
+  // settles (`LiveLink`'s catching up), so the read cannot undo them.
+  onResync: () => Promise<void>;
   // The edge applied a new store configuration (ADR-0160 item 7): reload what the till draws from
   // it without a new sign-in. `changedNodes` is what the edge says changed (ADR-0173), and absent
   // from an edge that cannot say, or one too old to.
@@ -83,18 +90,17 @@ function skipped(held: Position | null, next: Position | null): boolean {
 
 // The `/ws` URL for a (re)connect.
 //
-// The first connect names nothing, and is served from the next frame as every device always was —
-// the boot gate has just read what is open. A reconnect names the position it holds. One that holds
-// none — its link dropped before it saw a single frame — cannot say what it missed, so it asks to
-// resume from nothing: `after_sequence=0` with no stream, which the edge answers `resync` once the
-// socket is subscribed. That, and not a reload started on `open`, is what makes the read land after
-// the subscription, so a frame published while it runs is not lost between the two.
-function socketUrl(reconnecting: boolean, position: Position | null): string {
-  const base = liveSocketUrl();
-  if (!reconnecting) {
-    return base;
-  }
-  const url = new URL(base);
+// A socket that holds a position names it, and the edge sends what happened after it. One that holds
+// none cannot say what it missed, so it asks to resume from nothing: `after_sequence=0` with no
+// stream, which the edge answers `resync` once the socket is subscribed. That is every first
+// connect, and a reconnect whose link dropped before it saw a single frame. A first connect cannot
+// assume it is subscribed before the store is read: a till's first attempt is refused until it
+// pairs, and the retry that succeeds can come after the sign-in has read the store and the floor
+// has been used. The `resync` and the read it starts, and not a reload started on `open`, are what
+// make the read land after the subscription, so a frame published in between is not lost. Where
+// the store has not been read yet, the `resync` asks for nothing (`readAgain` waits for the load).
+function socketUrl(position: Position | null): string {
+  const url = new URL(liveSocketUrl());
   if (position === null) {
     url.searchParams.set("after_sequence", "0");
   } else {
@@ -104,15 +110,23 @@ function socketUrl(reconnecting: boolean, position: Position | null): string {
   return url.toString();
 }
 
+// How many frames are held while a resync's read is out. Past it the held frames are dropped and the
+// read is made again once it settles, since a read that starts later covers them.
+const HELD_LIMIT = 1024;
+
 export class LiveLink {
   #socket: WebSocket | null = null;
   #closed = false;
   #retry = 0;
   #timer: ReturnType<typeof setTimeout> | null = null;
-  // Whether a socket of this link has been open before, so the next one is a reconnect that may
-  // have missed something.
-  #wasOpen = false;
   #position: Position | null = null;
+  // While a resync's read is out, the frames that arrive are held here and applied once it settles:
+  // the read may have been served before them, and applied after them it would undo them. `null`
+  // when nothing is being caught up.
+  #held: (() => void)[] | null = null;
+  // Whether the read must be made again before the held frames are applied: another resync came,
+  // or more frames came than are held.
+  #again = false;
   readonly #handlers: LiveLinkHandlers;
 
   constructor(handlers: LiveLinkHandlers) {
@@ -132,6 +146,46 @@ export class LiveLink {
     }
     this.#socket?.close();
     this.#socket = null;
+    this.#held = null;
+    this.#again = false;
+  }
+
+  // Reads again what is open, holding the frames that arrive until the read settles.
+  #resync(): void {
+    if (this.#held !== null) {
+      this.#again = true;
+      return;
+    }
+    this.#held = [];
+    void this.#catchUp();
+  }
+
+  async #catchUp(): Promise<void> {
+    do {
+      this.#again = false;
+      try {
+        await this.#handlers.onResync();
+      } catch {
+        // The read reports its own failure; the held frames are still applied.
+      }
+    } while (this.#again && this.#held !== null);
+    const held = this.#held ?? [];
+    this.#held = null;
+    for (const apply of held) {
+      apply();
+    }
+  }
+
+  // Applies a frame now, or after the read a resync started.
+  #deliver(apply: () => void): void {
+    if (this.#held === null) {
+      apply();
+    } else if (this.#held.length < HELD_LIMIT) {
+      this.#held.push(apply);
+    } else {
+      this.#held = [];
+      this.#again = true;
+    }
   }
 
   #connect(): void {
@@ -146,12 +200,11 @@ export class LiveLink {
     // expression unchanged, and a device paired against a named edge opens the socket there rather
     // than against whatever origin happened to serve the page. The position rides in the query and
     // not beside the token: it is not a secret, and the edge logs the path, never the query.
-    const socket = new WebSocket(socketUrl(this.#wasOpen, this.#position), protocols);
+    const socket = new WebSocket(socketUrl(this.#position), protocols);
     this.#socket = socket;
 
     socket.addEventListener("open", () => {
       this.#retry = 0;
-      this.#wasOpen = true;
       this.#handlers.onStatus("open");
     });
 
@@ -171,16 +224,18 @@ export class LiveLink {
         // is spent: the next frame starts a fresh one. A resync published to every device carries
         // its own position, and one sent to this device alone carries none.
         this.#position = next;
-        this.#handlers.onResync();
+        this.#resync();
         return;
       }
       if (skipped(this.#position, next)) {
-        this.#handlers.onResync();
+        this.#resync();
       }
       if (message.type === "event" && typeof message.event_type === "string") {
-        this.#handlers.onEvent({ eventType: message.event_type, payload: message.payload });
+        const event = { eventType: message.event_type, payload: message.payload };
+        this.#deliver(() => this.#handlers.onEvent(event));
       } else if (message.type === "config_applied") {
-        this.#handlers.onConfigApplied(nodesOf(message.changed_nodes));
+        const changed = nodesOf(message.changed_nodes);
+        this.#deliver(() => this.#handlers.onConfigApplied(changed));
       }
       // Recorded once the frame is applied, because the position is the last frame this device
       // has, not the last one it was sent.
