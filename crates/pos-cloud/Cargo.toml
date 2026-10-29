@@ -41,7 +41,8 @@ path = "src/main.rs"
 
 [dependencies]
 # The backbone and the cloud store this binary composes. Paths, not versions.
-pos-ports = { path = "../pos-ports" }
+# `openapi`: the configuration update a store pulls names its schema (ADR-0180 D-T2).
+pos-ports = { path = "../pos-ports", features = ["openapi"] }
 # With `openapi`, so the wire types carry the schemas the OpenAPI documents describe responses
 # with (ADR-0177 decision 3).
 pos-proto = { path = "../pos-proto", features = ["openapi"] }

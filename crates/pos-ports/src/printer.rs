@@ -116,6 +116,7 @@ mod hex_bits {
 
 /// How a printer is attached.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[non_exhaustive]
 pub enum PrinterConnection {
     /// Directly attached. The only connection over which a cash drawer may be opened.
@@ -145,6 +146,7 @@ impl PrinterConnection {
 /// [`CodePage::Unsupported`], which forces bitmap rendering for everything and is therefore
 /// always safe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[non_exhaustive]
 pub enum CodePage {
     /// 7-bit ASCII only.
@@ -186,6 +188,7 @@ impl CodePage {
 
 /// What a printer can do.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct PrinterCapabilities {
     /// How it is attached.
     pub connection: PrinterConnection,
@@ -193,6 +196,7 @@ pub struct PrinterCapabilities {
     pub code_page: CodePage,
     /// Characters per line in the standard font. Receipt layout is computed from this, so
     /// a wrong value produces wrapped totals.
+    #[cfg_attr(feature = "openapi", schema(value_type = u16, minimum = 1))]
     pub columns: NonZeroU16,
     /// Printable dots per line — the width of a raster this printer will accept.
     ///
@@ -204,6 +208,7 @@ pub struct PrinterCapabilities {
     /// A raster wider than this is not clipped by the printer — the excess wraps onto the next
     /// line and shears the image — so [ADR-0102](../../../docs/adr/0102-printing-any-script.md)
     /// makes the renderer take this as its width rather than guess.
+    #[cfg_attr(feature = "openapi", schema(value_type = u16, minimum = 1))]
     pub dots_per_line: NonZeroU16,
     /// Whether it can print raster images, which is what bitmap fallback needs.
     pub prints_bitmaps: bool,
@@ -248,6 +253,7 @@ impl PrinterCapabilities {
 
 /// Text styling. Deliberately minimal — a receipt is a document, not a design.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct TextStyle {
     /// Bold.
     pub emphasised: bool,
@@ -259,6 +265,7 @@ pub struct TextStyle {
 
 /// One element of a printed document.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[non_exhaustive]
 pub enum PrintBlock {
     /// A line of text.
@@ -277,9 +284,11 @@ pub enum PrintBlock {
     /// byte count requires knowing the height, and getting that wrong shears the image.
     Bitmap {
         /// Pixels per row.
+        #[cfg_attr(feature = "openapi", schema(value_type = u16, minimum = 1))]
         width: NonZeroU16,
         /// Row-major bits, `width.div_ceil(8)` bytes per row.
         #[serde(with = "hex_bits")]
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = "hex"))]
         bits: Vec<u8>,
     },
     /// A one-dimensional barcode.
@@ -312,6 +321,7 @@ pub enum PrintBlock {
 
 /// A document to print.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct PrintDocument {
     /// The blocks, in order.
     pub blocks: Vec<PrintBlock>,
@@ -340,6 +350,7 @@ impl PrintDocument {
 /// and its own audit trail (`docs/pos-spec.md` §12 counts reprint rates per employee), so a
 /// retry after an ambiguous failure must not silently produce a second ticket.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct PrintJob {
     /// Idempotency key. A retry reuses it; a reprint mints a new one.
     pub job_id: pos_proto::ids::EventId,
@@ -351,6 +362,7 @@ pub struct PrintJob {
     ///
     /// Optional rather than a nil id: a receipt genuinely has no station, and a placeholder would
     /// have to be recognised as "not really a station" by everything that reads this.
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     pub station_id: Option<StationId>,
     /// What to print.
     pub document: PrintDocument,

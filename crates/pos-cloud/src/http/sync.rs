@@ -37,7 +37,7 @@ pub(in crate::http) struct ConfigSyncQuery {
 
 /// What a store should do to reach the current configuration — the wire form of a
 /// [`SyncOutcome`](crate::config_tree::SyncOutcome).
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
 #[serde(tag = "status", rename_all = "snake_case")]
 enum ConfigSyncResponse {
     /// The store already holds the current version; it applies nothing.
@@ -59,7 +59,7 @@ enum ConfigSyncResponse {
                                                                 Absent when it holds none"),
     ),
     responses(
-        (status = 200, description = "`status`: `up_to_date`, or `update` with the snapshot or collapsed \
+        (status = 200, body = ConfigSyncResponse, description = "`status`: `up_to_date`, or `update` with the snapshot or collapsed \
                                       delta that brings the store to the current version (ADR-0039)"),
         (status = 400, description = "store_id is not a ULID, or held_version is not a ULID", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No credential, or one the cloud does not accept: one answer for every \
