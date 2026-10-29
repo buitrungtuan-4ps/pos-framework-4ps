@@ -17,6 +17,7 @@ import { createSignal } from "solid-js";
 
 import { ApiError, api } from "../api/client";
 import type { LineRequest, MenuItemResponse, OrderLineRequest } from "../api/schemas";
+import { type Money, addMoney } from "../lib/money";
 import { PENDING, type OrderLine, loadLiveOrders, moveOrder, state, updateStore, walkInOrder } from "./store";
 
 // How long a write the edge answered waits for its event before the open orders are read again.
@@ -69,6 +70,9 @@ export async function addItem(
   }
   const rate = item.tax_rate;
   const walkIn = walkInOrder(tableId);
+  // A walk-in's line names no price (the edge prices it at its own channel), so only a table's is
+  // priced here.
+  const unitPrice = walkIn === undefined ? withModifiers(item, modifiers) : item.unit_price;
   const ghost = `${PENDING}${(provisionalCount += 1)}`;
   const line: OrderLine = {
     orderLineId: ghost,
@@ -76,7 +80,7 @@ export async function addItem(
     name: item.display_name,
     quantityMilli: 1000,
     // Never shown while the line is sending; the edge's event brings the line's own figure.
-    lineTotal: item.unit_price,
+    lineTotal: unitPrice,
     state: "ORDER_LINE_STATE_ADDED",
     // Whose dish it is, where the store assigns seats and a server has said (never on a walk-in).
     seat: walkIn === undefined && state.seatsEnabled ? state.seatForTable[tableId] : undefined,
@@ -94,7 +98,7 @@ export async function addItem(
   try {
     const response = await sending(() =>
       walkIn === undefined
-        ? api.addLine(tableId, tableLine(item, rate, line))
+        ? api.addLine(tableId, tableLine(item, rate, unitPrice, line))
         : api.addOrderLine(walkIn, counterLine(item, line)),
     );
     updateStore((draft) => {
@@ -120,19 +124,37 @@ export async function addItem(
   }
 }
 
-// The request for a table's line: what the price book says, which the edge prices again from its
-// own (roadmap-v3 E5).
+// One of the dish at the table's price book: its own price plus each chosen modifier's, which is
+// how a large costs more than a small (ADR-0063). A table's line is priced here, by the device, and
+// the edge records what it is sent, so a till that sent the dish's price alone charged the size
+// shown on the picker to nobody (pilot run 2, N2). A modifier the price book does not hold cannot
+// be priced, and is refused before anything is painted, as an unsellable dish is. A walk-in's line
+// names no price: the edge prices it, modifiers and all (ADR-0146).
+function withModifiers(item: MenuItemResponse, modifiers: string[]): Money {
+  let unitPrice: Money = item.unit_price;
+  for (const modifierId of modifiers) {
+    const modifier = state.menu.find((candidate) => candidate.menu_item_id === modifierId);
+    if (modifier === undefined) {
+      throw new Error(`${item.display_name} cannot be priced with that choice`);
+    }
+    unitPrice = addMoney(unitPrice, modifier.unit_price);
+  }
+  return unitPrice;
+}
+
+// The request for a table's line: the price book's figures, with the modifiers' prices in them.
 function tableLine(
   item: MenuItemResponse,
   rate: NonNullable<MenuItemResponse["tax_rate"]>,
+  unitPrice: Money,
   line: OrderLine,
 ): LineRequest {
   return {
     menu_item_id: item.menu_item_id,
     display_name: item.display_name,
     quantity: { milli: 1000 },
-    unit_price: item.unit_price,
-    line_total: item.unit_price,
+    unit_price: unitPrice,
+    line_total: unitPrice,
     tax_class_id: item.tax_class_id,
     tax_rate: rate,
     seat: line.seat,
