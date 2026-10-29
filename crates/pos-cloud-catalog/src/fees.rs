@@ -437,9 +437,9 @@ pub fn for_store(
 /// needs one, so it sells nothing a fee could apply to.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StoreFacts {
-    currency: Option<CurrencyCode>,
-    tax_rates: Option<TaxRateTable>,
-    menu: Option<MenuBook>,
+    pub(crate) currency: Option<CurrencyCode>,
+    pub(crate) tax_rates: Option<TaxRateTable>,
+    pub(crate) menu: Option<MenuBook>,
     /// The `locale` node's `prices_include_tax`, read as the edge reads it: absent is `false`.
     prices_include_tax: bool,
     /// The `locale` node's `cash_rounding_increment`, read as the edge reads it: absent, zero or
@@ -515,7 +515,9 @@ fn known_channels(channels: &[Open<SalesChannel>]) -> impl Iterator<Item = Sales
 
 /// Why a store cannot apply a rule it would be sent. Each one would fail every bill the rule
 /// applies to, so a store with one is not sent its rules at all.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, utoipa::ToSchema,
+)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum StoreFault {
     /// An amount in a currency other than the one the store bills in. A bill is one currency, so

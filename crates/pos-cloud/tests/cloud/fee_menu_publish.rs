@@ -135,6 +135,74 @@ fn second_class_only() -> serde_json::Value {
     serde_json::to_value(&table).expect("encode the tax table")
 }
 
+/// A tax table that rates each of `classes` on dine-in and takeaway, and nothing else.
+fn rating(classes: &[u128]) -> serde_json::Value {
+    let table = classes
+        .iter()
+        .fold(pos_proto::locale::TaxRateTable::new(), |table, class| {
+            [SalesChannel::DineIn, SalesChannel::Takeaway]
+                .into_iter()
+                .fold(table, |table, channel| {
+                    table.with(
+                        fee_tax_class(*class),
+                        channel,
+                        TaxRate::from_basis_points(800),
+                    )
+                })
+        });
+    serde_json::to_value(&table).expect("encode the tax table")
+}
+
+/// A menu the store cannot sell is not published at all (pilot finding M1): a tax table that no
+/// longer rates the pizzas' class lands between the publish's read and its write, so every sale of
+/// them would fail at the till. The refusal names each item and why, and nothing is written.
+#[tokio::test]
+async fn a_menu_publish_refuses_a_menu_the_store_cannot_sell() {
+    let (router, config_trees, catalog, menu_id) = menu_fees_app();
+    let cookie = admin_cookie(&router).await;
+    let [first, ..] = fees_stores();
+    let before = fee_store_tree(&config_trees, first).await.layers[2].clone();
+    add_pizza(&catalog, menu_id, 4);
+    *config_trees.interpose.lock().expect("lock") = Some(("tax".to_owned(), second_class_only()));
+
+    let refused = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/catalog/publish",
+            &serde_json::json!({
+                "tenant_id": tenant_scope_id(),
+                "store_id": first.to_string(),
+                "menu_id": menu_id.as_ulid().to_string(),
+            }),
+            &cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = json_body(refused).await;
+    let details = &body["error"]["details"];
+    assert!(
+        details
+            .as_array()
+            .is_some_and(|details| details.iter().any(|detail| {
+                detail["field"] == format!("items.{}", fee_item(4))
+                    && detail["reason"] == "TAX_RATE_NOT_CONFIGURED"
+            })),
+        "{body}"
+    );
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("Item 4")),
+        "{body}"
+    );
+    let after = fee_store_tree(&config_trees, first).await.layers[2].clone();
+    assert_eq!(
+        after["menu"], before["menu"],
+        "the store keeps the menu it had"
+    );
+}
+
 /// The menu publish, the fee routes and the generic preview over one catalog, rule store, registry
 /// and config-tree fake, as `main.rs` merges them, with the fee tests' stores seeded and a menu of
 /// items 1 and 3 to publish.
@@ -353,18 +421,37 @@ async fn a_menu_publish_writes_no_fees_where_they_are_unchanged() {
 
 /// A store that cannot apply one of its rules still gets its menu, and the answer says which rule
 /// and why, in the fee publish's own tokens; the store keeps the fees it has. The fees are
-/// composed on the tree the menu is written over: a tax table that no longer rates the pizzas'
-/// class, landing between the publish's read and its write, is the one the rule is checked
-/// against.
+/// composed on the tree the menu is written over: a tax table that no longer rates the class the
+/// packaging is taxed at, landing between the publish's read and its write, is the one the rule is
+/// checked against. It still rates the pizzas' own class, so the menu itself is one the store can
+/// sell (pilot finding M1 refuses one it cannot).
 #[tokio::test]
 async fn a_menu_publish_still_publishes_the_menu_where_the_store_cannot_apply_a_fee() {
     let (router, config_trees, catalog, menu_id) = menu_fees_app();
     let cookie = admin_cookie(&router).await;
     let [first, ..] = fees_stores();
-    let fee_id = write_pizza_packaging(&router, &cookie).await;
+    let mut layer = fee_store_tree(&config_trees, first).await.layers[2].clone();
+    layer["tax"] = rating(&[1, 2]);
+    config_trees.seed_store_layer(tenant(), first, layer);
+    let mut packaging = pizza_packaging();
+    packaging["tax_class_id"] = serde_json::json!(fee_tax_class(2).to_string());
+    let written = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/fees",
+            &fee_body("FEE_SCOPE_STORE", &first.to_string(), &packaging),
+            &cookie,
+        ))
+        .await
+        .expect("route the write");
+    assert_eq!(written.status(), StatusCode::CREATED);
+    let fee_id = json_body(written).await["fee_id"]
+        .as_str()
+        .expect("a fee id")
+        .to_owned();
     let held = fee_store_tree(&config_trees, first).await.layers[2]["fees"].clone();
     add_pizza(&catalog, menu_id, 4);
-    *config_trees.interpose.lock().expect("lock") = Some(("tax".to_owned(), second_class_only()));
+    *config_trees.interpose.lock().expect("lock") = Some(("tax".to_owned(), rating(&[1])));
 
     let body = publish_fee_menu(&router, &cookie, first, menu_id).await;
     assert_eq!(body["fees"]["outcome"], "FEE_PUBLISH_REFUSED", "{body}");
@@ -376,7 +463,7 @@ async fn a_menu_publish_still_publishes_the_menu_where_the_store_cannot_apply_a_
     assert_eq!(last_written(&tree), ["menu", "layout"]);
     assert_eq!(
         tree.layers[2]["tax"],
-        second_class_only(),
+        rating(&[1]),
         "written over, not under"
     );
     assert_eq!(
