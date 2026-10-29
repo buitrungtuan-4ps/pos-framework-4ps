@@ -35,7 +35,8 @@ use std::collections::BTreeMap;
 
 use pos_proto::chain::{ChainHash, ChainLink};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::ids::EventId;
+use pos_proto::ids::{BrandId, EventId, TenantId};
+use pos_proto::ulid::Ulid;
 use sha2::{Digest as _, Sha256};
 
 /// How many records one audit will walk.
@@ -239,6 +240,40 @@ fn record_hash(event: &EventEnvelope<RawPayload>, link: &ChainLink) -> Option<Ch
         .ok()
 }
 
+/// Whether `event` hashes to `expected` at `link`, as its store hashed it; `Err` carries the hash
+/// the cloud computed instead. A record that cannot be hashed at all is passed over, as before.
+///
+/// # Why the record is hashed twice
+///
+/// A store stamps its events with the nil tenant and brand, because it does not know who owns it,
+/// and the cloud overwrites both from its registry as it ingests
+/// ([ADR-0101](../../../docs/adr/0101-the-cloud-stamps-the-tenant.md)). The store hashed the record
+/// **before** that stamp, so the copy the cloud holds no longer reproduces the store's hash, and
+/// every link of every registered store read as broken (pilot run 2, N4). The record is therefore
+/// hashed as the cloud holds it, and then with the two owner fields put back to what a store
+/// stamps; either matching is the store's own hash. Nothing else is restored: an edit to any other
+/// field, the payload included, still breaks the link.
+fn hashes_to(
+    event: &EventEnvelope<RawPayload>,
+    link: &ChainLink,
+    expected: &ChainHash,
+) -> Result<(), ChainHash> {
+    let Some(held) = record_hash(event, link) else {
+        return Ok(());
+    };
+    if held == *expected {
+        return Ok(());
+    }
+    let mut published = event.clone();
+    published.tenant_id = TenantId::new(Ulid::NIL);
+    published.brand_id = BrandId::new(Ulid::NIL);
+    match record_hash(&published, link) {
+        Some(stamped) if stamped == *expected => Ok(()),
+        Some(stamped) => Err(stamped),
+        None => Err(held),
+    }
+}
+
 /// The findings an audit accumulates, capped without losing the count.
 ///
 /// A struct rather than a closure over two locals because the walk hands it between helpers, and a
@@ -359,10 +394,7 @@ fn walk_links(at: &BTreeMap<u64, &EventEnvelope<RawPayload>>, findings: &mut Fin
         let Some(previous_link) = previous.chain.as_ref() else {
             continue;
         };
-        let Some(computed) = record_hash(previous, previous_link) else {
-            continue;
-        };
-        if computed != link.prev_hash {
+        if let Err(computed) = hashes_to(previous, previous_link, &link.prev_hash) {
             findings.push(ChainFinding::BrokenLink {
                 seq: *seq,
                 declared: link.prev_hash.clone(),
@@ -385,10 +417,7 @@ fn check_head(
     let Some(link) = head_event.chain.as_ref() else {
         return;
     };
-    let Some(computed) = record_hash(head_event, link) else {
-        return;
-    };
-    if computed != *claimed_head {
+    if let Err(computed) = hashes_to(head_event, link, claimed_head) {
         findings.push(ChainFinding::BrokenLink {
             seq: to_seq,
             declared: claimed_head.clone(),
@@ -652,6 +681,66 @@ mod tests {
         assert!(
             broken.contains(&4),
             "record 4 links to what record 3 used to be; found {broken:?}"
+        );
+        assert!(audit.found_tampering());
+    }
+
+    /// A run as a store writes it, with the nil tenant and brand, then as the cloud holds it: owned
+    /// by the tenant and brand its registry names (ADR-0101).
+    fn stamped_chain(count: u64) -> Vec<EventEnvelope<RawPayload>> {
+        let mut chain = Vec::new();
+        let mut link = ChainLink::first();
+        for seed in 1..=count {
+            let mut event = unchained(u128::from(seed));
+            event.tenant_id = TenantId::new(Ulid::NIL);
+            event.brand_id = BrandId::new(Ulid::NIL);
+            let hash = record_hash(&event, &link).expect("a fixture record hashes");
+            event.chain = Some(link.clone());
+            link = ChainLink::following(link.seq, hash);
+            chain.push(event);
+        }
+        chain
+    }
+
+    /// The head of a store's run as the store hashed it, before the cloud stamped an owner on it.
+    fn store_head(count: u64) -> ChainHash {
+        head_of(&stamped_chain(count))
+    }
+
+    fn owned_by_the_registry(chain: &mut [EventEnvelope<RawPayload>]) {
+        for event in chain {
+            event.tenant_id = TenantId::new(Ulid::from_u128(0x007E_4A47));
+            event.brand_id = BrandId::new(Ulid::from_u128(0x000B_4A4D));
+        }
+    }
+
+    #[test]
+    fn a_chain_the_cloud_stamped_with_its_owner_still_walks_clean() {
+        // Pilot run 2, N4: every link of a registered store read as broken, because the cloud
+        // hashed its stamped copy and the store had hashed the record before the stamp.
+        let mut chain = stamped_chain(5);
+        owned_by_the_registry(&mut chain);
+        let audit = audit_window(&chain, 1, 5, &store_head(5));
+        assert_eq!(audit.found, 0, "{:?}", audit.findings);
+    }
+
+    #[test]
+    fn an_edit_to_a_stamped_record_still_breaks_its_link() {
+        let mut chain = stamped_chain(5);
+        owned_by_the_registry(&mut chain);
+        chain[2].data = RawPayload::encode(&DeviceActivationCompleted {
+            activated_device_id: DeviceId::new(Ulid::from_u128(0xDEAD)),
+        })
+        .expect("a fixture payload serialises");
+
+        let audit = audit_window(&chain, 1, 5, &store_head(5));
+        assert!(
+            audit
+                .findings
+                .iter()
+                .any(|finding| matches!(finding, ChainFinding::BrokenLink { seq: 4, .. })),
+            "{:?}",
+            audit.findings
         );
         assert!(audit.found_tampering());
     }
