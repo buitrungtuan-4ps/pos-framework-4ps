@@ -58,6 +58,7 @@ To find the files a change touches, start from the **[repository map](repository
 | [generated/adr-index.md](generated/adr-index.md) | The ADRs nothing in the code cites, and any citation of an ADR that does not exist (generated). `cargo xtask gen-docs --adr-citations [ADR-NNNN]` prints which files cite each ADR |
 | [snapshots/](snapshots/) | The published contracts: [events](snapshots/events.txt), [permissions](snapshots/permissions.txt), [settings](snapshots/settings.txt), [capabilities](snapshots/capabilities.txt), [edge routes](snapshots/routes.txt). Each is generated, and CI refuses a removal |
 | [capacity-and-reliability.md](capacity-and-reliability.md) | Sizing numbers, load limits, and the failure and recovery matrix |
+| [data-residency.md](data-residency.md) | Where each class of data rests and when it crosses a border, the mechanisms that make it visible, and what waits for a second cell. Not legal advice |
 | [gate-register.md](gate-register.md) | The gates only a person, a credential, hardware or an outside body can clear |
 | [production-readiness.md](production-readiness.md) | The open list between the tree and a shop that takes money |
 | [security-review.md](security-review.md) · [security-review-ws-d.md](security-review-ws-d.md) | The pre-production security review, and the ops-hardening pass |

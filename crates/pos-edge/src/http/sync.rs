@@ -41,6 +41,7 @@ pub(crate) struct SyncResponse {
     cloud_link: &'static str,
     /// When the outbox drain last reached the cloud; absent if it has not since the edge started.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     last_sync_time: Option<Timestamp>,
     /// `CLOCK_DRIFT_OK`, `CLOCK_DRIFT_ALARM` past `clock_drift_alarm_ms`, or
     /// `CLOCK_DRIFT_UNSPECIFIED` when no probe has succeeded since the edge started.
@@ -49,9 +50,11 @@ pub(crate) struct SyncResponse {
     clock_drift_alarm_ms: u64,
     /// This box's clock minus the time server's, in milliseconds; absent until measured.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     clock_offset_ms: Option<i64>,
     /// When that was measured, on this box's own clock; absent until measured.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     clock_measure_time: Option<Timestamp>,
 }
 

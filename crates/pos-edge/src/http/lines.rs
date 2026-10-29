@@ -106,10 +106,12 @@ pub(crate) struct LineResponse {
     state: String,
     /// The station the published routing sent this fire to, absent on an add (ADR-0072).
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     station_id: Option<String>,
     /// What came of the kitchen ticket: `PRINTED`, `NO_PRINTER`, `PRINTER_UNAVAILABLE` or
     /// `UNPRINTABLE_TEXT`. Absent on an add, which prints nothing (ADR-0100).
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     ticket_print: Option<String>,
 }
 

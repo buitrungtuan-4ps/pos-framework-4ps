@@ -210,7 +210,9 @@ fn store_archive_routes(deps: &RouteDeps<'_>) -> Router {
 
 /// Devices, translations, activation, claims, and the store registry.
 fn device_routes(deps: &RouteDeps<'_>) -> Router {
-    let RouteDeps { store, audit, .. } = *deps;
+    let RouteDeps {
+        store, audit, cell, ..
+    } = *deps;
     Router::new()
         .merge(http::device_router(
             store.device_proposals(),
@@ -225,10 +227,13 @@ fn device_routes(deps: &RouteDeps<'_>) -> Router {
             SystemClock,
             Arc::clone(audit),
         ))
-        .merge(http::activation_router(
+        // A named cell issues codes with its id as their prefix, and answers a prefix naming
+        // another cell from its directory (ADR-0181).
+        .merge(pos_cloud_devices::routes::activation_router_in_cell(
             store.activation_codes(),
             store.admin(),
             SystemClock,
+            Arc::clone(cell) as Arc<dyn pos_cloud_devices::routes::ActivationCell>,
         ))
         // A box installed with no store claims itself (ADR-0148): it shows a code, a console user
         // binds it to a device slot, and the box collects its credential once.

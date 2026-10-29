@@ -239,6 +239,7 @@ pub(crate) struct SignInRefused {
 pub(crate) struct SessionState {
     signed_in: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     employee_id: Option<String>,
     /// Whether a replacement machine has taken this store — `active`, `superseded` or `invalid`
     /// ([ADR-0123](../../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).

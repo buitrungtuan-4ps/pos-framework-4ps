@@ -362,6 +362,7 @@ pub struct PrintJob {
     ///
     /// Optional rather than a nil id: a receipt genuinely has no station, and a placeholder would
     /// have to be recognised as "not really a station" by everything that reads this.
+    #[cfg_attr(feature = "openapi", schema(required = true))]
     pub station_id: Option<StationId>,
     /// What to print.
     pub document: PrintDocument,
