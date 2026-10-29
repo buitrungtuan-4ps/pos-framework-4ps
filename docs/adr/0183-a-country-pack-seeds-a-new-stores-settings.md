@@ -1,8 +1,10 @@
 # ADR-0183 — A country pack seeds a new store's settings, in its own currency
 
-**Status** Proposed · **Owner** @maintainers-architecture · **Date** 2026-10-29 · Extends
+**Status** Accepted · **Owner** @maintainers-architecture · **Date** 2026-10-29 · Extends
 [ADR-0105](0105-a-country-pack-is-values.md) and [ADR-0160](0160-everything-a-store-runs-differently-is-published-configuration.md)
 decision 1
+
+Accepted by the owner on 2026-10-29.
 
 ## Context
 
