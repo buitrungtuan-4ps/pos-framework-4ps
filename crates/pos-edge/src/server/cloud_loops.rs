@@ -60,6 +60,7 @@ where
 {
     let CloudWiring {
         cloud_url,
+        cloud_roots,
         store_id,
         edge,
         queue,
@@ -71,7 +72,7 @@ where
         revocations,
         backup,
     } = wiring;
-    let client = sync_client(cloud_url, sync_key)?;
+    let client = sync_client(cloud_url, cloud_roots, sync_key)?;
     let config_client = config_client(
         &client,
         store_id,
@@ -99,7 +100,11 @@ where
 
 /// The keyed client the `/sync` loops dial on, or `None`, said once, when there is no key to key it
 /// with or it cannot be built.
-fn sync_client(cloud_url: &url::Url, sync_key: Option<String>) -> Option<CloudHttpClient> {
+fn sync_client(
+    cloud_url: &url::Url,
+    cloud_roots: &[tokio_rustls::rustls::pki_types::CertificateDer<'static>],
+    sync_key: Option<String>,
+) -> Option<CloudHttpClient> {
     let Some(sync_key) = sync_key else {
         tracing::warn!(
             "the store is activated but neither a sync key (vault or {SYNC_KEY_ENV}) nor its device \
@@ -107,7 +112,7 @@ fn sync_client(cloud_url: &url::Url, sync_key: Option<String>) -> Option<CloudHt
         );
         return None;
     };
-    match CloudHttpClient::new(cloud_url, sync_key) {
+    match CloudHttpClient::trusting(cloud_url, sync_key, cloud_roots) {
         Ok(client) => Some(client),
         Err(error) => {
             tracing::error!(

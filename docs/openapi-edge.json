@@ -58,7 +58,7 @@
             "description": "Activation failed"
           },
           "503": {
-            "description": "The cloud or the key vault is unavailable (`ACTIVATION_UNAVAILABLE`)"
+            "description": "The cloud or the key vault is unavailable (`ACTIVATION_UNAVAILABLE`); more precisely, the cloud's certificate is not one this box trusts (`ACTIVATION_CLOUD_UNTRUSTED`) or the cloud could not be reached at all (`ACTIVATION_CLOUD_UNREACHABLE`)"
           }
         },
         "security": [],

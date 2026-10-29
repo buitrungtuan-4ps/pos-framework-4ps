@@ -83,6 +83,8 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
   ALREADY_ACTIVATED: "error.already_activated",
   ACTIVATION_WRONG_STATE: "error.activation_wrong_state",
   ACTIVATION_UNAVAILABLE: "error.activation_unavailable",
+  ACTIVATION_CLOUD_UNTRUSTED: "error.activation_cloud_untrusted",
+  ACTIVATION_CLOUD_UNREACHABLE: "error.activation_cloud_unreachable",
 };
 
 // The sentence for anything a command threw: a translated refusal, the edge's own words for a

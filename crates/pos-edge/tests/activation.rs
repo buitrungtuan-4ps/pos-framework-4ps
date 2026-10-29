@@ -619,3 +619,74 @@ async fn every_activation_refusal_names_a_token_the_till_can_translate() {
         )
     );
 }
+
+/// What `/setup` is told when the exchange never reached the cloud, over the real TLS transport the
+/// box dials with. A handshake that fails — here against a listener that hangs up instead of
+/// answering, which fails it at the same step an untrusted private CA does — is
+/// `ACTIVATION_CLOUD_UNTRUSTED`; a port nothing listens on is
+/// `ACTIVATION_CLOUD_UNREACHABLE`. Before, both were the one `ACTIVATION_UNAVAILABLE`, and the pilot's
+/// technician could not tell a missing `cloud_ca_file` from a missing cable.
+#[tokio::test]
+async fn a_cloud_that_was_never_reached_says_which_way() {
+    use cloud_sync_http::{HttpCloudSync, TlsHttpTransport};
+
+    async fn activate_against(port: u16) -> (StatusCode, Option<String>) {
+        let edge = Arc::new(
+            Edge::new(
+                FakeStore::default(),
+                StoreIdentity::for_store(StoreId::new(Ulid::from_u128(3))),
+                EdgeSession::bootstrap(),
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("edge composes"),
+        );
+        let transport = TlsHttpTransport::new(
+            &format!("https://127.0.0.1:{port}"),
+            core::time::Duration::from_secs(5),
+        )
+        .expect("an https base builds");
+        let cloud = HttpCloudSync::new(
+            transport,
+            StoreId::new(Ulid::from_u128(3)),
+            pos_edge::version::target(),
+        );
+        let router = activation_router(
+            edge,
+            Arc::new(cloud),
+            Arc::new(FakeKeyVault::new()),
+            None,
+            &Arc::new(pos_edge::origins::Origins::new()),
+            None,
+            None,
+        );
+        reason_of(router, &format!("{{\"code\":\"{}\"}}", valid_code())).await
+    }
+
+    let plain = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("a local port");
+    let port = plain.local_addr().expect("its address").port();
+    tokio::spawn(async move {
+        while let Ok((socket, _)) = plain.accept().await {
+            drop(socket);
+        }
+    });
+    assert_eq!(
+        activate_against(port).await,
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Some("ACTIVATION_CLOUD_UNTRUSTED".to_owned())
+        )
+    );
+
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").expect("a local port");
+    let port = closed.local_addr().expect("its address").port();
+    drop(closed);
+    assert_eq!(
+        activate_against(port).await,
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Some("ACTIVATION_CLOUD_UNREACHABLE".to_owned())
+        )
+    );
+}

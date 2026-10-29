@@ -37,8 +37,8 @@ use hyper::header::{AUTHORIZATION, CONTENT_TYPE, HOST};
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
-use tokio_rustls::rustls::pki_types::ServerName;
-use tokio_rustls::rustls::{ClientConfig, RootCertStore};
+use tokio_rustls::rustls::ClientConfig;
+use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName};
 
 use pos_proto::ids::StoreId;
 
@@ -123,14 +123,27 @@ impl CloudHttpClient {
     /// cannot supply the safe default TLS versions (a build-time impossibility, a `Result` only to
     /// keep the constructor panic-free per the workspace lints).
     pub fn new(base_url: &url::Url, bearer: impl Into<String>) -> Result<Self, CloudHttpError> {
+        Self::trusting(base_url, bearer, &[])
+    }
+
+    /// [`Self::new`], also trusting `extra_roots` — the private CA `cloud_ca_file` names
+    /// ([`crate::cloud_roots`]) — beside the bundled Mozilla roots, not instead of them.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::new`].
+    pub fn trusting(
+        base_url: &url::Url,
+        bearer: impl Into<String>,
+        extra_roots: &[CertificateDer<'static>],
+    ) -> Result<Self, CloudHttpError> {
         if base_url.scheme() != "https" {
             return Err(CloudHttpError::new("the cloud base URL must use https"));
         }
         if base_url.host_str().is_none() {
             return Err(CloudHttpError::new("the cloud base URL has no host"));
         }
-        let mut roots = RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let roots = crate::cloud_roots::trust_store(extra_roots);
         let tls = ClientConfig::builder_with_provider(Arc::new(
             tokio_rustls::rustls::crypto::ring::default_provider(),
         ))

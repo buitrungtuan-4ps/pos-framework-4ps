@@ -54,4 +54,6 @@ mod wire;
 pub use claim::{Collection, HttpClaim, OpenedClaim};
 pub use client::HttpCloudSync;
 pub use link::{HttpLink, MAX_BATCH, MAX_BODY_BYTES};
-pub use wire::{HttpResponse, HttpTransport, TlsHttpTransport, TransportError};
+pub use wire::{
+    HttpResponse, HttpTransport, TlsHttpTransport, TransportError, Unreached, unreached,
+};

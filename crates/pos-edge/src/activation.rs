@@ -37,6 +37,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
 
+use cloud_sync_http::Unreached;
 use pos_core::activation::{ActivationCode, ActivationStanding, device_activation};
 use pos_ports::cloud_sync::CloudSync;
 use pos_ports::event_store::EventStore;
@@ -209,7 +210,10 @@ pub async fn boot_standing<V: KeyVault>(vault: &V) -> Result<ActivationStanding,
         (status = 409, description = "This box already holds a credential (`ALREADY_ACTIVATED`), or the \
                                       cloud says the device is in the wrong state \
                                       (`ACTIVATION_WRONG_STATE`)"),
-        (status = 503, description = "The cloud or the key vault is unavailable (`ACTIVATION_UNAVAILABLE`)"),
+        (status = 503, description = "The cloud or the key vault is unavailable (`ACTIVATION_UNAVAILABLE`); \
+                                      more precisely, the cloud's certificate is not one this box trusts \
+                                      (`ACTIVATION_CLOUD_UNTRUSTED`) or the cloud could not be reached \
+                                      at all (`ACTIVATION_CLOUD_UNREACHABLE`)"),
         (status = 500, description = "Activation failed"),
     ),
     tag = "activation",
@@ -254,7 +258,7 @@ where
 
     let grant = match state.cloud.activate(&request.code).await {
         Ok(grant) => grant,
-        Err(error) => return activation_error(&error),
+        Err(error) => return cloud_refusal(&error),
     };
 
     // Store the credential before announcing success: the vault is what the boot gate reads, so a
@@ -344,6 +348,43 @@ where
         )
             .into_response(),
         Err(error) => activation_error(&error),
+    }
+}
+
+/// The answer for an exchange the cloud did not complete, logged, because the technician at `/setup`
+/// and whoever reads the box's log afterwards both need to know why.
+///
+/// A request that never reached the cloud says which way it failed: a certificate this box does not
+/// trust — a cloud on a private CA with no `cloud_ca_file` naming it ([`crate::cloud_roots`]) — is
+/// fixed on this box, and no network is fixed in the shop. Both stay `503`, so a till that knows
+/// neither token still reads them as `ACTIVATION_UNAVAILABLE` did. The message names no code: the
+/// transport's failures carry none.
+fn cloud_refusal(error: &PortError) -> Response {
+    let unreached = match error.status() {
+        ErrorStatus::Unavailable => cloud_sync_http::unreached(error.message()),
+        _ => None,
+    };
+    match unreached {
+        Some(Unreached::Untrusted) => {
+            tracing::error!(%error, "activation failed: this box does not trust the cloud's certificate; if the cloud uses a private CA, name its root in cloud_ca_file");
+            refused(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "ACTIVATION_CLOUD_UNTRUSTED",
+                "this box does not trust the cloud's certificate",
+            )
+        }
+        Some(Unreached::Unreachable) => {
+            tracing::warn!(%error, "activation failed: the cloud could not be reached");
+            refused(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "ACTIVATION_CLOUD_UNREACHABLE",
+                "the cloud could not be reached",
+            )
+        }
+        None => {
+            tracing::warn!(%error, "activation failed");
+            activation_error(error)
+        }
     }
 }
 

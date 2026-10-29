@@ -72,6 +72,12 @@ pub struct EdgeConfig {
     /// the credential is — so it lives here rather than in the environment.
     #[serde(default)]
     pub cloud_url: Option<url::Url>,
+    /// A PEM file of extra root certificates to trust the cloud's certificate from, for a cloud
+    /// whose certificate comes from a private CA ([`crate::cloud_roots`]). Added to the bundled
+    /// public roots, never instead of them, for every client that dials [`Self::cloud_url`]. Absent,
+    /// only the public roots are trusted. Not a secret: a root certificate is public by design.
+    #[serde(default)]
+    pub cloud_ca_file: Option<PathBuf>,
     /// Where the SQLite event store lives ([ADR-0015](../../../docs/adr/0015-sqlite-access.md)).
     /// Relative to the working directory the service unit sets. Defaults to `store.sqlite`.
     #[serde(default = "default_store_path")]
@@ -225,6 +231,7 @@ impl EdgeConfig {
             advertised_ip: None,
             public_origin: None,
             cloud_url: None,
+            cloud_ca_file: None,
             store_path: default_store_path(),
             nats: None,
             sign_in_idle_timeout_minutes: None,
@@ -335,6 +342,8 @@ fn default_store_path() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::{DEFAULT_BIND, EdgeConfig, default_bind};
 
     #[test]
@@ -464,6 +473,16 @@ mod tests {
         assert_eq!(
             config.cloud_url.as_ref().map(url::Url::as_str),
             Some("https://acme.pos.example/"),
+        );
+    }
+
+    #[test]
+    fn a_cloud_ca_file_parses_when_present() {
+        let text = "store_id = \"01JQ0000000000000000000001\"\ncloud_ca_file = \"/etc/pos-edge/cloud-ca.pem\"";
+        let config = EdgeConfig::from_toml_str(text).expect("parses");
+        assert_eq!(
+            config.cloud_ca_file.as_deref(),
+            Some(Path::new("/etc/pos-edge/cloud-ca.pem")),
         );
     }
 

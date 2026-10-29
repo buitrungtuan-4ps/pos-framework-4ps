@@ -214,6 +214,7 @@ async fn surface_over(
         axum::Router::new(),
         super::CloudWiring {
             cloud_url: &cloud_url,
+            cloud_roots: &[],
             store_id,
             edge: &edge,
             queue: Arc::new(crate::InMemoryQueueNumbers::new()),

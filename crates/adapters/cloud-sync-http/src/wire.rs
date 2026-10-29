@@ -22,7 +22,7 @@ use hyper::header::{CONTENT_TYPE, HOST};
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
-use tokio_rustls::rustls::pki_types::ServerName;
+use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName};
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 
 /// One HTTP request/response over some transport — the seam the socket lives behind.
@@ -111,6 +111,43 @@ impl TransportError {
     }
 }
 
+// The words a failure that never reached the cloud is reported in, kept in one place so
+// [`unreached`] reads back exactly what [`TlsHttpTransport`] wrote.
+const TLS_HANDSHAKE_FAILED: &str = "the TLS handshake failed";
+const RESOLVE_FAILED: &str = "resolving the cloud host failed";
+const CONNECT_FAILED: &str = "connecting to the cloud failed";
+const NO_ADDRESSES: &str = "the cloud host resolved to no addresses";
+const TIMED_OUT: &str = "the request to the cloud timed out";
+
+/// Why a request never reached the cloud, when it did not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unreached {
+    /// The cloud answered, but its certificate was not trusted or the TLS handshake failed: a cloud
+    /// on a private CA this box has not been told to trust, or something in between rewriting TLS.
+    Untrusted,
+    /// The cloud's name did not resolve, nothing accepted the connection, or it did not answer in
+    /// time.
+    Unreachable,
+}
+
+/// Reads back from a failure's message — a [`TransportError`], or the `unavailable` port error it
+/// was mapped to — why the request never reached the cloud; `None` for any other failure, the
+/// cloud's own answers included. The port error carries only a message, so this is how a caller
+/// that holds one (the edge's `/setup`) tells a certificate it does not trust from no network.
+#[must_use]
+pub fn unreached(message: &str) -> Option<Unreached> {
+    if message.contains(TLS_HANDSHAKE_FAILED) {
+        Some(Unreached::Untrusted)
+    } else if [RESOLVE_FAILED, CONNECT_FAILED, NO_ADDRESSES, TIMED_OUT]
+        .iter()
+        .any(|words| message.contains(words))
+    {
+        Some(Unreached::Unreachable)
+    } else {
+        None
+    }
+}
+
 /// The production transport: one HTTPS request per call, over rustls/hyper
 /// ([ADR-0054](../../../../docs/adr/0054-edge-cloud-http-client.md)).
 ///
@@ -136,6 +173,20 @@ impl TlsHttpTransport {
     /// provider cannot supply the safe default TLS protocol versions (a build-time impossibility, so
     /// it is a `Result` here only to keep this constructor panic-free per the workspace lints).
     pub fn new(base_url: &str, timeout: Duration) -> Result<Self, TransportError> {
+        Self::trusting(base_url, timeout, &[])
+    }
+
+    /// [`Self::new`], also trusting `extra_roots`: the roots of a private CA the store's cloud
+    /// presents a certificate from, added to the bundled Mozilla set rather than replacing it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::new`].
+    pub fn trusting(
+        base_url: &str,
+        timeout: Duration,
+        extra_roots: &[CertificateDer<'static>],
+    ) -> Result<Self, TransportError> {
         let base = url::Url::parse(base_url).map_err(|error| {
             TransportError::new(format!("the cloud base URL is unparseable: {error}"))
         })?;
@@ -147,6 +198,7 @@ impl TlsHttpTransport {
         }
         let mut roots = RootCertStore::empty();
         roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        roots.add_parsable_certificates(extra_roots.iter().cloned());
         let tls = ClientConfig::builder_with_provider(Arc::new(
             tokio_rustls::rustls::crypto::ring::default_provider(),
         ))
@@ -169,9 +221,7 @@ impl TlsHttpTransport {
     async fn connect(host: &str, port: u16) -> Result<TcpStream, TransportError> {
         let addresses: Vec<SocketAddr> = tokio::net::lookup_host((host, port))
             .await
-            .map_err(|error| {
-                TransportError::new(format!("resolving the cloud host failed: {error}"))
-            })?
+            .map_err(|error| TransportError::new(format!("{RESOLVE_FAILED}: {error}")))?
             .collect();
         let mut last_error = None;
         for address in &addresses {
@@ -181,8 +231,8 @@ impl TlsHttpTransport {
             }
         }
         Err(TransportError::new(match last_error {
-            Some(error) => format!("connecting to the cloud failed: {error}"),
-            None => "the cloud host resolved to no addresses".to_owned(),
+            Some(error) => format!("{CONNECT_FAILED}: {error}"),
+            None => NO_ADDRESSES.to_owned(),
         }))
     }
 
@@ -217,7 +267,7 @@ impl TlsHttpTransport {
         let tls = connector
             .connect(server_name, stream)
             .await
-            .map_err(|error| TransportError::new(format!("the TLS handshake failed: {error}")))?;
+            .map_err(|error| TransportError::new(format!("{TLS_HANDSHAKE_FAILED}: {error}")))?;
 
         let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(tls))
             .await
@@ -293,14 +343,17 @@ impl HttpTransport for TlsHttpTransport {
         // being a store that can never archive at all.
         match tokio::time::timeout(self.timeout, self.send(path, content_type, body)).await {
             Ok(result) => result,
-            Err(_elapsed) => Err(TransportError::new("the request to the cloud timed out")),
+            Err(_elapsed) => Err(TransportError::new(TIMED_OUT)),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::TlsHttpTransport;
+    use super::{
+        CONNECT_FAILED, NO_ADDRESSES, RESOLVE_FAILED, TIMED_OUT, TLS_HANDSHAKE_FAILED,
+        TlsHttpTransport, TransportError, Unreached, unreached,
+    };
     use core::time::Duration;
 
     #[test]
@@ -313,6 +366,21 @@ mod tests {
     fn an_unparseable_base_is_rejected() {
         let built = TlsHttpTransport::new("not a url", Duration::from_secs(5));
         assert!(built.is_err(), "a garbage base URL is a construction error");
+    }
+
+    #[test]
+    fn a_failure_that_never_reached_the_cloud_says_why() {
+        let untrusted = TransportError::new(format!(
+            "{TLS_HANDSHAKE_FAILED}: invalid peer certificate: UnknownIssuer"
+        ));
+        assert_eq!(
+            unreached(&untrusted.to_string()),
+            Some(Unreached::Untrusted)
+        );
+        for words in [RESOLVE_FAILED, CONNECT_FAILED, NO_ADDRESSES, TIMED_OUT] {
+            assert_eq!(unreached(words), Some(Unreached::Unreachable), "{words}");
+        }
+        assert_eq!(unreached("the cloud answered 503"), None);
     }
 
     #[test]
