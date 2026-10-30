@@ -6,13 +6,13 @@
     "max-lines": 2082
   },
   "src/components/AccountMenu.tsx": {
-    "max-lines-per-function": 160
+    "max-lines-per-function": 135
   },
   "src/components/CommandPalette.tsx": {
     "max-lines-per-function": 191
   },
   "src/components/ContextPicker.tsx": {
-    "max-lines-per-function": 301
+    "max-lines-per-function": 295
   },
   "src/components/GetStarted.tsx": {
     "max-lines-per-function": 125

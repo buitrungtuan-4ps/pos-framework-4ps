@@ -26,7 +26,7 @@ import { A, useLocation } from "@solidjs/router";
 
 import { LOCALES, type Locale, locale, localeName, setLocale, t } from "../i18n";
 import { useClickOutside } from "../lib/dismiss";
-import { useEscape } from "../lib/escape";
+import { useFocusEscape } from "../lib/escape";
 import { initials } from "../lib/format";
 import { setTheme, type Theme, theme, THEMES } from "../lib/theme";
 import { actingAdmin } from "../state/session";
@@ -49,6 +49,29 @@ const ROLE_LABEL = {
   viewer: "role.viewer",
 } as const;
 
+
+function onThemeKeyDown(event: KeyboardEvent, currentChoice: Theme) {
+  const currentIndex = THEMES.indexOf(currentChoice);
+  if (currentIndex === -1) return;
+  let nextIndex = currentIndex;
+  if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+    event.preventDefault();
+    nextIndex = (currentIndex + 1) % THEMES.length;
+  } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+    event.preventDefault();
+    nextIndex = (currentIndex - 1 + THEMES.length) % THEMES.length;
+  }
+  if (nextIndex !== currentIndex) {
+    const nextTheme = THEMES[nextIndex];
+    if (nextTheme) {
+      setTheme(nextTheme);
+      const target = event.currentTarget as HTMLElement;
+      const buttons = target.parentElement?.querySelectorAll<HTMLButtonElement>("button[role='radio']");
+      buttons?.[nextIndex]?.focus();
+    }
+  }
+}
+
 export function AccountMenu(props: { onSignOut: () => void }) {
   const [open, setOpen] = createSignal(false);
   const location = useLocation();
@@ -57,12 +80,7 @@ export function AccountMenu(props: { onSignOut: () => void }) {
   let container: HTMLDivElement | undefined;
   let trigger: HTMLButtonElement | undefined;
   useClickOutside(open, () => container, () => setOpen(false));
-
-  useEscape(open, () => {
-    const hadFocus = container?.contains(document.activeElement) ?? false;
-    setOpen(false);
-    if (hadFocus) trigger?.focus();
-  });
+  useFocusEscape(open, () => container, () => trigger, () => setOpen(false));
 
   // Navigating closes the menu — the two links in it go somewhere, and a menu left hanging over the
   // screen the operator just asked for is a panel they have to dismiss before they can read it.
@@ -83,27 +101,6 @@ export function AccountMenu(props: { onSignOut: () => void }) {
     return who === null ? "" : initials(who.name);
   };
 
-  const onThemeKeyDown = (event: KeyboardEvent, currentChoice: Theme) => {
-    const currentIndex = THEMES.indexOf(currentChoice);
-    if (currentIndex === -1) return;
-    let nextIndex = currentIndex;
-    if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-      event.preventDefault();
-      nextIndex = (currentIndex + 1) % THEMES.length;
-    } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
-      event.preventDefault();
-      nextIndex = (currentIndex - 1 + THEMES.length) % THEMES.length;
-    }
-    if (nextIndex !== currentIndex) {
-      const nextTheme = THEMES[nextIndex];
-      if (nextTheme) {
-        setTheme(nextTheme);
-        const target = event.currentTarget as HTMLElement;
-        const buttons = target.parentElement?.querySelectorAll<HTMLButtonElement>("button[role='radio']");
-        buttons?.[nextIndex]?.focus();
-      }
-    }
-  };
 
   return (
     <div class="relative" ref={container}>
