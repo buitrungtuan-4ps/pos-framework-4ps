@@ -149,20 +149,6 @@ fn v6_loopback_ula_and_mapped_v4_are_refused() {
             ForbiddenReason::LinkLocal
         ))
     );
-    assert_eq!(
-        classify_ip(ip("2001:1234:5678:9abc:100:5efe:127.0.0.1")),
-        Err(SsrfRejection::ForbiddenAddress(
-            ip("2001:1234:5678:9abc:100:5efe:127.0.0.1"),
-            ForbiddenReason::Loopback
-        ))
-    );
-    assert_eq!(
-        classify_ip(ip("2001:1234:5678:9abc:fe00:5efe:169.254.169.254")),
-        Err(SsrfRejection::ForbiddenAddress(
-            ip("2001:1234:5678:9abc:fe00:5efe:169.254.169.254"),
-            ForbiddenReason::LinkLocal
-        ))
-    );
     // IPv4-mapped interface identifier smuggling cases (`<prefix>:0:ffff:a.b.c.d` or `<prefix>:ffff:ffff:a.b.c.d`).
     assert_eq!(
         classify_ip(ip("2001:db8::ffff:127.0.0.1")),
@@ -213,28 +199,6 @@ fn v6_loopback_ula_and_mapped_v4_are_refused() {
         classify_ip(ip("::169.254.169.254")),
         Err(SsrfRejection::ForbiddenAddress(
             ip("::169.254.169.254"),
-            ForbiddenReason::LinkLocal
-        ))
-    );
-    // Teredo smuggling cases (`2001:0::/32`).
-    assert_eq!(
-        classify_ip(ip("2001:0:7f00:1::")),
-        Err(SsrfRejection::ForbiddenAddress(
-            ip("2001:0:7f00:1::"),
-            ForbiddenReason::Loopback
-        ))
-    );
-    assert_eq!(
-        classify_ip(ip("2001:0:1234:5678:0:0:80ff:fffe")),
-        Err(SsrfRejection::ForbiddenAddress(
-            ip("2001:0:1234:5678:0:0:80ff:fffe"),
-            ForbiddenReason::Loopback
-        ))
-    );
-    assert_eq!(
-        classify_ip(ip("2001:0:1234:5678:0:0:5601:5601")),
-        Err(SsrfRejection::ForbiddenAddress(
-            ip("2001:0:1234:5678:0:0:5601:5601"),
             ForbiddenReason::LinkLocal
         ))
     );
@@ -422,6 +386,28 @@ fn v6_translation_prefixes_are_refused() {
 
 #[test]
 fn v6_tunneling_prefixes_are_refused() {
+    // Teredo smuggling cases (`2001:0::/32`).
+    assert_eq!(
+        classify_ip(ip("2001:0:7f00:1::")),
+        Err(SsrfRejection::ForbiddenAddress(
+            ip("2001:0:7f00:1::"),
+            ForbiddenReason::Loopback
+        ))
+    );
+    assert_eq!(
+        classify_ip(ip("2001:0:1234:5678:0:0:80ff:fffe")),
+        Err(SsrfRejection::ForbiddenAddress(
+            ip("2001:0:1234:5678:0:0:80ff:fffe"),
+            ForbiddenReason::Loopback
+        ))
+    );
+    assert_eq!(
+        classify_ip(ip("2001:0:1234:5678:0:0:5601:5601")),
+        Err(SsrfRejection::ForbiddenAddress(
+            ip("2001:0:1234:5678:0:0:5601:5601"),
+            ForbiddenReason::LinkLocal
+        ))
+    );
     // 6over4 / IPv4-compatible smuggling cases (`<prefix>:0:0:a.b.c.d`).
     assert_eq!(
         classify_ip(ip("2001:1234:5678:9abc::127.0.0.1")),
