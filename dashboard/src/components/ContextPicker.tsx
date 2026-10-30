@@ -36,11 +36,17 @@ export function ContextPicker() {
   const navigate = useNavigate();
   const location = useLocation();
   const [open, setOpen] = createSignal(false);
-  useEscape(open, () => setOpen(false));
 
   // Pressing anywhere else closes it, the way the pickers in the kit already close.
   let container: HTMLDivElement | undefined;
+  let trigger: HTMLButtonElement | undefined;
   useClickOutside(open, () => container, () => setOpen(false));
+
+  useEscape(open, () => {
+    const hadFocus = container?.contains(document.activeElement) ?? false;
+    setOpen(false);
+    if (hadFocus) trigger?.focus();
+  });
   const [tenants, setTenants] = createSignal<Tenant[] | null>(null);
   const [stores, setStores] = createSignal<Store[] | null>(null);
   const [busy, setBusy] = createSignal(false);
@@ -225,6 +231,7 @@ export function ContextPicker() {
   return (
     <div class="relative" ref={container}>
       <button
+        ref={trigger}
         type="button"
         aria-label={t("context.change")}
         aria-haspopup="dialog"

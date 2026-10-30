@@ -52,11 +52,17 @@ const ROLE_LABEL = {
 export function AccountMenu(props: { onSignOut: () => void }) {
   const [open, setOpen] = createSignal(false);
   const location = useLocation();
-  useEscape(open, () => setOpen(false));
 
   // Pressing anywhere else closes it, the way the pickers in the kit already close.
   let container: HTMLDivElement | undefined;
+  let trigger: HTMLButtonElement | undefined;
   useClickOutside(open, () => container, () => setOpen(false));
+
+  useEscape(open, () => {
+    const hadFocus = container?.contains(document.activeElement) ?? false;
+    setOpen(false);
+    if (hadFocus) trigger?.focus();
+  });
 
   // Navigating closes the menu — the two links in it go somewhere, and a menu left hanging over the
   // screen the operator just asked for is a panel they have to dismiss before they can read it.
@@ -102,6 +108,7 @@ export function AccountMenu(props: { onSignOut: () => void }) {
   return (
     <div class="relative" ref={container}>
       <button
+        ref={trigger}
         type="button"
         aria-label={t("account.open")}
         title={t("account.open")}

@@ -3,16 +3,16 @@
     "max-depth": 5
   },
   "src/api/client.ts": {
-    "max-lines": 2083
+    "max-lines": 2082
   },
   "src/components/AccountMenu.tsx": {
-    "max-lines-per-function": 154
+    "max-lines-per-function": 160
   },
   "src/components/CommandPalette.tsx": {
     "max-lines-per-function": 191
   },
   "src/components/ContextPicker.tsx": {
-    "max-lines-per-function": 295
+    "max-lines-per-function": 301
   },
   "src/components/GetStarted.tsx": {
     "max-lines-per-function": 125
@@ -73,11 +73,11 @@
     "max-lines-per-function": 840
   },
   "src/screens/Fees.tsx": {
-    "max-lines": 1646,
-    "max-lines-per-function": 1437
+    "max-lines": 1643,
+    "max-lines-per-function": 1436
   },
   "src/screens/Fleet.tsx": {
-    "max-lines-per-function": 699
+    "max-lines-per-function": 697
   },
   "src/screens/Floor.tsx": {
     "max-lines-per-function": 649
@@ -107,7 +107,7 @@
     "max-lines-per-function": 559
   },
   "src/screens/People.tsx": {
-    "max-lines": 1068,
+    "max-lines": 1067,
     "max-lines-per-function": 1004
   },
   "src/screens/ReasonCodes.tsx": {
@@ -132,7 +132,7 @@
     "max-lines-per-function": 502
   },
   "src/screens/StoreHub.tsx": {
-    "max-lines-per-function": 285
+    "max-lines-per-function": 283
   },
   "src/screens/StoreSettings.tsx": {
     "max-lines-per-function": 431
@@ -156,7 +156,7 @@
     "max-lines-per-function": 548
   },
   "src/screens/catalog/Menus.tsx": {
-    "max-lines": 1012,
+    "max-lines": 1007,
     "max-lines-per-function": 973
   },
   "src/screens/catalog/Modifiers.tsx": {
