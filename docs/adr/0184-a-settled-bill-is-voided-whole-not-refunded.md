@@ -1,12 +1,14 @@
 # ADR-0184 — A settled bill is voided whole, not refunded
 
-**Status** Proposed · **Owner** @maintainers-architecture · **Date** 2026-10-31 · Amends
+**Status** Accepted · **Owner** @maintainers-architecture · **Date** 2026-10-31 · Amends
 [ADR-0028](0028-settlement-and-payment-invariant.md) (the consequence on refunds) · Relates to
 [ADR-0025](0025-receipt-number-authority.md), [ADR-0115](0115-reason-codes-are-a-managed-list.md),
 [ADR-0156](0156-a-store-issues-its-e-invoice-and-the-cloud-submits-it.md),
 [ADR-0158](0158-the-till-enforces-each-persons-own-permissions.md),
 [ADR-0160](0160-everything-a-store-runs-differently-is-published-configuration.md),
 [ADR-0167](0167-a-till-has-its-own-cash-drawer.md)
+
+Accepted by the owner on 2026-10-31.
 
 ## Context
 
