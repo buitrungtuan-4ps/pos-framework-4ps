@@ -884,6 +884,14 @@ mod tests {
     use pos_proto::ids::{StoreId, TenantId};
     use pos_proto::ulid::Ulid;
 
+    /// The two later grants both backfill tests read, 0086 and 0087.
+    const MIGRATION_0086: &str = include_str!(
+        "../../adapters/store-postgres/migrations/0086_roles_can_override_an_assigned_drawer.sql"
+    );
+    const MIGRATION_0087: &str = include_str!(
+        "../../adapters/store-postgres/migrations/0087_roles_can_void_a_paid_bill.sql"
+    );
+
     /// A one-store assignment reads as it did, with `scope_kind` added before the `store_id` it
     /// always carried; a group's names its group instead, and a tenant-wide one names neither
     /// (ADR-0158 decision 3).
@@ -932,10 +940,11 @@ mod tests {
     /// directly, with approval, from a literal list in its SQL: the catalogue's PIN-flagged
     /// permissions as they were then, in byte order and once each. A PIN-flagged permission added
     /// since is granted by a migration of its own, which names it — 0076 for `billing.fee.waive`
-    /// (ADR-0159 decision 5), 0084 for `cash.shift.manage_other_till` (ADR-0167 decision 3) and 0086
-    /// for `cash.drawer.override_assignment` (decision 9). Together they are the `pin_required=true`
-    /// lines of `docs/snapshots/permissions.txt`, each granted once, so the backfills and the
-    /// catalogue cannot drift.
+    /// (ADR-0159 decision 5), 0084 for `cash.shift.manage_other_till` (ADR-0167 decision 3), 0086
+    /// for `cash.drawer.override_assignment` (decision 9) and 0087 for `billing.bill.void_settled`
+    /// (ADR-0184 decision 4). Together they are the `pin_required=true` lines of
+    /// `docs/snapshots/permissions.txt`, each granted once, so the backfills and the catalogue
+    /// cannot drift.
     #[test]
     fn the_with_approval_backfills_list_exactly_the_pin_flagged_permissions() {
         const MIGRATION_0074: &str = include_str!(
@@ -945,9 +954,6 @@ mod tests {
             include_str!("../../adapters/store-postgres/migrations/0076_roles_can_waive_a_fee.sql");
         const MIGRATION_0084: &str = include_str!(
             "../../adapters/store-postgres/migrations/0084_roles_can_manage_another_tills_drawer.sql"
-        );
-        const MIGRATION_0086: &str = include_str!(
-            "../../adapters/store-postgres/migrations/0086_roles_can_override_an_assigned_drawer.sql"
         );
         let open = MIGRATION_0074
             .find("ARRAY[")
@@ -971,6 +977,7 @@ mod tests {
             ("billing.fee.waive", MIGRATION_0076),
             ("cash.shift.manage_other_till", MIGRATION_0084),
             ("cash.drawer.override_assignment", MIGRATION_0086),
+            ("billing.bill.void_settled", MIGRATION_0087),
         ];
         for (id, migration) in later {
             assert!(
@@ -1009,9 +1016,6 @@ mod tests {
         const MIGRATION_0084: &str = include_str!(
             "../../adapters/store-postgres/migrations/0084_roles_can_manage_another_tills_drawer.sql"
         );
-        const MIGRATION_0086: &str = include_str!(
-            "../../adapters/store-postgres/migrations/0086_roles_can_override_an_assigned_drawer.sql"
-        );
         let open = MIGRATION_0079
             .find("ARRAY[")
             .expect("the grant's literal list")
@@ -1033,6 +1037,7 @@ mod tests {
         let later = [
             ("cash.shift.manage_other_till", MIGRATION_0084),
             ("cash.drawer.override_assignment", MIGRATION_0086),
+            ("billing.bill.void_settled", MIGRATION_0087),
         ];
         for (id, migration) in later {
             assert!(

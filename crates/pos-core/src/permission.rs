@@ -348,6 +348,16 @@ permissions! {
         default_roles: [Manager, Owner],
         description: "Void a bill; requires a reason and prints a void slip",
     },
+    /// Void a paid bill whole: not [`Self::VoidBill`], as forgiving money already taken is another
+    /// act (ADR-0184 decision 4). Migration 0087 granted it on `billing.bill.void`'s terms.
+    VoidSettledBill {
+        id: "billing.bill.void_settled",
+        group: Billing,
+        risk: High,
+        pin: true,
+        default_roles: [Manager, Owner],
+        description: "Void a bill that was paid, whole; requires a reason and prints a void slip",
+    },
     /// Issue a refund against a settled bill.
     IssueRefund {
         id: "billing.refund.issue",

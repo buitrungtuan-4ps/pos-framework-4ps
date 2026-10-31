@@ -243,7 +243,7 @@ fn existing_roles_keep_every_till_action_and_a_removal_sticks() {
 /// left byte for byte as it was, and a later boot does not hand back an approval an owner has
 /// since taken away.
 ///
-/// The 0073, 0076, 0079, 0084 and 0086 markers are written before the boot, so the boot runs
+/// The 0073, 0076, 0079, 0084, 0086 and 0087 markers are written before the boot, so the boot runs
 /// 0074 alone against the roles as they were authored.
 #[test]
 #[expect(
@@ -271,11 +271,12 @@ fn existing_roles_grant_each_pin_flagged_permission_with_approval_once() {
                  VALUES ('0073_roles_keep_every_till_action'), ('0076_roles_can_waive_a_fee'), \
                         ('0079_approvers_who_close_a_shift_see_takings'), \
                         ('0084_roles_can_manage_another_tills_drawer'), \
-                        ('0086_roles_can_override_an_assigned_drawer')",
+                        ('0086_roles_can_override_an_assigned_drawer'), \
+                        ('0087_roles_can_void_a_paid_bill')",
                 &[],
             )
             .await
-            .expect("0073, 0076, 0079, 0084 and 0086 have already run");
+            .expect("0073, 0076, 0079, 0084, 0086 and 0087 have already run");
         let people = store.people();
         // A manager who voids directly, and so approves voids for others, listed out of order
         // as a console may have written it.
@@ -418,7 +419,7 @@ fn existing_roles_grant_each_pin_flagged_permission_with_approval_once() {
 /// grants the override directly, and with approval otherwise. Nothing else in either list
 /// changes, and a later boot does not hand back a waive an owner has since taken away.
 ///
-/// The 0073, 0074, 0079, 0084 and 0086 markers are written before the boot, so the boot runs
+/// The 0073, 0074, 0079, 0084, 0086 and 0087 markers are written before the boot, so the boot runs
 /// 0076 alone against the roles as they were authored.
 #[test]
 #[expect(
@@ -440,11 +441,12 @@ fn existing_roles_waive_a_fee_on_the_terms_they_exceed_the_ceiling_once() {
                         ('0074_role_permissions_with_approval'), \
                         ('0079_approvers_who_close_a_shift_see_takings'), \
                         ('0084_roles_can_manage_another_tills_drawer'), \
-                        ('0086_roles_can_override_an_assigned_drawer')",
+                        ('0086_roles_can_override_an_assigned_drawer'), \
+                        ('0087_roles_can_void_a_paid_bill')",
                 &[],
             )
             .await
-            .expect("0073, 0074, 0079, 0084 and 0086 have already run");
+            .expect("0073, 0074, 0079, 0084, 0086 and 0087 have already run");
         let people = store.people();
         // A manager who exceeds the ceiling directly, and so approves it for others.
         people
@@ -614,7 +616,7 @@ fn existing_roles_waive_a_fee_on_the_terms_they_exceed_the_ceiling_once() {
 /// only with approval. No with-approval list changes, an archived approver is included, and a
 /// later boot does not hand back takings an owner has since taken away.
 ///
-/// The 0073, 0074, 0076, 0084 and 0086 markers are written before the boot, so the boot runs
+/// The 0073, 0074, 0076, 0084, 0086 and 0087 markers are written before the boot, so the boot runs
 /// 0079 alone against the roles as they were authored.
 #[test]
 #[expect(
@@ -637,11 +639,12 @@ fn existing_approvers_who_close_a_shift_see_takings_once_and_no_other_role_does(
                         ('0074_role_permissions_with_approval'), \
                         ('0076_roles_can_waive_a_fee'), \
                         ('0084_roles_can_manage_another_tills_drawer'), \
-                        ('0086_roles_can_override_an_assigned_drawer')",
+                        ('0086_roles_can_override_an_assigned_drawer'), \
+                        ('0087_roles_can_void_a_paid_bill')",
                 &[],
             )
             .await
-            .expect("0073, 0074, 0076, 0084 and 0086 have already run");
+            .expect("0073, 0074, 0076, 0084, 0086 and 0087 have already run");
         let people = store.people();
         // (role, name, direct, with approval), each the one case it is named for.
         let authored = [

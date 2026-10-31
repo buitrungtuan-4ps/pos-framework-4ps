@@ -296,6 +296,7 @@ pub fn register() -> Vec<Setting> {
         nodes::tender_key_settings(),
         nodes::counter_settings(),
         nodes::backup_settings(),
+        nodes::billing_settings(),
     ]
     .into_iter()
     .flatten()

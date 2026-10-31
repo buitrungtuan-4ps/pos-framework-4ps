@@ -17,6 +17,16 @@ backup.interval_hours	scope=SETTING_SCOPE_STORE_GROUP
 backup.interval_hours	scope=SETTING_SCOPE_TENANT
 backup.interval_hours	since=0.14.1
 backup.interval_hours	unit=SETTING_UNIT_HOURS
+billing.settled_void_window
+billing.settled_void_window	default=SETTLED_VOID_WINDOW_BUSINESS_DATE
+billing.settled_void_window	kind=SETTING_KIND_CHOICE
+billing.settled_void_window	scope=SETTING_SCOPE_BRAND
+billing.settled_void_window	scope=SETTING_SCOPE_STORE
+billing.settled_void_window	scope=SETTING_SCOPE_STORE_GROUP
+billing.settled_void_window	scope=SETTING_SCOPE_TENANT
+billing.settled_void_window	since=0.14.1
+billing.settled_void_window	value=SETTLED_VOID_WINDOW_BUSINESS_DATE
+billing.settled_void_window	value=SETTLED_VOID_WINDOW_SHIFT
 counter.walk_in_channel
 counter.walk_in_channel	default=WALK_IN_CHANNEL_TAKEAWAY
 counter.walk_in_channel	kind=SETTING_KIND_CHOICE
