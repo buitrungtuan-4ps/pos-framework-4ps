@@ -10,7 +10,7 @@ import { useLocation, useNavigate } from "@solidjs/router";
 import { api, ApiError } from "../api/client";
 import { locale, t } from "../i18n";
 import { useClickOutside } from "../lib/dismiss";
-import { useEscape } from "../lib/escape";
+import { useFocusEscape } from "../lib/escape";
 import {
   selectStore,
   selectTenant,
@@ -32,15 +32,17 @@ import {
 import { Button, Skeleton } from "./ui";
 import type { Store, Tenant } from "../api/schemas";
 
+
 export function ContextPicker() {
   const navigate = useNavigate();
   const location = useLocation();
   const [open, setOpen] = createSignal(false);
-  useEscape(open, () => setOpen(false));
 
   // Pressing anywhere else closes it, the way the pickers in the kit already close.
   let container: HTMLDivElement | undefined;
+  let trigger: HTMLButtonElement | undefined;
   useClickOutside(open, () => container, () => setOpen(false));
+  useFocusEscape(open, () => container, () => trigger, () => setOpen(false));
   const [tenants, setTenants] = createSignal<Tenant[] | null>(null);
   const [stores, setStores] = createSignal<Store[] | null>(null);
   const [busy, setBusy] = createSignal(false);
@@ -217,14 +219,13 @@ export function ContextPicker() {
   // The org switcher's search: filter each list by name as the operator types.
   const matchesSearch = (name: string, needle: string) =>
     name.toLowerCase().includes(needle.trim().toLowerCase());
-  const shownTenants = (all: Tenant[]) =>
-    tenantSearch().trim() ? all.filter((tenant) => matchesSearch(tenant.name, tenantSearch())) : all;
-  const shownStores = (all: Store[]) =>
-    storeSearch().trim() ? all.filter((store) => matchesSearch(store.name, storeSearch())) : all;
+  const filterList = <T extends { name: string }>(all: T[], query: string) =>
+    query.trim() ? all.filter((item) => matchesSearch(item.name, query)) : all;
 
   return (
     <div class="relative" ref={container}>
       <button
+        ref={trigger}
         type="button"
         aria-label={t("context.change")}
         aria-haspopup="dialog"
@@ -287,7 +288,7 @@ export function ContextPicker() {
                     class="mb-1 min-h-touch w-full rounded-token border border-line bg-surface-raised px-2 text-sm text-ink"
                   />
                   <ul>
-                    <For each={shownTenants(loaded())}>
+                    <For each={filterList(loaded(), tenantSearch())}>
                       {(tenant) => (
                         <li>
                           <button
@@ -304,7 +305,7 @@ export function ContextPicker() {
                       )}
                     </For>
                   </ul>
-                  <Show when={shownTenants(loaded()).length === 0}>
+                  <Show when={filterList(loaded(), tenantSearch()).length === 0}>
                     <p class="px-1 py-1 text-sm text-ink-muted">{t("context.noMatch")}</p>
                   </Show>
                 </Show>
@@ -362,7 +363,7 @@ export function ContextPicker() {
                       class="mb-1 min-h-touch w-full rounded-token border border-line bg-surface-raised px-2 text-sm text-ink"
                     />
                     <ul>
-                      <For each={shownStores(loaded())}>
+                      <For each={filterList(loaded(), storeSearch())}>
                         {(store) => (
                           <li>
                             <button
@@ -379,7 +380,7 @@ export function ContextPicker() {
                         )}
                       </For>
                     </ul>
-                    <Show when={shownStores(loaded()).length === 0}>
+                    <Show when={filterList(loaded(), storeSearch()).length === 0}>
                       <p class="px-1 py-1 text-sm text-ink-muted">{t("context.noMatch")}</p>
                     </Show>
                   </Show>

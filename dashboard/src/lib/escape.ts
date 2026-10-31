@@ -28,3 +28,19 @@ export function useEscape(isOpen: () => boolean, close: () => void): void {
   onMount(() => window.addEventListener("keydown", onKey));
   onCleanup(() => window.removeEventListener("keydown", onKey));
 }
+
+/**
+ * Closes `isOpen` on Escape and restores focus to `trigger` if focus was inside `container`.
+ */
+export function useFocusEscape(
+  isOpen: () => boolean,
+  container: () => HTMLElement | undefined,
+  trigger: () => HTMLElement | undefined,
+  onClose: () => void,
+): void {
+  useEscape(isOpen, () => {
+    const hadFocus = container()?.contains(document.activeElement) ?? false;
+    onClose();
+    if (hadFocus) trigger()?.focus();
+  });
+}

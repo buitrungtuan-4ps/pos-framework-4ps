@@ -76,15 +76,21 @@ describe("the account menu", () => {
     expect(screen.getByRole("button", { name: "Sign out" })).toBeTruthy();
   });
 
-  it("closes on Escape, which is the only way out for a keyboard", async () => {
+  it("closes on Escape and restores focus to the trigger button", async () => {
     // `useEscape` was private to `kit.tsx`, so the modal and the drawer had this and the three
     // header dropdowns did not — meaning the only way to dismiss one was to tab back through
     // whatever it contained and press the trigger again. Extracting the helper to `lib/escape.ts`
     // gave it to all three; this is the one with a test because it is the one being added.
     mount();
     await openMenu();
+    const trigger = screen.getByRole("button", { name: "Your account" });
+    const radio = screen.getByRole("radio", { name: "Dark" });
+    radio.focus();
+    expect(document.activeElement).toBe(radio);
+
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("radiogroup")).toBeNull());
+    expect(document.activeElement).toBe(trigger);
   });
 
   it("closes when a pointer goes down outside it", async () => {
