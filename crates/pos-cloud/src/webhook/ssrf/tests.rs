@@ -452,6 +452,23 @@ fn v6_tunneling_prefixes_are_refused() {
             ForbiddenReason::LinkLocal
         ))
     );
+    // The other u/g bit settings in the top byte of segment 4 (`0x0100`, `0x0300`).
+    assert_eq!(
+        classify_ip(ip("2001:1234:5678:9abc:100:5efe:127.0.0.1")),
+        Err(SsrfRejection::ForbiddenAddress(
+            ip("2001:1234:5678:9abc:100:5efe:127.0.0.1"),
+            ForbiddenReason::Loopback
+        ))
+    );
+    assert_eq!(
+        classify_ip(ip("2001:1234:5678:9abc:300:5efe:169.254.169.254")),
+        Err(SsrfRejection::ForbiddenAddress(
+            ip("2001:1234:5678:9abc:300:5efe:169.254.169.254"),
+            ForbiddenReason::LinkLocal
+        ))
+    );
+    // A low byte that is not zero is not ISATAP, and a public prefix stays allowed.
+    assert!(classify_ip(ip("2001:1234:5678:9abc:1:5efe:127.0.0.1")).is_ok());
 }
 
 #[test]
