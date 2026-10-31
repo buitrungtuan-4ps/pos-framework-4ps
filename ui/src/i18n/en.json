@@ -413,7 +413,7 @@
   "shift.expected": "Expected",
   "shift.expected_now": "The drawer should hold {amount}.",
   "shift.float_label": "Opening float ({currency})",
-  "shift.not_a_till": "This device is not one of the store's tills, so it has no drawer of its own: cash is taken at a till. A manager binds a device to a till on the Devices screen.",
+  "shift.not_a_till": "This device is not one of the store's tills, so it has no drawer of its own: cash is taken at a till. A manager binds a device to a till on the Devices screen, under This device. A store with no tills yet creates them in the console, under Devices → Terminals, and publishes them to the store.",
   "shift.open": "Open shift",
   "shift.open_drawer": "Open drawer",
   "shift.open_drawer_manager": "A manager types their code and PIN, then picks the reason.",

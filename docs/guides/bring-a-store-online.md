@@ -382,6 +382,7 @@ keeping the last-known-good if a version is rejected
 | **Menu** (Items → Modifiers → Menus) | the priced catalogue, compiled per channel | **Yes** — nothing to ring up without it |
 | **Tax rates** | the class × channel grid | **Yes**, anywhere a receipt must be right |
 | **Store settings** | country, currency, timezone, business-date cutoff; the till's cash rounding and quick-cash notes; the receipt's seller identity; and how many days the store PC keeps synced events (90 unless set, [ADR-0145](../adr/0145-the-edge-keeps-events-until-synced-and-n-days-old.md)). Choosing the **Country** fills its country pack (currency, display language, quoting posture, cash rounding, quick-cash notes, registration label) into every field nobody has set — blank, or still the framework default on a store that has published nothing — and says what it filled and what it kept; **Start from a country** takes the whole pack. Publishing a country the store did not have also writes the pack's settings that no scope sets, at the store's scope, and keeps any set otherwise, saying which — in Vietnam, 20,000 ₫ as the over/short past which a drawer close asks a reason ([ADR-0183](../adr/0183-a-country-pack-seeds-a-new-stores-settings.md)). Check rounding and notes before publishing: Vietnam's pack rounds cash to 1,000 ₫ | **Yes** — `country_code` is required ([ADR-0114](../adr/0114-region-is-required-recorded-visible.md)); the retention can stay at its default |
+| **Devices → Terminals** | one terminal for each till, and the receipt printer whose cash drawer it opens | **Yes, to take cash** on a store that keeps a drawer for each till, which is every store the wizard creates: a device takes cash only once it is bound to a terminal (Step 5) |
 | **Floor** and **Kitchen stations** | areas, tables, stations, and what routes where | Dine-in only |
 | **Configuration** | the capability flags, and the version history with diff and rollback | No, but it is where you go when a publish went wrong |
 | **Channels & payments**, **Inventory**, **Campaigns**, **Reason codes** | their own nodes | No — add them when the shop needs them |
@@ -426,6 +427,14 @@ given a public origin, [ADR-0111](../adr/0111-a-second-origin-may-address-the-ed
 type `IP:8787` and the six digits ([ADR-0030](../adr/0030-pairing-and-offline-auth.md),
 [ADR-0117](../adr/0117-a-headless-store-keeps-a-log.md)). Then sign a cashier in with their PIN, open
 a table, ring up an item. **Unplug the network — it keeps working.**
+
+**Bind each till to its terminal before it takes cash.** A store that keeps a drawer for each till
+(`shift.drawer_model`, [ADR-0167](../adr/0167-a-till-has-its-own-cash-drawer.md)), which is what the
+wizard gives a new store, takes cash only at a device bound to a terminal: until then the till's
+**Shift** screen says the device is not one of the store's tills and opens no drawer, and cash is
+refused. So, once the terminals from Step 4 are published, on each till sign a manager in, open
+**Devices**, and under **This device** choose the terminal it is. The shift screen then shows that
+till's own drawer.
 
 > **The boot code pairs the first device. After that, mint from inside the store.**
 >

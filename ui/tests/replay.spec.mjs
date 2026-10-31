@@ -4143,7 +4143,7 @@ test("a device that is no till says so, offers no drawer of its own, and is refu
     await signIn(page, edge);
     await navigateTo(page, "/shift");
     await expect(page.locator('[data-outcome="no-till"]')).toHaveText(
-      "This device is not one of the store's tills, so it has no drawer of its own: cash is taken at a till. A manager binds a device to a till on the Devices screen.",
+      "This device is not one of the store's tills, so it has no drawer of its own: cash is taken at a till. A manager binds a device to a till on the Devices screen, under This device. A store with no tills yet creates them in the console, under Devices → Terminals, and publishes them to the store.",
     );
     await expect(page.locator('[data-outcome="own-drawer"]')).toHaveCount(0);
     await expect(page.locator('[data-step="openShift"]')).toHaveCount(0);
