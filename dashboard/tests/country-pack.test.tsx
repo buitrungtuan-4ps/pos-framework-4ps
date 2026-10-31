@@ -8,13 +8,21 @@
 //     rounding and the notes among them, and says which;
 //   * on a store that has published, choosing it fills only what is blank and keeps — and names —
 //     what the store already has that the pack would set differently, so nothing is overwritten
-//     silently.
+//     silently;
+//   * publishing a locale that names a new country writes the pack's settings (ADR-0183) where no
+//     scope sets them, at the store's scope — so a store the new-store wizard created before it had
+//     a country ends with Vietnam's 20,000 ₫ over/short — and keeps one the tenant set.
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StoreSettings } from "../src/screens/StoreSettings";
-import { fillFromPack, FRAMEWORK_DEFAULTS, type PackFields } from "../src/lib/country-pack";
+import {
+  fillFromPack,
+  fillSettings,
+  FRAMEWORK_DEFAULTS,
+  type PackFields,
+} from "../src/lib/country-pack";
 import { selectStore, selectTenant } from "../src/state/session";
 
 const TENANT = { id: "01M22190WCY5PS7KCA7ET7H679", name: "Pizza 4P's Vietnam" };
@@ -33,9 +41,14 @@ const VIETNAM = {
   prices_include_tax: false,
   cash_rounding_increment: 1000,
   cash_denominations: [10000, 20000, 50000, 100000, 200000, 500000],
+  setting_defaults: [{ setting_key: "shift.variance_reason_minor", value: 20000 }],
 };
 
+const VARIANCE = "shift.variance_reason_minor";
+
 const effectiveConfig = vi.fn();
+const effectiveSettings = vi.fn();
+const putSetting = vi.fn();
 const toastOk = vi.fn();
 
 vi.mock("../src/api/client", () => ({
@@ -43,7 +56,9 @@ vi.mock("../src/api/client", () => ({
     listCountries: () => Promise.resolve([VIETNAM]),
     effectiveConfig: (...args: unknown[]) => effectiveConfig(...args),
     configNodes: () => Promise.resolve({ current_version_id: null, nodes: [] }),
-    publishLocale: vi.fn(),
+    publishLocale: () => Promise.resolve({}),
+    effectiveSettings: (...args: unknown[]) => effectiveSettings(...args),
+    putSetting: (...args: unknown[]) => putSetting(...args),
     publishStoreProfile: vi.fn(),
     publishRetention: vi.fn(),
   },
@@ -104,6 +119,72 @@ describe("choosing the store's country", () => {
     expect(toastOk).toHaveBeenCalledWith(
       expect.stringMatching(/^Kept what this store already has for Currency/),
     );
+  });
+});
+
+describe("publishing the store's country", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    selectTenant(TENANT.id, TENANT.name);
+    selectStore(STORE.id, STORE.name);
+    putSetting.mockResolvedValue({ stores: [] });
+  });
+  afterEach(cleanup);
+
+  const publish = () => fireEvent.click(screen.getByRole("button", { name: "Publish to store" }));
+
+  it("writes the pack's settings into a store that had no country, at the store's scope", async () => {
+    // The wizard's store: created, given the presets with no country, so the threshold is off.
+    effectiveConfig.mockResolvedValue(null);
+    effectiveSettings.mockResolvedValue([{ setting_key: VARIANCE, value: 0 }]);
+    await chooseVietnam();
+    publish();
+    await waitFor(() =>
+      expect(putSetting).toHaveBeenCalledWith(TENANT.id, VARIANCE, "SETTING_SCOPE_STORE", STORE.id, 20000),
+    );
+    expect(toastOk).toHaveBeenCalledWith(
+      "Set from Vietnam's pack for this store: Reason for a large over or short = 20000. Change it in Shared settings.",
+    );
+  });
+
+  it("keeps a value the tenant set, and says so", async () => {
+    effectiveConfig.mockResolvedValue(null);
+    effectiveSettings.mockResolvedValue([
+      { setting_key: VARIANCE, value: 50000, scope: "SETTING_SCOPE_TENANT", scope_id: TENANT.id },
+    ]);
+    await chooseVietnam();
+    publish();
+    await waitFor(() =>
+      expect(toastOk).toHaveBeenCalledWith(expect.stringMatching(/^Kept Reason for a large over or short/)),
+    );
+    expect(putSetting).not.toHaveBeenCalled();
+  });
+
+  it("writes nothing when the published country is the one the store already had", async () => {
+    effectiveConfig.mockResolvedValue({
+      locale: { country_code: "VN", currency_code: "VND", timezone: "Asia/Ho_Chi_Minh", cutoff_hour: 4 },
+    });
+    effectiveSettings.mockResolvedValue([{ setting_key: VARIANCE, value: 0 }]);
+    render(() => <StoreSettings />);
+    await waitFor(() => expect(field(/^Country/)).toBe("VN"));
+    publish();
+    await waitFor(() =>
+      expect(toastOk).toHaveBeenCalledWith(expect.stringMatching(/^Published locale settings/)),
+    );
+    expect(effectiveSettings).not.toHaveBeenCalled();
+    expect(putSetting).not.toHaveBeenCalled();
+  });
+});
+
+describe("fillSettings", () => {
+  const seeded = [{ setting_key: VARIANCE, value: 20000 }];
+
+  it("fills a setting the store runs at its default, keeps one set otherwise, skips an equal one", () => {
+    expect(fillSettings(seeded, [{ setting_key: VARIANCE, value: 0 }])).toEqual({ filled: seeded, kept: [] });
+    const set = { setting_key: VARIANCE, value: 50000, scope: "SETTING_SCOPE_STORE", scope_id: STORE.id };
+    expect(fillSettings(seeded, [set])).toEqual({ filled: [], kept: seeded });
+    expect(fillSettings(seeded, [{ ...set, value: 20000 }])).toEqual({ filled: [], kept: [] });
   });
 });
 

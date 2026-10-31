@@ -42,6 +42,7 @@ mod values;
 pub(crate) use catalogue::{__path_admin_list_settings, __path_admin_settings_catalogue};
 pub(crate) use effective::__path_admin_effective_settings;
 pub(crate) use presets::__path_admin_apply_setting_presets;
+pub(crate) use presets::as_node_value;
 pub(crate) use publish::__path_admin_publish_settings;
 // Moved to pos-cloud-config with the tenant layout; imported here, so the settings routes and
 // their callers keep reaching them through `super` and `crate::http`.

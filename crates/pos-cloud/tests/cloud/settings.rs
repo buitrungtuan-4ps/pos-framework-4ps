@@ -217,7 +217,8 @@ async fn a_new_store_is_given_the_owners_values_once() {
             "session.idle_lock_seconds",
             "permissions.enforced",
             "printing.receipt_language",
-            "qr.table_order"
+            "qr.table_order",
+            "counter.walk_in_channel"
         ])
     );
     assert_eq!(
@@ -254,6 +255,11 @@ async fn a_new_store_is_given_the_owners_values_once() {
         tenant_layer_node(&config_trees, third, "qr").await,
         Some(serde_json::json!({ "table_order": "TABLE_ORDER_JOIN" })),
         "a new store's guest orders join the table's order (the owner, 2026-10-01)"
+    );
+    assert_eq!(
+        tenant_layer_node(&config_trees, third, "counter").await,
+        Some(serde_json::json!({ "walk_in_channel": "WALK_IN_CHANNEL_ASK" })),
+        "a new store's counter asks each walk-in to eat in or take away (the owner, 2026-10-29)"
     );
 
     let again = router

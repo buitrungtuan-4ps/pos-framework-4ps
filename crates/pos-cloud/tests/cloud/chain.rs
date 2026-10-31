@@ -683,6 +683,132 @@ async fn a_gap_in_the_window_is_never_filed_as_a_contradiction() {
     );
 }
 
+/// The cloud's own copy of a store's log, as the chain window reads it in production: what ingest
+/// actually stored, owner stamp and all, rather than a list the test wrote.
+///
+/// One adjustment, and it is the fake's rather than the cloud's: `FakeStore` chains whatever it is
+/// given, as a store's own database does, so it overwrites the box's links with its own. The
+/// cloud's PostgreSQL log keeps each envelope verbatim, links included, so the window puts back the
+/// links the box sent — and keeps everything ingest changed.
+#[derive(Debug)]
+struct HeldWindow {
+    store: FakeStore,
+    sent: Vec<EventEnvelope<RawPayload>>,
+}
+
+impl ChainWindow for HeldWindow {
+    fn events_in_window<'a>(
+        &'a self,
+        _tenant: TenantId,
+        store: StoreId,
+        _day: &'a BusinessDate,
+        _days_back: u8,
+        limit: u32,
+    ) -> pos_ports::dynamic::BoxFuture<'a, Result<Vec<EventEnvelope<RawPayload>>, AnchorError>>
+    {
+        Box::pin(async move {
+            let page =
+                core::num::NonZeroU32::new(limit.max(1)).unwrap_or(core::num::NonZeroU32::MIN);
+            let held = pos_ports::EventStore::read(
+                &self.store,
+                &pos_ports::event_store::EventQuery::first(store, page),
+            )
+            .await
+            .map_err(|error| AnchorError::new(error.to_string()))?;
+            Ok(held
+                .into_iter()
+                .map(|mut event| {
+                    event.chain = self
+                        .sent
+                        .iter()
+                        .find(|sent| sent.event_id == event.event_id)
+                        .and_then(|sent| sent.chain.clone());
+                    event
+                })
+                .collect())
+        })
+    }
+}
+
+/// A box publishes its chained log and then a shift-close anchor over HTTPS, the cloud stamps the
+/// registry's tenant and brand on every record (ADR-0101), and the chain still audits clean (pilot
+/// run 2, N4: every link from seq 2 read as broken, 61 findings for an honest store).
+#[tokio::test]
+async fn a_chain_published_over_https_and_stamped_with_its_owner_audits_clean() {
+    // As a store writes it: the nil tenant and brand, because it does not know who owns it.
+    let mut log = Vec::new();
+    let mut link = ChainLink::first();
+    for seed in 1..=5 {
+        let mut event = fixtures::activation(store_id(), seed);
+        event.tenant_id = TenantId::new(Ulid::NIL);
+        event.brand_id = pos_proto::ids::BrandId::new(Ulid::NIL);
+        let hash = record_hash(&event, &link);
+        event.chain = Some(link.clone());
+        link = ChainLink::following(link.seq, hash);
+        log.push(event);
+    }
+    let mut anchor = anchor_over(&log, 100);
+    anchor.tenant_id = TenantId::new(Ulid::NIL);
+    anchor.brand_id = pos_proto::ids::BrandId::new(Ulid::NIL);
+
+    let store = FakeStore::new();
+    let ledger = Arc::new(FakeAnchors::default());
+    let cloud = Cloud::with_store_owners(
+        store.clone(),
+        Arc::new(crate::FakeOwners {
+            store: store_id(),
+            owner: pos_cloud::StoreOwner {
+                tenant_id: tenant(),
+                brand_id: pos_proto::ids::BrandId::new(Ulid::from_u128(0x000B_4A4D)),
+            },
+        }),
+    )
+    .with_anchor_ledger(ledger.clone())
+    .with_chain_window(Arc::new(HeldWindow {
+        store: store.clone(),
+        sent: log.iter().cloned().chain([anchor.clone()]).collect(),
+    }));
+    let keys = FakeKeys::default();
+    let router = http::router(app_all(
+        cloud,
+        FakeRollups::default(),
+        keys.clone(),
+        provisioned_admin(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    ));
+    let token = crate::issue_device_credential(&keys, tenant(), store_id());
+    let uri = format!("/sync/stores/{}/events", store_id().as_ulid());
+    for batch in [log.clone(), vec![anchor]] {
+        let published = router
+            .clone()
+            .oneshot(crate::post_json_bearer(
+                &uri,
+                &serde_json::json!({ "events": batch }),
+                &token,
+            ))
+            .await
+            .expect("route the publish");
+        assert_eq!(published.status(), StatusCode::OK);
+    }
+
+    let held = read_back(&store).await;
+    assert!(
+        held.iter().all(|event| event.tenant_id == tenant()),
+        "the cloud filed every record under the registry's tenant"
+    );
+    assert_eq!(
+        ledger.heads(),
+        vec![(5, log_head(&log).as_str().to_owned())],
+        "the head the box reported is held"
+    );
+    assert!(
+        ledger.conflicts().is_empty(),
+        "an honest chain is not filed as tampering: {:?}",
+        ledger.conflicts()
+    );
+}
+
 // --- The chain-finding read (`GET /admin/chain-findings`) ----------------------------------------
 
 /// The console read over an anchor ledger, with the session guard in front of it.
