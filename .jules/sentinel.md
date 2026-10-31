@@ -72,3 +72,8 @@
 **Vulnerability:** Webhook SSRF validation did not check RFC 9602 SRv6 SID block (`5f00::/16`), allowing Segment Routing locator addresses to fall through `classify_v6` as ordinary public unicast addresses.
 **Learning:** SRv6 Locators (`5f00::/16`) are special-purpose IPv6 unicast addresses used for Segment Routing network infrastructure, never as webhook receivers.
 **Prevention:** Explicitly check `first == 0x5f00` in `is_special_purpose_v6` within `classify_v6` to refuse addresses in the SRv6 locator block.
+
+## 2026-10-06 - [SSRF Dummy IPv6 Prefix Address Bypass]
+**Vulnerability:** Webhook SSRF validation checked Discard-Only (`100::/64`), but omitted the IANA Dummy IPv6 Prefix block (`100:0:0:1::/64`, RFC 9780), allowing OAM / multipoint BFD encapsulation addresses to fall through `classify_v6` as public unicast destinations.
+**Learning:** RFC 9780 allocated `100:0:0:1::/64` as a Dummy IPv6 Prefix with Destination=False and Globally Reachable=False for internal OAM/BFD encapsulation, so it must never be targeted by outbound webhooks.
+**Prevention:** Include `segments[3] == 1` alongside `segments[3] == 0` when matching `100::` prefixes in `classify_v6` to refuse Dummy IPv6 Prefix addresses as `ForbiddenReason::Reserved`.
