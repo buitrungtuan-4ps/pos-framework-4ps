@@ -518,6 +518,7 @@
           "operations"
         ],
         "summary": "A super-admin holding `console.alerts.manage` acknowledges an alert (idempotent).",
+        "description": "For a kind that never [clears itself](crate::alerts::AlertKind::clears_itself) — a chain break,\nwhich does not heal (ADR-0073 amendment 2026-10-31) — acknowledging is how it closes, so the same\naction resolves it, and the audit entry records `resolved_at_ms` beside who did it and when.",
         "operationId": "admin_ack_alert",
         "parameters": [
           {
@@ -532,7 +533,7 @@
         ],
         "responses": {
           "204": {
-            "description": "Acknowledged, and audited. Idempotent"
+            "description": "Acknowledged, and audited. Idempotent. An alert whose kind does not clear by itself (`chain_broken`) is resolved by the same acknowledgement, and the audit entry says so"
           },
           "401": {
             "description": "No session",

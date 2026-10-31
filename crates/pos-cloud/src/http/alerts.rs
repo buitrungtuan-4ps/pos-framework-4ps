@@ -187,7 +187,9 @@ where
         ("id" = String, Path, description = "The alert's id"),
     ),
     responses(
-        (status = 204, description = "Acknowledged, and audited. Idempotent"),
+        (status = 204, description = "Acknowledged, and audited. Idempotent. An alert whose kind \
+                                      does not clear by itself (`chain_broken`) is resolved by \
+                                      the same acknowledgement, and the audit entry says so"),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
         (status = 403, description = "The role lacks console.alerts.manage", body = crate::openapi_admin::ErrorResponse),
         (status = 503, description = "The alert store is unreachable", body = crate::openapi_admin::ErrorResponse),
@@ -195,6 +197,10 @@ where
     tag = "operations",
 )]
 /// A super-admin holding `console.alerts.manage` acknowledges an alert (idempotent).
+///
+/// For a kind that never [clears itself](crate::alerts::AlertKind::clears_itself) — a chain break,
+/// which does not heal (ADR-0073 amendment 2026-10-31) — acknowledging is how it closes, so the same
+/// action resolves it, and the audit entry records `resolved_at_ms` beside who did it and when.
 async fn admin_ack_alert<Al, A, C>(
     State(state): State<AlertState<Al, A, C>>,
     headers: HeaderMap,
@@ -216,8 +222,20 @@ where
         Ok(context) => context,
         Err(denied) => return denied,
     };
-    match state.alerts.acknowledge(&id, state.clock.now()).await {
+    let now = state.clock.now();
+    let closes = match closes_on_acknowledge(&state.alerts, &id).await {
+        Ok(closes) => closes,
+        Err(error) => return alert_error_response(&error),
+    };
+    let mut outcome = state.alerts.acknowledge(&id, now).await;
+    if closes && outcome.is_ok() {
+        outcome = state.alerts.resolve(&id, now).await;
+    }
+    match outcome {
         Ok(()) => {
+            let after = closes.then(
+                || serde_json::json!({ "resolved_at_ms": now.as_milliseconds_since_epoch() }),
+            );
             audit_action(
                 &state.audit,
                 &state.clock,
@@ -227,13 +245,25 @@ where
                 "alert",
                 &id,
                 None,
-                None,
+                after,
             )
             .await;
             StatusCode::NO_CONTENT.into_response()
         }
         Err(error) => alert_error_response(&error),
     }
+}
+
+/// Whether `id` is an *active* alert of a kind that a person's acknowledgement closes. An unknown
+/// or already-resolved id is `false`, so acknowledging it stays the plain idempotent write it was.
+async fn closes_on_acknowledge<Al: AlertStore + Sync>(
+    alerts: &Al,
+    id: &str,
+) -> Result<bool, AlertStoreError> {
+    let active = alerts.list_active().await?;
+    Ok(active
+        .iter()
+        .any(|alert| alert.id == id && !alert.kind.clears_itself()))
 }
 
 #[utoipa::path(

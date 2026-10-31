@@ -58,10 +58,9 @@
 # `#[expect(clippy::too_many_lines)]` says the same.
 "crates/adapters/store-sqlite/src/writer.rs::run" = { lines = 252, params = 2 }
 "crates/pos-cloud-api/src/console.rs::audit_action" = { lines = 39, params = 9 }
-"crates/pos-cloud/src/alerts/evaluator.rs::pass" = { lines = 40, params = 9 }
-# Listed for its 11 parameters (see its `#[expect(clippy::too_many_arguments)]`); at 90 lines it is
+# Listed for its 9 parameters (see its `#[expect(clippy::too_many_arguments)]`); at 86 lines it is
 # outside P8, which took functions over 100 lines.
-"crates/pos-cloud/src/alerts/evaluator.rs::run" = { lines = 90, params = 11 }
+"crates/pos-cloud/src/alerts/evaluator.rs::run" = { lines = 86, params = 9 }
 "crates/pos-cloud/src/http/config_publish/config_releases.rs::config_release_router" = { lines = 50, params = 9 }
 "crates/pos-cloud/src/http/store_groups/data_nodes.rs::batch_nodes" = { lines = 42, params = 9 }
 # Held, not split: open security PRs #834 #835 #839 #846 #847 touch it; split after they land.

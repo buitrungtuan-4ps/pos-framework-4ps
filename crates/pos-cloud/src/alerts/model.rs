@@ -63,6 +63,12 @@ pub enum AlertKind {
     /// A store's print agent is holding a ticket nobody has printed
     /// ([ADR-0112](../../../../docs/adr/0112-print-agents.md)).
     PrintAgentStalled,
+    /// Recomputing a store's chained log found it disagreeing with itself — a fork or a broken link
+    /// ([ADR-0132](../../../../docs/adr/0132-the-cloud-recomputes-the-chain-it-holds.md) decision 5).
+    ///
+    /// The one kind that never clears by itself: a broken chain does not heal, so the alert stays
+    /// open until a person acknowledges it ([`AlertKind::clears_itself`]).
+    ChainBroken,
 }
 
 impl AlertKind {
@@ -74,6 +80,7 @@ impl AlertKind {
         Self::ProjectorUnhealthy,
         Self::JetstreamCapacity,
         Self::PrintAgentStalled,
+        Self::ChainBroken,
     ];
 
     /// The stable wire/storage token (matches the serde representation).
@@ -86,6 +93,7 @@ impl AlertKind {
             Self::ProjectorUnhealthy => "projector_unhealthy",
             Self::JetstreamCapacity => "jetstream_capacity",
             Self::PrintAgentStalled => "print_agent_stalled",
+            Self::ChainBroken => "chain_broken",
         }
     }
 
@@ -110,9 +118,12 @@ impl AlertKind {
             // placements — an in-store box gone quiet is very likely still taking money. A stalled
             // print agent does not admit that reading: in every placement it means paper that was
             // promised is not coming and the kitchen has not been told.
-            Self::ProjectorUnhealthy | Self::JetstreamCapacity | Self::PrintAgentStalled => {
-                AlertSeverity::Critical
-            }
+            // A chain break is a store's books disagreeing with themselves: data integrity, by
+            // definition.
+            Self::ProjectorUnhealthy
+            | Self::JetstreamCapacity
+            | Self::PrintAgentStalled
+            | Self::ChainBroken => AlertSeverity::Critical,
         }
     }
 
@@ -121,6 +132,16 @@ impl AlertKind {
     #[must_use]
     pub const fn is_server_wide(self) -> bool {
         matches!(self, Self::ProjectorUnhealthy | Self::JetstreamCapacity)
+    }
+
+    /// Whether the evaluator resolves an open alert of this kind once its condition stops firing.
+    ///
+    /// True for every kind but [`AlertKind::ChainBroken`]. A store coming back online *is* the
+    /// offline alert's answer; nothing a store does afterwards un-breaks its chain, so that alert
+    /// closes only when a person acknowledges (or resolves) it from the console.
+    #[must_use]
+    pub const fn clears_itself(self) -> bool {
+        !matches!(self, Self::ChainBroken)
     }
 }
 
@@ -223,5 +244,21 @@ mod tests {
         assert!(!AlertKind::StoreOffline.is_server_wide());
         assert!(!AlertKind::RelayBacklog.is_server_wide());
         assert!(!AlertKind::WebhookDisabled.is_server_wide());
+        assert!(!AlertKind::ChainBroken.is_server_wide());
+    }
+
+    #[test]
+    fn only_a_chain_break_waits_for_a_person() {
+        for kind in AlertKind::ALL {
+            assert_eq!(
+                kind.clears_itself(),
+                *kind != AlertKind::ChainBroken,
+                "{kind:?}"
+            );
+        }
+        assert_eq!(
+            AlertKind::ChainBroken.default_severity(),
+            AlertSeverity::Critical
+        );
     }
 }

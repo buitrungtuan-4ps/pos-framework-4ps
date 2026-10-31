@@ -139,7 +139,6 @@ use tower::ServiceExt as _;
 use pos_cloud::activation::{
     ActivationCodeStore, ActivationStoreError, DeviceCredential, IssuedCode, hash_code,
 };
-use pos_cloud::alerts::{AlertRecord, AlertStore, AlertStoreError};
 use pos_cloud::audit::{
     AuditEntry, AuditQuery, AuditRecorder, AuditSink, AuditStore, AuditStoreError,
     NoopAuditRecorder, TrailOrder,
@@ -7873,79 +7872,6 @@ async fn the_employee_page_partitions_the_roster_and_every_page_reports_the_whol
         page.items.iter().all(|row| !row.record.has_pin),
         "the view carries whether a PIN exists, never the hash"
     );
-}
-
-// --- Operational alerts (`/admin/alerts`, ADR-0073, Track O2) -----------------------------------
-
-/// An in-memory [`AlertStore`] for the alerts-route tests: the same open→resolved lifecycle the store
-/// contract test covers, behind an `Arc<Mutex<…>>` so the router can clone it.
-#[derive(Clone, Default)]
-struct FakeAlerts {
-    rows: Arc<Mutex<Vec<AlertRecord>>>,
-}
-
-impl FakeAlerts {
-    fn seed(&self, rows: Vec<AlertRecord>) {
-        *self.rows.lock().expect("lock") = rows;
-    }
-}
-
-impl AlertStore for FakeAlerts {
-    async fn upsert(&self, record: &AlertRecord) -> Result<(), AlertStoreError> {
-        let mut rows = self.rows.lock().expect("lock");
-        if let Some(open) = rows
-            .iter_mut()
-            .find(|r| r.resolved_at.is_none() && r.key() == record.key())
-        {
-            open.severity = record.severity;
-            open.summary.clone_from(&record.summary);
-            open.detail = record.detail.clone();
-            open.last_seen_at = record.last_seen_at;
-        } else {
-            rows.push(record.clone());
-        }
-        Ok(())
-    }
-
-    async fn resolve(&self, id: &str, resolved_at: Timestamp) -> Result<(), AlertStoreError> {
-        let mut rows = self.rows.lock().expect("lock");
-        if let Some(row) = rows
-            .iter_mut()
-            .find(|r| r.id == id && r.resolved_at.is_none())
-        {
-            row.resolved_at = Some(resolved_at);
-        }
-        Ok(())
-    }
-
-    async fn acknowledge(
-        &self,
-        id: &str,
-        acknowledged_at: Timestamp,
-    ) -> Result<(), AlertStoreError> {
-        let mut rows = self.rows.lock().expect("lock");
-        if let Some(row) = rows.iter_mut().find(|r| r.id == id) {
-            row.acknowledged_at = Some(acknowledged_at);
-        }
-        Ok(())
-    }
-
-    async fn list_active(&self) -> Result<Vec<AlertRecord>, AlertStoreError> {
-        Ok(self
-            .rows
-            .lock()
-            .expect("lock")
-            .iter()
-            .filter(|r| r.resolved_at.is_none())
-            .cloned()
-            .collect())
-    }
-
-    async fn list_recent(&self, limit: u32) -> Result<Vec<AlertRecord>, AlertStoreError> {
-        let mut rows = self.rows.lock().expect("lock").clone();
-        rows.truncate(limit as usize);
-        Ok(rows)
-    }
 }
 
 /// The floor master-data store as two in-memory lists — the same `AreaStore`/`TableStore` seams the

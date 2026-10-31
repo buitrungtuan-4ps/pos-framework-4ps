@@ -111,6 +111,21 @@ pub trait AlertStore {
         &self,
         limit: u32,
     ) -> impl Future<Output = Result<Vec<AlertRecord>, AlertStoreError>> + Send;
+
+    /// For each `(tenant_id, dedup_key)` that has one, the most recently resolved alert of `kind`.
+    ///
+    /// What a kind that never [clears itself](AlertKind::clears_itself) needs to tell "a person has
+    /// already closed this" from "this is new": the evaluator reads the closed alert's detail to
+    /// decide whether anything has arrived since. At most one row per scope, so the result is
+    /// bounded by the number of stores or endpoints, not by history.
+    ///
+    /// # Errors
+    ///
+    /// [`AlertStoreError`] if the rows could not be read.
+    fn list_last_resolved(
+        &self,
+        kind: AlertKind,
+    ) -> impl Future<Output = Result<Vec<AlertRecord>, AlertStoreError>> + Send;
 }
 
 /// A failure of the alert store itself — the database is unreachable, or a stored value could not be
@@ -127,6 +142,25 @@ impl AlertStoreError {
     }
 }
 
+/// [`AlertStore::list_last_resolved`] over an in-memory list: the newest resolved row of `kind` per
+/// `(tenant_id, dedup_key)`. The in-memory fakes share it, so the rule the Postgres query states is
+/// stated once for them too.
+#[cfg(test)]
+pub(crate) fn last_resolved(rows: &[AlertRecord], kind: AlertKind) -> Vec<AlertRecord> {
+    let mut latest: Vec<AlertRecord> = Vec::new();
+    for row in rows.iter().filter(|r| r.kind == kind) {
+        let Some(resolved) = row.resolved_at else {
+            continue;
+        };
+        match latest.iter_mut().find(|kept| kept.key() == row.key()) {
+            Some(kept) if kept.resolved_at < Some(resolved) => *kept = row.clone(),
+            Some(_) => {}
+            None => latest.push(row.clone()),
+        }
+    }
+    latest
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
@@ -136,7 +170,7 @@ mod tests {
     use pos_proto::ulid::Ulid;
     use serde_json::json;
 
-    use super::{AlertRecord, AlertStore, AlertStoreError};
+    use super::{AlertRecord, AlertStore, AlertStoreError, last_resolved};
     use crate::alerts::model::{AlertKind, AlertSeverity};
 
     /// An in-memory [`AlertStore`] mirroring the partial-unique-index lifecycle: one open row per
@@ -205,6 +239,13 @@ mod tests {
             rows.sort_by_key(|r| core::cmp::Reverse(r.last_seen_at.as_milliseconds_since_epoch()));
             rows.truncate(limit as usize);
             Ok(rows)
+        }
+
+        async fn list_last_resolved(
+            &self,
+            kind: AlertKind,
+        ) -> Result<Vec<AlertRecord>, AlertStoreError> {
+            Ok(last_resolved(&self.rows.lock().expect("lock"), kind))
         }
     }
 

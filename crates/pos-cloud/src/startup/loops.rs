@@ -261,9 +261,14 @@ pub(crate) async fn alert_evaluator(
     );
     let alert_channel = alert_channel(config, webhook_timeout).await;
     tokio::spawn(alerts::evaluator::run(
-        store.registry(),
-        store.fleet(),
-        store.webhooks(),
+        alerts::ReadModels {
+            registry: store.registry(),
+            fleet: store.fleet(),
+            webhooks: store.webhooks(),
+            // The same ledger ingest files chain findings into (ADR-0132), so a finding raises its
+            // alert on the next tick (ADR-0073 amendment 2026-10-31).
+            chain_findings: Some(Arc::new(store.chain_anchors())),
+        },
         store.task_health(),
         store.alerts(),
         alert_channel,

@@ -18,11 +18,13 @@
 
 use core::future::Future;
 use core::time::Duration;
+use std::sync::Arc;
 
 use pos_proto::determinism::ClockSource;
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
 
+use super::chain::chain_alerts;
 use super::channel::AlertChannel;
 use pos_ports::message_link::LinkCapacity;
 
@@ -30,6 +32,7 @@ use super::eval::{AlertThresholds, TenantAlertInput, WebhookRef, evaluate};
 use super::model::FiringAlert;
 use super::probe::StreamCapacityProbe;
 use super::store::{AlertRecord, AlertStore, AlertStoreError};
+use crate::anchor::AnchorLedger;
 use crate::fleet::FleetStore;
 use crate::health::{ALERT_EVALUATOR, TaskHealthStore, tick_detail};
 use crate::registry::RegistryStore;
@@ -56,9 +59,27 @@ pub struct PassSummary {
     pub delivery_error: Option<String>,
 }
 
+/// The read models one pass gathers its snapshot from: the tenants, their fleet rows and webhook
+/// endpoints, and the anchor ledger whose chain findings raise [`AlertKind::ChainBroken`].
+///
+/// [`AlertKind::ChainBroken`]: super::model::AlertKind::ChainBroken
+#[derive(Debug, Clone)]
+pub struct ReadModels<Rg, Fl, Wh> {
+    /// The tenants to sweep.
+    pub registry: Rg,
+    /// Each tenant's per-store fleet rows.
+    pub fleet: Fl,
+    /// Each tenant's webhook endpoints.
+    pub webhooks: Wh,
+    /// The chain findings ([ADR-0132](../../../../docs/adr/0132-the-cloud-recomputes-the-chain-it-holds.md)),
+    /// or `None` for a cloud that keeps no anchor ledger.
+    pub chain_findings: Option<Arc<dyn AnchorLedger>>,
+}
+
 /// Reconciles the firing set against the store: opens a new alert for each firing condition that has
 /// no active alert, refreshes the ones that do, and resolves every active alert whose condition is no
-/// longer firing. Returns the newly-opened alerts (what delivery acts on) and the resolved count.
+/// longer firing — unless its kind does not [clear itself](super::model::AlertKind::clears_itself),
+/// in which case it stays open until a person closes it. Returns the newly-opened alerts (what delivery acts on) and the resolved count.
 ///
 /// `mint` supplies a fresh alert id for each newly-opened alert; injected so the reconcile is testable
 /// without entropy. The loop passes a ULID minter.
@@ -114,7 +135,7 @@ where
                 && c.kind == active_alert.kind
                 && c.dedup_key == active_alert.dedup_key
         });
-        if !still_firing {
+        if !still_firing && active_alert.kind.clears_itself() {
             alerts.resolve(&active_alert.id, now).await?;
             resolved += 1;
         }
@@ -138,15 +159,19 @@ fn mint_alert_id(now_ms: i64, salt: u128) -> String {
 
 /// Gathers each tenant's fleet rows and disabled webhook endpoints for one evaluation pass.
 async fn gather<Rg, Fl, Wh>(
-    registry: &Rg,
-    fleet: &Fl,
-    webhooks: &Wh,
+    models: &ReadModels<Rg, Fl, Wh>,
 ) -> Result<Vec<TenantAlertInput>, String>
 where
     Rg: RegistryStore + Sync,
     Fl: FleetStore + Sync,
     Wh: WebhookEndpointStore + Sync,
 {
+    let ReadModels {
+        registry,
+        fleet,
+        webhooks,
+        ..
+    } = models;
     let tenants = registry.list_tenants().await.map_err(|e| e.to_string())?;
     let mut inputs = Vec::with_capacity(tenants.len());
     // The evaluator reads identity only; the version each row was read at is for a writer
@@ -179,16 +204,8 @@ where
 
 /// One full pass: gather, evaluate, reconcile. Split out so the loop body stays small and the errors
 /// collapse to one string for the tick's health detail.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one pass over the five read seams a snapshot needs, plus the optional delivery channel \
-              and stream probe, the instant, and the thresholds. Every one is read exactly once here \
-              and passed straight to the pure `evaluate`"
-)]
 async fn pass<Rg, Fl, Wh, Th, Al, Ch, Pr>(
-    registry: &Rg,
-    fleet: &Fl,
-    webhooks: &Wh,
+    models: &ReadModels<Rg, Fl, Wh>,
     task_health: &Th,
     alerts: &Al,
     channel: Option<&Ch>,
@@ -205,10 +222,16 @@ where
     Ch: AlertChannel + Sync,
     Pr: StreamCapacityProbe + Sync,
 {
-    let tenants = gather(registry, fleet, webhooks).await?;
+    let tenants = gather(models).await?;
     let health = task_health.list_health().await.map_err(|e| e.to_string())?;
     let capacity = stream_capacity(probe).await;
-    let firing = evaluate(now, thresholds, &tenants, &health, capacity.as_ref());
+    let mut firing = evaluate(now, thresholds, &tenants, &health, capacity.as_ref());
+    let tenant_ids: Vec<_> = tenants.iter().map(|tenant| tenant.tenant_id).collect();
+    firing.extend(
+        chain_alerts(models.chain_findings.as_deref(), alerts, &tenant_ids)
+            .await
+            .map_err(|e| e.to_string())?,
+    );
     let now_ms = now.as_milliseconds_since_epoch();
     let mut salt = 0_u128;
     let (opened, resolved) = reconcile(alerts, now, &firing, || {
@@ -280,14 +303,12 @@ async fn deliver_opened<Ch: AlertChannel + Sync>(
 /// the conditions, reconciles them against the store, and records its own health.
 #[expect(
     clippy::too_many_arguments,
-    reason = "each store the loop reads is its own seam handle, plus the optional channel and stream \
-              probe, the clock, thresholds, interval and shutdown; bundling them would just be \
-              unpacked here, as the sibling loops' runs are"
+    reason = "the read models, the task-health and alert stores, the optional channel and stream \
+              probe, the clock, thresholds, interval and shutdown; bundling them further would just \
+              be unpacked here, as the sibling loops' runs are"
 )]
 pub async fn run<Rg, Fl, Wh, Th, Al, Ch, Pr, C>(
-    registry: Rg,
-    fleet: Fl,
-    webhooks: Wh,
+    models: ReadModels<Rg, Fl, Wh>,
     task_health: Th,
     alerts: Al,
     channel: Option<Ch>,
@@ -310,9 +331,7 @@ pub async fn run<Rg, Fl, Wh, Th, Al, Ch, Pr, C>(
     loop {
         let now = clock.now();
         let detail = match pass(
-            &registry,
-            &fleet,
-            &webhooks,
+            &models,
             &task_health,
             &alerts,
             channel.as_ref(),
@@ -443,6 +462,16 @@ mod tests {
 
         async fn list_recent(&self, _limit: u32) -> Result<Vec<AlertRecord>, AlertStoreError> {
             Ok(self.rows.lock().expect("lock").clone())
+        }
+
+        async fn list_last_resolved(
+            &self,
+            kind: AlertKind,
+        ) -> Result<Vec<AlertRecord>, AlertStoreError> {
+            Ok(crate::alerts::store::last_resolved(
+                &self.rows.lock().expect("lock"),
+                kind,
+            ))
         }
     }
 

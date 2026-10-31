@@ -184,6 +184,30 @@ impl PostgresAlerts {
             .map_err(unavailable)?;
         Ok(rows.iter().map(row_to_alert).collect())
     }
+
+    /// For each `(tenant_id, dedup_key)` with one, the most recently resolved alert of `kind`.
+    ///
+    /// One row per scope (`DISTINCT ON`), so the read is bounded by the number of stores or endpoints
+    /// the kind has ever been raised for, not by how long the history is.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn list_last_resolved(&self, kind: &str) -> Result<Vec<AlertRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .query(
+                &format!(
+                    "SELECT DISTINCT ON (coalesce(tenant_id, ''), dedup_key) {COLUMNS} \
+                     FROM alerts WHERE kind = $1 AND resolved_at IS NOT NULL \
+                     ORDER BY coalesce(tenant_id, ''), dedup_key, resolved_at DESC"
+                ),
+                &[&kind],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows.iter().map(row_to_alert).collect())
+    }
 }
 
 fn row_to_alert(row: &tokio_postgres::Row) -> AlertRow {

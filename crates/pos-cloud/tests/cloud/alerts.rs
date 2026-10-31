@@ -6,7 +6,8 @@
 use std::sync::{Arc, Mutex};
 
 use axum::http::StatusCode;
-use pos_cloud::alerts::{AlertKind, AlertRecord, AlertStore};
+use pos_cloud::alerts::{AlertKind, AlertRecord, AlertStore, AlertStoreError, ReadModels};
+use pos_cloud::audit::AuditSink;
 use pos_cloud::audit::NoopAuditRecorder;
 use pos_cloud::fleet::FleetRow;
 use pos_cloud::lease::StorePlacement;
@@ -19,10 +20,100 @@ use pos_proto::ulid::Ulid;
 use tower::ServiceExt;
 
 use crate::{
-    FakeAdmin, FakeAlerts, FakeConfigTrees, FakeFleet, FakeKeys, FakeRegistry, FakeRollups,
+    FakeAdmin, FakeAudit, FakeConfigTrees, FakeFleet, FakeKeys, FakeRegistry, FakeRollups,
     FakeTaskHealth, FakeWebhooks, admin_cookie, app_all, clock, get, get_with_cookie, json_body,
     post_with_cookie, provisioned_admin, seen_ago, tenant,
 };
+
+/// An in-memory [`AlertStore`] for the alerts-route tests: the same open→resolved lifecycle the store
+/// contract test covers, behind an `Arc<Mutex<…>>` so the router can clone it.
+#[derive(Clone, Default)]
+pub(crate) struct FakeAlerts {
+    rows: Arc<Mutex<Vec<AlertRecord>>>,
+}
+
+impl FakeAlerts {
+    pub(crate) fn seed(&self, rows: Vec<AlertRecord>) {
+        *self.rows.lock().expect("lock") = rows;
+    }
+}
+
+impl AlertStore for FakeAlerts {
+    async fn upsert(&self, record: &AlertRecord) -> Result<(), AlertStoreError> {
+        let mut rows = self.rows.lock().expect("lock");
+        if let Some(open) = rows
+            .iter_mut()
+            .find(|r| r.resolved_at.is_none() && r.key() == record.key())
+        {
+            open.severity = record.severity;
+            open.summary.clone_from(&record.summary);
+            open.detail = record.detail.clone();
+            open.last_seen_at = record.last_seen_at;
+        } else {
+            rows.push(record.clone());
+        }
+        Ok(())
+    }
+
+    async fn resolve(&self, id: &str, resolved_at: Timestamp) -> Result<(), AlertStoreError> {
+        let mut rows = self.rows.lock().expect("lock");
+        if let Some(row) = rows
+            .iter_mut()
+            .find(|r| r.id == id && r.resolved_at.is_none())
+        {
+            row.resolved_at = Some(resolved_at);
+        }
+        Ok(())
+    }
+
+    async fn acknowledge(
+        &self,
+        id: &str,
+        acknowledged_at: Timestamp,
+    ) -> Result<(), AlertStoreError> {
+        let mut rows = self.rows.lock().expect("lock");
+        if let Some(row) = rows.iter_mut().find(|r| r.id == id) {
+            row.acknowledged_at = Some(acknowledged_at);
+        }
+        Ok(())
+    }
+
+    async fn list_active(&self) -> Result<Vec<AlertRecord>, AlertStoreError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|r| r.resolved_at.is_none())
+            .cloned()
+            .collect())
+    }
+
+    async fn list_recent(&self, limit: u32) -> Result<Vec<AlertRecord>, AlertStoreError> {
+        let mut rows = self.rows.lock().expect("lock").clone();
+        rows.truncate(limit as usize);
+        Ok(rows)
+    }
+
+    async fn list_last_resolved(
+        &self,
+        kind: AlertKind,
+    ) -> Result<Vec<AlertRecord>, AlertStoreError> {
+        // The newest resolved row per scope, as the adapter's `DISTINCT ON` returns.
+        let mut latest: Vec<AlertRecord> = Vec::new();
+        for row in self.rows.lock().expect("lock").iter() {
+            if row.kind != kind || row.resolved_at.is_none() {
+                continue;
+            }
+            match latest.iter_mut().find(|kept| kept.key() == row.key()) {
+                Some(kept) if kept.resolved_at < row.resolved_at => *kept = row.clone(),
+                Some(_) => {}
+                None => latest.push(row.clone()),
+            }
+        }
+        Ok(latest)
+    }
+}
 
 /// An [`AlertChannel`] that records the batches it was handed, so a test can prove the evaluator
 /// actually pushes rather than merely counting what it could have pushed.
@@ -101,9 +192,12 @@ async fn one_evaluator_tick_pushes_the_newly_opened_alerts_to_the_channel() {
     // `run` passes once on entry and its shutdown select is `biased`, so an already-ready shutdown
     // gives exactly one tick.
     pos_cloud::alerts::evaluator::run(
-        registry,
-        fleet,
-        FakeWebhooks::default(),
+        ReadModels {
+            registry,
+            fleet,
+            webhooks: FakeWebhooks::default(),
+            chain_findings: None,
+        },
         FakeTaskHealth::default(),
         FakeAlerts::default(),
         Some(channel.clone()),
@@ -178,9 +272,12 @@ async fn an_evaluator_tick_without_a_channel_still_stores_the_alert() {
     let alerts = FakeAlerts::default();
 
     pos_cloud::alerts::evaluator::run(
-        registry,
-        fleet,
-        FakeWebhooks::default(),
+        ReadModels {
+            registry,
+            fleet,
+            webhooks: FakeWebhooks::default(),
+            chain_findings: None,
+        },
         FakeTaskHealth::default(),
         alerts.clone(),
         None::<SpyAlertChannel>,
@@ -228,6 +325,15 @@ fn alert_at(
 
 /// The main router (for `/admin/login`) merged with the alerts sub-router, one shared admin store.
 fn alerts_app(admin: FakeAdmin, alerts: FakeAlerts) -> axum::Router {
+    alerts_app_with_audit(admin, alerts, Arc::new(NoopAuditRecorder))
+}
+
+/// As [`alerts_app`], recording to a caller-supplied audit trail.
+fn alerts_app_with_audit(
+    admin: FakeAdmin,
+    alerts: FakeAlerts,
+    audit: Arc<dyn pos_cloud::audit::AuditRecorder>,
+) -> axum::Router {
     let app = app_all(
         Cloud::new(FakeStore::new()),
         FakeRollups::default(),
@@ -236,12 +342,7 @@ fn alerts_app(admin: FakeAdmin, alerts: FakeAlerts) -> axum::Router {
         FakeConfigTrees::default(),
         FakeWebhooks::default(),
     );
-    http::router(app).merge(http::alerts_router(
-        alerts,
-        admin,
-        clock(),
-        Arc::new(NoopAuditRecorder),
-    ))
+    http::router(app).merge(http::alerts_router(alerts, admin, clock(), audit))
 }
 
 #[tokio::test]
@@ -332,4 +433,77 @@ async fn alerts_require_a_session() {
         .await
         .expect("route without a cookie");
     assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn acknowledging_a_chain_break_closes_it_and_the_audit_trail_says_who() {
+    // A chain break never clears by itself (ADR-0073 amendment 2026-10-31), so a person's
+    // acknowledgement is what closes it — and the trail records that it did, with who and when.
+    let alerts = FakeAlerts::default();
+    alerts.seed(vec![
+        alert_at(
+            "alert-chain",
+            AlertKind::ChainBroken,
+            Some(tenant()),
+            "store-x",
+            false,
+        ),
+        alert_at(
+            "alert-offline",
+            AlertKind::StoreOffline,
+            Some(tenant()),
+            "store-y",
+            false,
+        ),
+    ]);
+    let audit = FakeAudit::default();
+    let router = alerts_app_with_audit(
+        provisioned_admin(),
+        alerts.clone(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let cookie = admin_cookie(&router).await;
+
+    for id in ["alert-chain", "alert-offline"] {
+        let ack = router
+            .clone()
+            .oneshot(post_with_cookie(
+                &format!("/admin/alerts/{id}/ack"),
+                &serde_json::json!({}),
+                &cookie,
+            ))
+            .await
+            .expect("route the ack");
+        assert_eq!(ack.status(), StatusCode::NO_CONTENT);
+    }
+
+    let active = alerts.list_active().await.expect("active");
+    assert_eq!(
+        active.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+        vec!["alert-offline"],
+        "the chain break is closed; an acknowledged offline store still waits for its condition"
+    );
+    let entries = audit.entries.lock().expect("lock").clone();
+    let chain = entries
+        .iter()
+        .find(|entry| entry.entity_id == "alert-chain")
+        .expect("the chain acknowledgement is audited");
+    assert_eq!(chain.action, "alert.acknowledge");
+    assert!(!chain.actor.admin_id.is_empty(), "who acknowledged it");
+    assert_eq!(
+        chain
+            .after
+            .as_ref()
+            .and_then(|after| after.get("resolved_at_ms")),
+        Some(&serde_json::json!(chain.at.as_milliseconds_since_epoch())),
+        "the entry says the acknowledgement resolved it, and when"
+    );
+    let offline = entries
+        .iter()
+        .find(|entry| entry.entity_id == "alert-offline")
+        .expect("the offline acknowledgement is audited");
+    assert!(
+        offline.after.is_none(),
+        "an ordinary acknowledgement resolves nothing"
+    );
 }
