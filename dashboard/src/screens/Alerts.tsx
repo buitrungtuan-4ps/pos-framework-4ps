@@ -25,6 +25,7 @@ import { toast } from "../components/Toast";
 import { apiMessage } from "../lib/errors";
 import type { Alert } from "../api/schemas";
 import { isKnown, tokenLabel } from "../lib/tokens";
+import { screenHref } from "../state/screens";
 
 /** The most rows one recent-history read returns; the server caps it too. */
 const ALERT_LIMIT = 200;
@@ -42,7 +43,16 @@ const KIND_LABEL: Record<string, MessageKey> = {
   projector_unhealthy: "alerts.kind.projectorUnhealthy",
   jetstream_capacity: "alerts.kind.jetstreamCapacity",
   print_agent_stalled: "alerts.kind.printAgentStalled",
+  chain_broken: "alerts.kind.chainBroken",
 };
+
+/** A chain break is read on the Chain integrity screen (ADR-0132); its alert links there, in the
+ *  alert's own tenant. Any other kind, or one with no tenant, has nowhere to link. */
+export function chainIntegrityHref(alert: Pick<Alert, "kind" | "tenant_id">): string | null {
+  return alert.kind === "chain_broken" && alert.tenant_id
+    ? screenHref("chainFindings", alert.tenant_id, "")
+    : null;
+}
 
 /** The three severities, least-to-most, mapped to their localized labels. */
 const SEVERITY_LABEL: Record<AlertSeverity, MessageKey> = {
@@ -85,6 +95,19 @@ function pretty(value: unknown): string {
   return value === null || value === undefined
     ? t("alerts.noValue")
     : JSON.stringify(value, null, 2);
+}
+
+/** The drawer's way to Chain integrity for a chain break; nothing for any other alert. */
+function ChainIntegrityLink(props: { alert: Alert }) {
+  return (
+    <Show when={chainIntegrityHref(props.alert)}>
+      {(href) => (
+        <a class="text-sm text-accent underline" href={href()}>
+          {t("alerts.openChainIntegrity")}
+        </a>
+      )}
+    </Show>
+  );
 }
 
 export function Alerts() {
@@ -306,9 +329,7 @@ export function Alerts() {
           { key: "recent", label: t("alerts.showRecent") },
         ]}
       />
-      <Card
-        title={recent() ? t("alerts.recent") : t("alerts.active")}
-      >
+      <Card title={recent() ? t("alerts.recent") : t("alerts.active")}>
         <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
         <Show when={alerts()} fallback={<Skeleton label={t("common.loading")} rows={5} />}>
           {(loaded) => (
@@ -365,6 +386,7 @@ export function Alerts() {
                   {pretty(alert().detail)}
                 </pre>
               </div>
+              <ChainIntegrityLink alert={alert()} />
               <Show when={canManage()}>
                 <div class="flex flex-wrap gap-2">
                   <Show when={alertState(alert()) === "firing"}>

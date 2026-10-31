@@ -136,3 +136,54 @@ fn upserts_refreshes_resolves_and_lists_alerts() {
         assert_eq!(alerts.list_active().await.expect("active").len(), 2);
     });
 }
+
+/// The newest *resolved* alert of one kind per scope: what a kind that never clears by itself reads
+/// to tell "a person closed this" from "this is new" (ADR-0073 amendment 2026-10-31).
+#[test]
+fn lists_the_last_resolved_alert_of_a_kind_per_scope() {
+    block_on(async {
+        let (store, _admin) = prepared().await.expect("prepare the database");
+        let alerts = store.alerts();
+        let open = |id: &'static str, dedup: &'static str, kind: &'static str, at: i64| {
+            let alerts = alerts.clone();
+            async move {
+                alerts
+                    .upsert(
+                        id,
+                        Some("tenant-a"),
+                        kind,
+                        dedup,
+                        "critical",
+                        "broken",
+                        r#"{"latest_noticed_at_ms":1}"#,
+                        at,
+                        at,
+                    )
+                    .await
+                    .expect("open");
+            }
+        };
+        // Store x: closed twice; the later closure is the one returned.
+        open("x-1", "store-x", "chain_broken", 1000).await;
+        alerts.resolve("x-1", 2000).await.expect("close x-1");
+        open("x-2", "store-x", "chain_broken", 3000).await;
+        alerts.resolve("x-2", 4000).await.expect("close x-2");
+        // Store y: still open, so it has no closed alert to return.
+        open("y-1", "store-y", "chain_broken", 1000).await;
+        // Another kind, closed: not returned for this one.
+        open("o-1", "store-x", "store_offline", 1000).await;
+        alerts.resolve("o-1", 5000).await.expect("close o-1");
+
+        let closed = alerts
+            .list_last_resolved("chain_broken")
+            .await
+            .expect("list the closed chain alerts");
+        assert_eq!(
+            closed.len(),
+            1,
+            "one per scope, open ones excluded: {closed:?}"
+        );
+        assert_eq!(closed[0].id, "x-2");
+        assert_eq!(closed[0].resolved_at_ms, Some(4000));
+    });
+}

@@ -2,6 +2,7 @@
 
 **Status** Accepted · **Owner** @maintainers-cloud · **Last reviewed** 2026-08-27
 **Relates to** [ADR-0068](0068-fleet-liveness.md) (fleet liveness + task health this reads) · [ADR-0032](0032-webhooks.md) (the webhook transport a channel reuses) · [ADR-0069](0069-audit-trail.md) (the nullable-tenant, RLS-isolated table shape this mirrors) · [ADR-0053](0053-cloud-sync-port.md) (`MessageLink::capacity`) · `docs/cloud-admin-ux-plan.md` (Track O2)
+**Amended** 2026-10-31 — a chain break raises a `chain_broken` alert that stays open until a person acknowledges it ([ADR-0132](0132-the-cloud-recomputes-the-chain-it-holds.md)); see the amendment at the end
 
 **Context.** Track O1 gave the console a *read model* — a Fleet screen and a task-health endpoint — but
 nothing **watches** it. An operator learns a store has been offline for an hour only by looking; a
@@ -68,6 +69,7 @@ signal is invented where one already exists — the engine is the missing *watch
 | Relay backlog stuck | `relay_backlog` over a limit, or `relay_oldest_pending_at` older than a threshold | per store |
 | Webhook endpoint disabled | the tenant's endpoints with `disabled = true` (auto-resolves when re-enabled) | per endpoint |
 | Projector unhealthy | the projector's `task_health` row: stale (no tick within interval+slack), `ok=false`, or `failed>0` | server-wide |
+| Chain broken (`chain_broken`, Critical; amendment 2026-10-31) | a finding the anchor ledger filed — a fork or broken link ([ADR-0132](0132-the-cloud-recomputes-the-chain-it-holds.md) decision 5), or a refused second head ([ADR-0131](0131-a-chained-event-log.md) decision 4). **Never auto-resolves**: an acknowledgement closes it | per store |
 
 **Conditions deferred (flagged), each needing upstream telemetry that does not exist yet** — recorded
 here so the gap is explicit, not silently dropped:
@@ -142,3 +144,25 @@ the whole cloud down over an ops endpoint typo is the wrong trade.
 
 **What is still a follow-up.** Email and a Zalo/Telegram chat channel, as further adapters behind the
 same trait — the seam is what this slice was for. Neither needs this ADR reopened.
+
+**Amendment (2026-10-31) — a chain break stays open until a person acknowledges it.** A real chain
+finding was logged and listed on the console's Chain integrity screen but never reached the Alerts
+screen. The evaluator now reads the anchor ledger's findings each pass and raises one
+`chain_broken` alert per store, tenant-scoped and `Critical`, with the store and the range of chain
+positions in its summary and detail (positions, a count and the newest finding's instant — no event
+contents, no PII). It reads only what the ledger files, and the ledger files only accusations: a
+fork and a broken link, the two of [ADR-0132](0132-the-cloud-recomputes-the-chain-it-holds.md)
+decision 5's four findings that say a log disagrees with itself, plus a refused second head
+([ADR-0131](0131-a-chained-event-log.md) decision 4). An *incomplete* window (a broker gap) or an
+*unverified* one can never raise it. This is the one kind exempt from the lifecycle above: a broken
+chain does not heal, so the evaluator never resolves it when it stops seeing the finding — including
+when the ledger cannot be read, which is logged and skipped rather than failing the pass.
+**Acknowledging it in the console resolves it** (owner decision, option (a)); the existing
+`POST /admin/alerts/{id}/ack` does both, and its ADR-0069 audit entry records who, when, and
+`resolved_at_ms`. No note is taken: the route has no body, and requiring one would break existing
+callers. A finding the cloud notices *after* the newest one the closed alert covered opens a new
+alert; the same findings do not reopen it. To know what was covered, the `AlertStore` seam gains a
+read of the last resolved alert per scope for a kind (`list_last_resolved`, a `DISTINCT ON` query
+over the existing table — no migration). Delivery is unchanged: a newly-opened chain alert goes to
+the console and any configured channel like any other. The console labels the kind and links its
+drawer to Chain integrity. No port, `pos-proto` or schema change.

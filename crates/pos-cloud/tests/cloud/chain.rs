@@ -683,6 +683,57 @@ async fn a_gap_in_the_window_is_never_filed_as_a_contradiction() {
     );
 }
 
+#[tokio::test]
+async fn a_fork_raises_one_critical_alert_and_a_gap_raises_none() {
+    // The alert reads what ingest filed (ADR-0073 amendment 2026-10-31), so what ADR-0132 decision 5
+    // treats as an accusation is exactly what can raise it: a fork does, a broker gap does not.
+    async fn chain_alerts_after(
+        window: Vec<EventEnvelope<RawPayload>>,
+        anchor_log: &[EventEnvelope<RawPayload>],
+    ) -> Vec<pos_cloud::alerts::FiringAlert> {
+        let ledger = Arc::new(FakeAnchors::default());
+        let cloud = Cloud::new(FakeStore::new())
+            .with_anchor_ledger(ledger.clone())
+            .with_chain_window(Arc::new(FakeWindow {
+                events: window,
+                unreadable: false,
+            }));
+        cloud
+            .ingest(&[anchor_over(anchor_log, 100)])
+            .await
+            .expect("ingest");
+        pos_cloud::alerts::chain::chain_alerts(
+            Some(ledger.as_ref()),
+            &crate::alerts::FakeAlerts::default(),
+            &[tenant()],
+        )
+        .await
+        .expect("the alert store answers")
+    }
+
+    let log = honest_log(6);
+    let mut with_a_gap = log.clone();
+    with_a_gap.remove(2);
+    assert!(
+        chain_alerts_after(with_a_gap, &log).await.is_empty(),
+        "a gap is a prompt to reconcile, never an alert"
+    );
+
+    let mut forked = log.clone();
+    let mut impostor = fixtures::activation(store_id(), 900);
+    impostor.chain = log[3].chain.clone();
+    forked.push(impostor);
+    let firing = chain_alerts_after(forked, &log).await;
+    assert_eq!(firing.len(), 1, "one alert for the store: {firing:?}");
+    assert_eq!(firing[0].kind, pos_cloud::alerts::AlertKind::ChainBroken);
+    assert_eq!(
+        firing[0].severity,
+        pos_cloud::alerts::AlertSeverity::Critical
+    );
+    assert_eq!(firing[0].dedup_key, store_id().to_string());
+    assert_eq!(firing[0].detail["from_seq"], 4, "at the contested position");
+}
+
 /// The cloud's own copy of a store's log, as the chain window reads it in production: what ingest
 /// actually stored, owner stamp and all, rather than a list the test wrote.
 ///

@@ -1082,20 +1082,29 @@ impl AlertStore for PostgresAlerts {
     }
 
     async fn list_active(&self) -> Result<Vec<AlertRecord>, AlertStoreError> {
-        let rows = self
-            .list_active()
-            .await
-            .map_err(|error| AlertStoreError::new(error.to_string()))?;
-        rows.into_iter().map(alert_record).collect()
+        alert_records(self.list_active().await)
     }
 
     async fn list_recent(&self, limit: u32) -> Result<Vec<AlertRecord>, AlertStoreError> {
-        let rows = self
-            .list_recent(i64::from(limit))
-            .await
-            .map_err(|error| AlertStoreError::new(error.to_string()))?;
-        rows.into_iter().map(alert_record).collect()
+        alert_records(self.list_recent(i64::from(limit)).await)
     }
+
+    async fn list_last_resolved(
+        &self,
+        kind: AlertKind,
+    ) -> Result<Vec<AlertRecord>, AlertStoreError> {
+        alert_records(self.list_last_resolved(kind.as_str()).await)
+    }
+}
+
+/// A read of `alerts` rows as [`AlertRecord`]s, the store failure carried as the seam's error.
+fn alert_records(
+    rows: Result<Vec<AlertRow>, PortError>,
+) -> Result<Vec<AlertRecord>, AlertStoreError> {
+    rows.map_err(|error| AlertStoreError::new(error.to_string()))?
+        .into_iter()
+        .map(alert_record)
+        .collect()
 }
 
 impl CampaignStore for PostgresCampaigns {
