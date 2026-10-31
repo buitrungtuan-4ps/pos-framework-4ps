@@ -472,6 +472,21 @@ fn v6_benchmarking_and_special_purpose_prefixes_are_refused() {
             ForbiddenReason::Reserved
         ))
     );
+    // Dummy IPv6 Prefix range (100:0:0:1::/64, RFC 9780).
+    assert_eq!(
+        classify_ip(ip("100:0:0:1::1")),
+        Err(SsrfRejection::ForbiddenAddress(
+            ip("100:0:0:1::1"),
+            ForbiddenReason::Reserved
+        ))
+    );
+    assert_eq!(
+        classify_ip(ip("100:0:0:1:dead:beef::1")),
+        Err(SsrfRejection::ForbiddenAddress(
+            ip("100:0:0:1:dead:beef::1"),
+            ForbiddenReason::Reserved
+        ))
+    );
     assert_eq!(
         classify_ip(ip("100::dead:beef")),
         Err(SsrfRejection::ForbiddenAddress(

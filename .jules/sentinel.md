@@ -73,6 +73,11 @@
 **Learning:** SRv6 Locators (`5f00::/16`) are special-purpose IPv6 unicast addresses used for Segment Routing network infrastructure, never as webhook receivers.
 **Prevention:** Explicitly check `first == 0x5f00` in `is_special_purpose_v6` within `classify_v6` to refuse addresses in the SRv6 locator block.
 
+## 2026-10-06 - [SSRF Dummy IPv6 Prefix Address Bypass]
+**Vulnerability:** Webhook SSRF validation checked Discard-Only (`100::/64`), but omitted the IANA Dummy IPv6 Prefix block (`100:0:0:1::/64`, RFC 9780), allowing OAM / multipoint BFD encapsulation addresses to fall through `classify_v6` as public unicast destinations.
+**Learning:** RFC 9780 allocated `100:0:0:1::/64` as a Dummy IPv6 Prefix with Destination=False and Globally Reachable=False for internal OAM/BFD encapsulation, so it must never be targeted by outbound webhooks.
+**Prevention:** Include `segments[3] == 1` alongside `segments[3] == 0` when matching `100::` prefixes in `classify_v6` to refuse Dummy IPv6 Prefix addresses as `ForbiddenReason::Reserved`.
+
 ## 2026-10-06 - [ISATAP u/g modifier bit SSRF bypass]
 **Vulnerability:** ISATAP interface identifiers (`<prefix>:<u/g>:5efe:a.b.c.d`) were only checking if segment 4 equaled `0` or `0x0200`, ignoring other valid u/g modifier bit configurations in segment 4 (such as `0x0100` or `0xfe00`), allowing attackers to bypass SSRF validation while targeting internal IPv4 addresses like `127.0.0.1` or `169.254.169.254`.
 **Learning:** In RFC 5214 ISATAP address definitions, segment 4 contains the 16-bit field where universal/local (u) and individual/group (g) bits sit in the top byte, while the lower 8 bits are required to be zero (`0xuu00`). Checking exact values rather than bitwise masking (`segments[4] & 0x00ff == 0`) left other u/g modifier bit combinations uninspected.

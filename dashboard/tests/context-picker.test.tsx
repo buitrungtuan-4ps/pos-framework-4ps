@@ -141,4 +141,17 @@ describe("the context picker on a cell that already has tenants", () => {
     // rather than which attribute happens to carry it.
     expect(await screen.findByRole("dialog", { name: "Change tenant or store" })).toBeDefined();
   });
+
+  it("closes on Escape and restores focus to the trigger button", async () => {
+    mountPicker();
+    const trigger = screen.getByLabelText("Change tenant or store");
+    fireEvent.click(trigger);
+
+    const box = await screen.findByLabelText("Search…");
+    await waitFor(() => expect(document.activeElement).toBe(box));
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(document.activeElement).toBe(trigger);
+  });
 });

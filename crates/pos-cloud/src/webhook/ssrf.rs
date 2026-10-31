@@ -471,8 +471,9 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
     } else if first == 0x2001 && second == 0x0002 {
         // 2001:2::/48 benchmarking (RFC 5180).
         Some(ForbiddenReason::Benchmarking)
-    } else if first == 0x0100 && second == 0 && third == 0 && segments[3] == 0 {
-        // 100::/64 Discard-Only Address Block (RFC 6666).
+    } else if first == 0x0100 && second == 0 && third == 0 && (segments[3] == 0 || segments[3] == 1)
+    {
+        // 100::/64 Discard-Only Address Block (RFC 6666) and 100:0:0:1::/64 Dummy IPv6 Prefix (RFC 9780).
         Some(ForbiddenReason::Reserved)
     } else if first == 0x2001 && second == 0x0001 {
         // 2001:1::/32 PCP and TURN anycast (RFC 7723, RFC 8155), within 2001::/23 (RFC 2928).
