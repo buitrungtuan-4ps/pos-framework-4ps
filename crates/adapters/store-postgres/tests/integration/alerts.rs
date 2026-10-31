@@ -183,7 +183,8 @@ fn lists_the_last_resolved_alert_of_a_kind_per_scope() {
             1,
             "one per scope, open ones excluded: {closed:?}"
         );
-        assert_eq!(closed[0].id, "x-2");
-        assert_eq!(closed[0].resolved_at_ms, Some(4000));
+        let last = closed.first().expect("store x's closed chain alert");
+        assert_eq!(last.id, "x-2");
+        assert_eq!(last.resolved_at_ms, Some(4000));
     });
 }
