@@ -36,6 +36,12 @@ billing.bill.void	default_role=OWNER
 billing.bill.void	group=BILLING
 billing.bill.void	pin_required=true
 billing.bill.void	risk=HIGH
+billing.bill.void_settled
+billing.bill.void_settled	default_role=MANAGER
+billing.bill.void_settled	default_role=OWNER
+billing.bill.void_settled	group=BILLING
+billing.bill.void_settled	pin_required=true
+billing.bill.void_settled	risk=HIGH
 billing.comp.apply
 billing.comp.apply	default_role=MANAGER
 billing.comp.apply	default_role=OWNER

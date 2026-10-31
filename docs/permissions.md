@@ -18,6 +18,7 @@ Generated from `crates/pos-core/src/permission.rs`. Do not edit by hand — run 
 | `billing.comp.apply` | BILLING | HIGH | yes | ✓ | ✓ | ✓ | · | · | · |
 | `billing.price.override` | BILLING | HIGH | yes | ✓ | ✓ | · | · | · | · |
 | `billing.bill.void` | BILLING | HIGH | yes | ✓ | ✓ | · | · | · | · |
+| `billing.bill.void_settled` | BILLING | HIGH | yes | ✓ | ✓ | · | · | · | · |
 | `billing.refund.issue` | BILLING | HIGH | yes | ✓ | ✓ | · | · | · | · |
 | `billing.receipt.reprint` | BILLING | MEDIUM | · | ✓ | ✓ | ✓ | ✓ | · | · |
 | `billing.bill.open` | BILLING | LOW | · | ✓ | ✓ | ✓ | ✓ | ✓ | · |
