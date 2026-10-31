@@ -2,6 +2,7 @@
 
 **Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-09-21
 · Decision 6 amended by [ADR-0158](0158-the-till-enforces-each-persons-own-permissions.md): a split and a merge need `billing.bill.split`, and still no PIN
+· Amended 2026-10-31: a bill's discount and comp are shared across the parts of its split (below)
 **Extends** [ADR-0028](0028-settlement-and-payment-invariant.md) (the settlement invariant each resulting bill must still prove)
 **Relates to** [ADR-0024](0024-protocol-version-negotiation.md) (why two enum values are additive rather than a bump) · [ADR-0115](0115-reason-codes-are-a-managed-list.md) (why neither act is a void) · [ADR-0029](0029-append-command-merge-semantics.md) (the line order the parts inherit)
 
@@ -82,3 +83,23 @@ With decision 9, each step is checkable arithmetic rather than a claim:
 - **The snapshot files move.** `docs/snapshots/routes.txt` gains the two routes; `events.txt` is untouched, because both events were already published; `permissions.txt` is untouched, per decision 6.
 - **Splitting evenly by N is not this, and is deliberately absent.** "Split the bill four ways" is what a great many people mean by the phrase, and it **cannot be expressed as a partition of lines** — four equal shares of a seven-line bill do not correspond to any grouping of those seven lines. It is a different operation with different arithmetic: allocate a total across N payers, with a residual rule, and it interacts with discounts and with who is owed the tax invoice. Folding it in here would break the one property the split event states about itself, so it needs its own record and its own event. Until it exists, an even split is several payments against one bill, which the settle path already supports.
 - **The screen is not decided here.** Dragging lines into a second panel, a "split by seat" button that computes the partition from the seat each line carries (#366), and what the cashier sees while two bills are open are all UI decisions that follow this model. This record fixes what a split *is*; `docs/ui-ux.md` §3 will say what it looks like.
+
+**Amendment (2026-10-31) — a split shares the bill's discount and comp.** The audit section above
+says *no reduction moves between bills*, and the first implementation opened each part owing its
+lines in full. `pos-spec.md` §14.3 says the opposite: bill-level discounts are allocated
+proportionally. Pilot run 2 found the cost: a manager-approved 50,000 ₫ discount vanished when the
+table split by item, and the guests were asked for the undiscounted total. The owner chose the spec.
+
+A split now gives each part a share of the source's discount and of its comp, weighted by what that
+part's unvoided lines come to; each share is rounded down and the remainder lands on the last part
+that owes anything, so the parts' reductions add up to the source's **exactly**. A merge adds each
+absorbed bill's discount and comp to the target, so merging a split's parts back owes what the bill
+owed. Nothing new is written to the log: the shares are derived from the split and the reductions
+already on the source, live and on replay alike, so decision 9's property (the log alone rebuilds
+which bill owed what) still holds. No event, route, permission or setting changes.
+
+Decision 4 stands: each part still computes its own tax and its own cash rounding, so the parts'
+totals can differ from the source's by each part's rounding. The *reductions* add up exactly; the
+*rounded totals* need not, for the reason decision 4 gives. Decision 6 stands too: sharing a
+reduction that was already approved neither creates nor forgives money, so it asks for no new
+approval. Everything else in this record stands.

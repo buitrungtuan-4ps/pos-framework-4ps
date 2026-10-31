@@ -266,6 +266,101 @@ impl Projection {
         }
     }
 
+    /// Shares the source's discount and comp across the parts of its split, in proportion to what
+    /// each part's sold lines come to, every share rounded down and the remainder on the last part
+    /// (`pos-spec.md` §14.3), so the parts' reductions add up to the source's exactly. Called after
+    /// each part's own `billing.bill.opened`, live and on replay, so a restart rebuilds the same
+    /// shares from the split and the reductions on the bill it split.
+    ///
+    /// A source with no reduction, or parts whose lines come to nothing, shares nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`DomainError::Money`] if the lines' totals overflow.
+    pub(in crate::app) fn inherit_reductions(
+        &mut self,
+        source: BillId,
+        parts: &[BillId],
+    ) -> Result<(), DomainError> {
+        let Some((order_id, discount, comp)) = self
+            .bills
+            .get(&source)
+            .map(|bill| (bill.order_id, bill.discount, bill.comp))
+        else {
+            return Ok(());
+        };
+        if discount.is_none() && comp.is_none() {
+            return Ok(());
+        }
+        let lines = self.identified_lines_for_order(order_id);
+        let mut weights = Vec::with_capacity(parts.len());
+        for part in parts {
+            let covered = self
+                .bills
+                .get(part)
+                .map(|bill| bill.order_line_ids.clone())
+                .unwrap_or_default();
+            let weight = lines
+                .iter()
+                .filter(|(id, line)| covered.contains(id) && line.state != OrderLineState::Voided)
+                .try_fold(0_i64, |sum, (_, line)| {
+                    sum.checked_add(line.line_total.amount_minor.max(0))
+                })
+                .ok_or(DomainError::Money(pos_proto::money::MoneyError::Overflow))?;
+            weights.push(weight);
+        }
+        // The parts after the last that owes anything take nothing, so the remainder lands on a part
+        // with something to take it off.
+        while weights.last() == Some(&0) {
+            weights.pop();
+        }
+        if weights.is_empty() {
+            return Ok(());
+        }
+        for (kind, amount) in [
+            (ReductionKind::Discount, discount),
+            (ReductionKind::Comp, comp),
+        ] {
+            let Some(amount) = amount else { continue };
+            let shares = billing::split_by_weights(amount, &weights)?;
+            for (part, share) in parts.iter().zip(shares) {
+                if !share.is_zero() {
+                    self.add_reduction(*part, kind, share)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Adds each absorbed bill's discount and comp to the target of a merge, so a part's share of
+    /// a split's discount, or a discount taken on a bill later merged, is not lost to the merge.
+    ///
+    /// # Errors
+    ///
+    /// [`DomainError::Money`] if the reductions overflow.
+    pub(in crate::app) fn absorb_reductions(
+        &mut self,
+        target: BillId,
+        absorbed: &[BillId],
+    ) -> Result<(), DomainError> {
+        for bill_id in absorbed {
+            let Some((discount, comp)) = self
+                .bills
+                .get(bill_id)
+                .map(|bill| (bill.discount, bill.comp))
+            else {
+                continue;
+            };
+            if let Some(discount) = discount {
+                self.add_reduction(target, ReductionKind::Discount, discount)?;
+            }
+            if let Some(comp) = comp {
+                self.add_reduction(target, ReductionKind::Comp, comp)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Records a fee waived on a bill (ADR-0159 decision 5), once: a second waive of the same fee
     /// is refused before it is written, and a replay that meets one anyway changes nothing.
     pub(in crate::app) fn waive_fee_record(&mut self, bill_id: BillId, fee_id: FeeId) {

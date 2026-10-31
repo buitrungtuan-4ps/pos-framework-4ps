@@ -217,6 +217,10 @@ impl<S: EventStore> Edge<S> {
             // Each part's own `billing.bill.opened`, in the same transaction, folded its lines and
             // its share of each fee; it takes its source's wholes and waived fees here.
             projection.inherit_fees(event.source_bill_id, &event.resulting_bill_ids);
+            // And its share of the source's discount and comp (`pos-spec.md` §14.3).
+            projection
+                .inherit_reductions(event.source_bill_id, &event.resulting_bill_ids)
+                .map_err(AppError::Domain)?;
             projection.set_bill_state(event.source_bill_id, BillState::Split);
             return Ok(());
         }
@@ -232,6 +236,10 @@ impl<S: EventStore> Edge<S> {
         if let Some(fees) = projection.merged_fees(event.target_bill_id, &event.merged_bill_ids)? {
             projection.set_bill_fees(event.target_bill_id, fees);
         }
+        // And what was taken off each, as the merge took it.
+        projection
+            .absorb_reductions(event.target_bill_id, &event.merged_bill_ids)
+            .map_err(AppError::Domain)?;
         for absorbed_id in event.merged_bill_ids {
             if let Some(absorbed) = projection.bill(absorbed_id) {
                 lines.extend(absorbed.order_line_ids);

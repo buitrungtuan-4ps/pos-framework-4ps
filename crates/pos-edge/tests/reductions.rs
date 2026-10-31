@@ -541,3 +541,124 @@ fn an_override_records_how_far_over_the_ceiling_it_went() {
         );
     });
 }
+
+/// Seats a table, sells a 100,000 line and a 200,000 line, opens the bill, and takes 50,000 off it
+/// with a manager's PIN; the bill and its two lines.
+async fn a_discounted_bill_of_two_lines(
+    edge: &Edge<FakeStore>,
+) -> (pos_proto::ids::BillId, Vec<pos_proto::ids::OrderLineId>) {
+    edge.seat_table(server(), table(), None)
+        .await
+        .expect("seats");
+    let mut lines = Vec::new();
+    for price in [100_000, 200_000] {
+        let line = pos_edge::LineDraft {
+            unit_price: vnd(price),
+            line_total: vnd(price),
+            ..a_line()
+        };
+        lines.push(
+            edge.add_line(server(), table(), line)
+                .await
+                .expect("adds")
+                .order_line_id,
+        );
+    }
+    let bill = edge
+        .open_bill(server(), table())
+        .await
+        .expect("opens the bill")
+        .bill_id;
+    edge.discount_bill(server(), bill, vnd(50_000), goodwill(), Some(&approval()))
+        .await
+        .expect("a manager's PIN authorises the discount");
+    (bill, lines)
+}
+
+/// What each part of `parts` owes: its discount and its total.
+fn owed(edge: &Edge<FakeStore>, parts: &[pos_proto::ids::BillId]) -> Vec<(Money, Money)> {
+    parts
+        .iter()
+        .map(|part| {
+            let totals = edge.bill_totals(*part).expect("the part prices");
+            (totals.discount_total, totals.total_due)
+        })
+        .collect()
+}
+
+/// A discount a manager approved is not lost when the guests split the bill by item (pilot run 2,
+/// N3): it is shared across the parts in proportion to what each owes before it (`pos-spec.md`
+/// §14.3), the remainder on the last part, and the parts add up to the discounted bill.
+#[test]
+fn a_split_shares_the_bills_discount_across_its_parts() {
+    run_ready(async {
+        let edge = edge_over(FakeStore::default());
+        let (bill, lines) = a_discounted_bill_of_two_lines(&edge).await;
+        // 300,000 less 50,000 is 250,000, and 10% on that is 275,000.
+        assert_eq!(
+            edge.bill_totals(bill).expect("totals").total_due,
+            vnd(275_000)
+        );
+
+        let parts = edge
+            .split_bill(server(), bill, vec![vec![lines[0]], vec![lines[1]]])
+            .await
+            .expect("splits");
+
+        // A third of 50,000 is 16,666 rounded down, and the last part takes the rest.
+        assert_eq!(
+            owed(&edge, &parts),
+            vec![(vnd(16_666), vnd(91_667)), (vnd(33_334), vnd(183_333))]
+        );
+    });
+}
+
+/// The parts' shares of a discount are rebuilt from the log on a restart, from the split and the
+/// discount on the bill it split, so a reboot between the split and the payment charges the same.
+#[test]
+fn a_splits_shares_of_a_discount_are_rebuilt_from_the_log() {
+    run_ready(async {
+        let store = FakeStore::default();
+        let parts = {
+            let edge = edge_over(store.clone());
+            let (bill, lines) = a_discounted_bill_of_two_lines(&edge).await;
+            edge.split_bill(server(), bill, vec![vec![lines[0]], vec![lines[1]]])
+                .await
+                .expect("splits")
+        };
+
+        let restarted = edge_over(store.clone());
+        restarted.rebuild().await.expect("replays the log");
+
+        assert_eq!(
+            owed(&restarted, &parts),
+            vec![(vnd(16_666), vnd(91_667)), (vnd(33_334), vnd(183_333))]
+        );
+    });
+}
+
+/// Merging the parts back puts their shares of the discount back together, live and after a
+/// restart: the merged bill owes what the bill owed before it was split.
+#[test]
+fn merging_a_splits_parts_back_keeps_the_discount() {
+    run_ready(async {
+        let store = FakeStore::default();
+        let edge = edge_over(store.clone());
+        let (bill, lines) = a_discounted_bill_of_two_lines(&edge).await;
+        let parts = edge
+            .split_bill(server(), bill, vec![vec![lines[0]], vec![lines[1]]])
+            .await
+            .expect("splits");
+        edge.merge_bills(server(), parts[0], vec![parts[1]])
+            .await
+            .expect("merges");
+        assert_eq!(owed(&edge, &parts[..1]), vec![(vnd(50_000), vnd(275_000))]);
+
+        let restarted = edge_over(store.clone());
+        restarted.rebuild().await.expect("replays the log");
+        assert_eq!(
+            owed(&restarted, &parts[..1]),
+            vec![(vnd(50_000), vnd(275_000))]
+        );
+    });
+}
