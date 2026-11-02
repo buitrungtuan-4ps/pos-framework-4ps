@@ -24,7 +24,9 @@ pub fn rollups_csv(days: &[DailyRollup]) -> Result<Vec<u8>, csv::Error> {
 }
 
 /// Serialises a store's daily revenue rollups to CSV: one row per trading day with the settled
-/// totals (ADR-0081, Track O4). Amounts are the store's currency's minor units. Revenue is **T2**,
+/// totals (ADR-0081, Track O4), which leave out a bill voided after payment (ADR-0184); how many
+/// were, and for how much, is in the revenue read and the X/Z report, and this header stays as it
+/// is. Amounts are the store's currency's minor units. Revenue is **T2**,
 /// so the route gates this on `console.reports.revenue` and audits only the row count. The product
 /// mix (`by_item`) is two-dimensional and not flattened here — the daily totals are the export —
 /// and the fees by code (`by_fee`) and the tax by component (`by_tax_component`) are exports of
@@ -258,6 +260,7 @@ mod tests {
                 })
                 .collect(),
             by_tax_component: Vec::new(),
+            voided_after_payment: crate::types::VoidedAfterPayment::default(),
         }
     }
 

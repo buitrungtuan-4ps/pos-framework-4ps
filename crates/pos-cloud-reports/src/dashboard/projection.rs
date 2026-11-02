@@ -26,6 +26,8 @@ use pos_proto::ids::{EventId, StoreId, TenantId};
 
 use crate::types::{AdmittedDevice, DailyCash, DailyRevenue, DailyRollup, XzReport};
 
+use super::voids::{KeptBills, fold_voids};
+
 use super::rollup::{
     RollupWindow, fold_cash, fold_devices, fold_event, fold_revenue, render_devices,
     render_revenue_window, render_window,
@@ -77,6 +79,13 @@ pub struct StoredRollups {
     /// can only re-fold, never lose a row or double-count one.
     #[serde(default)]
     pub devices: BTreeMap<String, AdmittedDevice>,
+    /// Each day's settled bills, kept so a void after payment takes its figures back out of its
+    /// day ([ADR-0184](../../../../docs/adr/0184-a-settled-bill-is-voided-whole-not-refunded.md),
+    /// second amendment); see [`fold_voids`]. In this blob for `devices`' reason: saved in the same
+    /// write as the cursor. `#[serde(default)]`, so a blob written before it loads with none, and
+    /// a void of a bill settled before then changes nothing until the rollup is reset.
+    #[serde(default)]
+    pub voids: KeptBills,
 }
 
 /// The store that persists materialised rollups (a table in `store-postgres`; a fake in tests).
@@ -170,6 +179,7 @@ where
             fold_event(&mut state.days, event);
             fold_revenue(&mut state.revenue, event);
             fold_cash(&mut state.cash, event);
+            fold_voids(&mut state.voids, &mut state.revenue, &mut state.cash, event);
             fold_devices(&mut state.devices, event);
             folded = folded.saturating_add(1);
         }

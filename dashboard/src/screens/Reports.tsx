@@ -86,6 +86,7 @@ function DrawerTable(props: { report: XzReport }) {
               <th class="py-2 pr-4 font-medium">{t("reports.drawerPaidOut")}</th>
               <th class="py-2 pr-4 font-medium">{t("reports.drawerExpected")}</th>
               <th class="py-2 pr-4 font-medium">{t("reports.drawerCounted")}</th>
+              <th class="py-2 pr-4 font-medium">{t("reports.drawerVoided")}</th>
               <th class="py-2 font-medium">{t("reports.drawerOverShort")}</th>
             </tr>
           </thead>
@@ -111,6 +112,7 @@ function DrawerTable(props: { report: XzReport }) {
                     <td class="py-2 pr-4">{cash(drawer.figures.paid_out)}</td>
                     <td class="py-2 pr-4">{closed(drawer.figures.expected)}</td>
                     <td class="py-2 pr-4">{closed(drawer.figures.counted)}</td>
+                    <td class="py-2 pr-4">{cash(drawer.figures.voided_cash ?? 0)}</td>
                     <td class="py-2 font-medium">{closed(drawer.figures.variance)}</td>
                   </tr>
                 );
@@ -121,6 +123,37 @@ function DrawerTable(props: { report: XzReport }) {
       </div>
       <p class="mt-2 text-sm text-ink-muted">{t("reports.drawersHint")}</p>
     </Show>
+  );
+}
+
+/**
+ * The bills voided after payment on the X/Z report's day, with what their guests had paid and the
+ * cash handed back (ADR-0184 decision 9): per store, never per person. Drawn only on a day with
+ * one, then the drawers.
+ */
+function XzExtras(props: { report: XzReport }) {
+  const voided = () => props.report.revenue.voided_after_payment;
+  const cash = (minor: number) => money(minor, props.report.revenue.currency_code);
+  return (
+    <>
+      <Show when={voided()}>
+        {(day) => (
+          <dl class="mt-4 grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-3">
+            <div>
+              <dt class="text-ink-muted">{t("reports.voidedAfterPayment")}</dt>
+              <dd class="font-medium text-ink">
+                {t("reports.voidedBills", { count: day().bills, amount: cash(day().amount) })}
+              </dd>
+            </div>
+            <div>
+              <dt class="text-ink-muted">{t("reports.voidedCash")}</dt>
+              <dd class="text-ink">{cash(props.report.cash.voided_cash ?? 0)}</dd>
+            </div>
+          </dl>
+        )}
+      </Show>
+      <DrawerTable report={props.report} />
+    </>
   );
 }
 
@@ -687,7 +720,7 @@ export function Reports() {
                   </dl>
                 )}
               </Show>
-              <Show when={xz()}>{(report) => <DrawerTable report={report()} />}</Show>
+              <Show when={xz()}>{(report) => <XzExtras report={report()} />}</Show>
             </Card>
 
           </Show>
