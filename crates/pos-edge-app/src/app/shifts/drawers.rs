@@ -102,28 +102,47 @@ impl<S: EventStore> Edge<S> {
         payments: &[Payment],
         approval: Option<&Approval>,
     ) -> Result<SettleDrawer, AppError> {
-        let mut overrider = None;
-        let drawer = if payments
+        if payments
             .iter()
             .any(|payment| payment.method == PaymentMethod::Cash)
         {
-            let drawer = self.cash_drawer(scope)?;
-            self.refuse_without_open_drawer(drawer)?;
-            let open = {
-                let projection = self.lock_projection();
-                projection
-                    .open_shift_of(drawer)
-                    .and_then(|shift_id| Some((shift_id, projection.shift(shift_id)?)))
-            };
-            if let Some((shift_id, record)) = open {
-                self.refuse_after_day_end(shift_id, &record)?;
-                overrider = self.override_assignment(ctx, Some(&record), approval)?;
-            }
-            drawer
-        } else {
-            self.refuse_without_open_shift()?;
-            None
+            return self.cash_drawer_for(ctx, scope, approval);
+        }
+        self.refuse_without_open_shift()?;
+        Ok((None, self.drawer_shift(scope), None))
+    }
+
+    /// The drawer cash goes into or comes out of at the device `scope` says acts, refused as cash
+    /// into it is: the drawer, [`Self::cash_drawer`]'s; the shift its events are stamped with,
+    /// [`Self::drawer_shift`]'s; and the approver of the override a drawer assigned to somebody
+    /// else takes (ADR-0167 decisions 6 and 9). A settle's cash goes in by it, and a void after
+    /// payment gives cash back out by it
+    /// ([ADR-0184](../../../../../docs/adr/0184-a-settled-bill-is-voided-whole-not-refunded.md)
+    /// decision 6).
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::NotATill`], [`AppError::OpenShiftRequired`] for that drawer, the day-end
+    /// refusal, and [`Self::override_assignment`]'s refusals.
+    pub(in crate::app) fn cash_drawer_for(
+        &self,
+        ctx: &mut DecisionCtx,
+        scope: TillScope,
+        approval: Option<&Approval>,
+    ) -> Result<SettleDrawer, AppError> {
+        let drawer = self.cash_drawer(scope)?;
+        self.refuse_without_open_drawer(drawer)?;
+        let open = {
+            let projection = self.lock_projection();
+            projection
+                .open_shift_of(drawer)
+                .and_then(|shift_id| Some((shift_id, projection.shift(shift_id)?)))
         };
+        let mut overrider = None;
+        if let Some((shift_id, record)) = open {
+            self.refuse_after_day_end(shift_id, &record)?;
+            overrider = self.override_assignment(ctx, Some(&record), approval)?;
+        }
         Ok((drawer, self.drawer_shift(scope), overrider))
     }
 

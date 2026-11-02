@@ -93,6 +93,13 @@ pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
         RouteGate::Person(&[Permission::VoidBill]),
     ),
     (
+        "POST /api/bills/{id}/void_settled",
+        RouteGate::Person(&[
+            Permission::VoidSettledBill,
+            Permission::OverrideDrawerAssignment,
+        ]),
+    ),
+    (
         "POST /api/drawer/open",
         RouteGate::Person(&[
             Permission::OpenDrawerNoSale,
@@ -280,10 +287,6 @@ pub const NOT_ON_A_ROUTE: &[(Permission, &str)] = &[
     (
         Permission::ApplyComp,
         "the till cannot comp a bill yet; the discount route only discounts",
-    ),
-    (
-        Permission::VoidSettledBill,
-        "the till cannot void a paid bill yet (ADR-0184)",
     ),
     (
         Permission::IssueRefund,

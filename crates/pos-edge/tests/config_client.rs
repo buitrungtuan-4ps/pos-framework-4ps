@@ -17,6 +17,7 @@ use pos_core::lease::LeaseStanding;
 use pos_edge::config_changes::changed_nodes;
 use pos_edge::config_client::{
     ConfigClient, ConfigTransport, ConfigTransportError, SyncedConfig, restore_session_from_store,
+    session_from_config,
 };
 use pos_edge::{Edge, EdgeSession, InMemoryReceipts, StoreIdentity};
 use pos_fakes::FakeStore;
@@ -504,4 +505,32 @@ fn changed_nodes_names_each_node_added_removed_or_changed_once_and_sorted() {
     );
     assert_eq!(changed_nodes(&before, &before), Some(Vec::new()));
     assert_eq!(changed_nodes(&serde_json::json!([]), &after), None);
+}
+
+/// The `billing` node sets how long after payment a bill may be voided (ADR-0184 decision 7):
+/// the bill's business date where it sets none or is gone, and the last where it cannot be read.
+#[test]
+fn the_billing_node_sets_the_window_for_voiding_a_paid_bill() {
+    use pos_proto::billing::SettledVoidWindow;
+    let window = |session: &EdgeSession| session.billing.settled_void_window();
+    let base = EdgeSession::bootstrap();
+    assert_eq!(window(&base), SettledVoidWindow::BusinessDate);
+    let by_shift = session_from_config(
+        &base,
+        &serde_json::json!({ "billing": { "settled_void_window": "SETTLED_VOID_WINDOW_SHIFT" } }),
+    );
+    assert_eq!(window(&by_shift), SettledVoidWindow::Shift);
+    assert_eq!(
+        window(&session_from_config(
+            &by_shift,
+            &serde_json::json!({ "billing": "not a node" })
+        )),
+        SettledVoidWindow::Shift,
+        "a node that cannot be read keeps the window the store had"
+    );
+    assert_eq!(
+        window(&session_from_config(&by_shift, &serde_json::json!({}))),
+        SettledVoidWindow::BusinessDate,
+        "a document with no billing node runs the default"
+    );
 }

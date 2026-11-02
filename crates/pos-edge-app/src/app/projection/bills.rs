@@ -429,6 +429,7 @@ impl Projection {
         settle_time: Timestamp,
     ) -> Result<(), DomainError> {
         self.settle_bill_record(settled.bill_id);
+        self.record_settle_shift(settled.bill_id, shift);
         self.record_settled(
             settled.bill_id,
             SettledReceipt::of(settled, business_date, settle_time),

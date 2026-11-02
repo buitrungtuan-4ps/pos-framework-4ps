@@ -9,7 +9,7 @@ mod shifts;
 
 pub use bills::{
     BillCheckView, BillView, BuyerDetails, MAX_SETTLED_LISTED, PreBill, ReceiptCopy, ReceiptLine,
-    SettledBillView, Takings,
+    SettledBillView, SettledVoidView, Takings,
 };
 pub use orders::{
     BumpView, CounterOrderLine, CounterOrderOpened, CounterOrderView, FiredLine, LineDraft,

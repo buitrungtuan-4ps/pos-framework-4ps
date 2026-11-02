@@ -182,6 +182,11 @@ impl<S: EventStore> Edge<S> {
                     let shift = envelope.shift_id.or(projection.open_shift_of(None));
                     projection.collect_cash(shift, event.applied_to_bill)?;
                 }
+                projection.record_payment(
+                    event.bill_id,
+                    event.method.known(),
+                    event.applied_to_bill,
+                )?;
             }
             EventType::BillingBillSettled => {
                 let event: BillingBillSettled = envelope.data.decode().map_err(AppError::Encode)?;
@@ -269,7 +274,15 @@ impl<S: EventStore> Edge<S> {
             projection.set_line_state(event.order_line_id, OrderLineState::Voided);
         } else {
             let event: BillingBillVoided = envelope.data.decode().map_err(AppError::Encode)?;
-            projection.void_bill_record(event.bill_id);
+            // A paid bill's void gives its cash back from the drawer the void was stamped with
+            // (ADR-0184 decision 6); an unpaid one's moves no money.
+            if projection.is_settled(event.bill_id) {
+                projection
+                    .void_settled_record(event.bill_id, envelope.shift_id)
+                    .map_err(AppError::Domain)?;
+            } else {
+                projection.void_bill_record(event.bill_id);
+            }
         }
         Ok(())
     }

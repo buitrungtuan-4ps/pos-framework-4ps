@@ -54,8 +54,8 @@ pub use error::{AppError, Approval};
 pub(crate) use records::fee_records;
 pub use records::fee_records_in;
 use records::{
-    BillRecord, LineRecord, LiveSnapshot, OrderOrigin, OrderSnapshot, SettleDrawer, SettledReceipt,
-    ShiftRecord, StaffDecision, StaffStanding, another_till, is_till,
+    BillRecord, LineRecord, LiveSnapshot, OrderOrigin, OrderSnapshot, PaidBill, SettleDrawer,
+    SettledReceipt, ShiftRecord, StaffDecision, StaffStanding, another_till, is_till,
 };
 pub use roster::{StaffAuth, StaffRoster, StoreIdentity};
 pub use session::EdgeSession;
@@ -63,8 +63,8 @@ pub use views::{
     BillCheckView, BillView, BumpView, BuyerDetails, CashMovement, ClosedDrawers, CombinedReport,
     CounterOrderLine, CounterOrderOpened, CounterOrderView, DrawerFigures, DrawerView, DrawersView,
     FiredLine, LineDraft, LineView, LiveOrderLine, LiveOrderView, MAX_SETTLED_LISTED,
-    OrderLineChoice, PreBill, ReceiptCopy, ReceiptLine, SettledBillView, ShiftReport, ShiftView,
-    TableView, Takings, TillScope, TransferView, WaitingLine,
+    OrderLineChoice, PreBill, ReceiptCopy, ReceiptLine, SettledBillView, SettledVoidView,
+    ShiftReport, ShiftView, TableView, Takings, TillScope, TransferView, WaitingLine,
 };
 
 /// Milliseconds in a day, for turning a retention period in days into a cutoff instant. No leap
@@ -124,6 +124,9 @@ struct Projection {
     /// Each settled bill's receipt as the settle recorded it, for printing a copy (ADR-0164). Folded
     /// from the log like the rest, so it holds what the log holds and no more.
     settled: HashMap<BillId, SettledReceipt>,
+    /// What each bill's tenders put on it and the shift its settle was stamped with (ADR-0184), so
+    /// a void after payment gives back what was taken. Folded from the log, as `settled` is.
+    paid: HashMap<BillId, PaidBill>,
     /// What firing has consumed, folded from each fire's `stock_movements` (§8).
     ///
     /// Until roadmap B1.1 those movements were computed by `decide_line` and **thrown away**, so

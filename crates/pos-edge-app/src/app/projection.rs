@@ -9,6 +9,7 @@ mod bills;
 mod fold;
 mod lines;
 mod orders;
+mod paid;
 mod shifts;
 mod snapshots;
 

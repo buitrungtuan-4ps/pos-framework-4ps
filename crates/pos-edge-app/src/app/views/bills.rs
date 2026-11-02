@@ -156,6 +156,32 @@ pub struct SettledBillView {
     pub copies: u32,
 }
 
+/// A paid bill voided whole, as the till is answered
+/// ([ADR-0184](../../../../../docs/adr/0184-a-settled-bill-is-voided-whole-not-refunded.md)): what
+/// it gives back and how, for the screen and the void slip.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettledVoidView {
+    /// The bill.
+    pub bill_id: BillId,
+    /// Its state now, `VOIDED`.
+    pub state: BillState,
+    /// The receipt's number, which stays used (decision 5).
+    pub receipt_number: u64,
+    /// What the guest paid.
+    pub total_due: Money,
+    /// The cash given back from this till's drawer, which its expected cash no longer holds.
+    pub cash_returned: Money,
+    /// Every other tender, recorded as reversed: the card terminal or provider gives it back, and
+    /// the till does not drive one, so the slip reminds the cashier to (decision 6).
+    pub other_reversed: Money,
+    /// Whether to open the drawer to hand the cash back: only where there is cash.
+    pub open_drawer: bool,
+    /// The till whose drawer the cash leaves, where the store keeps one per till.
+    pub drawer_till: Option<DeviceId>,
+    /// Whether to print a void slip, as the domain asks for every void after payment.
+    pub print_void_slip: bool,
+}
+
 /// What this store has taken in one business day: the sum of its settled bills and how many there
 /// were, for the Today screen's tile
 /// ([ADR-0160](../../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)

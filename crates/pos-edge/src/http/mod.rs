@@ -46,6 +46,7 @@ pub mod route_permissions;
 pub mod shifts;
 mod sync;
 pub mod tables;
+mod void_settled;
 pub mod ws;
 
 use std::str::FromStr;
@@ -544,6 +545,9 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
             // A waive the bill cannot take (ADR-0159 decision 5).
             DomainError::FeeNotOnBill => "FEE_NOT_ON_BILL",
             DomainError::FeeNotWaivable => "FEE_NOT_WAIVABLE",
+            // A void after payment the till may not make (ADR-0184 decisions 7 and 8).
+            DomainError::SettledVoidWindowClosed { .. } => "SETTLED_VOID_WINDOW_CLOSED",
+            DomainError::EInvoiceIssued => "E_INVOICE_ISSUED",
             DomainError::Empty { .. } => "EMPTY",
             DomainError::PermissionDenied { .. } => "PERMISSION_DENIED",
             DomainError::CapabilityDisabled { .. } => "CAPABILITY_DISABLED",

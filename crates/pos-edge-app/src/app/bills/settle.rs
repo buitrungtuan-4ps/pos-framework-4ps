@@ -147,8 +147,7 @@ impl<S: EventStore> Edge<S> {
         self.commit_settle(&ctx, &envelopes, &messages, buyer)
             .await?;
 
-        let table_state =
-            self.fold_settled(&settled, shift, &ctx, proved.cash_taken, proved.table_id)?;
+        let table_state = self.fold_settled(&settled, (shift, &payments), &ctx, &proved)?;
         // The last part of a split settles the order off the boards, and its notes go with it.
         self.forget_notes_off_screen();
         Ok(Self::settled_view(&proved, &settled, table_state, drawer))
@@ -338,20 +337,26 @@ impl<S: EventStore> Edge<S> {
     }
 
     /// Folds the committed settle into the projection — what the envelope carries, so a box that
-    /// replays the log keeps the same record — and collects its cash into the drawer; answers the
-    /// table's state after it.
+    /// replays the log keeps the same record — records what each tender put on the bill, and
+    /// collects its cash into the drawer; answers the table's state after it.
     fn fold_settled(
         &self,
         settled: &BillingBillSettled,
-        shift: Option<ShiftId>,
+        (shift, payments): (Option<ShiftId>, &[Payment]),
         ctx: &DecisionCtx,
-        cash_taken: Money,
-        table_id: Option<TableId>,
+        proved: &ProvedSettle,
     ) -> Result<Option<TableState>, AppError> {
         let mut projection = self.lock_projection();
+        // Each tender onto its bill, as the replay folds each `billing.payment.captured`, so a void
+        // after payment gives back the same cash either way (ADR-0184 decision 6).
+        for payment in payments {
+            projection.record_payment(settled.bill_id, payment.method, payment.applied_to_bill)?;
+        }
         projection.fold_settle(settled, shift, ctx.business_date, ctx.now)?;
-        projection.collect_cash(shift, cash_taken)?;
-        Ok(table_id.map(|table_id| projection.table_state(table_id)))
+        projection.collect_cash(shift, proved.cash_taken)?;
+        Ok(proved
+            .table_id
+            .map(|table_id| projection.table_state(table_id)))
     }
 
     /// One `billing.payment.captured` per tender, prepared for the settle's transaction.

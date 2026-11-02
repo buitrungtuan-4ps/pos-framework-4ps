@@ -38,6 +38,11 @@ pub(in crate::app) struct ShiftRecord {
     pub(in crate::app) cash_collected: Money,
     pub(in crate::app) paid_in: Money,
     pub(in crate::app) paid_out: Money,
+    /// The cash given back from this drawer by voiding bills that were paid
+    /// ([ADR-0184](../../../../../docs/adr/0184-a-settled-bill-is-voided-whole-not-refunded.md)
+    /// decision 6): each voided bill's cash, wherever it was taken, leaves the drawer of the till
+    /// the void is done at.
+    pub(in crate::app) voided_cash: Money,
     pub(in crate::app) counted: Option<Money>,
     /// The tax by component and rate its settled bills recorded on their tax lines (ADR-0168
     /// decision 5), one entry for each name and rate, and none for a line that recorded none.
@@ -67,20 +72,23 @@ impl ShiftRecord {
             cash_collected: zero,
             paid_in: zero,
             paid_out: zero,
+            voided_cash: zero,
             counted: None,
             tax_components: Vec::new(),
         }
     }
 
     /// The cash the drawer is expected to hold: the float, plus every cash payment taken on the
-    /// shift, plus what was paid in, minus what was paid out (ADR-0165 decision 2). Cash rounding and
-    /// non-cash tenders never touch the drawer, so they are not in it.
+    /// shift, plus what was paid in, minus what was paid out (ADR-0165 decision 2), minus the cash
+    /// given back by voiding paid bills here (ADR-0184 decision 6). Cash rounding and non-cash
+    /// tenders never touch the drawer, so they are not in it.
     pub(in crate::app) fn expected(&self) -> Result<Money, DomainError> {
         Ok(self
             .opening_float
             .checked_add(self.cash_collected)?
             .checked_add(self.paid_in)?
-            .checked_sub(self.paid_out)?)
+            .checked_sub(self.paid_out)?
+            .checked_sub(self.voided_cash)?)
     }
 }
 
