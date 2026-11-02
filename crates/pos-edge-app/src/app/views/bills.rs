@@ -154,6 +154,9 @@ pub struct SettledBillView {
     pub settle_time: Timestamp,
     /// How many copies have been printed.
     pub copies: u32,
+    /// Whether it was voided after it was paid (ADR-0184): its receipt keeps its number, and a
+    /// copy of it is marked VOID.
+    pub voided: bool,
 }
 
 /// A paid bill voided whole, as the till is answered
@@ -180,6 +183,14 @@ pub struct SettledVoidView {
     pub drawer_till: Option<DeviceId>,
     /// Whether to print a void slip, as the domain asks for every void after payment.
     pub print_void_slip: bool,
+    /// The void's own event, which keys the slip's print job so a retried job prints once.
+    pub job_id: pos_proto::ids::EventId,
+    /// When the bill was voided.
+    pub voided_time: Timestamp,
+    /// The reason's name in the store's list, as the slip prints it.
+    pub reason: Option<DisplayName>,
+    /// The name of the till the void was done at, where the device is one of the store's tills.
+    pub till_name: Option<DisplayName>,
 }
 
 /// What this store has taken in one business day: the sum of its settled bills and how many there
@@ -221,6 +232,9 @@ pub struct ReceiptCopy {
     /// The copy's own event id: its print job's idempotency key, so a copy retried after an
     /// ambiguous failure prints once, and the next press prints another.
     pub job_id: pos_proto::ids::EventId,
+    /// Whether the bill was voided after it was paid, so the copy is marked VOID (ADR-0184
+    /// decision 5).
+    pub voided: bool,
 }
 
 /// How many of today's settled bills the till's list shows, newest first (ADR-0164). A bound, as

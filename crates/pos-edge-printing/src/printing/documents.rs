@@ -7,6 +7,7 @@
 use pos_core::billing::{BillTotals, TaxComponentLine};
 use pos_ports::printer::{PrintBlock, PrintDocument, TextStyle};
 use pos_proto::devices::PublishedDevice;
+use pos_proto::money::Money;
 use pos_proto::store_profile::StoreProfile;
 
 use crate::app::{BuyerDetails, CombinedReport, DrawerFigures, ReceiptLine, ShiftReport};
@@ -140,7 +141,8 @@ pub fn receipt_document(
 /// ([ADR-0164](../../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)):
 /// the receipt as it printed, under the same number, with **COPY** and which copy it is, and when
 /// it was printed, under that number. `reprinted` is the store's local time, as the caller formats
-/// it. In a second language as [`receipt_document`] is.
+/// it. A copy of a bill voided after it was paid is marked VOID above COPY (ADR-0184 decision 5).
+/// In a second language as [`receipt_document`] is.
 #[must_use]
 #[expect(
     clippy::too_many_arguments,
@@ -151,8 +153,7 @@ pub fn receipt_copy_document(
     profile: &StoreProfile,
     money: &MoneyStyle,
     labels: &PaperLabels,
-    receipt_number: u64,
-    copy_number: u32,
+    (receipt_number, copy_number, voided): (u64, u32, bool),
     reprinted: &str,
     lines: &[ReceiptLine],
     totals: &BillTotals,
@@ -164,6 +165,7 @@ pub fn receipt_copy_document(
             receipt_number,
             copy_number,
             reprinted,
+            voided,
         },
         profile,
         money,
@@ -172,6 +174,72 @@ pub fn receipt_copy_document(
         totals,
         buyer,
     )
+}
+
+/// What a void slip prints of a paid bill voided whole
+/// ([ADR-0184](../../../../docs/adr/0184-a-settled-bill-is-voided-whole-not-refunded.md)).
+///
+/// It names no person: the edge holds no staff names, and an approver's code is half a credential
+/// (the amendment of 2026-11-02). Who approved is on the log, in the approval's own event.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoidSlip {
+    /// The receipt's number, which stays used.
+    pub receipt_number: u64,
+    /// What the guest had paid.
+    pub total_due: Money,
+    /// The cash handed back from the drawer.
+    pub cash_returned: Money,
+    /// Card and every other tender, recorded as reversed; the cashier gives it back on the terminal.
+    pub other_reversed: Money,
+    /// The reason's name in the store's list.
+    pub reason: Option<String>,
+    /// The till the void was done at.
+    pub till: Option<String>,
+    /// When, in the store's local time, as the caller formats it.
+    pub voided_at: String,
+}
+
+/// The slip a void after payment prints: the store, **BILL VOIDED** under the receipt's number,
+/// the amount, the reason, the till and the time, what cash was handed back, and, where a card or
+/// another tender was taken, how much and that it is reversed on the card terminal, which the till
+/// does not drive (ADR-0184 decisions 4 and 6). A line with nothing to say is left out.
+#[must_use]
+pub fn void_slip_document(
+    profile: &StoreProfile,
+    money: &MoneyStyle,
+    labels: &PaperLabels,
+    slip: &VoidSlip,
+) -> PrintDocument {
+    let mut blocks = seller_blocks(profile);
+    blocks.push(centred(labels.bill_voided, true));
+    blocks.push(centred(format!("#{}", slip.receipt_number), true));
+    blocks.push(amount_line(labels.amount, slip.total_due, money));
+    for (label, value) in [
+        (labels.reason, slip.reason.as_deref()),
+        (labels.till, slip.till.as_deref()),
+        (labels.time, Some(slip.voided_at.as_str())),
+    ] {
+        if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
+            blocks.push(PrintBlock::Text {
+                line: format!("{label}: {value}"),
+                style: TextStyle::default(),
+            });
+        }
+    }
+    if !slip.cash_returned.is_zero() {
+        blocks.push(amount_line(labels.cash_returned, slip.cash_returned, money));
+    }
+    if !slip.other_reversed.is_zero() {
+        blocks.push(amount_line(
+            labels.card_to_reverse,
+            slip.other_reversed,
+            money,
+        ));
+        blocks.push(centred(labels.reverse_on_terminal, true));
+    }
+    blocks.push(centred(labels.void, true));
+    blocks.push(PrintBlock::Cut);
+    PrintDocument { blocks }
 }
 
 /// The check a table asks for before it pays: the rows the receipt will print and what they come to,
@@ -357,6 +425,8 @@ enum BillDocument<'a> {
         receipt_number: u64,
         copy_number: u32,
         reprinted: &'a str,
+        /// The bill was voided after it was paid, so the copy says so (ADR-0184 decision 5).
+        voided: bool,
     },
     /// The check before payment: headed as such, under the order's reference, and unnumbered.
     PreBill { reference: &'a str },
@@ -442,8 +512,12 @@ fn heading_blocks(kind: BillDocument<'_>, words: Words<'_>) -> Vec<PrintBlock> {
             receipt_number,
             copy_number,
             reprinted,
+            voided,
         } => {
             blocks.push(centred(format!("#{receipt_number}"), false));
+            if voided {
+                blocks.extend(words.centred(|labels| labels.void, "", true));
+            }
             blocks.extend(words.centred(|labels| labels.copy, "", true));
             blocks.extend(words.centred(
                 |labels| labels.reprint,

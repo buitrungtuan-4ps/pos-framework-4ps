@@ -340,3 +340,34 @@ fn by_shift_only_a_bill_the_open_shift_took_is_voided() {
             .expect("the shift that took it is open");
     });
 }
+
+/// The voided bill is still among today's, marked voided, and its copy is marked VOID under the
+/// number it kept (ADR-0184 decision 5). The answer carries what the void slip prints.
+#[test]
+fn a_voided_bill_stays_listed_and_its_copy_is_marked_void() {
+    pos_fakes::executor::run_ready(async {
+        let edge = over(FakeStore::default(), session());
+        let bill_id = a_paid_bill(&edge, 510, vec![cash(165_000)]).await;
+        let voided = void(&edge, bill_id, Some("MGR-1")).await.expect("voids");
+        assert!(voided.reason.is_some(), "the slip names the reason");
+        assert_eq!(
+            voided.till_name, None,
+            "a device that is no till names none"
+        );
+
+        let listed = edge.settled_bills().expect("lists");
+        let row = listed
+            .iter()
+            .find(|bill| bill.bill_id == bill_id)
+            .expect("still listed");
+        assert!(row.voided);
+        assert_eq!(row.receipt_number, voided.receipt_number);
+
+        let copy = edge
+            .reprint_receipt(actor(), bill_id)
+            .await
+            .expect("a copy of a voided bill");
+        assert!(copy.voided);
+        assert_eq!(copy.receipt_number, voided.receipt_number);
+    });
+}

@@ -11,6 +11,7 @@ use axum::extract::{Extension, Path, State};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
+use pos_core::business_date::local_time;
 use pos_core::decision::Actor;
 use pos_ports::event_store::EventStore;
 use pos_proto::WireEnum;
@@ -20,7 +21,7 @@ use pos_proto::money::Money;
 use crate::app::{Edge, SettledVoidView, TillScope};
 use crate::http::bills::VoidBillRequest;
 use crate::http::{bad_request, cash_movements, error_response, parse_ulid, shifts};
-use crate::printing::Printers;
+use crate::printing::{PrintOutcome, Printers, VoidSlip};
 
 /// What a void after payment gives back, for the till to show (ADR-0184 decision 6).
 #[derive(Debug, Serialize)]
@@ -43,6 +44,9 @@ pub(crate) struct VoidSettledResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(nullable = false, value_type = Option<cash_movements::DrawerOutcomeSchema>))]
     drawer_open: Option<String>,
+    /// What came of printing the void slip, as a receipt's printing reports it: `PRINTED`,
+    /// `NO_PRINTER`, and so on.
+    void_slip_print: &'static str,
 }
 
 impl From<&SettledVoidView> for VoidSettledResponse {
@@ -55,6 +59,7 @@ impl From<&SettledVoidView> for VoidSettledResponse {
             cash_returned: view.cash_returned,
             other_reversed: view.other_reversed,
             drawer_open: None,
+            void_slip_print: PrintOutcome::NoPrinter.as_wire(),
         }
     }
 }
@@ -137,5 +142,40 @@ where
             cash_movements::open_drawer_through(printers.as_deref(), &edge, view.drawer_till).await;
         response.drawer_open = Some(opened.as_wire().to_owned());
     }
+    if view.print_void_slip
+        && let Some(printers) = printers.as_deref()
+    {
+        response.void_slip_print = print_slip(printers, &edge, actor, &view).await.as_wire();
+    }
     Json(response).into_response()
+}
+
+/// Prints the void slip at the receipt printer of the till the void was done at, in the store's
+/// local time (ADR-0184 decision 4 and its amendment: no person on it). After the commit, never
+/// before, so a printer that is down cannot unwind a void.
+async fn print_slip<S>(
+    printers: &Arc<Printers>,
+    edge: &Arc<Edge<S>>,
+    actor: Actor,
+    view: &SettledVoidView,
+) -> PrintOutcome
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    let session = edge.session();
+    let till = printers.till_for(&session, actor.device_id).await;
+    let slip = VoidSlip {
+        receipt_number: view.receipt_number,
+        total_due: view.total_due,
+        cash_returned: view.cash_returned,
+        other_reversed: view.other_reversed,
+        reason: view.reason.as_ref().map(|name| name.as_str().to_owned()),
+        till: view.till_name.as_ref().map(|name| name.as_str().to_owned()),
+        voided_at: local_time(view.voided_time, &session.timezone)
+            .map(|time| time.to_string())
+            .unwrap_or_default(),
+    };
+    printers
+        .print_void_slip(&session, &till, edge.store_id(), view.job_id, &slip)
+        .await
 }
