@@ -223,6 +223,22 @@ pub(crate) struct ShiftResponse {
     /// the console flag (ADR-0167 decision 11). Absent otherwise.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     day_ended: bool,
+    /// At its close, the paid bills voided at this drawer's till during the shift and the cash
+    /// they handed back out of it, which the expected amount leaves out (ADR-0184). Absent before
+    /// the close, so the count stays blind, and on a shift that voided none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    voided_after_payment: Option<VoidedAfterPaymentResponse>,
+}
+
+/// A closed shift's voids after payment, for its close card (ADR-0184).
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+struct VoidedAfterPaymentResponse {
+    /// How many paid bills were voided at the drawer's till.
+    bills: u32,
+    /// The cash they handed back out of the drawer.
+    cash_returned: Money,
 }
 
 impl From<ShiftView> for ShiftResponse {
@@ -241,6 +257,12 @@ impl From<ShiftView> for ShiftResponse {
             shift_report_print: None,
             drawer_open: None,
             day_ended: view.day_ended,
+            voided_after_payment: view.report.filter(|report| report.voided_bills > 0).map(
+                |report| VoidedAfterPaymentResponse {
+                    bills: report.voided_bills,
+                    cash_returned: report.voided_cash,
+                },
+            ),
         }
     }
 }

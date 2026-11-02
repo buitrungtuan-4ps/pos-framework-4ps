@@ -132,6 +132,8 @@ export interface ShiftInfo {
   // Still open past the business day it opened on, which the Shift screen flags (ADR-0167
   // decision 11). The edge's judgement, read with the shift: the till keeps no business day.
   dayEnded?: boolean;
+  // At its close, the paid bills voided at this till during the shift and their cash (ADR-0184).
+  voided?: { bills: number; cash_returned: Money };
   // Whose the drawer is, where the store assigns drawers: an id, never a name (decision 9).
   assignee?: string;
 }
@@ -1746,6 +1748,7 @@ function replaceShift(info: ShiftInfo | null): void {
           paidIn: info.paidIn,
           paidOut: info.paidOut,
           dayEnded: info.dayEnded,
+          voided: info.voided,
           assignee: info.assignee,
         },
   );

@@ -4,6 +4,7 @@ import { ApproverFields } from "../components/ApproverFields";
 import { AssigneeField, DrawerOwner } from "../components/DrawerOwner";
 import { Keypad } from "../components/Keypad";
 import { PageHeader } from "../components/ui";
+import { ShiftCashLines } from "../components/ShiftCashLines";
 import type { ApproverRequest, DrawerEntry, DrawerOutcome, ShiftResponse } from "../api/schemas";
 import { t, type MessageKey } from "../i18n";
 import { WhyUnavailable } from "../components/StoreData";
@@ -826,18 +827,7 @@ export function Shift() {
         {(variance) => (
           <div class="mt-4 rounded-token border border-line bg-surface p-4" data-outcome="shift-closed">
             <p class="font-semibold">{t("shift.closed")}</p>
-            <Show when={nonZero(shift()?.paidIn)}>
-              <p class="mt-2 text-ink-muted">
-                {t("shift.paid_in")}{" "}
-                <span class="tabular-nums">{formatAmount(shift()?.paidIn ?? money(storeCurrency(), 0))}</span>
-              </p>
-            </Show>
-            <Show when={nonZero(shift()?.paidOut)}>
-              <p class="text-ink-muted">
-                {t("shift.paid_out")}{" "}
-                <span class="tabular-nums">{formatAmount(shift()?.paidOut ?? money(storeCurrency(), 0))}</span>
-              </p>
-            </Show>
+            <ShiftCashLines paidIn={shift()?.paidIn} paidOut={shift()?.paidOut} voided={shift()?.voided} />
             <p class="mt-2 text-ink-muted">
               {t("shift.expected")}{" "}
               <span class="tabular-nums">{formatAmount(shift()?.expected ?? money(storeCurrency(), 0))}</span>

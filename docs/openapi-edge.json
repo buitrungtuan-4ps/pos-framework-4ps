@@ -6720,6 +6720,10 @@
           "variance": {
             "$ref": "#/components/schemas/Money",
             "description": "Revealed only at close. Negative means short."
+          },
+          "voided_after_payment": {
+            "$ref": "#/components/schemas/VoidedAfterPaymentResponse",
+            "description": "At its close, the paid bills voided at this drawer's till during the shift and the cash\nthey handed back out of it, which the expected amount leaves out (ADR-0184). Absent before\nthe close, so the count stays blind, and on a shift that voided none."
           }
         }
       },
@@ -7260,6 +7264,26 @@
           "void_slip_print": {
             "type": "string",
             "description": "What came of printing the void slip, as a receipt's printing reports it: `PRINTED`,\n`NO_PRINTER`, and so on."
+          }
+        }
+      },
+      "VoidedAfterPaymentResponse": {
+        "type": "object",
+        "description": "A closed shift's voids after payment, for its close card (ADR-0184).",
+        "required": [
+          "bills",
+          "cash_returned"
+        ],
+        "properties": {
+          "bills": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many paid bills were voided at the drawer's till.",
+            "minimum": 0
+          },
+          "cash_returned": {
+            "$ref": "#/components/schemas/Money",
+            "description": "The cash they handed back out of the drawer."
           }
         }
       },

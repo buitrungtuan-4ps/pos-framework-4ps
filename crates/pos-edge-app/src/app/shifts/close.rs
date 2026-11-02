@@ -308,6 +308,8 @@ impl<S: EventStore> Edge<S> {
             expected_amount,
             counted_amount,
             variance,
+            voided_bills: record.voided_bills,
+            voided_cash: record.voided_cash,
             tax_components,
         };
         Ok((payload, report))

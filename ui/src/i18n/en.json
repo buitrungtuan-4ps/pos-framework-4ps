@@ -437,6 +437,7 @@
   "shift.title": "Cash shift",
   "shift.variance": "Variance",
   "shift.variance_reason": "Over or short by more than the store allows. Why?",
+  "shift.voided_after_payment": "Voided after payment: {count, plural, one {# bill} other {# bills}}, cash handed back {amount}",
   "shift.waiting_per_store": "The store changes to one drawer for the whole store once every till's drawer is closed.",
   "shift.waiting_per_till": "The store changes to a drawer for each till once the store's one drawer is closed.",
   "signin.code": "Staff code",

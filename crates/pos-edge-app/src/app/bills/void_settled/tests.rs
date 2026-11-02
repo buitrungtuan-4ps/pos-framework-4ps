@@ -371,3 +371,45 @@ fn a_voided_bill_stays_listed_and_its_copy_is_marked_void() {
         assert_eq!(copy.receipt_number, voided.receipt_number);
     });
 }
+
+/// The drawer's close card says how many paid bills were voided at its till and the cash they handed
+/// back, which its expectation already leaves out (ADR-0184); a restart closes on the same figures.
+#[test]
+fn a_shifts_close_reports_its_voids_after_payment() {
+    pos_fakes::executor::run_ready(async {
+        let store = FakeStore::default();
+        let shift = {
+            let edge = over(store.clone(), session());
+            let shift = edge
+                .open_shift(actor(), vnd(100_000))
+                .await
+                .expect("opens")
+                .shift_id;
+            let by_cash = a_paid_bill(&edge, 511, vec![cash(165_000)]).await;
+            let by_card = a_paid_bill(&edge, 512, vec![card(165_000)]).await;
+            let _kept = a_paid_bill(&edge, 513, vec![cash(165_000)]).await;
+            void(&edge, by_cash, Some("MGR-1")).await.expect("voids");
+            void(&edge, by_card, Some("MGR-1")).await.expect("voids");
+            shift
+        };
+        let edge = over(store, session());
+        edge.rebuild().await.expect("rebuilds");
+        edge.count_shift(actor(), shift, 265_000)
+            .await
+            .expect("counts");
+        let closed = edge.close_shift(actor(), shift).await.expect("closes");
+        let report = closed.report.expect("a closed shift's report");
+        assert_eq!(
+            report.voided_bills, 2,
+            "cash or card, each void at this till"
+        );
+        assert_eq!(
+            report.voided_cash,
+            vnd(165_000),
+            "only the cash leaves the drawer"
+        );
+        assert_eq!(report.expected_amount, vnd(265_000));
+        assert_eq!(report.variance, vnd(0));
+        assert_eq!(report.figures().voided_cash, vnd(165_000));
+    });
+}
