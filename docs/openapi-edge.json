@@ -707,6 +707,77 @@
         "x-permission": "billing.bill.void"
       }
     },
+    "/api/bills/{id}/void_settled": {
+      "post": {
+        "tags": [
+          "bills"
+        ],
+        "summary": "`POST /api/bills/{id}/void_settled` — void a bill that was paid, whole, citing a reason from the\nstore's managed list (ADR-0184).",
+        "description": "The bill's cash leaves the drawer of the till this device is, which opens for it once the void\nhas committed; every other tender is recorded as reversed. A device whose till cannot be read\ngives back no cash rather than guess a drawer, as a settle takes none.",
+        "operationId": "void_settled_bill",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The bill's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`reason_code_id`, a void reason from the managed list, with `approver_code` and `approver_pin` of somebody who holds `billing.bill.void_settled` where the person acting does not hold it directly. Both are secrets and are never logged",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VoidBillRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Voided: what was given back, cash from this till's drawer and every other tender recorded as reversed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoidSettledResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; the void needs an approval that was missing or refused, or the approver is locked out; or this box was superseded by a replacement"
+          },
+          "409": {
+            "description": "Refused: the bill is not settled (`TRANSITION_REFUSED`), it is past the store's window (`SETTLED_VOID_WINDOW_CLOSED`), an e-invoice was issued for it (`E_INVOICE_ISSUED`), the reason is not one for voiding a bill (`VOID_REASON_NOT_VALID`), the person lacks the permission, or the cash cannot leave this device's drawer. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": [
+          "billing.bill.void_settled",
+          "cash.drawer.override_assignment"
+        ]
+      }
+    },
     "/api/claim": {
       "get": {
         "tags": [
@@ -7136,6 +7207,49 @@
           },
           "reason_code_id": {
             "$ref": "#/components/schemas/ReasonCodeId"
+          }
+        }
+      },
+      "VoidSettledResponse": {
+        "type": "object",
+        "description": "What a void after payment gives back, for the till to show (ADR-0184 decision 6).",
+        "required": [
+          "bill_id",
+          "state",
+          "receipt_number",
+          "total_due",
+          "cash_returned",
+          "other_reversed"
+        ],
+        "properties": {
+          "bill_id": {
+            "$ref": "#/components/schemas/BillId"
+          },
+          "cash_returned": {
+            "$ref": "#/components/schemas/Money",
+            "description": "The cash handed back from this till's drawer."
+          },
+          "drawer_open": {
+            "$ref": "#/components/schemas/DrawerOutcomeSchema",
+            "description": "What came of opening the drawer for the cash, where there was cash: `OPENED`, `NO_DRAWER`,\nand so on. Absent where no cash is handed back."
+          },
+          "other_reversed": {
+            "$ref": "#/components/schemas/Money",
+            "description": "Card and every other tender, recorded as reversed: the cashier gives it back on the card\nterminal or through the provider, which the till does not drive."
+          },
+          "receipt_number": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The receipt's number, which stays used.",
+            "minimum": 0
+          },
+          "state": {
+            "type": "string",
+            "description": "`BILL_STATE_VOIDED`."
+          },
+          "total_due": {
+            "$ref": "#/components/schemas/Money",
+            "description": "What the guest paid."
           }
         }
       },

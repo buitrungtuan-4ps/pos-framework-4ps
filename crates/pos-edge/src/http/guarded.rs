@@ -168,6 +168,12 @@ where
         // registry's `pin: true`.
         .route("/api/lines/{id}/void", post(lines::void_line::<S>))
         .route("/api/bills/{id}/void", post(bills::void_bill::<S>))
+        // A paid bill voided whole (ADR-0184): its own permission, and the cash back out of this
+        // till's drawer.
+        .route(
+            "/api/bills/{id}/void_settled",
+            post(super::void_settled::void_settled_bill::<S>),
+        )
         .route("/api/bills/{id}/discount", post(bills::discount_bill::<S>))
         // Waiving one of the bill's fees (ADR-0159 decision 5): `billing.fee.waive`, PIN-flagged,
         // so the approver rides with the request as it does for a void.

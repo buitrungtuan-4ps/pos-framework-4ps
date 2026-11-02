@@ -549,7 +549,7 @@ fn respond(outcome: Result<BillView, crate::app::AppError>) -> Response {
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct VoidBillRequest {
-    reason_code_id: ReasonCodeId,
+    pub(crate) reason_code_id: ReasonCodeId,
     #[serde(default)]
     approver_code: Option<String>,
     #[serde(default)]
@@ -557,7 +557,7 @@ pub(crate) struct VoidBillRequest {
 }
 
 impl VoidBillRequest {
-    fn approval(&self) -> Option<Approval> {
+    pub(crate) fn approval(&self) -> Option<Approval> {
         let code = self.approver_code.clone()?;
         let pin = self.approver_pin.clone()?;
         Some(Approval { code, pin })

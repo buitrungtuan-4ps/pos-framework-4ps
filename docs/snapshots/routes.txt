@@ -38,6 +38,7 @@ POST /api/bills/{id}/receipt/reprint
 POST /api/bills/{id}/settle
 POST /api/bills/{id}/split
 POST /api/bills/{id}/void
+POST /api/bills/{id}/void_settled
 POST /api/drawer/open
 POST /api/kds/bump
 POST /api/lines/{id}/fire

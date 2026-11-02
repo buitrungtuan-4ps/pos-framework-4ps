@@ -11,6 +11,7 @@ mod reductions;
 mod regroup;
 mod settle;
 mod void;
+mod void_settled;
 
 #[cfg(test)]
 mod tests;

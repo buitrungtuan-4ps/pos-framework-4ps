@@ -8,7 +8,7 @@ use pos_core::billing::{BillTotals, FeeLine, FeeWhole, MergingBill, TaxComponent
 use pos_proto::BillState;
 use pos_proto::events::{BillFeeLine, BillTaxComponent, BillTaxLine, BillingBillSettled};
 use pos_proto::fees::FrozenFee;
-use pos_proto::ids::{FeeId, OrderId, OrderLineId, SubjectId, TableId};
+use pos_proto::ids::{FeeId, OrderId, OrderLineId, ShiftId, SubjectId, TableId};
 use pos_proto::money::{CurrencyCode, Money};
 use pos_proto::time::{BusinessDate, Timestamp};
 
@@ -171,6 +171,33 @@ pub(in crate::app) fn by_name_and_rate(components: &mut [TaxComponentLine]) {
     components.sort_by(|left, right| {
         (&left.name, left.rate_basis_points).cmp(&(&right.name, right.rate_basis_points))
     });
+}
+
+/// What a bill's tenders put on it, and the drawer shift its settle was stamped with: what a void
+/// after payment gives back, and the shift whose being open a `SETTLED_VOID_WINDOW_SHIFT` store
+/// asks about
+/// ([ADR-0184](../../../../../docs/adr/0184-a-settled-bill-is-voided-whole-not-refunded.md)
+/// decisions 6 and 7). Folded from `billing.payment.captured` and `billing.bill.settled`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::app) struct PaidBill {
+    /// The cash applied to the bill, change and tips apart: what left the guest for the drawer.
+    pub(in crate::app) cash: Money,
+    /// Every other tender applied to the bill, which a void records as reversed and the card
+    /// terminal or provider gives back.
+    pub(in crate::app) other: Money,
+    /// The shift the settle was stamped with, or `None` where no shift took it.
+    pub(in crate::app) shift_id: Option<ShiftId>,
+}
+
+impl PaidBill {
+    /// Nothing paid yet, in `currency`.
+    pub(in crate::app) const fn nothing(currency: CurrencyCode) -> Self {
+        Self {
+            cash: Money::zero(currency),
+            other: Money::zero(currency),
+            shift_id: None,
+        }
+    }
 }
 
 /// What a settle recorded of a bill, kept so its receipt can be printed again as a copy

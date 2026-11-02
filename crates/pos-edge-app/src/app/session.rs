@@ -13,6 +13,7 @@ use pos_core::lease::LeaseGeneration;
 use pos_core::ota::{DeviceOtaAssignment, FleetRollout};
 use pos_core::permission::PermissionSet;
 use pos_proto::backup::PublishedBackup;
+use pos_proto::billing::PublishedBilling;
 use pos_proto::counter::PublishedCounter;
 use pos_proto::devices::PublishedDevices;
 use pos_proto::display::DisplayPlan;
@@ -276,6 +277,10 @@ pub struct EdgeSession {
     /// decision 2): the channel it takes when the till names none. Takeaway, as every walk-in was
     /// before the setting, in the bootstrap and wherever the node sets none.
     pub counter: PublishedCounter,
+    /// How long after it was paid a bill may still be voided, from the `billing` node
+    /// ([ADR-0184](../../../../docs/adr/0184-a-settled-bill-is-voided-whole-not-refunded.md)
+    /// decision 7). The bill's business date in the bootstrap and wherever the node sets none.
+    pub billing: PublishedBilling,
     /// How often the store archives its database off the box, from the `backup` node
     /// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
     /// decision 6). Empty in the bootstrap and wherever the node sets none, which leaves the

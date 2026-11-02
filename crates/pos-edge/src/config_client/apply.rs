@@ -16,6 +16,8 @@ use super::{
     localized_book, roster_from,
 };
 
+use pos_proto::billing::PublishedBilling;
+
 /// The store's display language from the `locale` node, and the `menu` node in it (ADR-0066,
 /// ADR-0074).
 pub(super) fn apply_menu(
@@ -335,9 +337,19 @@ pub(super) fn apply_pricing(session: &mut EdgeSession, document: &serde_json::Va
     }
 }
 
-/// The `fees`, `channels` and `tender` nodes: what a bill may carry and how it is paid
-/// (ADR-0159).
+/// The `fees`, `channels`, `tender` and `billing` nodes: what a bill may carry, how it is paid
+/// (ADR-0159), and how long after payment it may be voided (ADR-0184).
 pub(super) fn apply_bill_rules(session: &mut EdgeSession, document: &serde_json::Value) {
+    // The `billing` node (ADR-0184 decision 7), a node of settings like `counter`: absent puts the
+    // business-date window back, and a node that is not an object keeps the last.
+    match document.get(PublishedBilling::NODE) {
+        None => session.billing = PublishedBilling::default(),
+        Some(value) => {
+            if let Ok(billing) = serde_json::from_value::<PublishedBilling>(value.clone()) {
+                session.billing = billing;
+            }
+        }
+    }
     // The `fees` node ([ADR-0159](../../../../docs/adr/0159-a-fee-is-configuration.md) decision 1):
     // every fee rule a bill may apply. Absent means no rule, as for a node of settings: the cloud
     // sends the whole document, so a node it no longer sends is fees somebody removed, and an empty

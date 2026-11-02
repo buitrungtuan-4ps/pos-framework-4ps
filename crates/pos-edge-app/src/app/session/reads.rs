@@ -13,6 +13,7 @@ use pos_core::capability::{Capability, CapabilityContext};
 use pos_core::inventory::{RecipeBook, StockProjection};
 use pos_core::permission::{Permission, PermissionSet};
 use pos_proto::backup::PublishedBackup;
+use pos_proto::billing::PublishedBilling;
 use pos_proto::counter::PublishedCounter;
 use pos_proto::devices::PublishedDevices;
 use pos_proto::display::DisplayPlan;
@@ -133,6 +134,7 @@ impl EdgeSession {
             accepted_tender: None,
             tender_keys: PublishedTenderKeys::default(),
             counter: PublishedCounter::default(),
+            billing: PublishedBilling::default(),
             backup: PublishedBackup::default(),
             display_language: None,
             country_language: None,

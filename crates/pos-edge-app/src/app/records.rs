@@ -9,7 +9,9 @@ mod shifts;
 
 pub(crate) use bills::fee_records;
 pub use bills::fee_records_in;
-pub(in crate::app) use bills::{BillRecord, SettledReceipt, by_name_and_rate, tax_records};
+pub(in crate::app) use bills::{
+    BillRecord, PaidBill, SettledReceipt, by_name_and_rate, tax_records,
+};
 pub(in crate::app) use orders::{
     LineRecord, LiveSnapshot, OrderOrigin, OrderSnapshot, StaffDecision, StaffStanding, attach_note,
 };
