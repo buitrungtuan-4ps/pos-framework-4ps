@@ -40,6 +40,7 @@ export type BumpRequest = Schemas["BumpRequest"];
 export type ReasonCodeEntry = Schemas["ReasonCodeResponse"];
 export type ReasonCodesResponse = Schemas["ReasonCodesResponse"];
 export type VoidBillResponse = Schemas["VoidBillResponse"];
+export type VoidSettledResponse = Schemas["VoidSettledResponse"];
 export type BumpResponse = Schemas["BumpResponse"];
 export type PaymentRequest = Schemas["PaymentRequest"];
 export type BuyerRequest = Schemas["BuyerRequest"];
