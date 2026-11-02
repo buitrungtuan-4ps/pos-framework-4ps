@@ -63,6 +63,7 @@ import type {
   TestPrintResponse,
   TransferResponse,
   VoidBillResponse,
+  VoidSettledResponse,
   VoidRequest,
   WaitingResponse,
   WaiveFeeRequest,
@@ -399,6 +400,11 @@ export const api = {
   // kitchen started. A settled one is refused with a 409 — reversing that is a refund.
   voidBill: (billId: string, request_: VoidRequest) =>
     request<VoidBillResponse>("POST", `/api/bills/${billId}/void`, request_),
+
+  // Void a bill that was paid, whole (ADR-0184): its own permission, a void reason, and the cash
+  // back out of this till's drawer. The answer says what to hand back and what the slip did.
+  voidSettledBill: (billId: string, request_: VoidRequest) =>
+    request<VoidSettledResponse>("POST", `/api/bills/${billId}/void_settled`, request_),
 
   // Money off a bill before it settles. The response is the whole re-priced bill rather than an
   // acknowledgement, so the screen never subtracts a discount itself and arrives at a different tax.

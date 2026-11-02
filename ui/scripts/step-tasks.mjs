@@ -126,6 +126,19 @@ export const TASKS = [
     outcome: { route: "/today", mark: "receipt-reprinted" },
   },
   {
+    task: "Void a paid bill from today's bills",
+    budget: 3,
+    note: "Three, at §6's ceiling for a rare action: the bill, *Void bill*, a reason. The whole bill is voided and its money given back, never part of it (ADR-0184): a wrong charge is corrected by voiding and ringing a new bill. Choosing the bill first, as the reprint does, so a tap on a crowded list voids the bill that was meant. It needs a manager who may void a paid bill, whose code and PIN are typed, not tapped. The edge refuses a bill past the store's window or with an issued invoice, and the panel says why.",
+    steps: [
+      { route: "/today", action: "chooseBill" },
+      { route: "/today", action: "askVoidPaidBill" },
+      { route: "/today", action: "voidPaidBillReason" },
+    ],
+    outcome: { route: "/today", mark: "paid-bill-voided" },
+    unreplayable:
+      "the bill void's missing moment — the manager's badge and PIN are typed between the second and third taps, and the harness types only before the first",
+  },
+  {
     task: "Print a guest's receipt again right after they pay",
     budget: 3,
     note: "One tap under the settled figures, which is where the cashier is when the guest asks. The same act as the Today screen's reprint, counted the same way (ADR-0164). The counter's settled screen carries the same button, and it is not declared separately because it is the same act on the other pay screen.",

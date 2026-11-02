@@ -1874,6 +1874,47 @@ test("every copy of a receipt is counted, and the count is the edge's", async ({
   }
 });
 
+// A paid bill voided whole from Today (ADR-0184), which the declared flow cannot replay because the
+// approver is typed mid-flow. The demo employee holds every permission, so they approve their own
+// void, as they do the bill void before payment. The panel says what to hand back, the row says
+// Voided and offers no second void, and a reload still says so, because the edge lists it voided.
+test("a paid bill is voided whole from today's bills, and stays voided", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await aSettledTable(page);
+
+    await navigateTo(page, "/today");
+    const bill = page.locator('[data-step="chooseBill"]');
+    await expect(bill).toHaveCount(1);
+    await bill.click();
+    await page.locator('[data-step="askVoidPaidBill"]').click();
+    await page.locator("#void-paid-bill-approver-code").fill(edge.staffCode);
+    await page.locator("#void-paid-bill-approver-pin").fill(edge.staffPin);
+    const answered = page.waitForResponse(
+      (response) =>
+        response.url().endsWith("/void_settled") && response.request().method() === "POST",
+    );
+    await page.locator('[data-step="voidPaidBillReason"]').first().click();
+    expect((await answered).status()).toBe(200);
+
+    const outcome = page.locator('[data-outcome="paid-bill-voided"]');
+    await expect(outcome).toContainText("Bill voided. Receipt #1 keeps its number.");
+    await expect(outcome).toContainText("in cash.");
+    await expect(bill).toContainText("Voided");
+    await expect(page.locator('[data-step="askVoidPaidBill"]')).toHaveCount(0);
+
+    await page.reload();
+    await expect(bill).toContainText("Voided");
+    await bill.click();
+    await expect(page.locator('[data-step="askVoidPaidBill"]')).toHaveCount(0);
+    await expect(page.locator('[data-step="reprintReceipt"]')).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
 // On a phone or a tablet, a dish's choices open on screen, where the thumb that tapped it is.
 //
 // Below a terminal the menu is under the bill, and the picker was drawn in the bill's column, so it
@@ -5302,6 +5343,7 @@ test("every flow is replayed except the ones that say why they cannot be", () =>
       "Take money off a bill",
       "Void a bill before it settles",
       "Void a line the kitchen has already been given",
+      "Void a paid bill from today's bills",
       "Waive a fee on a bill",
     ].sort(),
   );

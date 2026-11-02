@@ -28,6 +28,7 @@ export type PermissionId =
   | "billing.bill.open"
   | "billing.bill.split"
   | "billing.bill.void"
+  | "billing.bill.void_settled"
   | "billing.discount.apply"
   | "billing.discount.override_ceiling"
   | "billing.fee.waive"
@@ -49,7 +50,7 @@ export type PermissionId =
   | "sales.table.manage"
   | "sales.ticket.bump";
 
-// The acts that take another person's approval today: voiding a fired line or a bill, a discount
+// The acts that take another person's approval today: voiding a fired line or a bill, paid or not, a discount
 // above the ceiling, waiving a fee, opening the drawer without a sale, and starting, counting or
 // closing another till's drawer (`docs/pos-spec.md` §9, ADR-0167 decision 3), and acting on a drawer
 // assigned to another person (decision 9). Any other permission
@@ -58,6 +59,7 @@ export type PermissionId =
 const TAKES_APPROVER: ReadonlySet<PermissionId> = new Set<PermissionId>([
   "sales.line.void_fired",
   "billing.bill.void",
+  "billing.bill.void_settled",
   "billing.discount.override_ceiling",
   "billing.fee.waive",
   "cash.drawer.open_no_sale",
