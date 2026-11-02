@@ -90,8 +90,8 @@ pub use devices::{
     receipt_printer, station_printer,
 };
 pub use documents::{
-    combined_shift_report_document, pre_bill_document, receipt_copy_document, receipt_document,
-    shift_report_document, test_page_document,
+    VoidSlip, combined_shift_report_document, pre_bill_document, receipt_copy_document,
+    receipt_document, shift_report_document, test_page_document, void_slip_document,
 };
 pub use language::{SecondLanguage, receipt_language, ticket_language};
 pub use tickets::{TicketLine, TicketNote, ticket_at, ticket_document, ticket_line};

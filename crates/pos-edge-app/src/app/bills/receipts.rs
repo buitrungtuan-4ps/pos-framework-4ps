@@ -25,7 +25,8 @@ impl<S: EventStore> Edge<S> {
     /// [`MAX_SETTLED_LISTED`] of them: what the till lists to reprint a receipt from
     /// ([ADR-0164](../../../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
     ///
-    /// A bill voided after it settled has no receipt to copy, so it is not listed.
+    /// A bill voided after it was paid is listed too, marked voided: its receipt keeps its number
+    /// (ADR-0184 decision 5), and the till offers its copy, marked VOID.
     ///
     /// # Errors
     ///
@@ -40,7 +41,8 @@ impl<S: EventStore> Edge<S> {
             .into_iter()
             .filter_map(|(bill_id, receipt)| {
                 let bill = projection.bill(bill_id)?;
-                (bill.state == BillState::Settled).then_some(SettledBillView {
+                let voided = bill.state == BillState::Voided;
+                (bill.state == BillState::Settled || voided).then_some(SettledBillView {
                     bill_id,
                     order_id: bill.order_id,
                     table_id: bill.table_id,
@@ -48,6 +50,7 @@ impl<S: EventStore> Edge<S> {
                     total_due: receipt.total_due,
                     settle_time: receipt.settle_time,
                     copies: receipt.copies,
+                    voided,
                 })
             })
             .collect())
@@ -95,7 +98,7 @@ impl<S: EventStore> Edge<S> {
     /// # Errors
     ///
     /// [`AppError::UnknownBill`] for a bill the edge does not know; [`AppError::NotSettled`] for one
-    /// that has not settled, or was voided since; [`AppError::ReceiptFromAnotherDay`] for one
+    /// that has not settled (a bill voided after it was paid is copied, marked VOID); [`AppError::ReceiptFromAnotherDay`] for one
     /// settled on an earlier business day; [`AppError::Domain`] without the permission; or
     /// [`AppError`] if the store cannot be written.
     pub async fn reprint_receipt(
@@ -111,7 +114,10 @@ impl<S: EventStore> Edge<S> {
             let receipt = projection.settled.get(&bill_id).cloned();
             (bill, receipt)
         };
-        let Some(receipt) = receipt.filter(|_| bill.state == BillState::Settled) else {
+        // A settled bill's receipt, or a voided one's that was settled first: only a settle records
+        // a receipt, so a bill voided unpaid has none.
+        let voided = bill.state == BillState::Voided;
+        let Some(receipt) = receipt.filter(|_| bill.state == BillState::Settled || voided) else {
             return Err(AppError::NotSettled);
         };
         if receipt.business_date != ctx.business_date {
@@ -153,6 +159,7 @@ impl<S: EventStore> Edge<S> {
             totals,
             buyer_subject_id: receipt.buyer_subject_id,
             job_id,
+            voided,
         })
     }
 

@@ -72,6 +72,27 @@ pub struct PaperLabels {
     /// What a kitchen ticket prints for a guest note the edge no longer holds — it restarted since
     /// the note was written ([ADR-0157](../../../docs/adr/0157-a-guest-note-lives-in-the-stores-memory-for-the-service.md)).
     pub note_lost: &'static str,
+    /// The mark on a copy of a receipt whose bill was voided after it was paid, and the heading of
+    /// the slip that voids it
+    /// ([ADR-0184](../../../docs/adr/0184-a-settled-bill-is-voided-whole-not-refunded.md)).
+    pub void: &'static str,
+    /// The slip's title: a paid bill voided whole.
+    pub bill_voided: &'static str,
+    /// What the guest had paid, on the slip.
+    pub amount: &'static str,
+    /// The reason the void cited.
+    pub reason: &'static str,
+    /// The till the void was done at.
+    pub till: &'static str,
+    /// When it was voided.
+    pub time: &'static str,
+    /// The cash handed back from the drawer.
+    pub cash_returned: &'static str,
+    /// What was paid by card or another tender, which the till records as reversed and the cashier
+    /// gives back on the terminal, before the amount.
+    pub card_to_reverse: &'static str,
+    /// The reminder under it: the till does not drive the terminal (ADR-0184 decision 6).
+    pub reverse_on_terminal: &'static str,
 }
 
 /// English, and the fallback for every case the module documentation names.
@@ -101,6 +122,15 @@ pub static ENGLISH: PaperLabels = PaperLabels {
     store_totals: "STORE TOTALS",
     tax_by_component: "TAX BY COMPONENT",
     note_lost: "A note was written - ask the server",
+    void: "VOID",
+    bill_voided: "BILL VOIDED",
+    amount: "Amount",
+    reason: "Reason",
+    till: "Till",
+    time: "Time",
+    cash_returned: "Cash returned",
+    card_to_reverse: "Card and other",
+    reverse_on_terminal: "Reverse it on the card terminal",
 };
 
 /// Vietnamese, in the words a Vietnamese receipt and cash-up sheet use.
@@ -130,6 +160,15 @@ pub static VIETNAMESE: PaperLabels = PaperLabels {
     store_totals: "TỔNG CỬA HÀNG",
     tax_by_component: "THUẾ THEO THÀNH PHẦN",
     note_lost: "Có ghi chú - hỏi nhân viên phục vụ",
+    void: "ĐÃ HỦY",
+    bill_voided: "HÓA ĐƠN ĐÃ HỦY",
+    amount: "Số tiền",
+    reason: "Lý do",
+    till: "Quầy",
+    time: "Thời gian",
+    cash_returned: "Tiền mặt trả lại",
+    card_to_reverse: "Thẻ và hình thức khác",
+    reverse_on_terminal: "Hoàn tiền trên máy quẹt thẻ",
 };
 
 impl PaperLabels {
@@ -206,6 +245,15 @@ mod tests {
             ENGLISH.over,
             ENGLISH.store_totals,
             ENGLISH.tax_by_component,
+            ENGLISH.void,
+            ENGLISH.bill_voided,
+            ENGLISH.amount,
+            ENGLISH.reason,
+            ENGLISH.till,
+            ENGLISH.time,
+            ENGLISH.cash_returned,
+            ENGLISH.card_to_reverse,
+            ENGLISH.reverse_on_terminal,
         ] {
             assert!(label.is_ascii(), "{label}");
         }
