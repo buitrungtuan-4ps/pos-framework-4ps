@@ -8,7 +8,8 @@
 [ADR-0160](0160-everything-a-store-runs-differently-is-published-configuration.md),
 [ADR-0167](0167-a-till-has-its-own-cash-drawer.md)
 
-Accepted by the owner on 2026-10-31.
+Accepted by the owner on 2026-10-31. **Amended** 2026-11-02: the void slip names no person, and
+the edge reports no e-invoice issued until a store issues them (Amendment below).
 
 ## Context
 
@@ -83,3 +84,15 @@ The owner decided on 2026-10-31: **no refunds; a bill that was paid is voided.**
   deliberate: it is an accounting correction, and it belongs in the cloud with its own record.
 - A card void is only recorded. Until the till drives a card terminal, the cashier must also reverse
   the charge on the terminal, and the void slip is the reminder.
+
+**Amendment (2026-11-02) — the slip names no person, and no invoice is issued yet.** Two things
+decision 4 and decision 8 left open, decided by the owner. **The void slip names no person**: it
+prints the receipt number, the amount, the reason, the time, the till and, where a card or another
+non-cash tender was taken, the reminder to reverse it on the terminal. The edge holds no staff names
+(ADR-0158 decision 9), and the approver's code is half of a credential, so neither goes on paper; the
+approver stays where every approval already is, in the override event the approval writes beside
+the void, and so in the cloud's audit.
+**The edge reports "not issued"** for every bill until a store issues e-invoices: no code issues
+one today ([ADR-0156](0156-a-store-issues-its-e-invoice-and-the-cloud-submits-it.md) is proposed, not
+built), so no bill can carry one. The refusal and the till's message for it ship now, and the record
+that builds issuing supplies the answer from the country module. Everything else in this ADR stands.
