@@ -33,6 +33,7 @@ mod receipts;
 mod reports;
 mod tickets;
 mod tills;
+mod void_slip;
 
 /// The store's own choices, which a till whose terminal names nothing prints with.
 const STORE: TillPrinting = TillPrinting::STORE;

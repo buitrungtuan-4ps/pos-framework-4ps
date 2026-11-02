@@ -152,6 +152,9 @@ struct SettledBillResponse {
     settle_clock: Option<String>,
     /// How many copies have been printed.
     copies: u32,
+    /// Whether it was voided after it was paid (ADR-0184): listed still, its copy marked VOID, and
+    /// not offered to void again.
+    voided: bool,
 }
 
 /// The wall clock an instant reads in the store's timezone, `HH:MM`.
@@ -167,7 +170,8 @@ pub(super) fn wall_clock(instant: Timestamp, zone: &StoreTimeZone) -> Option<Str
     responses(
         (status = 200, body = Vec<SettledBillResponse>, description = "Today's settled bills, newest first and capped: each with its order, \
                                       table or queue number, receipt number, total, settle time and the \
-                                      shop's clock at it, and how many copies were printed"),
+                                      shop's clock at it, how many copies were printed, and whether it was voided \
+                                      after payment"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
         (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
         (status = 500, description = "The business date could not be derived from the clock"),
@@ -211,6 +215,7 @@ where
             settle_time: bill.settle_time,
             settle_clock: wall_clock(bill.settle_time, &session.timezone),
             copies: bill.copies,
+            voided: bill.voided,
         });
     }
     (StatusCode::OK, Json(body)).into_response()

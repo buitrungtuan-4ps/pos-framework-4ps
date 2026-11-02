@@ -103,6 +103,7 @@ impl<S: EventStore> Edge<S> {
             reason_code_id,
         };
         let (envelope, message) = self.prepare_on(&ctx, &voided, shift)?;
+        let job_id = envelope.event_id;
         let mut envelopes = vec![envelope];
         let mut messages = vec![message];
         for (permission, approved_by) in [
@@ -137,6 +138,13 @@ impl<S: EventStore> Edge<S> {
             open_drawer: !cash.is_zero(),
             drawer_till: drawer,
             print_void_slip: decision.effects.contains(&Effect::PrintVoidBillSlip),
+            job_id,
+            voided_time: ctx.now,
+            reason: session
+                .reason_codes
+                .find(reason_code_id)
+                .map(|reason| reason.display_name.clone()),
+            till_name: self.till_name(scope.own),
         })
     }
 

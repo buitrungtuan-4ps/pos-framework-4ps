@@ -17,8 +17,8 @@ use crate::line_notes::NoteText;
 use crate::printing::blocks::{MoneyStyle, printed_totals};
 use crate::printing::devices::{TillPrinting, guest_printer, published_printers, station_printer};
 use crate::printing::documents::{
-    combined_shift_report_document, pre_bill_document, receipt_copy_document, receipt_document,
-    shift_report_document, test_page_document,
+    VoidSlip, combined_shift_report_document, pre_bill_document, receipt_copy_document,
+    receipt_document, shift_report_document, test_page_document, void_slip_document,
 };
 use crate::printing::language::receipt_lines_in;
 use crate::printing::tickets::ticket_at;
@@ -115,8 +115,7 @@ impl Printers {
             &session.profile,
             &MoneyStyle::of(session),
             self.receipt_labels_for(session, till),
-            copy.receipt_number,
-            copy.copy_number,
+            (copy.receipt_number, copy.copy_number, copy.voided),
             &reprinted,
             &printed,
             &totals,
@@ -128,6 +127,41 @@ impl Printers {
             device,
             PrintJob {
                 job_id: copy.job_id,
+                store_id,
+                station_id: None,
+                document,
+            },
+        )
+        .await
+    }
+
+    /// Prints the slip of a paid bill voided whole on `till`'s receipt printer, where the receipt
+    /// went (ADR-0184 decision 4), in the store's language. Keyed on the void's own event, so a
+    /// job retried after an ambiguous failure prints once. Never fails the void, which has
+    /// committed: the outcome is reported for the till to show.
+    pub async fn print_void_slip(
+        &self,
+        session: &EdgeSession,
+        till: &TillPrinting,
+        store_id: StoreId,
+        job_id: EventId,
+        slip: &VoidSlip,
+    ) -> PrintOutcome {
+        let device = match guest_printer(&session.devices, till) {
+            Ok(device) => device,
+            Err(outcome) => return outcome,
+        };
+        let document = void_slip_document(
+            &session.profile,
+            &MoneyStyle::of(session),
+            self.receipt_labels_for(session, till),
+            slip,
+        );
+        self.dispatch(
+            session,
+            device,
+            PrintJob {
+                job_id,
                 store_id,
                 station_id: None,
                 document,
