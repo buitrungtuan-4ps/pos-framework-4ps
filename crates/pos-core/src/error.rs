@@ -9,6 +9,7 @@
 //! names the rule, so a caller (and a test) learns *which* invariant failed rather than only that
 //! one did.
 
+use pos_proto::billing::SettledVoidWindow;
 use pos_proto::money::MoneyError;
 
 use crate::state_machine::TransitionError;
@@ -97,6 +98,21 @@ pub enum DomainError {
     /// bill it applies to (ADR-0159 decision 5).
     FeeNotWaivable,
 
+    /// A paid bill is past the window in which the till may void it: its business date has
+    /// passed, or the shift that took its money has closed, as the store's
+    /// `billing.settled_void_window` says
+    /// ([ADR-0184](../../../docs/adr/0184-a-settled-bill-is-voided-whole-not-refunded.md)
+    /// decision 7). A correction from then on belongs in the cloud.
+    SettledVoidWindowClosed {
+        /// The window the store runs, so the refusal can say which one closed.
+        window: SettledVoidWindow,
+    },
+
+    /// A legal invoice was issued for the bill, so the till does not void it: the invoice must be
+    /// cancelled first, and how is not decided yet (ADR-0184 decision 8). Whether one was issued
+    /// is the country module's to say, not the core's.
+    EInvoiceIssued,
+
     /// The acting role's [`PermissionSet`](crate::permission::PermissionSet) does not grant the
     /// permission the action needs. Deny by default: every gated action fails this way unless the
     /// set explicitly carries the permission
@@ -152,6 +168,12 @@ impl core::fmt::Display for DomainError {
             }
             Self::FeeNotOnBill => f.write_str("the bill charges no such fee"),
             Self::FeeNotWaivable => f.write_str("the fee's rule does not let it be waived"),
+            Self::SettledVoidWindowClosed { window } => {
+                write!(f, "the window to void a paid bill has closed ({window})")
+            }
+            Self::EInvoiceIssued => {
+                f.write_str("an e-invoice was issued for the bill; cancel it before voiding")
+            }
             Self::PermissionDenied { permission } => {
                 write!(f, "permission denied: {permission}")
             }
@@ -176,6 +198,8 @@ impl core::error::Error for DomainError {
             | Self::LinesDoNotMatchBases
             | Self::FeeNotOnBill
             | Self::FeeNotWaivable
+            | Self::SettledVoidWindowClosed { .. }
+            | Self::EInvoiceIssued
             | Self::PermissionDenied { .. }
             | Self::CapabilityDisabled { .. } => None,
         }

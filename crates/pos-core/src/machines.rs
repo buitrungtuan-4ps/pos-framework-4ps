@@ -14,12 +14,13 @@
 //!
 //! # Two subtleties worth stating
 //!
-//! **A settled bill is terminal, and a refund is not a transition out of it.** Bill has `Open`,
-//! `Settled` and `Voided`, and both `Settled` and `Voided` are terminal — reached only from `Open`.
-//! A post-settlement void or refund is a *new, signed movement* against the settled bill
-//! ([ADR-0028](../../../docs/adr/0028-settlement-and-payment-invariant.md)), its own event, not a
-//! `Settled → Voided` edge. Modelling it as an edge would make `Settled` non-terminal and reopen the
-//! exclusive-settlement hole.
+//! **A settled bill can only be voided, whole.** Bill has `Open`, `Settled` and `Voided`. `Settle`
+//! is legal only from `Open`, so a bill still settles exactly once (ADR-0028's exclusive
+//! settlement). `Settled` has one way out, [`BillTrigger::VoidSettled`] to `Voided`
+//! ([ADR-0184](../../../docs/adr/0184-a-settled-bill-is-voided-whole-not-refunded.md) decision 1),
+//! so `Settled` is no longer terminal, while `Voided` stays terminal and outranks it: a void after
+//! payment survives a merge with the settle it undid. Nothing else leaves `Settled` — no
+//! reduction, split or refund — because the whole bill, never part of it, is what is voided.
 //!
 //! **A table has no terminal state.** It cycles `Free → Occupied → AwaitingPayment → NeedsCleaning →
 //! Free` forever, so the liveness check that every non-terminal reaches a terminal is skipped for it
@@ -291,20 +292,23 @@ impl StateMachine for OrderLine {
 // -----------------------------------------------------------------------------------------------
 
 triggers! {
-    /// What ends a bill's life. There is no post-settlement transition: a refund is a separate,
-    /// signed event, not an edge out of `Settled`
-    /// ([ADR-0028](../../../docs/adr/0028-settlement-and-payment-invariant.md)).
+    /// What ends a bill's life. The one post-settlement transition is a void of the whole bill
+    /// ([ADR-0184](../../../docs/adr/0184-a-settled-bill-is-voided-whole-not-refunded.md)).
     BillTrigger {
         /// Settle the bill. A one-time transition.
         Settle => "settle",
         /// Void the bill before settlement.
         Void => "void",
+        /// Void a bill that has settled, whole (ADR-0184 decision 1). A trigger of its own rather
+        /// than [`Self::Void`] from a second state, because it is a second act with its own
+        /// permission: a command meant for an unpaid bill cannot void a paid one by arriving late.
+        VoidSettled => "void_settled",
         /// Reduce what the bill owes — a discount, a comp, or a fee waived (ADR-0159 decision 5).
         ///
         /// A self-transition, for the reason [`LineTrigger::Amend`] is one: the bill is the same
         /// bill, and it is still open for payment. What the row buys is the refusal on the other
-        /// two states, where there is no arm at all — a settled bill is not discounted, it is
-        /// refunded, and a voided one is owed nothing to reduce.
+        /// states, where there is no arm at all — a settled bill is not discounted, it is voided
+        /// whole and rung again (ADR-0184), and a voided one is owed nothing to reduce.
         Reduce => "reduce",
         /// Partition the bill's lines into two or more new bills
         /// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)).
@@ -321,11 +325,12 @@ triggers! {
     }
 }
 
-/// The lifecycle of a bill: `Open`, then terminal `Settled`, `Voided`, `Split` or `Merged`.
+/// The lifecycle of a bill: `Open`, then `Settled` or terminal `Voided`, `Split` or `Merged`; a
+/// `Settled` bill may still be voided whole (ADR-0184).
 ///
 /// Distinct from [`Order`]: one order may split across several bills, and several orders may merge
-/// into one. `Settled` being terminal is what makes `bill:settle` a one-time transition
-/// (`docs/pos-spec.md` §14.4) a property of the type rather than of a lock.
+/// into one. `Settle` being legal from `Open` alone is what makes `bill:settle` a one-time
+/// transition (`docs/pos-spec.md` §14.4) a property of the type rather than of a lock.
 #[derive(Debug, Clone, Copy)]
 pub struct Bill;
 
@@ -349,7 +354,8 @@ impl StateMachine for Bill {
     fn next(from: BillState, trigger: BillTrigger) -> Option<BillState> {
         Some(match (from, trigger) {
             (BillState::Open, BillTrigger::Settle) => BillState::Settled,
-            (BillState::Open, BillTrigger::Void) => BillState::Voided,
+            (BillState::Open, BillTrigger::Void)
+            | (BillState::Settled, BillTrigger::VoidSettled) => BillState::Voided,
             (BillState::Open, BillTrigger::Reduce) => BillState::Open,
             (BillState::Open, BillTrigger::Split) => BillState::Split,
             (BillState::Open, BillTrigger::Merge) => BillState::Merged,
@@ -360,7 +366,7 @@ impl StateMachine for Bill {
     fn is_terminal(state: BillState) -> bool {
         matches!(
             state,
-            BillState::Settled | BillState::Voided | BillState::Split | BillState::Merged
+            BillState::Voided | BillState::Split | BillState::Merged
         )
     }
 
@@ -510,7 +516,7 @@ mod tests {
     #[test]
     fn settling_twice_is_refused_with_a_named_error() {
         // Exclusive settlement (pos-spec.md §14.4) as a property of the machine, not a lock: the
-        // second settle has no transition out of the terminal Settled state.
+        // second settle has no transition out of Settled.
         let settled = Bill::step(pos_proto::BillState::Open, super::BillTrigger::Settle)
             .expect("open bill settles");
         let second = Bill::step(settled, super::BillTrigger::Settle);
@@ -518,6 +524,40 @@ mod tests {
         assert_eq!(error.machine, "bill");
         assert_eq!(error.from, "BILL_STATE_SETTLED");
         assert_eq!(error.trigger, "settle");
+    }
+
+    #[test]
+    fn a_settled_bill_is_voided_whole_and_by_nothing_else() {
+        // ADR-0184 decision 1: `Settled → Voided` by its own trigger, and `Voided` stays terminal.
+        use super::BillTrigger;
+        use pos_proto::BillState;
+        assert_eq!(
+            Bill::step(BillState::Settled, BillTrigger::VoidSettled),
+            Ok(BillState::Voided)
+        );
+        assert!(!Bill::is_terminal(BillState::Settled));
+        assert!(Bill::is_terminal(BillState::Voided));
+        for trigger in BillTrigger::ALL {
+            if *trigger != BillTrigger::VoidSettled {
+                assert!(
+                    Bill::step(BillState::Settled, *trigger).is_err(),
+                    "{} leaves a settled bill alone",
+                    trigger.label()
+                );
+            }
+            assert!(Bill::step(BillState::Voided, *trigger).is_err());
+        }
+        for from in [BillState::Open, BillState::Split, BillState::Merged] {
+            assert!(
+                Bill::step(from, BillTrigger::VoidSettled).is_err(),
+                "only a settled bill is voided after payment"
+            );
+        }
+        assert_eq!(
+            Bill::merge(BillState::Settled, BillState::Voided),
+            BillState::Voided,
+            "a void after payment survives a merge with the settle it undid"
+        );
     }
 
     #[test]

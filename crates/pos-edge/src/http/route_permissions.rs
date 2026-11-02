@@ -282,6 +282,10 @@ pub const NOT_ON_A_ROUTE: &[(Permission, &str)] = &[
         "the till cannot comp a bill yet; the discount route only discounts",
     ),
     (
+        Permission::VoidSettledBill,
+        "the till cannot void a paid bill yet (ADR-0184)",
+    ),
+    (
         Permission::IssueRefund,
         "refunds are not built yet (ADR-0028)",
     ),

@@ -5,6 +5,7 @@
 //! [`register`](super::register) lists in turn.
 
 use crate::backup::{self, PublishedBackup};
+use crate::billing::{PublishedBilling, SettledVoidWindow};
 use crate::counter::{PublishedCounter, WalkInChannel};
 use crate::locale::{LocaleSettings, TaxRounding};
 use crate::people::PublishedPermissions;
@@ -617,5 +618,29 @@ pub(super) fn backup_settings() -> Vec<Setting> {
                       `backup_interval_hours = 0` in a box's own config.toml does, and it wins. A \
                       box whose config.toml sets another number keeps it until this is set, and \
                       this then wins.",
+    }]
+}
+
+/// The settings on the `billing` node, in the register's order.
+pub(super) fn billing_settings() -> Vec<Setting> {
+    vec![Setting {
+        node: PublishedBilling::NODE,
+        field: "settled_void_window",
+        shape: SettingShape::Choice {
+            values: choices::<SettledVoidWindow>(),
+            default: PublishedBilling::default().settled_void_window().as_wire(),
+            // ADR-0184 decision 7 names the business date as the default and gives a new store
+            // nothing else.
+            preset: None,
+        },
+        scopes: STORE_WIDE,
+        since: NEXT_RELEASE,
+        confirm: None,
+        summary: "How long after it was paid a bill may still be voided at the till, whole, by \
+                  somebody holding `billing.bill.void_settled`. \
+                  `SETTLED_VOID_WINDOW_BUSINESS_DATE` allows it while the store trades on the \
+                  bill's own business date. `SETTLED_VOID_WINDOW_SHIFT` allows it only while the \
+                  shift that took the money is open. Outside the window the till refuses and says \
+                  why, and the correction belongs in the cloud.",
     }]
 }

@@ -14,6 +14,7 @@ use super::{
     render_snapshot_of,
 };
 use crate::backup::{DEFAULT_INTERVAL_HOURS, PublishedBackup};
+use crate::billing::PublishedBilling;
 use crate::counter::PublishedCounter;
 use crate::locale::LocaleSettings;
 use crate::people::PublishedPermissions;
@@ -511,6 +512,10 @@ fn read_back(node: &str, field: &str, value: Option<&Value>) -> Option<Value> {
                 "walk_in_channel" => Some(json!(counter.walk_in_channel().as_wire())),
                 _ => None,
             }
+        }
+        PublishedBilling::NODE if field == "settled_void_window" => {
+            let billing: PublishedBilling = serde_json::from_value(document).ok()?;
+            Some(json!(billing.settled_void_window().as_wire()))
         }
         PublishedBackup::NODE => {
             let backup: PublishedBackup = serde_json::from_value(document).ok()?;

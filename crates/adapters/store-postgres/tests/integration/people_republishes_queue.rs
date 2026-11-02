@@ -25,8 +25,8 @@ fn tree(tenant_layer: &serde_json::Value, store_layer: &serde_json::Value) -> St
 /// store is. A later boot queues nothing.
 ///
 /// `prepared` truncates `data_migrations` and the queue, so the boot below is the migration's
-/// first run, as it is on a database that has never seen the file. The 0084 and 0086 markers are
-/// written first, so what the boot queues is 0083's alone, under its own name.
+/// first run, as it is on a database that has never seen the file. The 0084, 0086 and 0087 markers
+/// are written first, so what the boot queues is 0083's alone, under its own name.
 #[test]
 fn the_stores_whose_people_were_published_are_queued_once() {
     let tenant = TenantId::new(Ulid::from_u128(0x0083_7E11));
@@ -78,11 +78,12 @@ fn the_stores_whose_people_were_published_are_queued_once() {
             .execute(
                 "INSERT INTO data_migrations (name) \
                  VALUES ('0084_roles_can_manage_another_tills_drawer'), \
-                        ('0086_roles_can_override_an_assigned_drawer')",
+                        ('0086_roles_can_override_an_assigned_drawer'), \
+                        ('0087_roles_can_void_a_paid_bill')",
                 &[],
             )
             .await
-            .expect("0084 and 0086 have already run");
+            .expect("0084, 0086 and 0087 have already run");
         let trees = postgres.config_trees();
         for (tenant_id, store_id, state) in &seeded {
             trees
@@ -142,7 +143,7 @@ fn the_stores_whose_people_were_published_are_queued_once() {
 
 /// Every marker-gated migration that grants roles a permission, and the queue's: a test of one
 /// writes the others' markers before its boot, so the boot runs that one alone.
-const MARKED: [&str; 7] = [
+const MARKED: [&str; 8] = [
     "0073_roles_keep_every_till_action",
     "0074_role_permissions_with_approval",
     "0076_roles_can_waive_a_fee",
@@ -150,25 +151,48 @@ const MARKED: [&str; 7] = [
     "0083_people_republishes",
     "0084_roles_can_manage_another_tills_drawer",
     "0086_roles_can_override_an_assigned_drawer",
+    "0087_roles_can_void_a_paid_bill",
 ];
 
 /// Every role that exists is given, once, `cash.shift.manage_other_till` on the terms it grants
 /// `cash.drawer.open_no_sale` (migration 0084, ADR-0167 decision 3).
 #[test]
 fn another_tills_drawer_is_granted_once_on_the_drawers_terms_and_its_stores_are_queued() {
-    granted_once_on_the_drawers_terms(MARKED[5], "cash.shift.manage_other_till", 0x0084);
+    granted_once_on_the_terms_of(
+        MARKED[5],
+        "cash.shift.manage_other_till",
+        "cash.drawer.open_no_sale",
+        0x0084,
+    );
 }
 
 /// Every role that exists is given, once, `cash.drawer.override_assignment` on the same terms
 /// (migration 0086, ADR-0167 decision 9).
 #[test]
 fn an_assigned_drawers_override_is_granted_once_and_its_stores_are_queued() {
-    granted_once_on_the_drawers_terms(MARKED[6], "cash.drawer.override_assignment", 0x0086);
+    granted_once_on_the_terms_of(
+        MARKED[6],
+        "cash.drawer.override_assignment",
+        "cash.drawer.open_no_sale",
+        0x0086,
+    );
 }
 
-/// The migration `grant` gives every role, once, `permission` on the terms it grants
-/// `cash.drawer.open_no_sale`: directly where it grants that directly, and with approval
-/// otherwise, an archived role included, and nothing else in either list changes. The same
+/// Every role that exists is given, once, `billing.bill.void_settled` on the terms it grants
+/// `billing.bill.void` (migration 0087, ADR-0184 decision 4).
+#[test]
+fn a_paid_bills_void_is_granted_once_on_the_voids_terms_and_its_stores_are_queued() {
+    granted_once_on_the_terms_of(
+        MARKED[7],
+        "billing.bill.void_settled",
+        "billing.bill.void",
+        0x0087,
+    );
+}
+
+/// The migration `grant` gives every role, once, `permission` on the terms it grants `terms`
+/// (`cash.drawer.open_no_sale` or `billing.bill.void`): directly where it grants that directly,
+/// and with approval otherwise, an archived role included, and nothing else in either list changes. The same
 /// statement queues every store holding a `permissions` roster on some layer under the
 /// migration's name, and no other store. A later boot grants nothing again and queues nothing.
 ///
@@ -179,7 +203,7 @@ fn an_assigned_drawers_override_is_granted_once_and_its_stores_are_queued() {
     clippy::too_many_lines,
     reason = "one boot over four roles and four stores, and the boot after it"
 )]
-fn granted_once_on_the_drawers_terms(grant: &str, permission: &str, seed: u128) {
+fn granted_once_on_the_terms_of(grant: &str, permission: &str, terms: &str, seed: u128) {
     const MANAGER: &str = "01ROLE000000000000000000M4";
     const SUPERVISOR: &str = "01ROLE000000000000000000V4";
     const SERVER: &str = "01ROLE000000000000000000S4";
@@ -224,19 +248,21 @@ fn granted_once_on_the_drawers_terms(grant: &str, permission: &str, seed: u128) 
                 .expect("every other grant and the queue have already run");
         }
         let people = postgres.people();
-        // A manager who opens the drawer without a sale directly, and so approves it for others.
+        // A manager who holds `terms` directly, and so approves it for others.
+        let manager_direct =
+            serde_json::json!([terms, "cash.shift.close", "cash.shift.open"]).to_string();
         people
             .insert_role_template(
                 MANAGER,
                 &tenant_id,
                 "Manager",
-                r#"["cash.drawer.open_no_sale","cash.shift.close","cash.shift.open"]"#,
+                &manager_direct,
                 r#"["billing.comp.apply"]"#,
                 Some(500_000),
             )
             .await
             .expect("a manager");
-        // A supervisor who opens it only with somebody's approval.
+        // A supervisor who holds both `terms` only with somebody's approval.
         people
             .insert_role_template(
                 SUPERVISOR,
@@ -248,7 +274,7 @@ fn granted_once_on_the_drawers_terms(grant: &str, permission: &str, seed: u128) 
             )
             .await
             .expect("a supervisor");
-        // A server who cannot open it at all, listed out of order as a console may have
+        // A server who holds neither, listed out of order as a console may have
         // written it.
         people
             .insert_role_template(
@@ -324,12 +350,12 @@ fn granted_once_on_the_drawers_terms(grant: &str, permission: &str, seed: u128) 
         assert_eq!(
             list(&role(MANAGER).permissions_json),
             sorted(vec![
-                "cash.drawer.open_no_sale",
+                terms,
                 "cash.shift.close",
                 permission,
-                "cash.shift.open",
+                "cash.shift.open"
             ]),
-            "directly, beside the drawer, in byte order"
+            "directly, beside what it is granted on the terms of, in byte order"
         );
         assert_eq!(
             list(&role(MANAGER).permissions_with_approval_json),

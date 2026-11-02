@@ -29,6 +29,7 @@
 #![doc(test(attr(deny(warnings))))]
 
 pub mod backup;
+pub mod billing;
 pub mod campaign;
 pub mod chain;
 pub mod channels;

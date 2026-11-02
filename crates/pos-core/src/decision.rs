@@ -45,6 +45,9 @@ use crate::machines::{Bill, BillTrigger, LineTrigger, OrderLine, Shift, ShiftTri
 use crate::permission::{Grant, Permission, PermissionSet, require};
 use crate::state_machine::StateMachine;
 
+mod settled_void;
+pub use settled_void::{SettledVoid, within_settled_void_window};
+
 /// Who is performing an action, for authorisation and the audit trail.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Actor {
@@ -351,6 +354,9 @@ pub enum BillCommand {
         /// Whether the edge has collected and verified the actor's PIN.
         pin_verified: bool,
     },
+    /// Void a bill that has settled, whole. Needs [`Permission::VoidSettledBill`], PIN-flagged,
+    /// inside the store's window and with no legal invoice issued (ADR-0184).
+    VoidSettled(SettledVoid),
     /// Partition the bill's lines into two or more new bills
     /// ([ADR-0128](../../../docs/adr/0128-a-bill-splits-and-merges.md)).
     ///
@@ -595,8 +601,8 @@ fn refuse_reductions_past(
 ///
 /// # Errors
 ///
-/// - [`DomainError::Transition`] if the command is not legal from `current` (a settled bill is
-///   terminal — a post-settlement refund is a new signed movement, ADR-0028, not a transition here).
+/// - [`DomainError::Transition`] if the command is not legal from `current` (a settled bill is only
+///   voided whole, by [`BillCommand::VoidSettled`], ADR-0184; see [`SettledVoid`] for its refusals).
 /// - [`DomainError::PaymentsDoNotSumToTotal`] / [`DomainError::NegativeChange`] / [`DomainError::Empty`]
 ///   from the settlement invariant.
 /// - [`DomainError::PermissionDenied`] if a bill void or a fee waive is not granted, or its PIN was
@@ -648,6 +654,7 @@ pub fn decide_bill(
                 effects: vec![Effect::PrintVoidBillSlip],
             })
         }
+        BillCommand::VoidSettled(void) => settled_void::decide_settled_void(current, void, ctx),
         BillCommand::WaiveFee { pin_verified } => {
             // The machine first, as for a reduction: a waive takes money off what the bill owes,
             // and a settled or voided bill owes nothing to take it off.
@@ -1462,6 +1469,8 @@ mod tests {
     mod reductions;
     // ---- Tips: in `tests/tips.rs` ----
     mod tips;
+    // ---- A paid bill voided whole: in `tests/settled_void.rs` ----
+    mod settled_void;
 
     // ---- Shift ----
 

@@ -348,6 +348,12 @@ const MIGRATION_0085: &str = include_str!("../migrations/0085_terminal_opening_f
 const MIGRATION_0086: &str =
     include_str!("../migrations/0086_roles_can_override_an_assigned_drawer.sql");
 
+/// Every role that exists is given, once, `billing.bill.void_settled` on the terms it grants
+/// `billing.bill.void`, and every store whose people have been published is queued for the cloud to
+/// publish them again
+/// ([ADR-0184](../../../docs/adr/0184-a-settled-bill-is-voided-whole-not-refunded.md) decision 4).
+const MIGRATION_0087: &str = include_str!("../migrations/0087_roles_can_void_a_paid_bill.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -750,6 +756,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0086)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0087)
             .await
             .map_err(unavailable)
     }
