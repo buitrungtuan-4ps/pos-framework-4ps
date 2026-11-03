@@ -11,16 +11,20 @@ import { holdsOwn } from "../state/permissions";
 import type { MoneyPhase } from "../state/money-act";
 
 /** What each act says while it is out, and once the store server cannot be reached. */
-const ACTS: Readonly<Record<"settle" | "void", { doing: MessageKey; unreachable: MessageKey; outcome: string }>> = {
+export type PendingActKind = "settle" | "void" | "discount" | "waive";
+
+const ACTS: Readonly<Record<PendingActKind, { doing: MessageKey; unreachable: MessageKey; outcome: string }>> = {
   settle: { doing: "pay.paying", unreachable: "pay.unreachable", outcome: "settle-pending" },
   void: { doing: "pay.voiding", unreachable: "pay.void_unreachable", outcome: "void-pending" },
+  discount: { doing: "pay.discounting", unreachable: "pay.reduction_unreachable", outcome: "discount-pending" },
+  waive: { doing: "pay.waiving", unreachable: "pay.reduction_unreachable", outcome: "waive-pending" },
 };
 
 export function PendingSettle(props: {
   readonly phase: MoneyPhase;
   readonly amount: string;
   readonly onLeave: () => void;
-  readonly act?: "settle" | "void";
+  readonly act?: PendingActKind;
 }) {
   const act = () => ACTS[props.act ?? "settle"];
   return (

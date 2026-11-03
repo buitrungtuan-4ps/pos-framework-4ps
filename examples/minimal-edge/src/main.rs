@@ -86,6 +86,13 @@ async fn main() -> Result<(), EdgeError> {
             demo::DEMO_STAFF_CODE,
             demo::DEMO_STAFF_PIN
         );
+        if demo::approvals() {
+            tracing::info!(
+                "approve with code {} and PIN {}",
+                demo::DEMO_MANAGER_CODE,
+                demo::DEMO_MANAGER_PIN
+            );
+        }
     } else {
         tracing::info!(
             "this demo store publishes no staff (POS_DEMO_PROFILE=unstaffed): nobody can sign in"
