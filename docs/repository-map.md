@@ -115,6 +115,7 @@ first, then its entry; a new money act also needs its own ADR.
 | Its routes and permissions | equal to the route's row in `crates/pos-edge/src/http/route_permissions.rs`; a money route is in `MONEY_ROUTES` beside the test, `crates/pos-edge/src/http/route_permissions/catalogue.rs` | `an_act_needs_exactly_what_its_routes_need`, `every_route_a_person_acts_through_is_an_act`, `an_act_is_money_exactly_when_its_route_is` |
 | Its refusals | tokens `error_reason` in `crates/pos-edge/src/http/mod.rs` answers with; the permission is implied, not listed | `every_predictable_refusal_is_one_the_edge_answers_with` |
 | Snapshot | [`snapshots/actions.txt`](snapshots/actions.txt), via `just snapshot` | `the_committed_snapshot_matches_the_catalogue`; `xtask snapshot` refuses a removed act, effect or parameter |
+| The till's view | `ui/src/package/actions.ts`, rendered from the catalogue via `just snapshot`; never edited by hand | `the_tills_snapshot_of_the_catalogue_matches_it`; `ui/unit/package-actions.test.ts` |
 
 ## Event
 
