@@ -175,6 +175,7 @@
   "error.shift_already_open": "A shift is already open. Count and close it first.",
   "error.shift_not_open": "This shift no longer takes cash in or out: it has been counted or closed.",
   "error.drawer_counted": "This drawer is being closed. Take this payment at another till, or by card.",
+  "error.flow_prerequisite_unmet": "The store's way of working puts another step first ({step}). Do that step, then try again.",
   "error.split_not_a_partition": "Each item must be on exactly one part of the split.",
   "error.store_unavailable": "The store could not save that. Try again; if it keeps happening, restart the store PC or call support.",
   "error.superseded": "This machine has been replaced. Finish what is open here and take new orders on the new machine.",

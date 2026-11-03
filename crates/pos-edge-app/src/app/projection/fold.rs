@@ -299,6 +299,7 @@ impl<S: EventStore> Edge<S> {
         // than failing the whole replay: a box that cannot rebuild does not trade, and a
         // guessed variant would tax a bill at a rate nobody chose.
         projection.open_order_origin(event.order_id, event.channel.require().ok(), event.table_id);
+        projection.record_guest_count(event.order_id, event.guest_count);
         // A waiter's order already sat down on its `sales.table.opened`; a guest's has no
         // other record of its table (`seat_guest_order`). Seating either twice is a no-op.
         if let Some(table_id) = event.table_id {

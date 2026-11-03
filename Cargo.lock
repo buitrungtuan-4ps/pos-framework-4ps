@@ -2169,6 +2169,7 @@ dependencies = [
  "pos-fakes",
  "pos-ports",
  "pos-proto",
+ "pos-rules",
  "serde",
  "serde_json",
  "store-sqlite",

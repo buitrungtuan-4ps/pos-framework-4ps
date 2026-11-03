@@ -106,7 +106,9 @@ impl<S: EventStore> Edge<S> {
     ///
     /// # Errors
     ///
-    /// [`AppError::NoOpenOrder`] if the table has not been seated, [`AppError::BillAlreadyOpen`] once
+    /// [`AppError::FlowPrerequisiteUnmet`] where the store's flow puts a step before the first line
+    /// and the edge sees it undone (ADR-0192), [`AppError::NoOpenOrder`] if the table has not been
+    /// seated, [`AppError::BillAlreadyOpen`] once
     /// a bill is open on its order (that bill would not cover the line), [`AppError::Domain`] if the
     /// actor lacks `sales.line.add` or the line names a seat and the store does not do seats,
     /// [`AppError::ModifierSelectionInvalid`] if the modifiers break the item's rules, or
@@ -162,6 +164,7 @@ impl<S: EventStore> Edge<S> {
             (order_id, billed.is_some())
         };
         let order_id = order_id.ok_or(AppError::NoOpenOrder)?;
+        self.check_flow_guard("sales.line.add", order_id)?;
         // A bill names the lines it covers when it opens (ADR-0128 decision 9), so a line rung
         // after it is on no bill: the guest pays the old total and the line leaves with the table,
         // unpaid. The counter path has refused this since ADR-0146; the floor refuses it too, and
@@ -239,6 +242,7 @@ impl<S: EventStore> Edge<S> {
         if bill.is_some() {
             return Err(AppError::BillAlreadyOpen);
         }
+        self.check_flow_guard("sales.line.add", order_id)?;
         let channel = origin.channel.unwrap_or(session.sales_channel);
         // The order's own channel's price book, not the store's: a takeaway order is priced at
         // takeaway prices, as it is taxed at the takeaway rate.
