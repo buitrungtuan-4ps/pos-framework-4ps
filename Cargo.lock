@@ -2046,6 +2046,7 @@ name = "pos-edge"
 version = "0.0.0"
 dependencies = [
  "argon2",
+ "async-nats",
  "axum",
  "bytes",
  "chacha20poly1305",
