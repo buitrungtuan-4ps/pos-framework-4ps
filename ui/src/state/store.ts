@@ -1117,16 +1117,6 @@ export function openBillCount(): number {
 
 // ---- commands (call the edge, update at once, let the fan-out reconcile) -----
 
-export async function seat(tableId: string): Promise<void> {
-  const response = await api.seatTable(tableId);
-  setState(
-    produce((draft) => {
-      draft.tableState[tableId] = response.state;
-      draft.seatedAt[tableId] ??= new Date().toISOString();
-    }),
-  );
-}
-
 // Marks an item sold out, or back, in the price book this device holds.
 function setSoldOut(menuItemId: string, soldOut: boolean): void {
   const index = state.menu.findIndex((item) => item.menu_item_id === menuItemId);

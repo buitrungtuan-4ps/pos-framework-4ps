@@ -5,11 +5,11 @@ import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { tableStateKey } from "../i18n/labels";
 import { can } from "../state/permissions";
+import { seatAtOnce, seatRefusal, seating, setSeatRefusal } from "../state/optimistic";
 import {
   areaIsPlaced,
   clean,
   floorAreas,
-  seat,
   seatedAt,
   tableState,
   tablesEnabled,
@@ -72,6 +72,41 @@ const DOT: Record<string, string> = {
 // served, or to pay. A table waiting to be cleaned has been left.
 const SEATED_STATES = new Set(["TABLE_STATE_OCCUPIED", "TABLE_STATE_AWAITING_PAYMENT"]);
 
+// A free table is seated and its order opened at once (ADR-0188): the Order screen opens before the
+// edge answers, and a refusal brings the server back here, if they are still on that table.
+function seatThenOpen(tableId: string, navigate: (to: string) => void): void {
+  const order = `/table/${tableId}`;
+  seatAtOnce(tableId, () => {
+    if (window.location.pathname === order) {
+      navigate("/");
+    }
+  });
+  navigate(order);
+}
+
+// A seat the edge refused: its sentence, and the lines typed meanwhile, which were not sent.
+function SeatRefused() {
+  return (
+    <Show when={seatRefusal()}>
+      {(refusal) => (
+        <div class="mb-4 rounded-token border border-danger px-3 py-2" role="alert" data-outcome="seat-refused">
+          <p class="text-danger">{refusal().message}</p>
+          <Show when={refusal().lines.length > 0}>
+            <p class="mt-1 text-sm">{t("floor.seat_refused_lines", { lines: refusal().lines.join(", ") })}</p>
+          </Show>
+          <button
+            type="button"
+            class="mt-2 min-h-touch rounded-token border border-line px-3 text-sm"
+            onClick={() => setSeatRefusal(null)}
+          >
+            {t("floor.seat_refused_dismiss")}
+          </button>
+        </div>
+      )}
+    </Show>
+  );
+}
+
 export function Floor() {
   const navigate = useNavigate();
   const [error, setError] = createSignal<string | null>(null);
@@ -96,8 +131,7 @@ export function Floor() {
     const current = tableState(tableId);
     try {
       if (current === "TABLE_STATE_FREE") {
-        await seat(tableId);
-        navigate(`/table/${tableId}`);
+        seatThenOpen(tableId, navigate);
       } else if (current === "TABLE_STATE_NEEDS_CLEANING") {
         await clean(tableId);
       } else {
@@ -147,7 +181,7 @@ export function Floor() {
             class={`inline-block h-2.5 w-2.5 rounded-full ${DOT[currentState()] ?? "bg-free"}`}
             aria-hidden="true"
           />
-          {t(tableStateKey(currentState()))}
+          {t(seating(table.id) ? "floor.seating" : tableStateKey(currentState()))}
         </span>
         {/* Shown only where the store recorded a capacity: zero means "not recorded" on the wire
             (`pos_proto::floor::FloorTable`), and printing "seats 0" would be a lie a host acts on. */}
@@ -206,6 +240,7 @@ export function Floor() {
           </p>
         )}
       </Show>
+      <SeatRefused />
       {/* The floor drawn is what proves a sign-in took, so it carries the outcome mark for that
           task (ADR-0109). It is present whenever this screen renders, which is the claim. */}
       <div data-outcome="floor">
