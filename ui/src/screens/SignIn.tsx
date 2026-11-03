@@ -1,13 +1,36 @@
 import { Show, createSignal, onMount } from "solid-js";
-import { useNavigate } from "@solidjs/router";
+import { type Navigator, useNavigate } from "@solidjs/router";
 
 import { ApiError, api } from "../api/client";
 import { CodePad } from "../components/CodePad";
 import { PageHeader } from "../components/ui";
-import { t } from "../i18n";
+import { adoptStoreLanguage, t } from "../i18n";
 import { signedInAs } from "../state/session";
 import { loadStore } from "../state/registry";
 import { errorMessage } from "../lib/errors";
+
+// A device already signed in has no business on the sign-in screen; a device not paired must pair
+// first. Both are resolved by asking the edge who is signed in, so a manual visit or a reload lands
+// correctly. The same read gives the store's language, which a device that has never signed in has
+// heard nowhere else (pilot run 2, N8); a language the operator chose on this device still wins.
+function routeFromSession(navigate: Navigator, setUnstaffed: (unstaffed: boolean) => void): void {
+  void api
+    .session()
+    .then((session) => {
+      if (session.signed_in) {
+        navigate("/", { replace: true });
+        return;
+      }
+      adoptStoreLanguage(session.display_language);
+      // Only an explicit `false`: an edge too old to say is not a store with no staff.
+      setUnstaffed(session.sign_in_ready === false);
+    })
+    .catch((caught) => {
+      if (caught instanceof ApiError && caught.isUnauthorized) {
+        navigate("/pair", { replace: true });
+      }
+    });
+}
 
 // Staff sign-in on a paired device (S0b, ADR-0084). A paired device commands nothing until a real
 // employee signs in with their badge code and PIN; the edge verifies the PIN offline against the
@@ -34,25 +57,7 @@ export function SignIn() {
   // costs no tap of its own; the code is where the screen starts, so that is where it starts.
   const [filling, setFilling] = createSignal<"code" | "pin">("code");
 
-  onMount(() => {
-    // A device already signed in has no business here; a device not paired must pair first. Both are
-    // resolved by asking the edge who is signed in, so a manual visit or a reload lands correctly.
-    void api
-      .session()
-      .then((session) => {
-        if (session.signed_in) {
-          navigate("/", { replace: true });
-          return;
-        }
-        // Only an explicit `false`: an edge too old to say is not a store with no staff.
-        setUnstaffed(session.sign_in_ready === false);
-      })
-      .catch((caught) => {
-        if (caught instanceof ApiError && caught.isUnauthorized) {
-          navigate("/pair", { replace: true });
-        }
-      });
-  });
+  onMount(() => routeFromSession(navigate, setUnstaffed));
 
   const submit = async () => {
     setError(null);

@@ -2412,6 +2412,31 @@ test("a till remembers the store's language for the screens before sign-in", asy
   }
 });
 
+// A device that has never signed in learns the store's language from the session read, which needs
+// no sign-in (pilot run 2, N8): until then a fresh till drew its sign-in screen in English on a
+// Vietnamese store, because the language came only from `GET /api/locale`, behind the sign-in.
+// The operator's own choice on the device still wins.
+test("a fresh device that never signed in shows the store's language", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await page.route("**/api/session", async (route) => {
+      const response = await fetchWhole(route);
+      const body = await response.json();
+      await route.fulfill({ response, json: { ...body, display_language: "vi-VN" } });
+    });
+    await pair(page, edge);
+    await expect(page.locator("html")).toHaveAttribute("lang", "vi");
+    await expect(page.getByText("Nhập mã nhân viên và mã PIN để bắt đầu ca làm.")).toBeVisible();
+
+    await page.evaluate(() => localStorage.setItem("pos.locale", "en"));
+    await page.reload();
+    await expect(page.getByText("Enter your staff code and PIN to start your shift.")).toBeVisible();
+    await expect(page.locator("html")).toHaveAttribute("lang", "en");
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A bill split three ways settles with each guest's own tender, and the cash guest's change.
 //
 // The edge settles a bill in one step, with payments that add up to the total exactly, so the pay
