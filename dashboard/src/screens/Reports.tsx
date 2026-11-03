@@ -21,6 +21,7 @@ import { actingAdmin, storeId, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader } from "../components/ui";
 import { DateField, DateRange, Toolbar } from "../components/kit";
 import { DrawerTable } from "./reports/DrawerTable";
+import { XzCash } from "./reports/XzCash";
 import { apiMessage } from "../lib/errors";
 import type {
   DailyRevenue,
@@ -615,24 +616,7 @@ export function Reports() {
                       <dt class="text-ink-muted">{t("reports.bills")}</dt>
                       <dd class="text-ink">{formatCount(report().revenue.bills)}</dd>
                     </div>
-                    <div>
-                      <dt class="text-ink-muted">{t("reports.xzExpected")}</dt>
-                      <dd class="text-ink">
-                        {money(report().cash.expected, report().cash.currency_code)}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt class="text-ink-muted">{t("reports.xzCounted")}</dt>
-                      <dd class="text-ink">
-                        {money(report().cash.counted, report().cash.currency_code)}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt class="text-ink-muted">{t("reports.xzVariance")}</dt>
-                      <dd class="font-medium text-ink">
-                        {money(report().cash.variance, report().cash.currency_code)}
-                      </dd>
-                    </div>
+                    <XzCash report={report()} />
                   </dl>
                 )}
               </Show>

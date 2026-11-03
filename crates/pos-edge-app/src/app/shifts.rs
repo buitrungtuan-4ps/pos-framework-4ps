@@ -12,6 +12,7 @@ mod drawers;
 mod handover;
 mod open;
 mod reads;
+mod x_read;
 
 // The unit tests name these as `super::`, as they did beside them in `app/mod.rs`.
 #[cfg(test)]

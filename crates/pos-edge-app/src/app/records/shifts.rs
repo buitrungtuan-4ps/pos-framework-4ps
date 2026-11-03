@@ -52,10 +52,18 @@ pub(in crate::app) struct ShiftRecord {
     pub(in crate::app) counted: Option<Money>,
     /// How many bills it settled, for its report.
     pub(in crate::app) bills: u32,
+    /// What its settled bills came to, what their guests paid, for its X (ADR-0187 decision 4).
+    pub(in crate::app) sales: Money,
+    /// The discounts and comps on those bills, for its X.
+    pub(in crate::app) discounts: Money,
     /// What each tender applied to those bills, for its report's tender mix.
     pub(in crate::app) tenders: Vec<(PaymentMethod, Money)>,
     /// The count note by note, where it was counted so (ADR-0186); empty for one typed amount.
     pub(in crate::app) count_breakdown: CountBreakdown,
+    /// The float note by note, where it was counted so; empty for one typed amount.
+    pub(in crate::app) float_breakdown: CountBreakdown,
+    /// The shift it took the drawer over from at a handover (ADR-0187), whose slip it reprints.
+    pub(in crate::app) handed_over_from: Option<ShiftId>,
     /// The tax by component and rate its settled bills recorded on their tax lines (ADR-0168
     /// decision 5), one entry for each name and rate, and none for a line that recorded none.
     /// Fee tax is inside the tax lines, so a fee's own components are not added again.
@@ -89,8 +97,12 @@ impl ShiftRecord {
             voided_bills: 0,
             counted: None,
             bills: 0,
+            sales: zero,
+            discounts: zero,
             tenders: Vec::new(),
             count_breakdown: CountBreakdown::default(),
+            float_breakdown: CountBreakdown::default(),
+            handed_over_from: None,
             tax_components: Vec::new(),
         }
     }

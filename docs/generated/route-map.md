@@ -71,10 +71,14 @@ From [`docs/openapi-edge.json`](../openapi-edge.json).
 | GET | `/api/shifts/current` | `current_shift` | `till_session` | — | [`crates/pos-edge/src/http/shifts.rs`](../../crates/pos-edge/src/http/shifts.rs) |
 | POST | `/api/shifts/{id}/close` | `close_shift` | `till_session` | `cash.shift.close`, `cash.shift.manage_other_till`, `cash.drawer.override_assignment` | [`crates/pos-edge/src/http/shifts.rs`](../../crates/pos-edge/src/http/shifts.rs) |
 | POST | `/api/shifts/{id}/count` | `count_shift` | `till_session` | `cash.shift.close`, `cash.shift.manage_other_till`, `cash.drawer.override_assignment` | [`crates/pos-edge/src/http/shifts.rs`](../../crates/pos-edge/src/http/shifts.rs) |
+| POST | `/api/shifts/{id}/handover-slip/print` | `reprint_handover_slip` | `till_session` | `reports.shift.read_x` | [`crates/pos-edge/src/http/shift_x.rs`](../../crates/pos-edge/src/http/shift_x.rs) |
 | POST | `/api/shifts/{id}/paid-in` | `record_paid_in` | `till_session` | `cash.movement.record`, `cash.drawer.override_assignment` | [`crates/pos-edge/src/http/cash_movements.rs`](../../crates/pos-edge/src/http/cash_movements.rs) |
 | POST | `/api/shifts/{id}/paid-out` | `record_paid_out` | `till_session` | `cash.movement.record`, `cash.drawer.override_assignment` | [`crates/pos-edge/src/http/cash_movements.rs`](../../crates/pos-edge/src/http/cash_movements.rs) |
 | POST | `/api/shifts/{id}/safe-drop` | `record_safe_drop` | `till_session` | `cash.movement.record`, `cash.drawer.override_assignment` | [`crates/pos-edge/src/http/cash_movements.rs`](../../crates/pos-edge/src/http/cash_movements.rs) |
+| GET | `/api/shifts/{id}/x` | `shift_x` | `till_session` | `reports.takings.view`, `reports.shift.read_x` | [`crates/pos-edge/src/http/shift_x.rs`](../../crates/pos-edge/src/http/shift_x.rs) |
 | POST | `/api/shifts:batch_close` | `batch_close_shifts` | `till_session` | `cash.shift.close`, `cash.shift.manage_other_till`, `cash.drawer.override_assignment` | [`crates/pos-edge/src/http/shifts.rs`](../../crates/pos-edge/src/http/shifts.rs) |
+| POST | `/api/shifts:print_x` | `print_x` | `till_session` | `reports.takings.view`, `reports.shift.read_x` | [`crates/pos-edge/src/http/shift_x.rs`](../../crates/pos-edge/src/http/shift_x.rs) |
+| GET | `/api/shifts:x` | `store_x` | `till_session` | `reports.takings.view`, `reports.shift.read_x` | [`crates/pos-edge/src/http/shift_x.rs`](../../crates/pos-edge/src/http/shift_x.rs) |
 | GET | `/api/sync` | `sync_status` | `till_session` | — | [`crates/pos-edge/src/http/sync.rs`](../../crates/pos-edge/src/http/sync.rs) |
 | GET | `/api/tables/{id}` | `table_state` | `till_session` | — | [`crates/pos-edge/src/http/tables.rs`](../../crates/pos-edge/src/http/tables.rs) |
 | POST | `/api/tables/{id}/bill` | `open_table_bill` | `till_session` | `billing.bill.open` | [`crates/pos-edge/src/http/bills.rs`](../../crates/pos-edge/src/http/bills.rs) |

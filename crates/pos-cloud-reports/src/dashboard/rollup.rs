@@ -84,8 +84,7 @@ pub fn fold_devices(
 }
 
 /// The roster as the console reads it: still-admitted devices first, newest admission first within
-/// each group, so the tills a store is actually running are at the top and the retired ones remain
-/// visible below them.
+/// each group, so the tills a store is running are at the top and the retired ones show below.
 ///
 /// The device id breaks a tie, so the order is stable across reads — a list that reshuffles between
 /// a render and a click is a list an operator acts on the wrong row of.
@@ -375,6 +374,7 @@ pub fn empty_revenue(business_date: &str) -> DailyRevenue {
         by_fee: BTreeMap::new(),
         by_tax_component: Vec::new(),
         voided_after_payment: VoidedAfterPayment::default(),
+        by_tender: BTreeMap::new(),
     }
 }
 

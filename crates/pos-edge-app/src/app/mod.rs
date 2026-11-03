@@ -64,7 +64,8 @@ pub use views::{
     CounterOrderLine, CounterOrderOpened, CounterOrderView, DrawerFigures, DrawerView, DrawersView,
     FiredLine, HandoverSlip, LineDraft, LineView, LiveOrderLine, LiveOrderView, MAX_SETTLED_LISTED,
     OrderLineChoice, PreBill, ReceiptCopy, ReceiptLine, SettledBillView, SettledVoidView,
-    ShiftHeader, ShiftReport, ShiftView, TableView, Takings, TillScope, TransferView, WaitingLine,
+    ShiftHeader, ShiftReport, ShiftView, ShiftX, StoreX, TableView, Takings, TenderTotals,
+    TillScope, TransferView, WaitingLine, XFigures,
 };
 
 /// Milliseconds in a day, for turning a retention period in days into a cutoff instant. No leap

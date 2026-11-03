@@ -30,6 +30,7 @@ use super::drops::fold_drops;
 use super::floats::{KeptFloats, fold_closed_floats};
 use super::handovers::{KeptHandovers, fold_handovers};
 use super::mix::{KeptLines, fold_line_updates};
+use super::tenders::fold_tenders;
 use super::voids::{KeptBills, fold_voids};
 
 use super::rollup::{
@@ -198,6 +199,7 @@ where
         for event in &batch {
             fold_event(&mut state.days, event);
             fold_revenue(&mut state.revenue, event);
+            fold_tenders(&mut state.revenue, event);
             fold_line_updates(&mut state.lines, &mut state.revenue, event);
             fold_cash(&mut state.cash, event);
             fold_closed_floats(&mut state.floats, &mut state.cash, event);

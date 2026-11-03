@@ -19,7 +19,8 @@
 //! A read route (`GET`) is here only where a permission decides who may see what it shows: the
 //! day's takings
 //! ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
-//! decision 2), and which of the store's terminals this device or another holds, which the till's
+//! decision 2), a shift's X and the store's
+//! ([ADR-0187](../../../../docs/adr/0187-a-shift-is-handed-over-at-the-till-and-read-there.md)), and which of the store's terminals this device or another holds, which the till's
 //! binding screen reads ([ADR-0112](../../../../docs/adr/0112-print-agents.md)). Every other read
 //! changes nothing, and the signed-in gate covers it.
 
@@ -47,6 +48,14 @@ pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
     (
         "GET /api/reports/takings",
         RouteGate::Person(&[Permission::ViewTakings]),
+    ),
+    (
+        "GET /api/shifts/{id}/x",
+        RouteGate::Person(&[Permission::ViewTakings, Permission::ReadShiftX]),
+    ),
+    (
+        "GET /api/shifts:x",
+        RouteGate::Person(&[Permission::ViewTakings, Permission::ReadShiftX]),
     ),
     (
         "POST /api/activate",
@@ -219,6 +228,10 @@ pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
         ]),
     ),
     (
+        "POST /api/shifts/{id}/handover-slip/print",
+        RouteGate::Person(&[Permission::ReadShiftX]),
+    ),
+    (
         "POST /api/shifts/{id}/paid-in",
         RouteGate::Person(&[
             Permission::RecordCashMovement,
@@ -247,6 +260,10 @@ pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
             Permission::ManageOtherTill,
             Permission::OverrideDrawerAssignment,
         ]),
+    ),
+    (
+        "POST /api/shifts:print_x",
+        RouteGate::Person(&[Permission::ViewTakings, Permission::ReadShiftX]),
     ),
     (
         "POST /api/tables/{id}/bill",

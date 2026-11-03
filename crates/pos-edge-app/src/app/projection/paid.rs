@@ -12,6 +12,7 @@
 //! (ADR-0028) and are not touched.
 
 use pos_core::error::DomainError;
+use pos_proto::events::BillingBillSettled;
 use pos_proto::ids::{BillId, OrderId, ShiftId};
 use pos_proto::money::Money;
 use pos_proto::{BillState, PaymentMethod};
@@ -49,6 +50,21 @@ impl Projection {
         if let Some(record) = shift.and_then(|shift| self.shifts.get_mut(&shift)) {
             record.bills = record.bills.saturating_add(1);
         }
+    }
+
+    /// Adds a settled bill's total and its discounts and comps to `shift`'s, for its X
+    /// ([ADR-0187](../../../../../docs/adr/0187-a-shift-is-handed-over-at-the-till-and-read-there.md)
+    /// decision 4).
+    pub(in crate::app) fn record_shift_sale(
+        &mut self,
+        shift: Option<ShiftId>,
+        settled: &BillingBillSettled,
+    ) -> Result<(), DomainError> {
+        if let Some(record) = shift.and_then(|shift| self.shifts.get_mut(&shift)) {
+            record.sales = record.sales.checked_add(settled.total_due)?;
+            record.discounts = record.discounts.checked_add(settled.reduction_total)?;
+        }
+        Ok(())
     }
 
     /// Adds one tender's `applied` to `shift`'s tender mix, for its report.

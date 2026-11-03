@@ -460,16 +460,19 @@ impl<S: EventStore> Edge<S> {
                 let event: CashShiftOpened = envelope.data.decode().map_err(AppError::Encode)?;
                 // A shift that names no till is the store's one drawer's, as every shift was
                 // before a till had its own (ADR-0167 decision 5).
-                projection.open_shift_record(
-                    event.opened_shift_id,
-                    ShiftRecord::opened(
-                        event.opening_float,
-                        event.opening_float.currency_code,
-                        (event.terminal_device_id, event.assigned_employee_id),
-                        envelope.event_time,
-                        envelope.business_date,
-                    ),
+                let mut record = ShiftRecord::opened(
+                    event.opening_float,
+                    event.opening_float.currency_code,
+                    (event.terminal_device_id, event.assigned_employee_id),
+                    envelope.event_time,
+                    envelope.business_date,
                 );
+                record.float_breakdown = pos_core::cash_count::CountBreakdown {
+                    denomination_counts: event.denomination_counts,
+                    uncounted_amount: event.uncounted_amount,
+                };
+                record.handed_over_from = event.handed_over_from_shift_id;
+                projection.open_shift_record(event.opened_shift_id, record);
             }
             EventType::CashShiftCounted => {
                 let event: CashShiftCounted = envelope.data.decode().map_err(AppError::Encode)?;

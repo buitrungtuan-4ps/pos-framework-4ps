@@ -43,6 +43,7 @@ pub mod reason_codes;
 mod reports;
 mod revalidate;
 pub mod route_permissions;
+mod shift_x;
 pub mod shifts;
 mod sync;
 pub mod tables;

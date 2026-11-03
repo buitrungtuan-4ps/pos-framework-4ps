@@ -875,7 +875,7 @@ where
 /// Where a cash-up prints: the receipt printer of the till the device is, where the store keeps a
 /// drawer per till, and the store's otherwise, as every report printed before (ADR-0167 decision
 /// 10).
-fn printed_at(session: &EdgeSession, scope: TillScope) -> TillPrinting {
+pub(super) fn printed_at(session: &EdgeSession, scope: TillScope) -> TillPrinting {
     scope
         .own
         .and_then(|own| published_terminals(&session.devices).find(|entry| entry.device_id == own))

@@ -10,7 +10,7 @@ use pos_core::cash_count::CountBreakdown;
 use pos_ports::event_store::EventStore;
 use pos_proto::ids::ShiftId;
 
-use crate::app::{Edge, HandoverSlip};
+use crate::app::{AppError, Edge, HandoverSlip};
 
 impl<S: EventStore> Edge<S> {
     /// The slip for the handover from `outgoing` to `incoming`, the shift just opened with
@@ -46,5 +46,22 @@ impl<S: EventStore> Edge<S> {
             incoming_breakdown,
             difference: into.opening_float.checked_sub(outgoing_count).ok()?,
         })
+    }
+
+    /// The slip of the handover `incoming` opened with, to print again from the drawer list
+    /// (ADR-0187 decision 3), its float's notes as it recorded them.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::UnknownShift`] for a shift the edge does not know, and
+    /// [`AppError::NothingToPrint`] for one that took no drawer over.
+    pub fn handover_slip_of(&self, incoming: ShiftId) -> Result<HandoverSlip, AppError> {
+        let record = self
+            .lock_projection()
+            .shift(incoming)
+            .ok_or(AppError::UnknownShift)?;
+        let outgoing = record.handed_over_from.ok_or(AppError::NothingToPrint)?;
+        self.handover_slip(outgoing, incoming, record.float_breakdown)
+            .ok_or(AppError::NothingToPrint)
     }
 }

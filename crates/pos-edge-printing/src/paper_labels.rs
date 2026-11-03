@@ -104,6 +104,12 @@ pub struct PaperLabels {
     pub uncounted: &'static str,
     /// Cash taken from the drawer to the safe, apart from the paid out (ADR-0186).
     pub dropped_to_safe: &'static str,
+    /// The heading of an X, which says it closes nothing (ADR-0187 decision 4).
+    pub x_not_a_close: &'static str,
+    /// What a shift's settled bills came to, on its X.
+    pub sales: &'static str,
+    /// The line over a store's X once every drawer of the day is closed (decision 5).
+    pub all_tills_closed: &'static str,
     /// When the shift opened.
     pub opened_at: &'static str,
     /// When it closed.
@@ -169,6 +175,9 @@ pub static ENGLISH: PaperLabels = PaperLabels {
     count_by_denomination: "COUNT BY NOTE",
     uncounted: "Other / uncounted",
     dropped_to_safe: "Dropped to safe",
+    x_not_a_close: "X - NOT A CLOSE",
+    sales: "Sales",
+    all_tills_closed: "ALL TILLS CLOSED FOR THE DAY",
     opened_at: "Opened",
     closed_at: "Closed",
     bills: "Bills",
@@ -223,6 +232,9 @@ pub static VIETNAMESE: PaperLabels = PaperLabels {
     count_by_denomination: "ĐẾM THEO MỆNH GIÁ",
     uncounted: "Khác / không đếm",
     dropped_to_safe: "Nộp két",
+    x_not_a_close: "X - KHÔNG PHẢI CHỐT CA",
+    sales: "Doanh thu",
+    all_tills_closed: "TẤT CẢ QUẦY ĐÃ ĐÓNG CA",
     opened_at: "Mở ca",
     closed_at: "Chốt ca",
     bills: "Số hóa đơn",
@@ -323,6 +335,9 @@ mod tests {
             ENGLISH.count_by_denomination,
             ENGLISH.uncounted,
             ENGLISH.dropped_to_safe,
+            ENGLISH.x_not_a_close,
+            ENGLISH.sales,
+            ENGLISH.all_tills_closed,
             ENGLISH.opened_at,
             ENGLISH.closed_at,
             ENGLISH.bills,

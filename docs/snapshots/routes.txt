@@ -26,6 +26,8 @@ GET /api/reports/takings
 GET /api/session
 GET /api/shifts
 GET /api/shifts/current
+GET /api/shifts/{id}/x
+GET /api/shifts:x
 GET /api/sync
 GET /api/tables/{id}
 GET /api/tables/{id}/check
@@ -66,10 +68,12 @@ POST /api/session/sign-out
 POST /api/shifts
 POST /api/shifts/{id}/close
 POST /api/shifts/{id}/count
+POST /api/shifts/{id}/handover-slip/print
 POST /api/shifts/{id}/paid-in
 POST /api/shifts/{id}/paid-out
 POST /api/shifts/{id}/safe-drop
 POST /api/shifts:batch_close
+POST /api/shifts:print_x
 POST /api/tables/{id}/bill
 POST /api/tables/{id}/check/print
 POST /api/tables/{id}/clean

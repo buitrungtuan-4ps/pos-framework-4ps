@@ -83,6 +83,7 @@ mod jobs;
 mod language;
 mod tickets;
 mod transports;
+mod x_read;
 
 pub use agents::{AgentDispatch, AgentLane};
 pub use blocks::{MoneyStyle, short_reference};
@@ -98,6 +99,7 @@ pub use documents::{
 pub use language::{SecondLanguage, receipt_language, ticket_language};
 pub use tickets::{TicketLine, TicketNote, ticket_at, ticket_document, ticket_line};
 pub use transports::{TcpTransports, TransportFactory, assumed_capabilities};
+pub use x_read::{XPaper, x_document};
 
 // The unit tests below name these as `super::`, as they did when every item sat in this file.
 #[cfg(test)]
