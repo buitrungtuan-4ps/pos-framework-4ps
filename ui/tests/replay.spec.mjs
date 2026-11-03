@@ -5707,6 +5707,61 @@ test("take payment moves at once, and reads the amount while the bill is opened"
   }
 });
 
+/** Holds every GET of a check until the test calls the returned function. */
+async function holdChecks(page) {
+  let release = () => {};
+  const released = new Promise((resolve) => {
+    release = resolve;
+  });
+  for (const pattern of ["**/api/tables/*/check", "**/api/bills/*/check"]) {
+    await page.route(pattern, async (route) => {
+      await released;
+      await route.continue();
+    });
+  }
+  return release;
+}
+
+// The cash keys wait for the amount, as the tenders do. The pay screen opens before the amount is
+// known (`docs/ui-ux.md` §3), and "Exact" until then is nothing: a tap on it chose 0, the tender
+// enabled once the figure landed, and the settle went out for 0 and was refused with the guest's
+// money on the counter.
+test("the cash keys wait for the amount, and a tap before it sends nothing", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    await sendOrder(page);
+    let settles = 0;
+    page.on("request", (request) => {
+      if (request.method() === "POST" && /\/api\/bills\/[^/]+\/settle$/.test(request.url())) {
+        settles += 1;
+      }
+    });
+
+    const release = await holdChecks(page);
+    await page.locator('[data-step="takePayment"]').click();
+    await expect(page.locator('[data-outcome="amount-loading"]')).toBeVisible();
+    await expect(page.locator('[data-step="setTender"]').first()).toBeDisabled();
+    await expect(page.locator('[data-step="typeTender"]')).toBeDisabled();
+    await page.locator('[data-step="setTender"]').first().click({ force: true });
+    await expect(page.locator('[data-step="payCash"]')).toBeDisabled();
+
+    release();
+    await expect(page.locator('[data-outcome="amount-loading"]')).toHaveCount(0);
+    await expect(page.locator('[data-step="setTender"]').first()).toBeEnabled();
+    expect(settles).toBe(0);
+    await page.locator('[data-step="setTender"]').first().click();
+    await page.locator('[data-step="payCash"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+    expect(settles).toBe(1);
+  } finally {
+    await edge.stop();
+  }
+});
+
 test("a sold-out refusal takes the painted line back off, with its sentence and no ghost", async ({
   page,
 }) => {
