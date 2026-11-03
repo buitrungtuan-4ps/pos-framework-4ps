@@ -865,6 +865,18 @@ async fn seed_readiness(people: &FakePeople) {
     seed_assignment(people, 3, cam, AssignmentScope::Store(store_id()), old).await;
 }
 
+/// `permissions.enforced` set on at the store's own scope, by a person.
+fn enforced_at_the_store() -> pos_cloud::settings::SettingValue {
+    pos_cloud::settings::SettingValue {
+        setting_key: "permissions.enforced".to_owned(),
+        scope: Open::from_known(pos_proto::settings::SettingScope::Store),
+        scope_id: store_id().to_string(),
+        value: serde_json::json!(true),
+        update_time: Timestamp::from_milliseconds_since_epoch(NOW_MS).expect("valid"),
+        pack_country_code: None,
+    }
+}
+
 /// Before a store enforces each person's own permissions, the console reads what each role held
 /// there does not grant (ADR-0158, Rollout). It needs `console.people.read`, as every read of the
 /// store's staff does; it names roles and counts people, and names nobody.
@@ -940,19 +952,9 @@ async fn the_readiness_read_lists_each_roles_gaps_and_names_nobody() {
     }
 
     // The store's own value, and where it comes from.
-    pos_cloud::settings::SettingsStore::put(
-        &settings,
-        tenant(),
-        &pos_cloud::settings::SettingValue {
-            setting_key: "permissions.enforced".to_owned(),
-            scope: Open::from_known(pos_proto::settings::SettingScope::Store),
-            scope_id: store_id().to_string(),
-            value: serde_json::json!(true),
-            update_time: Timestamp::from_milliseconds_since_epoch(NOW_MS).expect("valid"),
-        },
-    )
-    .await
-    .expect("write the value");
+    pos_cloud::settings::SettingsStore::put(&settings, tenant(), &enforced_at_the_store())
+        .await
+        .expect("write the value");
     let read = router
         .clone()
         .oneshot(get_with_cookie(&readiness_url(store_id()), &owner))

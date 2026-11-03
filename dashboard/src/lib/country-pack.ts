@@ -181,7 +181,7 @@ const settingName = (seeded: SettingDefault) =>
 export async function applyPackSettings(tenant: string, store: string, country: Country) {
   const fill = fillSettings(country.setting_defaults, await api.effectiveSettings(tenant, store));
   for (const seeded of fill.filled) {
-    await api.putSetting(tenant, seeded.setting_key, "SETTING_SCOPE_STORE", store, seeded.value);
+    await api.putSetting(tenant, seeded.setting_key, "SETTING_SCOPE_STORE", store, seeded.value, undefined, country.code);
   }
   const names = (seeds: readonly SettingDefault[], withValue: boolean) =>
     seeds

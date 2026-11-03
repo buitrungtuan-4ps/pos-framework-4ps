@@ -1802,10 +1802,9 @@ export const api = {
   putSetting: (
     tenantId: string,
     settingKey: string,
-    scope: SettingScope,
-    scopeId: string,
-    value: Json,
+    scope: SettingScope, scopeId: string, value: Json,
     noticeConfirmed?: true,
+    packCountryCode?: string,
   ) =>
     requestJson<SettingPublishReport>("PUT", "/admin/settings", {
       tenant_id: tenantId,
@@ -1814,6 +1813,7 @@ export const api = {
       scope_id: scopeId,
       value,
       notice_confirmed: noticeConfirmed,
+      pack_country_code: packCountryCode,
     }),
   // A `404` here means nothing is written at that scope any more.
   clearSetting: (tenantId: string, settingKey: string, scope: SettingScope, scopeId: string) =>

@@ -37,6 +37,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use pos_proto::ids::TenantId;
+use pos_proto::locale::CountryCode;
 use pos_proto::people::PublishedPermissions;
 use pos_proto::settings::{Setting, SettingScope, ValueRefusal, register};
 use pos_proto::time::Timestamp;
@@ -92,6 +93,14 @@ pub struct SettingValue {
     pub value: serde_json::Value,
     /// When it was written. Decides between two store groups that disagree.
     pub update_time: Timestamp,
+    /// The country whose pack gave the value
+    /// ([ADR-0183](../../../docs/adr/0183-a-country-pack-seeds-a-new-stores-settings.md)), so the
+    /// console can say so rather than show it as set by hand. Absent for a value a person wrote,
+    /// and for the register's preset; a person's later write of the setting leaves it absent. Left
+    /// off the wire while absent, so a value stored before it loads with none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<String>, nullable = false, example = "VN")]
+    pub pack_country_code: Option<CountryCode>,
 }
 
 /// Why a value cannot be written.
@@ -414,6 +423,7 @@ mod tests {
             scope_id: scope_id.to_owned(),
             value: json!(token),
             update_time: at(written),
+            pack_country_code: None,
         }
     }
 
