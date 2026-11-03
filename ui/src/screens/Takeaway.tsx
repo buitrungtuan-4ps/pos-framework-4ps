@@ -14,7 +14,6 @@ import {
   currencyExponent,
   formatAmount,
   settle,
-  startWalkIn,
   tenderAccepted,
   tipPercents,
   tipsEnabled,
@@ -26,6 +25,7 @@ import { can } from "../state/permissions";
 import { createScreenRead } from "../state/screen-read";
 import { SendFirst } from "../components/SendFirst";
 import { counterKey, createSendFirst } from "../state/unsent";
+import { draftWalkIn } from "../state/draft-walk-in";
 
 // The table pay screen's guard on the cash snap, kept in step with `Pay.tsx` by hand rather than
 // shared: this is its second use, and `docs/design-principles.md` extracts on the third. `Pay.tsx`
@@ -86,17 +86,11 @@ export function Takeaway() {
   );
   const refresh = () => listRead.run();
 
-  // A walk-in guest (ADR-0146, finding F12): the counter opens its own order and goes straight to
-  // it. Before this, a store without tables could charge an order someone else started and could
-  // not start one.
-  const openWalkIn = async (channel?: string) => {
-    setError(null);
-    try {
-      navigate(`/order/${await startWalkIn(channel)}`);
-    } catch (caught) {
-      explain(caught);
-    }
-  };
+  // A walk-in guest (ADR-0146, finding F12): the counter goes straight to a new order. Before this,
+  // a store without tables could charge an order someone else started and could not start one. The
+  // order is opened on the edge by its first item (`../state/draft-walk-in`), so a guest who leaves
+  // before ordering leaves no empty order behind.
+  const openWalkIn = (channel?: string) => navigate(draftWalkIn(channel));
   // A store that asks each walk-in guest whether they eat in or take away (ADR-0160 decision 2):
   // New order offers the two answers, and the order opens on the channel tapped. Every other store
   // opens the order at the first tap, as before.

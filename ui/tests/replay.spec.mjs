@@ -3586,6 +3586,44 @@ async function sellTheSalad(page, price) {
   await expectLineAdded(page);
 }
 
+// A walk-in is opened on the edge by its first item (UX-16). New order used to open it at the tap,
+// and a guest who left before ordering left an order behind that had a queue number, nothing on it,
+// and no way to be listed or closed. Leaving before the first item now leaves nothing.
+test("a new counter order is opened by its first item, and leaving before then leaves nothing", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    let opened = 0;
+    page.on("request", (request) => {
+      if (request.method() === "POST" && new URL(request.url()).pathname === "/api/orders") {
+        opened += 1;
+      }
+    });
+
+    await startWalkIn(page);
+    await expect(page).toHaveURL(/\/order\/new$/);
+    await page.locator('a[href="/counter"]').first().click();
+    await expect(page.locator('[data-step="newOrder"]')).toBeVisible();
+    expect(opened).toBe(0);
+
+    await startWalkIn(page);
+    await addItem(page);
+    await expect(page).toHaveURL(/\/order\/[0-9A-Z]{26}$/);
+    expect(opened).toBe(1);
+    await addItem(page);
+    await expect(page.locator('[data-outcome="line-added"]')).toHaveCount(2);
+    expect(opened).toBe(1);
+    await sendOrder(page);
+    await page.locator('a[href="/counter"]').first().click();
+    await expect(page.locator('[data-step="charge"]')).toHaveCount(1);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A store whose walk-ins are eaten in sells them from the dining room's book (ADR-0160 decision 2).
 //
 // `POS_DEMO_PROFILE=walk-in-dine-in` prices the garden salad at 89,000₫ in the dining room and
