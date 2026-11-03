@@ -2519,8 +2519,9 @@ test("the change to hand back is the largest figure once cash settles", async ({
     await page.route("**/api/locale", async (route) => {
       const response = await fetchWhole(route);
       const body = await response.json();
-      const notes = [10_000, 20_000, 50_000, 100_000, 200_000, 500_000];
-      await route.fulfill({ response, json: { ...body, cash_denominations: notes } });
+            // One note, larger than either sale: the key after "Exact" is that note whether or not the
+      // amount has landed when it is tapped, so the change is never nothing.
+      const notes = [500_000]; await route.fulfill({ response, json: { ...body, cash_denominations: notes } });
     });
     await pair(page, edge);
     await signIn(page, edge);
@@ -2545,6 +2546,11 @@ test("the change to hand back is the largest figure once cash settles", async ({
       expect(await fontSize(change)).toBeGreaterThan(await fontSize(settled));
       await page.locator('a[href="/"]').first().click();
     }
+  } finally {
+    await edge.stop();
+  }
+});
+
 // An even split is kept for its bill (UX-5): a reload, or leaving and coming back, finds the share
 // already taken still taken, and only the rest owed. It used to be forgotten, and the reopened bill
 // was taken whole after a guest had paid their half. Leaving with a share taken asks first.
