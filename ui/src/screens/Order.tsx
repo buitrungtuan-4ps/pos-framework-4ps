@@ -52,6 +52,7 @@ import {
 } from "../state/store";
 import { addItem, moveTable, setQuantity, writesPending } from "../state/optimistic";
 import { errorMessage } from "../lib/errors";
+import { useInFlight } from "../lib/in-flight";
 import { printOutcomeKey } from "../lib/print";
 import { SendFirst } from "../components/SendFirst";
 import { createSendFirst, waitingByCourse } from "../state/unsent";
@@ -92,6 +93,8 @@ export function Order() {
   };
   const label = () => labelOf(params.id);
 
+  // The send in flight: the button says so until the edge answers, and a second tap does nothing.
+  const sending = useInFlight<"send">(setError);
   const guard = async (run: () => Promise<void>) => {
     setError(null);
     try {
@@ -1326,13 +1329,11 @@ export function Order() {
             <button
               type="button"
               class="min-h-money w-full rounded-token bg-primary px-4 text-lg font-semibold text-primary-ink disabled:opacity-50"
-              disabled={unfired().length === 0}
+              disabled={unfired().length === 0 || sending.busy() !== null}
               data-step="fireOrder"
-              onClick={() => void guard(() => fireOrder(key()))}
+              onClick={() => void sending.run("send", () => fireOrder(key()))}
             >
-              {unfired().length === 0
-                ? t("order.send")
-                : t("order.send_count", { count: unfired().length })}
+              {t(sending.busy() !== null ? "order.sending" : unfired().length === 0 ? "order.send" : "order.send_count", { count: unfired().length })}
             </button>
             </Show>
 

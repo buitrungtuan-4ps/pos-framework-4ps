@@ -49,6 +49,7 @@ import {
   formatAmount,
 } from "../state/store";
 import { errorMessage } from "../lib/errors";
+import { useInFlight } from "../lib/in-flight";
 import { printOutcomeKey } from "../lib/print";
 import { asksApprover, can, permissionsEnforced } from "../state/permissions";
 
@@ -390,13 +391,14 @@ export function Pay() {
     };
   };
 
-  const pay = async (payments: PaymentRequest[]) => {
-    const id = billId();
-    if (id === null) {
-      return;
-    }
-    setError(null);
-    try {
+  // The settle in flight, keyed by the tender tapped, which says so until the edge answers.
+  const paying = useInFlight<string>(setError);
+  const pay = (payments: PaymentRequest[]) =>
+    paying.run(payments[payments.length - 1]?.method ?? "", async () => {
+      const id = billId();
+      if (id === null) {
+        return;
+      }
       const settled = await settle(id, payments, buyer());
       setGivenChange(
         payments.reduce(
@@ -409,10 +411,7 @@ export function Pay() {
         ),
       );
       setDone(settled);
-    } catch (caught) {
-      setError(errorMessage(caught));
-    }
-  };
+    });
 
   // Records one payment. Outside a split, or on a split's last share, that settles the bill with
   // every payment taken; before the last share it keeps this one and clears the pad for the next
@@ -1305,33 +1304,33 @@ export function Pay() {
               <button
                 type="button"
                 class="min-h-money rounded-token bg-primary text-lg font-semibold text-primary-ink disabled:opacity-50"
-                disabled={check() === null || typedTenderInvalid()}
+                disabled={check() === null || typedTenderInvalid() || paying.busy() !== null}
                 data-step="payCash"
                 onClick={() => payCash()}
               >
-                {t("pay.take_cash")}
+                {t(paying.busy() === "PAYMENT_METHOD_CASH" ? "pay.paying" : "pay.take_cash")}
               </button>
               </Show>
               <Show when={tenderAccepted("PAYMENT_METHOD_CARD")}>
                 <button
                   type="button"
                   class="min-h-touch rounded-token border border-line bg-surface disabled:opacity-50"
-                  disabled={check() === null}
+                  disabled={check() === null || paying.busy() !== null}
                   data-step="payCard"
                   onClick={() => payCard()}
                 >
-                  {t("pay.card")}
+                  {t(paying.busy() === "PAYMENT_METHOD_CARD" ? "pay.paying" : "pay.card")}
                 </button>
               </Show>
               <Show when={tenderAccepted("PAYMENT_METHOD_QR")}>
                 <button
                   type="button"
                   class="min-h-touch rounded-token border border-line bg-surface disabled:opacity-50"
-                  disabled={check() === null}
+                  disabled={check() === null || paying.busy() !== null}
                   data-step="payQr"
                   onClick={() => payQr()}
                 >
-                  {t("pay.qr")}
+                  {t(paying.busy() === "PAYMENT_METHOD_QR" ? "pay.paying" : "pay.qr")}
                 </button>
                 <p class="text-sm text-ink-muted">{t("pay.qr_hint")}</p>
               </Show>

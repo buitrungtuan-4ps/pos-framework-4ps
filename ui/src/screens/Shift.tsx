@@ -31,6 +31,7 @@ import {
 } from "../state/store";
 import { openingFloatMinor } from "../state/session";
 import { errorMessage, owedVariances } from "../lib/errors";
+import { useInFlight } from "../lib/in-flight";
 import { printOutcomeKey } from "../lib/print";
 import { asksApprover, can } from "../state/permissions";
 import { overrideAsks } from "../state/drawer-access";
@@ -162,16 +163,15 @@ export function Shift() {
     void loadDrawers();
   });
 
-  const run = async (action: () => Promise<unknown>) => {
-    setError(null);
-    try {
+  // The act on this till's own drawer in flight, keyed by the button tapped, which says so until
+  // the edge answers; every other act on it waits for that answer.
+  const own = useInFlight<string>(setError);
+  const run = (key: string, action: () => Promise<unknown>) =>
+    own.run(key, async () => {
       await action();
       setAmount("");
       setFloatTyped(false);
-    } catch (caught) {
-      setError(errorMessage(caught));
-    }
-  };
+    });
 
   // A float as the cashier would type it: whole units of the currency, which is all the keypad
   // types. Nothing fills in for no float, as before the setting, nor for one that is not a whole
@@ -205,8 +205,7 @@ export function Shift() {
     if (!current || value === null) {
       return;
     }
-    setError(null);
-    try {
+    await own.run(reasonCodeId, async () => {
       const outcome = await recordCashMovement(current.shiftId, way, value, reasonCodeId);
       setMoved({
         key: way === "in" ? "shift.paid_in_recorded" : "shift.paid_out_recorded",
@@ -216,9 +215,7 @@ export function Shift() {
       setDirection(null);
       setMovementAmount("");
       setMovementPad(false);
-    } catch (caught) {
-      setError(errorMessage(caught));
-    }
+    });
   };
 
   const closeDrawerPanel = () => {
@@ -230,21 +227,19 @@ export function Shift() {
   // A manager's code and PIN, where the person needs an approver for the drawer: everybody, where
   // the store does not enforce each person's own set (ADR-0158).
   const drawerAsks = () => asksApprover("cash.drawer.open_no_sale");
-  const openDrawer = async (reasonCodeId: string) => {
-    setError(null);
+  const openDrawer = (reasonCodeId: string) => {
     const approval = drawerAsks()
       ? { approver_code: approverCode(), approver_pin: approverPin() }
       : undefined;
-    try {
+    return own.run(reasonCodeId, async () => {
       setDrawer(await openDrawerNoSale(reasonCodeId, approval));
       closeDrawerPanel();
-    } catch (caught) {
-      setError(errorMessage(caught));
-    }
+    });
   };
 
   const approverReady = () =>
-    !drawerAsks() || (approverCode().trim() !== "" && approverPin().trim() !== "");
+    own.busy() === null &&
+    (!drawerAsks() || (approverCode().trim() !== "" && approverPin().trim() !== ""));
 
   // The taps the step budget counts, named for what the operator is doing (`ui/scripts/step-budget.mjs`
   // resolves a declared step to the handler its element calls).
@@ -263,8 +258,8 @@ export function Shift() {
   const drawerReason = (reasonCodeId: string) => void openDrawer(reasonCodeId);
 
   // Closes this till's own drawer; where the store asks a reason first, says so with the figures.
-  const closeOwn = (close: () => Promise<unknown>) =>
-    run(async () => {
+  const closeOwn = (key: string, close: () => Promise<unknown>) =>
+    run(key, async () => {
       try {
         await close();
         setOwedClose(null);
@@ -279,7 +274,7 @@ export function Shift() {
   const varianceReason = (reasonCodeId: string) => {
     const current = shift();
     if (current) {
-      void closeOwn(() => closeShift(current.shiftId, reasonCodeId));
+      void closeOwn(reasonCodeId, () => closeShift(current.shiftId, reasonCodeId));
     }
   };
   // Only for the shift it was asked of: one closed meanwhile from the list asks nothing more.
@@ -599,16 +594,16 @@ export function Shift() {
         <button
           type="button"
           class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
-          disabled={floatParsed() === null}
+          disabled={floatParsed() === null || own.busy() !== null}
           data-step="openShift"
           onClick={() => {
             const value = floatParsed();
             if (value !== null) {
-              void run(() => openShift(value));
+              void run("open", () => openShift(value));
             }
           }}
         >
-          {t("shift.open")}
+          {t(own.busy() === "open" ? "common.sending" : "shift.open")}
         </button>
       </Show>
 
@@ -675,11 +670,11 @@ export function Shift() {
                       <button
                         type="button"
                         class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
-                        disabled={movementParsed() === null}
+                        disabled={movementParsed() === null || own.busy() !== null}
                         data-step="movementReason"
                         onClick={() => movementReason(reason.reason_code_id)}
                       >
-                        {reason.display_name}
+                        {own.busy() === reason.reason_code_id ? t("common.sending") : reason.display_name}
                       </button>
                     )}
                   </For>
@@ -750,17 +745,17 @@ export function Shift() {
         <button
           type="button"
           class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
-          disabled={parsed() === null}
+          disabled={parsed() === null || own.busy() !== null}
           data-step="countShift"
           onClick={() => {
             const value = parsed();
             const current = shift();
             if (value !== null && current) {
-              void run(() => countShift(current.shiftId, value));
+              void run("count", () => countShift(current.shiftId, value));
             }
           }}
         >
-          {t("shift.enter_count")}
+          {t(own.busy() === "count" ? "common.sending" : "shift.enter_count")}
         </button>
         </Show>
       </Show>
@@ -772,16 +767,17 @@ export function Shift() {
         <Show when={can("cash.shift.close")}>
         <button
           type="button"
-          class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink"
+          class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
+          disabled={own.busy() !== null}
           data-step="closeShift"
           onClick={() => {
             const current = shift();
             if (current) {
-              void closeOwn(() => closeShift(current.shiftId));
+              void closeOwn("close", () => closeShift(current.shiftId));
             }
           }}
         >
-          {t("shift.close")}
+          {t(own.busy() === "close" ? "common.sending" : "shift.close")}
         </button>
         </Show>
         <Show when={owedHere()}>
@@ -802,11 +798,12 @@ export function Shift() {
                   {(reason) => (
                     <button
                       type="button"
-                      class="min-h-touch rounded-token border border-line bg-surface px-3 text-left"
+                      class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
+                      disabled={own.busy() !== null}
                       data-step="varianceReason"
                       onClick={() => varianceReason(reason.reason_code_id)}
                     >
-                      {reason.display_name}
+                      {own.busy() === reason.reason_code_id ? t("common.sending") : reason.display_name}
                     </button>
                   )}
                 </For>
@@ -903,7 +900,7 @@ export function Shift() {
                     data-step="drawerReason"
                     onClick={() => drawerReason(reason.reason_code_id)}
                   >
-                    {reason.display_name}
+                    {own.busy() === reason.reason_code_id ? t("common.sending") : reason.display_name}
                   </button>
                 )}
               </For>

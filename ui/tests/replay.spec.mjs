@@ -5303,6 +5303,89 @@ test("an added line shows at once, sending, and payment waits until the edge con
   }
 });
 
+/**
+ * Double-taps `step` while its POST to `pattern` is held, and checks the button says `pending` and
+ * takes no second tap until the answer. Resolves to how many POSTs reached `pattern` once `outcome`
+ * shows; the route is taken off again, so the next act is not held.
+ */
+async function doubleTap(page, step, pattern, pending, outcome) {
+  let posts = 0;
+  let release = () => {};
+  const released = new Promise((resolve) => {
+    release = resolve;
+  });
+  const hold = async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.fallback();
+      return;
+    }
+    posts += 1;
+    await released;
+    await route.continue();
+  };
+  await page.route(pattern, hold);
+  const button = page.locator(`[data-step="${step}"]`).first();
+  await button.dblclick();
+  await expect(button).toHaveText(pending);
+  await expect(button).toBeDisabled();
+  release();
+  await expect(page.locator(`[data-outcome="${outcome}"]`)).toBeVisible();
+  await page.unroute(pattern, hold);
+  return posts;
+}
+
+// A tap that writes says so at once and takes no second tap until the edge answers (`docs/ui-ux.md`
+// §4). The button used to look untouched while the request was out, so a cashier tapped again and
+// a second send or settle went out behind the first.
+test("a double tap on Send or on a tender sends one request, and the button says it is working", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    expect(await doubleTap(page, "fireOrder", "**/api/orders/*/fire", "Sending…", "line-fired")).toBe(1);
+    await page.locator('[data-step="takePayment"]').click();
+    expect(
+      await doubleTap(page, "payCash", "**/api/bills/*/settle", "Taking payment…", "settled"),
+    ).toBe(1);
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("a double tap on any act on the till's own drawer sends one request", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await navigateTo(page, "/shift");
+    await page.locator("#float").fill("100000");
+    expect(await doubleTap(page, "openShift", "**/api/shifts", "Sending…", "shift-open")).toBe(1);
+
+    await page.locator("#movement-amount").fill("20000");
+    await page.locator('[data-step="askPaidIn"]').click();
+    const paidIn = "**/api/shifts/*/paid-in";
+    expect(await doubleTap(page, "movementReason", paidIn, "Sending…", "cash-moved")).toBe(1);
+
+    await page.locator('[data-step="askOpenDrawer"]').click();
+    await page.locator("#no-sale-approver-code").fill(edge.staffCode);
+    await page.locator("#no-sale-approver-pin").fill(edge.staffPin);
+    const noSale = "**/api/drawer/open";
+    expect(await doubleTap(page, "drawerReason", noSale, "Sending…", "drawer-opened")).toBe(1);
+
+    await page.locator("#count").fill("120000");
+    const count = "**/api/shifts/*/count";
+    expect(await doubleTap(page, "countShift", count, "Sending…", "shift-counted")).toBe(1);
+    const close = "**/api/shifts/*/close";
+    expect(await doubleTap(page, "closeShift", close, "Sending…", "shift-closed")).toBe(1);
+  } finally {
+    await edge.stop();
+  }
+});
+
 test("a sold-out refusal takes the painted line back off, with its sentence and no ghost", async ({
   page,
 }) => {
