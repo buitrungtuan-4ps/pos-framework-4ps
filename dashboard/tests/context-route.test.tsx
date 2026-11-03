@@ -16,7 +16,7 @@ import { createMemoryHistory, MemoryRouter, Route } from "@solidjs/router";
 import { cleanup, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { TenantContext } from "../src/App";
+import { ConsoleLevelRedirect, TenantContext } from "../src/App";
 import {
   selectStore,
   selectTenant,
@@ -113,5 +113,31 @@ describe("what a URL says about the working context", () => {
     selectStore(STORE_LTT.id, STORE_LTT.name);
     await mounted(arriveAt(`/t/${TENANT_VN.id}/devices?store=`, "/devices"));
     await waitFor(() => expect(storeId()).toBe(""));
+  });
+});
+
+// V-3: `/t/<tenant>/alerts` matched no route and rendered a blank page, because the alert list is
+// console-level and lives at a bare `/alerts`. The tenant-prefixed form now sheds the prefix.
+describe("a console-level screen under a tenant prefix", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    selectTenant("", "");
+  });
+  afterEach(cleanup);
+
+  it("redirects to the bare path and keeps the tenant", async () => {
+    const history = createMemoryHistory();
+    history.set({ value: `/t/${TENANT_VN.id}/alerts?store=${STORE_LTT.id}` });
+    const view = render(() => (
+      <MemoryRouter history={history}>
+        <Route path="/t/:tenant" component={TenantContext}>
+          <Route path="/alerts" component={() => <ConsoleLevelRedirect screen="alerts" />} />
+        </Route>
+        <Route path="/alerts" component={() => <span>alert list</span>} />
+      </MemoryRouter>
+    ));
+    await waitFor(() => expect(view.container.innerHTML).toContain("alert list"));
+    expect(history.get()).toBe("/alerts");
+    expect(tenantId()).toBe(TENANT_VN.id);
   });
 });

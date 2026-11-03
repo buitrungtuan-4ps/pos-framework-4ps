@@ -266,6 +266,14 @@ function LegacyRedirect(props: { screen: ScreenId }) {
   return <Navigate href={screenHref(props.screen, tenantId(), storeId())} />;
 }
 
+// A console-level screen reached under a tenant prefix — `/t/<tenant>/alerts`, a link someone built
+// by hand or a script that prefixed every path. The screen has no tenant to carry, so the URL sheds
+// it; the tenant itself is still taken by `TenantContext` above. Before this the path matched no
+// route and rendered a blank page (V-3). Exported for `tests/context-route.test.tsx`.
+export function ConsoleLevelRedirect(props: { screen: ScreenId }) {
+  return <Navigate href={SCREENS[props.screen].path} />;
+}
+
 export function App() {
   const [ready, setReady] = createSignal(false);
 
@@ -299,6 +307,9 @@ export function App() {
           <Route path={`${TENANT_PREFIX}/:tenant`} component={TenantContext}>
             {TENANT_SCOPED.map((id) => (
               <Route path={SCREENS[id].path} component={COMPONENTS[id]} />
+            ))}
+            {CONSOLE_LEVEL.map((id) => (
+              <Route path={SCREENS[id].path} component={() => <ConsoleLevelRedirect screen={id} />} />
             ))}
           </Route>
           {/* Console-level screens span every tenant, so they keep a bare path. */}
