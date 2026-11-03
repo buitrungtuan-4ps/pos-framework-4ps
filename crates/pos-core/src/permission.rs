@@ -519,8 +519,8 @@ permissions! {
     ///
     /// An X resets nothing and moves no money, so no PIN. Anybody who sees takings reads an X; this
     /// is what adds the expected cash to it in a blind-close store, which would otherwise tell a
-    /// cashier what their count should come to. Out of the box the manager and the owner hold it; a
-    /// role authored before it existed holds it once an owner grants it.
+    /// cashier what their count should come to. Out of the box the manager and the owner hold it;
+    /// migration 0088 gives it once to every role that grants `admin.config.edit` directly.
     ReadShiftX {
         id: "reports.shift.read_x",
         group: Reports,
