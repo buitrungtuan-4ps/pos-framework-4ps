@@ -201,6 +201,7 @@
   "handover.done": "Đã giao ca. Chênh lệch: {amount}.",
   "handover.finish": "Xong",
   "handover.open_in": "Mở ca của tôi với số đếm này",
+  "handover.reprint": "In lại phiếu giao ca",
   "handover.sign_in": "Thu ngân ca sau: đăng nhập trên máy này.",
   "handover.sign_in_button": "Đăng nhập để nhận ca",
   "handover.slip_printed": "Đã in phiếu giao ca",

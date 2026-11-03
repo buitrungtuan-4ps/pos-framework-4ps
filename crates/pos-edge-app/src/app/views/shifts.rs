@@ -238,6 +238,8 @@ pub struct ShiftView {
     /// The float the shift opened with, which the drawer list shows rather than the till's default
     /// float.
     pub opening_float: Money,
+    /// The shift it took the drawer over from at a handover (ADR-0187), whose slip prints again.
+    pub handed_over_from: Option<ShiftId>,
     /// Cash paid into the drawer outside a sale so far
     /// ([ADR-0165](../../../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).
     ///

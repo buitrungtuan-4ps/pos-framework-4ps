@@ -7153,6 +7153,10 @@
             "$ref": "#/components/schemas/Money",
             "description": "Revealed at close (§11.1), and before it only where the store's count is not blind."
           },
+          "handed_over_from_shift_id": {
+            "type": "string",
+            "description": "The shift it took the drawer over from at a handover (ADR-0187), whose slip\n`POST /api/shifts/{id}/handover-slip/print` prints again. Absent for a float brought in."
+          },
           "handover_difference": {
             "$ref": "#/components/schemas/Money",
             "description": "On an opening that took a drawer over (ADR-0187), the incoming float less the outgoing\ncount: zero where they agree. Absent on every other command."

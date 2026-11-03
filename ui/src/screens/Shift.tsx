@@ -2,7 +2,7 @@ import { For, Show, createSignal, onMount } from "solid-js";
 
 import { ApproverFields } from "../components/ApproverFields";
 import { ClosedCard } from "../components/ClosedCard";
-import { Handover, handingOver } from "../components/Handover";
+import { Handover, ReprintSlip, handingOver } from "../components/Handover";
 import { DayClosed, ShiftXButton } from "../components/ShiftXRead";
 import { CountField } from "../components/CountField";
 import { AssigneeField, DrawerOwner } from "../components/DrawerOwner";
@@ -843,6 +843,7 @@ export function Shift() {
       >
         <Handover />
       </Show>
+      <ReprintSlip drawer={drawers().find((entry) => entry.shift?.shift_id === shift()?.shiftId)} />
       <ShiftXButton />
 
       {/*
@@ -1039,6 +1040,9 @@ export function Shift() {
                   >
                     {t("shift.enter_count")}
                   </button>
+                </Show>
+                <Show when={picking() !== "closed" && pickedDrawers().length === 1}>
+                  <ReprintSlip drawer={pickedDrawers()[0]} />
                 </Show>
                 <Show when={picking() === "counted"}>
                   <button
