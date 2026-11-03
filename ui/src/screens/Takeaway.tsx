@@ -6,6 +6,7 @@ import type { BillResponse, CounterOrder, PaymentRequest, ReprintResponse } from
 import { Keypad } from "../components/Keypad";
 import { ReadFailed } from "../components/StoreData";
 import { PageHeader } from "../components/ui";
+import { BillReductions } from "../components/BillReductions";
 import { t } from "../i18n";
 import { money, parseWhole, percentOf, quickCashFor, roundToIncrement } from "../lib/money";
 import {
@@ -46,6 +47,17 @@ function distinctAndSpendable(keys: readonly number[]): boolean {
 // The queue number is the heading of each card because it is what staff shouted at the customer and
 // what the customer will say back. The order's ULID is never shown: an operator cannot read one, and
 // the list is what turns the id into something tappable.
+// The tip keys for a bill of `total` minor units (see `tipKeys` below).
+function tipKeysFor(total: number): number[] {
+  const exact = tipPercents().map((percent) => percentOf(total, percent));
+  const increment = cashRoundingIncrement();
+  if (increment === null) {
+    return exact;
+  }
+  const snapped = exact.map((amount) => roundToIncrement(amount, increment));
+  return distinctAndSpendable(snapped) ? snapped : exact;
+}
+
 export function Takeaway() {
   const [orders, setOrders] = createSignal<CounterOrder[] | null>(null);
   const [chosen, setChosen] = createSignal<CounterOrder | null>(null);
@@ -128,15 +140,7 @@ export function Takeaway() {
   // total the 5% key was a fraction of a đồng, and the edge refused the settle with the guest's money
   // on the counter. It then offered 5, 10 and 15 percent at every store after the table pay screen
   // took the store's own keys.
-  const tipKeys = () => {
-    const exact = tipPercents().map((percent) => percentOf(total(), percent));
-    const increment = cashRoundingIncrement();
-    if (increment === null) {
-      return exact;
-    }
-    const snapped = exact.map((amount) => roundToIncrement(amount, increment));
-    return distinctAndSpendable(snapped) ? snapped : exact;
-  };
+  const tipKeys = () => tipKeysFor(total());
   // The same quick-cash ladder the table pay screen offers, so a cashier's hands learn one pad —
   // and, since roadmap **E5**, keyed on this order's own currency rather than VND's three notes.
   // This was the fifth hardcoded-VND site: E5 named three, the audit found a fourth, and this is the
@@ -146,7 +150,10 @@ export function Takeaway() {
     return [owed, ...quickCashFor(cashDenominations(), owed)];
   };
 
-  const back = () => {
+  // Back to the list. After a void it says what came of it, since the order is there to charge again.
+  const [voidedNote, setVoidedNote] = createSignal(false);
+  const back = (voided = false) => {
+    setVoidedNote(voided);
     setChosen(null);
     setTender(null);
     setTyping(false);
@@ -240,6 +247,7 @@ export function Takeaway() {
         fallback={
           <>
             <PageHeader title={t("counter.title")} />
+            <Show when={voidedNote()}><p class="mb-3 text-sm text-ink-muted" role="status" data-outcome="bill-voided">{t("pay.void_done_hint")}</p></Show>
             <Show when={can("sales.line.add")}>
             <button
               type="button"
@@ -335,7 +343,7 @@ export function Takeaway() {
               type="button"
               class="min-h-touch border-0 bg-transparent p-0 text-sm text-ink-muted hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded-token"
               aria-label={t("counter.back")}
-              onClick={back}
+              onClick={() => back()}
             >
               {t("counter.back")}
             </button>
@@ -482,6 +490,9 @@ export function Takeaway() {
                     </Show>
                   </div>
                   </Show>
+                  {/* Money off and the void, as on the table's pay screen (UX-10). A voided bill
+                      leaves the order open to charge again, so the pad goes back to the list. */}
+                  <BillReductions billId={() => order().bill_id ?? null} currency={currency} report={setError} onApplied={(totals) => setChosen({ ...order(), total_due: totals.total_due })} onVoided={() => back(true)} />
                 </>
               }
             >
@@ -540,7 +551,7 @@ export function Takeaway() {
                   <button
                     type="button"
                     class="mt-4 min-h-touch w-full rounded-token border border-line bg-surface"
-                    onClick={back}
+                    onClick={() => back()}
                   >
                     {t("counter.next")}
                   </button>
