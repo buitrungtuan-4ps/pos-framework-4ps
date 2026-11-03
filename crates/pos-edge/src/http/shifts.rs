@@ -224,6 +224,11 @@ pub(crate) struct ShiftResponse {
     variance: Option<Money>,
     /// The float the shift opened with, which the drawer list shows beside the till's default.
     opening_float: Money,
+    /// The shift it took the drawer over from at a handover (ADR-0187), whose slip
+    /// `POST /api/shifts/{id}/handover-slip/print` prints again. Absent for a float brought in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    handed_over_from_shift_id: Option<String>,
     /// Cash paid into the drawer outside a sale so far (ADR-0165).
     paid_in_amount: Money,
     /// Cash paid out of it outside a sale so far.
@@ -299,6 +304,7 @@ impl From<ShiftView> for ShiftResponse {
             counted_amount: view.counted_amount,
             variance: view.variance,
             opening_float: view.opening_float,
+            handed_over_from_shift_id: view.handed_over_from.map(|from| from.to_string()),
             paid_in_amount: view.paid_in,
             paid_out_amount: view.paid_out,
             dropped_amount: view.dropped,

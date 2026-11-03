@@ -54,6 +54,7 @@ impl<S: EventStore> Edge<S> {
             counted_amount: record.counted,
             variance: None,
             opening_float: record.opening_float,
+            handed_over_from: record.handed_over_from,
             paid_in: record.paid_in,
             paid_out: record.paid_out,
             dropped: record.dropped,

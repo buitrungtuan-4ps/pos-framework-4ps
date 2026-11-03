@@ -201,6 +201,7 @@
   "handover.done": "Shift handed over. Difference: {amount}.",
   "handover.finish": "Done",
   "handover.open_in": "Open my shift on this count",
+  "handover.reprint": "Print the handover slip again",
   "handover.sign_in": "Incoming cashier: sign in on this till.",
   "handover.sign_in_button": "Sign in to take over",
   "handover.slip_printed": "Handover slip printed",

@@ -138,6 +138,7 @@ pub(in crate::app) fn closed_view(
         counted_amount: Some(report.counted_amount),
         variance: Some(report.variance),
         opening_float: report.opening_float,
+        handed_over_from: record.handed_over_from,
         paid_in: report.paid_in,
         paid_out: report.paid_out,
         dropped: report.dropped,

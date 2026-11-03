@@ -5,7 +5,10 @@
 import { For, Show, createSignal } from "solid-js";
 import { Dynamic } from "solid-js/web";
 
+import { api } from "../api/client";
+import type { DrawerEntry } from "../api/schemas";
 import { t } from "../i18n";
+import { errorMessage } from "../lib/errors";
 import { money } from "../lib/money";
 import { printOutcomeKey } from "../lib/print";
 import {
@@ -28,6 +31,7 @@ import {
   text,
   typed,
 } from "../state/handover";
+import { holdsOwn } from "../state/permissions";
 import { formatAmount, reasonsFor, storeCurrency } from "../state/store";
 import { ApproverFields } from "./ApproverFields";
 import { CountField } from "./CountField";
@@ -222,5 +226,54 @@ export function Handover() {
         )}
       </Show>
     </div>
+  );
+}
+
+/**
+ * Prints the handover slip of `drawer`'s shift again, from the Shift screen and the drawer list
+ * (ADR-0187 decision 3): only for a shift that took its drawer over, and a person whose own role
+ * reads an X's expected cash, as the edge asks.
+ */
+export function ReprintSlip(props: { drawer?: DrawerEntry }) {
+  const [outcome, setOutcome] = createSignal<string | null>(null);
+  const [failed, setFailed] = createSignal<string | null>(null);
+  const [sending, setSending] = createSignal(false);
+  const shiftId = () =>
+    props.drawer?.shift?.handed_over_from_shift_id === undefined ? undefined : props.drawer.shift.shift_id;
+  const print = async (id: string) => {
+    setSending(true);
+    setFailed(null);
+    try {
+      setOutcome((await api.reprintHandoverSlip(id)).handover_slip_print);
+    } catch (caught) {
+      setFailed(errorMessage(caught));
+    } finally {
+      setSending(false);
+    }
+  };
+  return (
+    <Show when={holdsOwn("reports.shift.read_x") && shiftId()}>
+      {(id) => (
+        <div class="mt-3">
+          <button
+            type="button"
+            class="min-h-touch w-full rounded-token border border-line text-sm disabled:opacity-50"
+            disabled={sending()}
+            data-step="reprintSlip"
+            onClick={() => void print(id())}
+          >
+            {t(sending() ? "common.sending" : "handover.reprint")}
+          </button>
+          <Show when={outcome()}>
+            {(done) => (
+              <p class="mt-1 text-sm text-ink-muted" role="status" data-outcome="handover-slip-again">
+                {t(printOutcomeKey(done(), "handover.slip_printed"))}
+              </p>
+            )}
+          </Show>
+          <Show when={failed()}>{(message) => <p class="mt-1 text-sm text-danger">{message()}</p>}</Show>
+        </div>
+      )}
+    </Show>
   );
 }

@@ -989,6 +989,8 @@ async fn a_handover_names_the_shift_just_closed_and_prints_its_slip() {
     assert_eq!(opened["handover_difference"], json!(vnd(-10_000)));
     // UX-12: the drawer list shows the float the shift opened with, not the till's default.
     assert_eq!(opened["opening_float"], json!(vnd(1_770_000)));
+    // The drawer list names the shift it took over, so the slip can be printed again from there.
+    assert_eq!(opened["handed_over_from_shift_id"], morning.as_str());
     let listed = get(&tills, &tills.bar, "/api/shifts").await;
     assert_eq!(
         listed["drawers"][0]["shift"]["opening_float"],

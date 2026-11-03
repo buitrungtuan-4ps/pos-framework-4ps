@@ -17,7 +17,7 @@ import { money, type Money } from "../lib/money";
 import { t } from "../i18n";
 import { EMPTY_COUNT, fieldAmount, type CounterValue } from "./cash-count";
 import { loadSession, signedInAs } from "./session";
-import { applyShift, closeShift, countShift, state, storeCurrency } from "./store";
+import { applyShift, closeShift, countShift, loadDrawers, state, storeCurrency } from "./store";
 
 export type HandoverStep = "out" | "reason" | "signin" | "in" | "done";
 
@@ -155,6 +155,8 @@ export const handIn = (confirmed: boolean) =>
       handed_over_from_shift_id: out.shiftId,
     });
     applyShift(opened);
+    // The drawer list names the shift this one took over, which offers its slip again.
+    void loadDrawers();
     setDifference(opened.handover_difference ?? money(storeCurrency(), gap));
     setPrinted(opened.handover_slip_print ?? null);
     setStep("done");

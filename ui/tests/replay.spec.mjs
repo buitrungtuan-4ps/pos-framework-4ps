@@ -4091,6 +4091,9 @@ test("a shift is handed over at the till, the X reads it, and the day closes on 
     await expect(page.locator('[data-outcome="handover-done"]')).toContainText("-10,000₫");
     expect(opened.at(-1).opening_float.amount_minor).toBe(90_000);
     expect(opened.at(-1).handed_over_from_shift_id).toBeTruthy();
+    // The slip prints again from the Shift screen, for a person who reads an X's expected cash.
+    await page.locator('[data-step="reprintSlip"]').click();
+    await expect(page.locator('[data-outcome="handover-slip-again"]')).toBeVisible();
     await expect(page.locator('[data-outcome="shift-open"]')).toBeVisible();
 
     // The day's last drawer closes: the till says every till is closed, with the store's figures.
