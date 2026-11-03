@@ -5707,6 +5707,33 @@ test("take payment moves at once, and reads the amount while the bill is opened"
   }
 });
 
+// One failed read of the order's figure does not leave it blank for good. The order screen's check
+// read is a resource, and a resource whose read threw stayed in error: every later read answered,
+// and the total still read "—" until the screen was left.
+test("the order's total recovers after one read of it fails", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    let failures = 1;
+    await page.route("**/api/tables/*/check", async (route) => {
+      if (failures > 0) {
+        failures -= 1;
+        await route.fulfill({ status: 500, json: { code: "INTERNAL", message: "a blip" } });
+        return;
+      }
+      await route.continue();
+    });
+    await seatTable(page);
+    await addItem(page);
+    expect(failures).toBe(0);
+    const total = page.locator('[data-outcome="check-total"] .text-2xl');
+    await expect(total).toHaveText(/\d/);
+  } finally {
+    await edge.stop();
+  }
+});
+
 test("a sold-out refusal takes the painted line back off, with its sentence and no ghost", async ({
   page,
 }) => {
