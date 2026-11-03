@@ -25,6 +25,18 @@
 // Only with `POS_PERF_ENFORCE=1`, which the nightly job sets, does a p95 over its budget fail the
 // run. Every commit's checks assert no timing (ADR-0109): a number from a shared runner on a debug
 // build is a number about the runner.
+//
+// # Emulating a slower machine, and seeing where the time goes
+//
+// `POS_PERF_CPU_THROTTLE=<rate>` slows the page's CPU by that factor through the Chrome DevTools
+// Protocol (`Emulation.setCPUThrottlingRate`), for every page the run opens. It is an emulation:
+// it stretches the page's main thread, not the edge, the GPU or the frame clock, so it stands in
+// for a slower till and is not a measurement of one. The rate goes into the JSON as `cpuThrottle`.
+//
+// `POS_PERF_TRACE=<file>` writes a Chromium performance trace of the first round to that file, and
+// marks each sample in it as a user-timing measure named `ttp <act>`, so `perf/trace-breakdown.mjs`
+// can say where each act's time went. Tracing costs time of its own, so a traced run's figures are
+// for the breakdown and not for the record.
 
 import { writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -42,6 +54,8 @@ const RELOADS_PER_ROUND = 5;
 
 const OUT = process.env["POS_PERF_OUT"] ?? "test-results/tap-to-paint.json";
 const ENFORCE = process.env["POS_PERF_ENFORCE"] === "1";
+const CPU_THROTTLE = Number(process.env["POS_PERF_CPU_THROTTLE"] ?? 1);
+const TRACE = process.env["POS_PERF_TRACE"];
 
 /** Each act's p95 budget in milliseconds (ADR-0173 decision 6). */
 const ALONE_MS = 50;
@@ -124,7 +138,11 @@ async function arm(page, until) {
       const observer = new MutationObserver(() => {
         if (holds()) {
           observer.disconnect();
-          requestAnimationFrame(() => resolve(performance.now() - probe.tap));
+          const changed = performance.now();
+          requestAnimationFrame(() => {
+            probe.end = performance.now();
+            resolve({ paint: probe.end - probe.tap, change: changed - probe.tap });
+          });
         }
       });
       observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
@@ -132,11 +150,18 @@ async function arm(page, until) {
   }, until);
 }
 
+/**
+ * Each act's time from the tap to the change in the DOM, before the frame that paints it: the part
+ * of a sample the till's own code decides, where the rest is the wait for the display's next frame
+ * and that frame's rendering. Recorded beside `tapToPaint`, and never enforced.
+ */
+const tapToChange = {};
+
 /** How long one sample may take before the run says which act never answered. */
 const SAMPLE_DEADLINE_MS = 10_000;
 
-/** Taps `locator` and returns the sample, in milliseconds. */
-async function measure(page, locator, until) {
+/** Taps `locator` and adds the sample, in milliseconds, to `acts[act]`; a trace marks it `ttp <act>`. */
+async function measure(page, acts, act, locator, until) {
   await arm(page, until);
   await locator.click();
   const sample = await page.evaluate(
@@ -147,7 +172,13 @@ async function measure(page, locator, until) {
   if (sample === null) {
     throw new Error(`no change matching ${JSON.stringify(until)} within ${SAMPLE_DEADLINE_MS} ms`);
   }
-  return sample;
+  if (TRACE !== undefined) {
+    await page.evaluate((name) => {
+      performance.measure(`ttp ${name}`, { start: window.__ttp.tap, end: window.__ttp.end });
+    }, act);
+  }
+  acts[act].push(sample.paint);
+  (tapToChange[act] ??= []).push(sample.change);
 }
 
 /** Every `/api/*` request since the last call, as `{ "<path>": [ms, …] }`, and clears the buffer. */
@@ -202,14 +233,12 @@ async function pairAndSignIn(page, edge) {
 async function moveUntilNoTableIsFree(page, acts) {
   for (;;) {
     const open = page.locator('[data-step="openMove"]');
-    acts["open the move list"].push(await measure(page, open, { present: '[data-step="moveTo"]' }));
+    await measure(page, acts, "open the move list", open, { present: '[data-step="moveTo"]' });
     const offered = page.locator('[data-step="moveTo"]');
     if ((await offered.count()) <= 1) {
       return;
     }
-    acts["move a table"].push(
-      await measure(page, offered.first(), { text: '[data-outcome="order-open"]' }),
-    );
+    await measure(page, acts, "move a table", offered.first(), { text: '[data-outcome="order-open"]' });
     await confirmed(page);
   }
 }
@@ -223,20 +252,20 @@ async function round(page, acts, requests) {
 
     // Seat the first free table: an act that waits for the edge.
     const seat = page.locator('[data-step="onCard"]').first();
-    acts["seat a table"].push(await measure(page, seat, { present: '[data-outcome="order-open"]' }));
+    await measure(page, acts, "seat a table", seat, { present: '[data-outcome="order-open"]' });
     const tableUrl = page.url();
 
     // Adding a line, which waits for the edge.
     for (let i = 0; i < LINES_PER_ROUND; i += 1) {
       const item = page.locator('[data-step="onItem"]').first();
-      acts["add a line"].push(await measure(page, item, { count: '[data-outcome="line-added"]' }));
+      await measure(page, acts, "add a line", item, { count: '[data-outcome="line-added"]' });
       await confirmed(page);
     }
 
     // One more on the first line, which waits for the edge.
     for (let i = 0; i < QUANTITY_TAPS_PER_ROUND; i += 1) {
       const plus = page.locator('[data-step="setQuantity"]').first();
-      acts["change a quantity"].push(await measure(page, plus, { text: '[data-outcome="line-quantity"]' }));
+      await measure(page, acts, "change a quantity", plus, { text: '[data-outcome="line-quantity"]' });
       await confirmed(page);
     }
     await drainRequests(page, requests);
@@ -244,9 +273,9 @@ async function round(page, acts, requests) {
     // Switching screens over data already loaded: to the floor and back to the table.
     for (let i = 0; i < SWITCHES_PER_ROUND; i += 1) {
       const home = page.locator('header a[href="/"]').first();
-      acts["order screen to floor"].push(await measure(page, home, { present: '[data-outcome="floor"]' }));
+      await measure(page, acts, "order screen to floor", home, { present: '[data-outcome="floor"]' });
       const card = page.locator('[data-step="onCard"]').first();
-      acts["floor to order screen"].push(await measure(page, card, { present: '[data-outcome="order-open"]' }));
+      await measure(page, acts, "floor to order screen", card, { present: '[data-outcome="order-open"]' });
     }
     await drainRequests(page, requests);
     expect(page.url()).toBe(tableUrl);
@@ -255,7 +284,13 @@ async function round(page, acts, requests) {
     for (let i = 0; i < RELOADS_PER_ROUND; i += 1) {
       await page.evaluate(() => sessionStorage.setItem("ttp-reload", "order"));
       await page.reload();
-      acts["reload to a drawn order screen"].push(await page.evaluate(() => window.__ttp.reload));
+      const reloaded = await page.evaluate(() => window.__ttp.reload);
+      if (TRACE !== undefined) {
+        await page.evaluate((end) => {
+          performance.measure("ttp reload to a drawn order screen", { start: 0, end });
+        }, reloaded);
+      }
+      acts["reload to a drawn order screen"].push(reloaded);
       await page.evaluate(() => sessionStorage.removeItem("ttp-reload"));
       await drainRequests(page, requests);
     }
@@ -265,6 +300,20 @@ async function round(page, acts, requests) {
   } finally {
     await edge.stop();
   }
+}
+
+/** Slows the page's CPU and starts the trace, where the run asks for them; resolves to what ends the trace. */
+async function instrument(browser, context, page, first) {
+  if (CPU_THROTTLE !== 1) {
+    const cdp = await context.newCDPSession(page);
+    await cdp.send("Emulation.setCPUThrottlingRate", { rate: CPU_THROTTLE });
+  }
+  if (TRACE === undefined || !first) {
+    return async () => {};
+  }
+  mkdirSync(dirname(TRACE), { recursive: true });
+  await browser.startTracing(page, { path: TRACE, screenshots: false });
+  return () => browser.stopTracing();
 }
 
 test("tap-to-paint and the edge round trip, recorded", async ({ browser }) => {
@@ -283,7 +332,9 @@ test("tap-to-paint and the edge round trip, recorded", async ({ browser }) => {
     const context = await browser.newContext();
     await context.addInitScript(installProbe);
     const page = await context.newPage();
+    const stopTracing = await instrument(browser, context, page, i === 0);
     await round(page, acts, requests);
+    await stopTracing();
     await context.close();
   }
 
@@ -296,7 +347,9 @@ test("tap-to-paint and the edge round trip, recorded", async ({ browser }) => {
   );
   const result = {
     rounds: ROUNDS,
+    cpuThrottle: CPU_THROTTLE,
     tapToPaint,
+    tapToChange: Object.fromEntries(Object.entries(tapToChange).map(([act, samples]) => [act, summarise(samples)])),
     edgeRoundTrip: Object.fromEntries(
       Object.entries(requests)
         .sort(([a], [b]) => a.localeCompare(b))
