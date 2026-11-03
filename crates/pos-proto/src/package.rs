@@ -95,6 +95,7 @@ impl PublishedPackage {
 
 /// One published package version, as it rides the store's document.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct PackageContent {
     /// The package.
     pub package_id: PackageId,
@@ -117,6 +118,7 @@ pub struct PackageContent {
 /// whose windows holds the store's local time, read in its time zone through `ClockSource`. A slot
 /// listed later that also holds that moment is not current until the earlier one ends.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct TimeSlot {
     /// The slot's id within its package, which a [`VariantSelector`] names: at most
     /// [`LABEL_CHARS_MAX`] characters of `a`–`z`, `0`–`9` and `_`.
