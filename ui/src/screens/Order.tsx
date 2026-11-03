@@ -121,7 +121,10 @@ export function Order() {
       .join(","),
   );
   // A draft walk-in (`../state/draft-walk-in`) has nothing on the edge to price until its first item.
-  const [check, { refetch: refetchCheck }] = createResource(() => params.id !== DRAFT && priceable(), () => loadCheck(key()));
+  // A read that fails is "no figure yet" rather than an error the resource keeps: a resource that
+  // has thrown stays errored, so one failed read used to leave the total at "—" through every read
+  // that followed. The next change reads it again.
+  const [check, { refetch: refetchCheck }] = createResource(() => params.id !== DRAFT && priceable(), () => loadCheck(key()).catch(() => undefined));
 
   // The lines the kitchen has not been told about. The count rides on the Send button, because the
   // question an operator asks before pressing it is "what is about to go" — and the answer used to
