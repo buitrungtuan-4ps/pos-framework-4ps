@@ -43,6 +43,9 @@ pub(in crate::app) struct ShiftRecord {
     /// decision 6): each voided bill's cash, wherever it was taken, leaves the drawer of the till
     /// the void is done at.
     pub(in crate::app) voided_cash: Money,
+    /// How many paid bills were voided at this drawer's till during the shift, cash or not
+    /// (ADR-0184), for its close card.
+    pub(in crate::app) voided_bills: u32,
     pub(in crate::app) counted: Option<Money>,
     /// The tax by component and rate its settled bills recorded on their tax lines (ADR-0168
     /// decision 5), one entry for each name and rate, and none for a line that recorded none.
@@ -73,6 +76,7 @@ impl ShiftRecord {
             paid_in: zero,
             paid_out: zero,
             voided_cash: zero,
+            voided_bills: 0,
             counted: None,
             tax_components: Vec::new(),
         }

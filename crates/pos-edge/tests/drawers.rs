@@ -1183,6 +1183,7 @@ fn a_combined_close_report_is_the_sum_of_the_drawers_closed_together() {
                 expected_amount: vnd(1_015_000),
                 counted_amount: vnd(1_015_000),
                 variance: vnd(0),
+                voided_cash: vnd(0),
             },
             "each figure is the sum of the two drawers' own: 765k expected at the bar, 250k at \
              the counter, 5k short and 5k over"

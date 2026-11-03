@@ -437,6 +437,7 @@
   "shift.title": "Ca tiền mặt",
   "shift.variance": "Chênh lệch",
   "shift.variance_reason": "Thừa hoặc thiếu nhiều hơn mức cửa hàng cho phép. Vì sao?",
+  "shift.voided_after_payment": "Hủy sau khi thanh toán: {count, plural, other {# hóa đơn}}, tiền mặt đã trả lại {amount}",
   "shift.waiting_per_store": "Cửa hàng sẽ chuyển sang một két chung cho cả cửa hàng khi két của mọi máy POS đều đã đóng ca.",
   "shift.waiting_per_till": "Cửa hàng sẽ chuyển sang mỗi máy POS một két khi két chung của cửa hàng đã đóng ca.",
   "signin.code": "Mã nhân viên",

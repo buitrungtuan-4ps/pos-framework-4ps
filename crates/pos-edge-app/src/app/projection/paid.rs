@@ -61,10 +61,12 @@ impl Projection {
         bill_id: BillId,
         shift: Option<ShiftId>,
     ) -> Result<(), DomainError> {
-        if let Some(cash) = self.paid(bill_id).map(|paid| paid.cash)
-            && let Some(record) = shift.and_then(|shift_id| self.shifts.get_mut(&shift_id))
-        {
-            record.voided_cash = record.voided_cash.checked_add(cash)?;
+        let cash = self.paid(bill_id).map(|paid| paid.cash);
+        if let Some(record) = shift.and_then(|shift_id| self.shifts.get_mut(&shift_id)) {
+            if let Some(cash) = cash {
+                record.voided_cash = record.voided_cash.checked_add(cash)?;
+            }
+            record.voided_bills = record.voided_bills.saturating_add(1);
         }
         self.void_bill_record(bill_id);
         Ok(())

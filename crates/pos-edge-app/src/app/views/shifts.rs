@@ -32,12 +32,18 @@ pub struct ShiftReport {
     pub paid_in: Money,
     /// Cash taken out of it outside a sale (`cash.drawer.paid_out`).
     pub paid_out: Money,
-    /// The float, plus the cash taken, plus paid in, minus paid out.
+    /// The float, plus the cash taken, plus paid in, minus paid out, minus the cash voids handed back.
     pub expected_amount: Money,
     /// What the cashier counted.
     pub counted_amount: Money,
     /// Counted minus expected. Negative means short.
     pub variance: Money,
+    /// How many paid bills were voided at this drawer's till during the shift
+    /// ([ADR-0184](../../../../../docs/adr/0184-a-settled-bill-is-voided-whole-not-refunded.md)),
+    /// cash or not, for the close card.
+    pub voided_bills: u32,
+    /// The cash those voids handed back out of this drawer, which the expected amount leaves out.
+    pub voided_cash: Money,
     /// Its bills' tax by component and rate, in order of name and then rate: what the tax lines of
     /// each bill settled on the shift recorded (ADR-0168 decision 5). Empty where none recorded any,
     /// as in every store whose `tax` node names no components; a line that recorded none adds
@@ -57,6 +63,7 @@ impl ShiftReport {
             expected_amount: self.expected_amount,
             counted_amount: self.counted_amount,
             variance: self.variance,
+            voided_cash: self.voided_cash,
         }
     }
 }
@@ -79,6 +86,9 @@ pub struct DrawerFigures {
     pub counted_amount: Money,
     /// Counted minus expected. Negative means short.
     pub variance: Money,
+    /// The cash handed back out of it for bills voided after payment (ADR-0184), which the
+    /// expectation leaves out.
+    pub voided_cash: Money,
 }
 
 impl DrawerFigures {
@@ -97,6 +107,7 @@ impl DrawerFigures {
             expected_amount: zero,
             counted_amount: zero,
             variance: zero,
+            voided_cash: zero,
         };
         reports.iter().try_fold(none, |sum, report| {
             Ok(Self {
@@ -107,6 +118,7 @@ impl DrawerFigures {
                 expected_amount: sum.expected_amount.checked_add(report.expected_amount)?,
                 counted_amount: sum.counted_amount.checked_add(report.counted_amount)?,
                 variance: sum.variance.checked_add(report.variance)?,
+                voided_cash: sum.voided_cash.checked_add(report.voided_cash)?,
             })
         })
     }

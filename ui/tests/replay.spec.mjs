@@ -2946,6 +2946,42 @@ test("cash paid in and out moves what the close expects, and a reload keeps it",
   }
 });
 
+// A cash bill voided after payment leaves the drawer of the till that voided it (ADR-0184): the
+// count is the float alone and balances, and the close card says what the voids handed back.
+test("a shift whose cash bill was voided closes balanced on its float and says so", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await openShift(page);
+    await navigateTo(page, "/");
+    await aSettledTable(page);
+
+    await navigateTo(page, "/today");
+    await page.locator('[data-step="chooseBill"]').click();
+    await page.locator('[data-step="askVoidPaidBill"]').click();
+    await page.locator("#void-paid-bill-approver-code").fill(edge.staffCode);
+    await page.locator("#void-paid-bill-approver-pin").fill(edge.staffPin);
+    await page.locator('[data-step="voidPaidBillReason"]').first().click();
+    await expect(page.locator('[data-outcome="paid-bill-voided"]')).toBeVisible();
+
+    await navigateTo(page, "/shift");
+    await page.locator("#count").fill("100000");
+    await page.locator('[data-step="countShift"]').click();
+    await expect(page.locator('[data-outcome="shift-counted"]')).toBeVisible();
+    await page.locator('[data-step="closeShift"]').click();
+    const closed = page.locator('[data-outcome="shift-closed"]');
+    await expect(closed.locator(".text-ok")).toBeVisible();
+    await expect(closed.locator('[data-outcome="shift-voided-after-payment"]')).toContainText(
+      "Voided after payment: 1 bill, cash handed back",
+    );
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A store's shift settings (ADR-0160 decision 2). The `shift-settings` store fills in a float of
 // 500,000₫ and shows what the drawer should hold at the count; every other store fills in nothing
 // and counts blind, as before the settings.

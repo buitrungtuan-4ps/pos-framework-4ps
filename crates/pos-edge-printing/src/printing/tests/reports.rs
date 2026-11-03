@@ -30,6 +30,8 @@ fn a_shift_report_adds_up_on_paper_and_says_over_or_short_in_words() {
         expected_amount: vnd(1_750_000),
         counted_amount: vnd(counted),
         variance: vnd(counted - 1_750_000),
+        voided_bills: 0,
+        voided_cash: vnd(0),
         tax_components: Vec::new(),
     };
 
@@ -82,6 +84,8 @@ fn a_combined_slip_prints_the_store_totals_then_each_drawer_under_its_tills_name
         expected_amount: vnd(float + 100_000),
         counted_amount: vnd(counted),
         variance: vnd(counted - float - 100_000),
+        voided_bills: 0,
+        voided_cash: vnd(0),
         tax_components: Vec::new(),
     };
     let bar = drawer(0xBA, 500_000, 590_000);
@@ -95,6 +99,7 @@ fn a_combined_slip_prints_the_store_totals_then_each_drawer_under_its_tills_name
             expected_amount: vnd(1_000_000),
             counted_amount: vnd(990_000),
             variance: vnd(-10_000),
+            voided_cash: vnd(0),
         },
         tax_components: Vec::new(),
         drawers: vec![
@@ -148,6 +153,8 @@ fn a_shift_report_prints_what_was_paid_in_and_out_so_the_expectation_adds_up() {
         expected_amount: vnd(1_800_000),
         counted_amount: vnd(1_800_000),
         variance: vnd(0),
+        voided_bills: 0,
+        voided_cash: vnd(0),
         tax_components: Vec::new(),
     };
     let english = shift_report_document(&StoreProfile::default(), &style(0), &ENGLISH, &report);
@@ -227,6 +234,8 @@ fn a_vietnamese_store_prints_its_bill_and_its_drawer_in_vietnamese() {
         expected_amount: vnd(1_750_000),
         counted_amount: vnd(1_730_000),
         variance: vnd(-20_000),
+        voided_bills: 0,
+        voided_cash: vnd(0),
         tax_components: Vec::new(),
     };
     let drawer = shift_report_document(&StoreProfile::default(), &style(0), &VIETNAMESE, &report);
@@ -234,4 +243,46 @@ fn a_vietnamese_store_prints_its_bill_and_its_drawer_in_vietnamese() {
     assert_eq!(drawn.first(), Some(&"BÁO CÁO CA"));
     assert_eq!(drawn.last(), Some(&"Thiếu"));
     assert!(drawn.contains(&"Chênh lệch  VND -20,000"));
+}
+
+/// A drawer that handed cash back for bills voided after payment prints it among the terms its
+/// expectation sums, so the paper still adds up (ADR-0184); one that handed none back prints no line.
+#[test]
+fn a_shift_report_prints_the_cash_voids_handed_back() {
+    let vnd = |minor| Money::new(CurrencyCode::VND, minor);
+    let report = ShiftReport {
+        shift_id: pos_proto::ids::ShiftId::new(Ulid::from_u128(7)),
+        opening_float: vnd(500_000),
+        cash_collected: vnd(1_250_000),
+        paid_in: vnd(0),
+        paid_out: vnd(0),
+        expected_amount: vnd(1_635_000),
+        counted_amount: vnd(1_635_000),
+        variance: vnd(0),
+        voided_bills: 1,
+        voided_cash: vnd(115_000),
+        tax_components: Vec::new(),
+    };
+    let english = shift_report_document(&StoreProfile::default(), &style(0), &ENGLISH, &report);
+    assert_eq!(
+        lines_of(&english)[2..6],
+        [
+            "Opening float  VND 500,000",
+            "Cash taken  VND 1,250,000",
+            "Voided after payment  VND 115,000",
+            "Expected in drawer  VND 1,635,000",
+        ]
+    );
+    let none = ShiftReport {
+        voided_bills: 0,
+        voided_cash: vnd(0),
+        ..report
+    };
+    let drawn = shift_report_document(&StoreProfile::default(), &style(0), &ENGLISH, &none);
+    assert!(
+        !lines_of(&drawn)
+            .iter()
+            .any(|line| line.starts_with("Voided")),
+        "no void, no line"
+    );
 }

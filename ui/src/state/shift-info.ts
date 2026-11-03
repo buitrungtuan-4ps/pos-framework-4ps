@@ -22,6 +22,7 @@ export function shiftInfo(response: ShiftResponse): ShiftInfo {
     paidIn: response.paid_in_amount,
     paidOut: response.paid_out_amount,
     dayEnded: response.day_ended === true,
+    voided: response.voided_after_payment,
     assignee: response.assigned_employee_id,
   };
 }
