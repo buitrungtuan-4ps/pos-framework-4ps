@@ -262,6 +262,12 @@ fn parse_archive_key(response: &HttpResponse) -> Result<String, PortError> {
             PORT,
             "this store's key does not authorise an archive key",
         )),
+        // Says so, because "the cloud could not be reached" is what an operator read while sync
+        // worked: a cloud with no archive storage is reachable and keeps no archives.
+        404 => Err(PortError::unavailable(
+            PORT,
+            "the cloud keeps no store archives: its archive storage is not configured (status 404)",
+        )),
         _ => Err(PortError::unavailable(
             PORT,
             format!(
@@ -443,7 +449,8 @@ fn parse_report(response: &HttpResponse) -> Result<(), PortError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        HttpResponse, SIGNATURE_HEADER, decode_hex, parse_activate, parse_fetch, parse_report,
+        HttpResponse, SIGNATURE_HEADER, decode_hex, parse_activate, parse_archive_key, parse_fetch,
+        parse_report,
     };
     use pos_proto::ids::DeviceId;
     use pos_proto::ulid::Ulid;
@@ -576,6 +583,26 @@ mod tests {
             "uppercase is not the agreed encoding"
         );
         assert_eq!(decode_hex("zz"), None);
+    }
+
+    #[test]
+    fn a_cloud_without_archive_storage_says_so_and_is_still_skipped_as_unavailable() {
+        let error = parse_archive_key(&response(404, b"")).expect_err("no archive storage");
+        assert_eq!(error.status(), pos_proto::ErrorStatus::Unavailable);
+        assert!(
+            error
+                .message()
+                .contains("archive storage is not configured"),
+            "{}",
+            error.message()
+        );
+        let error = parse_archive_key(&response(503, b"")).expect_err("down");
+        assert_eq!(error.status(), pos_proto::ErrorStatus::Unavailable);
+        assert!(
+            !error.message().contains("not configured"),
+            "{}",
+            error.message()
+        );
     }
 
     #[test]

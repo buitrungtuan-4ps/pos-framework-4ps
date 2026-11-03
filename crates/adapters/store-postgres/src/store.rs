@@ -5,15 +5,17 @@
 
 use std::num::NonZeroU32;
 
-use deadpool_postgres::{Manager, ManagerConfig, Object, Pool, PoolError, RecyclingMethod};
+use deadpool_postgres::{Manager, Object, Pool, PoolError};
 use tokio_postgres::NoTls;
 use tokio_postgres::error::SqlState;
 
 use pos_ports::event_store::{
     AppendOutcome, ChainAnchor, EventQuery, EventStore, OutboxPosition, OutboxRecord,
 };
-use pos_ports::{PortError, PortName, Transactional, TxContext};
+use pos_ports::{PortError, PortName, Transactional};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
+
+use crate::tx::{PgTx, manager_config};
 use pos_proto::ids::{EventId, StoreId, TenantId};
 
 /// The cloud schema, applied idempotently at start-up ([ADR-0017](../../../../docs/adr/0017-migrations.md)).
@@ -378,20 +380,7 @@ impl PostgresStore {
             PortError::invalid_argument(PortName::EventStore, "invalid database connection string")
                 .with_source(error)
         })?;
-        // Recycle every connection with `ROLLBACK` before it is handed out again. This is the
-        // load-bearing choice for durability: a `PgTx` dropped without `commit`/`rollback` (the
-        // crash the contract simulates) returns its connection to the pool with a transaction
-        // still open, and deadpool's own `Clean`/`Fast` recycling does *not* end it — the next
-        // caller would run inside that leaked transaction and see uncommitted rows. `ROLLBACK`
-        // ends it. When there is no open transaction it is a harmless no-op (a warning, not an
-        // error), so the normal begin→append→commit path pays nothing for it.
-        let manager = Manager::from_config(
-            config,
-            NoTls,
-            ManagerConfig {
-                recycling_method: RecyclingMethod::Custom("ROLLBACK".to_owned()),
-            },
-        );
+        let manager = Manager::from_config(config, NoTls, manager_config());
         let pool = Pool::builder(manager)
             .max_size(POOL_SIZE)
             .build()
@@ -1157,40 +1146,18 @@ impl PostgresStore {
     }
 }
 
-/// A write transaction over a pooled connection. `begin` issues `BEGIN`; [`TxContext::commit`] and
-/// [`TxContext::rollback`] issue `COMMIT`/`ROLLBACK` and return the connection to the pool. Owned,
-/// borrowing nothing, so it is `Send` and can be held across a spawn (ADR-0026 §2).
-#[derive(Debug)]
-pub struct PgTx {
-    connection: Object,
-}
-
-impl TxContext for PgTx {
-    async fn commit(self) -> Result<(), PortError> {
-        self.connection
-            .batch_execute("COMMIT")
-            .await
-            .map_err(unavailable)
-    }
-
-    async fn rollback(self) -> Result<(), PortError> {
-        self.connection
-            .batch_execute("ROLLBACK")
-            .await
-            .map_err(unavailable)
-    }
-}
-
 impl Transactional for PostgresStore {
     type Tx = PgTx;
 
     async fn begin(&self) -> Result<Self::Tx, PortError> {
-        let connection = self.connection().await?;
-        connection
+        // Held by the transaction before `BEGIN` is sent, so a caller cancelled while it is in
+        // flight drops a `PgTx`, whose connection then closes rather than going back open.
+        let tx = PgTx::new(self.connection().await?);
+        tx.client()?
             .batch_execute("BEGIN")
             .await
             .map_err(unavailable)?;
-        Ok(PgTx { connection })
+        Ok(tx)
     }
 }
 
@@ -1228,7 +1195,7 @@ impl EventStore for PostgresStore {
             // Idempotent by (business_date, event_id) — which is event_id in practice, since a replay
             // carries the same business_date. The stored copy wins; the incoming one is discarded.
             let inserted = tx
-                .connection
+                .client()?
                 .execute(
                     "INSERT INTO events (business_date, event_id, tenant_id, store_id, envelope) \
                      VALUES (to_date($1, 'YYYY-MM-DD'), $2, $3, $4, $5::text::json) \
@@ -1240,7 +1207,7 @@ impl EventStore for PostgresStore {
 
             if inserted == 1 {
                 outcome.appended = outcome.appended.saturating_add(1);
-                tx.connection
+                tx.client()?
                     .execute(
                         "INSERT INTO event_outbox (store_id, envelope) VALUES ($1, $2::text::json)",
                         &[&store_id, &envelope],

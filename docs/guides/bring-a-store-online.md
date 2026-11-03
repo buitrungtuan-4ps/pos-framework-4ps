@@ -122,7 +122,9 @@ Pick the tenant in the top bar, then open the **Stores** screen and choose **Gui
 > as a number, and `backup_interval_hours = 0` is the one thing it still does that the console
 > cannot: the store ships nothing, which the log says loudly at every start-up. Archiving needs
 > `cloud_url`, the scoped sync key, and a cloud configured for it; a box missing any of those trades
-> normally and names the missing piece in its log.
+> normally and names the missing piece in its log. A cloud without archive storage answers every
+> round without a key, and the box warns each round that the cloud keeps no store archives because
+> its archive storage is not configured; the store's sync is not affected.
 
 ## Step 2 — Install the store server and drop the config
 

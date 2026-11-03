@@ -4,7 +4,7 @@
 
 ## What it is
 
-The cloud's `EventStore` over PostgreSQL, and the tables behind every other cloud store (configuration, people, devices, catalogue, rollups, API keys …). Hand-written SQL over `tokio-postgres` and `deadpool`. The event log is partitioned monthly and tenant-isolated by row-level security.
+The cloud's `EventStore` over PostgreSQL, and the tables behind every other cloud store (configuration, people, devices, catalogue, rollups, API keys …). Hand-written SQL over `tokio-postgres` and `deadpool`. The event log is partitioned monthly and tenant-isolated by row-level security. A write transaction dropped before its `COMMIT` or `ROLLBACK` succeeds closes its connection rather than returning it to the pool, so the pool checks a connection it hands out with an empty query and never ends a transaction on it.
 
 ## Owns
 
