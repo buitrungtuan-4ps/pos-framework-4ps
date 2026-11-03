@@ -83,3 +83,15 @@ Two related gaps surfaced in the same UX review:
   refused and must use another till or a card. This is deliberate: that cash belongs to no count.
 - **Older edges:** an older edge ignores the new fields, and an older till sends none. Nothing
   breaks; the breakdown is simply absent.
+
+**Amendment (2026-11-03) — a drop has its own reasons, and the default list covers spending.** Decided
+by the owner with this record ("ok hết": the safe drop and the Vietnamese paid-out reasons). Decision 5
+gave `cash.drawer.dropped` an optional `reason_code_id`, but every reason field must name a
+`ReasonAction` the framework default covers (ADR-0115), so the console can author a value for it.
+**`ReasonAction` gains `REASON_ACTION_CASH_DROPPED`** (additive), and the framework default set gains
+`SAFE_DROP` ("Dropped to safe" / "Nộp két") for it; a drop's reason comes from that list, never the
+paid-out list. **The default set also gains two reasons for spending from the drawer**, applied to
+`REASON_ACTION_CASH_PAID_OUT`: `PURCHASE` ("Small purchase" / "Mua hàng") and `STAFF_ADVANCE`
+("Advance to staff" / "Tạm ứng"), so a store spends from the drawer for a stated reason before it
+publishes its own list. `STAFF_ADVANCE` names no person; who received it is not recorded. Until the
+action exists, the event ships without the field and adds it then, which is additive.
