@@ -8,6 +8,7 @@
 //! every store.
 
 pub mod from_log;
+pub mod mix;
 pub mod projection;
 pub mod rollup;
 pub mod voids;
