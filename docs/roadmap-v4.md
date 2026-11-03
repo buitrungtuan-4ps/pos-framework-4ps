@@ -69,8 +69,8 @@ Each is an ADR, accepted with this plan. The numbers were reserved together.
 | [0197](adr/0197-every-tap-paints-within-ten-milliseconds.md) | The 10 ms budget: its definition, its measurement (CI emulation and till telemetry) and its gate | replaces roadmap-v3 PF1's till targets |
 | [0198](adr/0198-a-store-reaches-the-internet-only-through-the-cloud.md) | The cloud as gateway: secrets in the cloud; retries, idempotency and timeouts; private address ranges blocked | extends ADR-0153 |
 | [0199](adr/0199-a-function-is-signed-pure-webassembly-that-returns-a-decision.md) | WebAssembly functions: pure functions returning decisions, fuel and memory limits, signed, rolled out by ring, run by `wasmtime` on the edge | amends ADR-0083 |
-| 0200 | Six business-type templates, shipped with the framework like country packs, tested as a template-by-country matrix | — |
-| 0201 | Devices: Tauri v2 mobile for Android and iOS, kiosk behaviour that does not depend on the Windows edition, the device class as a screen dimension | extends ADR-0147 |
+| [0200](adr/0200-six-business-type-templates-ship-with-the-framework.md) | Six business-type templates, shipped with the framework like country packs, tested as a template-by-country matrix | — |
+| [0201](adr/0201-the-till-runs-on-every-device-class.md) | Devices: Tauri v2 mobile for Android and iOS, kiosk behaviour that does not depend on the Windows edition, the device class as a screen dimension | extends ADR-0147 |
 
 ## Where roadmap v3's open items went
 
