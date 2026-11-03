@@ -18,7 +18,7 @@ pos-ports = { path = "../pos-ports" }
 # and RUSTSEC-2026-0192 declared both of those unmaintained. These two are the successors their own
 # advisories name, they are actively maintained (HarfBuzz and Google Fonts' fontations), and they
 # share one font parser — `read-fonts` — so the tree gains no second one.
-harfrust = { version = "0.14.0", default-features = false, features = ["std"] }
+harfrust = { version = "0.15.0", default-features = false, features = ["std"] }
 # Outlines, over the same `read-fonts` parser harfrust uses. These two versions are coupled and are
 # bumped together or not at all: each depends on read-fonts at a `0.x` minor of its own, so a skrifa
 # a minor ahead of harfrust (or behind it) puts a second read-fonts in the tree, which `deny.toml`'s
@@ -26,7 +26,7 @@ harfrust = { version = "0.14.0", default-features = false, features = ["std"] }
 # `.github/dependabot.yml` groups the two so a bump of one is proposed with the other; when a skrifa
 # needs a read-fonts no harfrust has been released against, wait for that harfrust rather than
 # pinning around it.
-skrifa = { version = "0.48.0", default-features = false, features = ["std"] }
+skrifa = { version = "0.49.0", default-features = false, features = ["std"] }
 
 [lints]
 workspace = true
