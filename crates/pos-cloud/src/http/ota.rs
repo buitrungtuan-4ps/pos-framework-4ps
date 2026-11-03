@@ -48,6 +48,9 @@ struct OtaReportState<R, C, K> {
     /// The `/internal` shared secret (ADR-0097). Guarded at the handler like the other two, for one
     /// shape across all three, even though this router carries only the one route.
     internal_shared_secret: Option<InternalSecret>,
+    /// Where a reporting store is handed to catch its package up (ADR-0189 decision 5), or `None`
+    /// where nothing compiles packages.
+    package_catch_up: Option<crate::http::PackageCatchUp>,
 }
 
 /// An edge's OTA report body ([ADR-0078](../../../docs/adr/0078-sync-and-ota-closure.md)): which store
@@ -98,6 +101,7 @@ pub fn ota_report_router<R, C, K>(
     clock: C,
     keys: K,
     internal_shared_secret: Option<InternalSecret>,
+    package_catch_up: Option<crate::http::PackageCatchUp>,
 ) -> Router
 where
     R: OtaReportStore + Clone + Send + Sync + 'static,
@@ -115,6 +119,7 @@ where
             clock,
             keys,
             internal_shared_secret,
+            package_catch_up,
         })
 }
 

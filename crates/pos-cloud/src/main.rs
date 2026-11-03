@@ -71,6 +71,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let chain_anchors: Arc<dyn pos_cloud::anchor::AnchorLedger> = Arc::new(store.chain_anchors());
 
     let providers = startup::vendor_catalogue(&config)?;
+    let (package_catch_up, catch_up_worker) = startup::packages::package_catch_up(&store, &audit);
+    let catch_up_task = tokio::spawn(catch_up_worker);
 
     let deps = startup::routes::RouteDeps {
         store: &store,
@@ -84,6 +86,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         orders_limiter: &orders_limiter,
         relay_wake: &relay_wake,
         cell: &cell,
+        package_catch_up: &package_catch_up,
     };
     let service = startup::routes::api_routes(app, &deps);
     let service = startup::routes::with_guest_ordering(service, &deps);
@@ -93,6 +96,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     loops.wind_down(archive_retention_task).await;
+    catch_up_task.abort();
     if let Some(task) = directory_reload {
         task.abort();
     }

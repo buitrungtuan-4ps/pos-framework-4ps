@@ -148,7 +148,7 @@ where
 }
 
 /// The version the store's published document carries on its Tenant layer, if any.
-async fn running_version<Cfg: ConfigTreeStore>(
+pub(super) async fn running_version<Cfg: ConfigTreeStore>(
     config_trees: &Cfg,
     tenant_id: TenantId,
     store_id: StoreId,
