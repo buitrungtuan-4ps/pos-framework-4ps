@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 use crate::campaign::PublishedSchedule;
 use crate::devices::DeviceClass;
 use crate::enums::SalesChannel;
+use crate::flow::Flow;
 use crate::ids::{DeviceId, PackageId, PackageVersionId};
 use crate::text::{ReleaseTag, TranslationKey};
 use crate::ulid::Ulid;
@@ -109,6 +110,10 @@ pub struct PackageContent {
     /// The package's named time slots, in the order that decides which one is current.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub time_slots: Vec<TimeSlot>,
+    /// The package's flows ([ADR-0192](../../../docs/adr/0192-a-flow-is-a-graph-of-steps-the-edge-re-checks.md)),
+    /// each with its variants; the variants of one flow share its `flow_id`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub flows: Vec<Variant<Flow>>,
 }
 
 /// A named part of the week a variant may be chosen for, such as lunch.
