@@ -356,6 +356,12 @@ const MIGRATION_0086: &str =
 /// ([ADR-0184](../../../docs/adr/0184-a-settled-bill-is-voided-whole-not-refunded.md) decision 4).
 const MIGRATION_0087: &str = include_str!("../migrations/0087_roles_can_void_a_paid_bill.sql");
 
+/// Every role that exists and grants `admin.config.edit` directly is given, once,
+/// `reports.shift.read_x` directly, and every store whose people have been published is queued for
+/// the cloud to publish them again
+/// ([ADR-0187](../../../docs/adr/0187-a-shift-is-handed-over-at-the-till-and-read-there.md) decision 4).
+const MIGRATION_0088: &str = include_str!("../migrations/0088_roles_can_read_a_shifts_x.sql");
+
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
 
@@ -749,6 +755,10 @@ impl PostgresStore {
             .map_err(unavailable)?;
         connection
             .batch_execute(MIGRATION_0087)
+            .await
+            .map_err(unavailable)?;
+        connection
+            .batch_execute(MIGRATION_0088)
             .await
             .map_err(unavailable)
     }

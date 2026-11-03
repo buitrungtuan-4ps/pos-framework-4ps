@@ -25,8 +25,8 @@ fn tree(tenant_layer: &serde_json::Value, store_layer: &serde_json::Value) -> St
 /// store is. A later boot queues nothing.
 ///
 /// `prepared` truncates `data_migrations` and the queue, so the boot below is the migration's
-/// first run, as it is on a database that has never seen the file. The 0084, 0086 and 0087 markers
-/// are written first, so what the boot queues is 0083's alone, under its own name.
+/// first run, as it is on a database that has never seen the file. The 0084, 0086, 0087 and 0088
+/// markers are written first, so what the boot queues is 0083's alone, under its own name.
 #[test]
 fn the_stores_whose_people_were_published_are_queued_once() {
     let tenant = TenantId::new(Ulid::from_u128(0x0083_7E11));
@@ -79,11 +79,12 @@ fn the_stores_whose_people_were_published_are_queued_once() {
                 "INSERT INTO data_migrations (name) \
                  VALUES ('0084_roles_can_manage_another_tills_drawer'), \
                         ('0086_roles_can_override_an_assigned_drawer'), \
-                        ('0087_roles_can_void_a_paid_bill')",
+                        ('0087_roles_can_void_a_paid_bill'), \
+                        ('0088_roles_can_read_a_shifts_x')",
                 &[],
             )
             .await
-            .expect("0084, 0086 and 0087 have already run");
+            .expect("0084, 0086, 0087 and 0088 have already run");
         let trees = postgres.config_trees();
         for (tenant_id, store_id, state) in &seeded {
             trees
@@ -143,7 +144,7 @@ fn the_stores_whose_people_were_published_are_queued_once() {
 
 /// Every marker-gated migration that grants roles a permission, and the queue's: a test of one
 /// writes the others' markers before its boot, so the boot runs that one alone.
-const MARKED: [&str; 8] = [
+const MARKED: [&str; 9] = [
     "0073_roles_keep_every_till_action",
     "0074_role_permissions_with_approval",
     "0076_roles_can_waive_a_fee",
@@ -152,6 +153,7 @@ const MARKED: [&str; 8] = [
     "0084_roles_can_manage_another_tills_drawer",
     "0086_roles_can_override_an_assigned_drawer",
     "0087_roles_can_void_a_paid_bill",
+    "0088_roles_can_read_a_shifts_x",
 ];
 
 /// Every role that exists is given, once, `cash.shift.manage_other_till` on the terms it grants
@@ -449,6 +451,166 @@ fn granted_once_on_the_terms_of(grant: &str, permission: &str, terms: &str, seed
                 .expect("read the queue")
                 .is_empty(),
             "and queues nothing"
+        );
+    });
+}
+
+/// Every role that exists and grants `admin.config.edit` directly is given, once,
+/// `reports.shift.read_x` directly (migration 0088, ADR-0187 decision 4), an archived one included;
+/// no other role, and no with-approval list, changes. The same statement queues every store holding
+/// a roster under the migration's name, and a later boot grants nothing again.
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one boot over three roles and two stores, and the boot after it"
+)]
+fn reading_a_shifts_x_is_granted_once_to_the_roles_that_run_the_store() {
+    const GRANT: &str = "0088_roles_can_read_a_shifts_x";
+    const MANAGER: &str = "01ROLE000000000000000000M8";
+    const SUPERVISOR: &str = "01ROLE000000000000000000V8";
+    const RETIRED: &str = "01ROLE000000000000000000R8";
+    let tenant = TenantId::new(Ulid::from_u128(0x0088_7E11));
+    let tenant_id = tenant.to_string();
+    let store = |n: u128| StoreId::new(Ulid::from_u128(0x0088_0000 + n));
+    let people_node = serde_json::json!({ "permissions": { "staff": [] } });
+    let list = |json: &str| -> Vec<String> {
+        serde_json::from_str(json).expect("a permission list is JSON")
+    };
+    block_on(async {
+        let (postgres, admin) = prepared().await.expect("prepare the database");
+        for marker in MARKED.into_iter().filter(|marker| *marker != GRANT) {
+            admin
+                .execute("INSERT INTO data_migrations (name) VALUES ($1)", &[&marker])
+                .await
+                .expect("every other grant and the queue have already run");
+        }
+        let people = postgres.people();
+        let roles = [
+            (
+                MANAGER,
+                r#"["menu.item.edit","admin.config.edit"]"#,
+                r#"["billing.comp.apply"]"#,
+            ),
+            (
+                SUPERVISOR,
+                r#"["cash.shift.close"]"#,
+                r#"["admin.config.edit"]"#,
+            ),
+            (RETIRED, r#"["admin.config.edit"]"#, "[]"),
+        ];
+        for (id, direct, approved) in roles {
+            people
+                .insert_role_template(id, &tenant_id, id, direct, approved, None)
+                .await
+                .expect("a role");
+        }
+        let retired = people
+            .fetch_role_template(&tenant_id, RETIRED)
+            .await
+            .expect("fetch")
+            .expect("present");
+        people
+            .set_role_template(
+                &tenant_id,
+                RETIRED,
+                RETIRED,
+                r#"["admin.config.edit"]"#,
+                "[]",
+                "archived",
+                None,
+                &retired.version,
+            )
+            .await
+            .expect("archive it");
+        let trees = postgres.config_trees();
+        trees
+            .save_state(
+                tenant,
+                store(1),
+                &tree(&serde_json::json!({}), &people_node),
+                None,
+            )
+            .await
+            .expect("a store whose people were published");
+        trees
+            .save_state(
+                tenant,
+                store(2),
+                &tree(&serde_json::json!({}), &serde_json::json!({})),
+                None,
+            )
+            .await
+            .expect("a store with none");
+
+        postgres
+            .migrate()
+            .await
+            .expect("the boot that runs 0088 first");
+        let role = |id: &'static str| {
+            let people = postgres.people();
+            let tenant_id = tenant_id.clone();
+            async move {
+                people
+                    .fetch_role_template(&tenant_id, id)
+                    .await
+                    .expect("fetch")
+                    .expect("present")
+            }
+        };
+        let manager = role(MANAGER).await;
+        assert_eq!(
+            list(&manager.permissions_json),
+            [
+                "admin.config.edit",
+                "menu.item.edit",
+                "reports.shift.read_x"
+            ],
+            "directly, in byte order"
+        );
+        assert_eq!(
+            list(&manager.permissions_with_approval_json),
+            ["billing.comp.apply"]
+        );
+        let supervisor = role(SUPERVISOR).await;
+        assert_eq!(list(&supervisor.permissions_json), ["cash.shift.close"]);
+        assert_eq!(
+            list(&supervisor.permissions_with_approval_json),
+            ["admin.config.edit"]
+        );
+        let archived = role(RETIRED).await;
+        assert_eq!(
+            list(&archived.permissions_json),
+            ["admin.config.edit", "reports.shift.read_x"]
+        );
+
+        let queue = postgres.people_republishes();
+        let queued = queue.pending(None, 100).await.expect("read the queue");
+        let keys: Vec<(String, String)> = queued
+            .iter()
+            .filter(|row| row.reason == GRANT)
+            .map(|row| (row.tenant_id.clone(), row.store_id.clone()))
+            .collect();
+        assert_eq!(keys, vec![(tenant_id.clone(), store(1).to_string())]);
+
+        // The owner takes it off the manager; the next boot does not hand it back.
+        people
+            .set_role_template(
+                &tenant_id,
+                MANAGER,
+                MANAGER,
+                r#"["admin.config.edit","menu.item.edit"]"#,
+                r#"["billing.comp.apply"]"#,
+                "active",
+                None,
+                &manager.version,
+            )
+            .await
+            .expect("the owner edits the role");
+        postgres.migrate().await.expect("the next boot");
+        assert_eq!(
+            list(&role(MANAGER).await.permissions_json),
+            ["admin.config.edit", "menu.item.edit"],
+            "a later boot does not hand back what the owner took away"
         );
     });
 }
