@@ -33,6 +33,12 @@ import { Button, Skeleton } from "./ui";
 import type { Store, Tenant } from "../api/schemas";
 
 
+// The org switcher's search: filter each list by name as the operator types.
+const matchesSearch = (name: string, needle: string) =>
+  name.toLowerCase().includes(needle.trim().toLowerCase());
+const filterList = <T extends { name: string }>(all: T[], query: string) =>
+  query.trim() ? all.filter((item) => matchesSearch(item.name, query)) : all;
+
 export function ContextPicker() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -180,10 +186,15 @@ export function ContextPicker() {
     void loadStores(tenant.tenant_id);
   };
 
+  const close = () => {
+    setOpen(false);
+    queueMicrotask(() => trigger?.focus());
+  };
+
   const chooseStore = (store: Store) => {
     selectStore(store.store_id, store.name);
     goToContext(tenantId(), store.store_id);
-    setOpen(false);
+    close();
   };
 
   // Create a tenant right here (F0). Before this, an empty registry was a dead end: the picker read
@@ -216,12 +227,6 @@ export function ContextPicker() {
     }
   };
 
-  // The org switcher's search: filter each list by name as the operator types.
-  const matchesSearch = (name: string, needle: string) =>
-    name.toLowerCase().includes(needle.trim().toLowerCase());
-  const filterList = <T extends { name: string }>(all: T[], query: string) =>
-    query.trim() ? all.filter((item) => matchesSearch(item.name, query)) : all;
-
   return (
     <div class="relative" ref={container}>
       <button
@@ -252,7 +257,7 @@ export function ContextPicker() {
         >
           <div class="flex items-center justify-between border-b border-line px-3 py-2">
             <span class="text-sm font-semibold text-ink">{t("context.workingIn")}</span>
-            <Button variant="secondary" onClick={() => setOpen(false)}>
+            <Button variant="secondary" onClick={close}>
               {t("context.close")}
             </Button>
           </div>

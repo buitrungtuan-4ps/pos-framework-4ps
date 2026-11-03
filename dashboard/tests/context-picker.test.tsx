@@ -42,12 +42,12 @@ vi.mock("../src/api/client", () => ({
  * hands back the router's history, which is where the address bar lives here. `MemoryRouter` never
  * touches `window.location`, so asserting on that would pass no matter what the component did.
  */
-function mountPicker() {
+function mountPicker(path = "/") {
   const history = createMemoryHistory();
+  history.set({ value: path });
   render(() => (
     <MemoryRouter history={history}>
-      <Route path="/" component={ContextPicker} />
-      <Route path="/t/:tenant" component={ContextPicker} />
+      <Route path="*" component={ContextPicker} />
     </MemoryRouter>
   ));
   return history;
@@ -151,6 +151,34 @@ describe("the context picker on a cell that already has tenants", () => {
     await waitFor(() => expect(document.activeElement).toBe(box));
 
     fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("closes on Close button and restores focus to the trigger button", async () => {
+    mountPicker();
+    const trigger = screen.getByLabelText("Change tenant or store");
+    fireEvent.click(trigger);
+
+    const closeBtn = await screen.findByRole("button", { name: "Close" });
+    fireEvent.click(closeBtn);
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("restores focus to the trigger button when a store is selected", async () => {
+    const STORE = { store_id: "01M22190WCY5PS7KCA7ET7H678", name: "Ben Thanh" };
+    listStores.mockResolvedValue([STORE]);
+    setTenantId(TENANT.tenant_id);
+
+    mountPicker();
+    const trigger = screen.getByLabelText("Change tenant or store");
+    fireEvent.click(trigger);
+
+    const storeBtn = await screen.findByRole("button", { name: /Ben Thanh/ });
+    fireEvent.click(storeBtn);
+
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(document.activeElement).toBe(trigger);
   });
