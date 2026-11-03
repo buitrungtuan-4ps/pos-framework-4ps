@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "@solidjs/router";
 
 import { ApiError, api } from "../api/client";
 import { ApproverFields } from "../components/ApproverFields";
+import { BillEnded } from "../components/BillEnded";
 import { DrawerOwner } from "../components/DrawerOwner";
 import { Keypad } from "../components/Keypad";
 import type {
@@ -50,6 +51,7 @@ import {
 } from "../state/store";
 import { errorMessage } from "../lib/errors";
 import { useInFlight } from "../lib/in-flight";
+import { endedElsewhere } from "../state/closing";
 import { printOutcomeKey } from "../lib/print";
 import { asksApprover, can, permissionsEnforced } from "../state/permissions";
 
@@ -393,6 +395,8 @@ export function Pay() {
 
   // The settle in flight, keyed by the tender tapped, which says so until the edge answers.
   const paying = useInFlight<string>(setError);
+  // The bill on screen settled or voided on another till; not asked while this till's own act is out.
+  const ended = () => (done() === null && !voided() && paying.busy() === null ? endedElsewhere(params.id, billId()) : null);
   const pay = (payments: PaymentRequest[]) =>
     paying.run(payments[payments.length - 1]?.method ?? "", async () => {
       const id = billId();
@@ -683,15 +687,11 @@ export function Pay() {
     if (id === null) {
       return;
     }
-    setError(null);
-    void voidBill(id, reasonCodeId, voidAsks() ? approval() : undefined)
-      .then(() => {
-        closeVoid();
-        setVoided(true);
-      })
-      .catch((caught: unknown) =>
-        setError(errorMessage(caught)),
-      );
+    void paying.run("void", async () => {
+      await voidBill(id, reasonCodeId, voidAsks() ? approval() : undefined);
+      closeVoid();
+      setVoided(true);
+    });
   };
 
   // Minor units, or null while what has been typed is not a number the till can send. Integer the
@@ -838,7 +838,7 @@ export function Pay() {
       <Show
         when={done()}
         fallback={
-          <Show when={!voided()} fallback={voidedPanel()}>
+          <Show when={!voided() && ended() === null} fallback={voided() ? voidedPanel() : <BillEnded how={ended() ?? "settled"} tableId={params.id} />}>
             <p class="mt-4 text-sm text-ink-muted">{t("pay.amount_due")}</p>
             <Show when={check()} fallback={<p class="text-2xl font-semibold tabular-nums">{"—"}</p>}>
               {(totals) => (
