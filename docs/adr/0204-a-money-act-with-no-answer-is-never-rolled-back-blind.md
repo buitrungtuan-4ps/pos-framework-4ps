@@ -31,10 +31,12 @@ the drawer, and invites the cashier to take the payment again.
 2. **The re-read is bounded.** It retries every 2 seconds for 30 seconds. After that, the screen says
    the store server cannot be reached and that the payment is not confirmed, and keeps reading every
    10 seconds while it is open.
-3. **A manager may leave it to look up later.** A person with the act's permission and a manager's
-   PIN may leave the pending screen. The subject stays marked on this till as **unconfirmed** until
-   the edge answers for it. A bill marked so offers no settle, here or from the order screen; the
-   other tills see it as the edge does.
+3. **A manager may leave it to look up later.** A signed-in person whose own roles grant
+   `billing.bill.void`, which the till already knows ([ADR-0158](0158-the-till-enforces-each-persons-own-permissions.md)),
+   may leave the screen once the store server is unreachable. No PIN is asked, because the edge,
+   which checks PINs, is what cannot be reached. The subject stays marked on this till as
+   **unconfirmed** until the edge answers for it. A bill marked so offers no settle on this till;
+   the other tills see it as the edge does.
 4. **Never a second attempt.** While an act's answer is unknown, the till does not offer that act on
    its subject again. The edge stays the only writer (ADR-0196 decision 5), and nothing is queued or
    re-sent.
@@ -43,6 +45,6 @@ the drawer, and invites the cashier to take the payment again.
 
 - A cashier can wait on a pending payment screen for as long as the edge is unreachable, rather than
   being told a payment failed that may have succeeded.
-- A manager's PIN is needed to walk away from an unconfirmed payment.
+- Only a manager can walk away from an unconfirmed payment, and does so without a PIN.
 - The till keeps a small per-subject "unconfirmed" mark until the edge answers. It is lost on reload,
   and the reload reads the edge's state anyway.
