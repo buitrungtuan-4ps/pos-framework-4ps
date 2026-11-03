@@ -43,7 +43,6 @@ import {
   voidLine,
   waiveFee,
   walkInAsks,
-  walkInEatenIn,
   walkInKey,
   walkInOrderChannel,
   type OrderLine,
@@ -55,6 +54,7 @@ import { useInFlight } from "../lib/in-flight";
 import { printOutcomeKey } from "../lib/print";
 import { SendFirst } from "../components/SendFirst";
 import { createSendFirst, waitingByCourse } from "../state/unsent";
+import { DRAFT, draftChannel, eatenIn, keyToAddTo } from "../state/draft-walk-in";
 import { asksApprover, can } from "../state/permissions";
 
 // The action a void of one line cites, so the picker offers what the store holds *for voiding* and
@@ -79,7 +79,7 @@ export function Order() {
   // unchanged; only the header, the way back and the way to pay differ.
   const walkIn = () => location.pathname.startsWith("/order/");
   const key = () => (walkIn() ? walkInKey(params.id) : params.id);
-  if (walkIn()) {
+  if (walkIn() && params.id !== DRAFT) {
     holdWalkIn(params.id);
   }
   // The table's published label — the number the floor, the kitchen board and the pass all show
@@ -120,7 +120,8 @@ export function Order() {
       .map((line) => `${line.orderLineId}:${line.state}:${line.quantityMilli}`)
       .join(","),
   );
-  const [check, { refetch: refetchCheck }] = createResource(priceable, () => loadCheck(key()));
+  // A draft walk-in (`../state/draft-walk-in`) has nothing on the edge to price until its first item.
+  const [check, { refetch: refetchCheck }] = createResource(() => params.id !== DRAFT && priceable(), () => loadCheck(key()));
 
   // The lines the kitchen has not been told about. The count rides on the Send button, because the
   // question an operator asks before pressing it is "what is about to go" — and the answer used to
@@ -343,7 +344,7 @@ export function Order() {
 
   // The price book this order is sold from. A walk-in is priced by the edge at its own channel, so
   // it shows that channel's book (ADR-0066); a table is the dining room's.
-  const channel = () => walkInOrderChannel(params.id);
+  const channel = () => (params.id === DRAFT ? draftChannel() : walkInOrderChannel(params.id));
   const menuItems = () => (walkIn() ? (state.walkInMenu[channel()] ?? []) : state.menu);
   const menuGroups = () =>
     walkIn() ? (state.walkInModifierGroups[channel()] ?? []) : state.modifierGroups;
@@ -465,7 +466,8 @@ export function Order() {
     return trimmed === "" ? undefined : trimmed;
   };
   const addWithNote = async (item: MenuItemResponse, modifiers: string[]) => {
-    await addItem(key(), item, modifiers, pendingNote());
+    const into = await keyToAddTo(params.id, key(), (path) => navigate(path, { replace: true }));
+    await addItem(into, item, modifiers, pendingNote());
     setNote("");
   };
 
@@ -633,12 +635,12 @@ export function Order() {
             {walkIn() ? t("order.walk_in") : t("common.table", { label: label() })}
           </h1>
           {/* What the guest answered, where the store asks each walk-in (ADR-0160 decision 2). */}
-          <Show when={walkIn() && walkInAsks() && walkInEatenIn(params.id) !== undefined}>
+          <Show when={walkIn() && walkInAsks() && eatenIn(params.id) !== undefined}>
             <span
               class="rounded-token bg-surface-muted px-2 text-sm font-semibold"
               data-outcome="walk-in-channel"
             >
-              {t(walkInEatenIn(params.id) ? "counter.eat_in" : "counter.take_away")}
+              {t(eatenIn(params.id) ? "counter.eat_in" : "counter.take_away")}
             </span>
           </Show>
           <Show when={!walkIn()}>
