@@ -867,7 +867,7 @@ export function fold(event: ServerEvent): void {
       } else if (own === null) {
         void loadShift();
       }
-      void loadDrawers();
+      void loadDrawers(true);
       break;
     }
     // A count names the drawer's shift and no till: under a drawer per till it is this device's when
@@ -883,7 +883,7 @@ export function fold(event: ServerEvent): void {
           void loadShift();
         }
       }
-      void loadDrawers();
+      void loadDrawers(true);
       break;
     }
     // A paid in or out on any device: read the shift's totals back, rather than add the amount here,
@@ -893,7 +893,7 @@ export function fold(event: ServerEvent): void {
       if (ownDrawer(str(payload, "terminal_device_id")) !== false) {
         void loadShift();
       }
-      void loadDrawers();
+      void loadDrawers(true);
       break;
     case "cash.shift.closed": {
       const shiftId = str(payload, "closed_shift_id");
@@ -912,7 +912,7 @@ export function fold(event: ServerEvent): void {
       } else if (own === null) {
         void loadShift();
       }
-      void loadDrawers();
+      void loadDrawers(true);
       break;
     }
     case "billing.bill.settled": {
@@ -1696,8 +1696,11 @@ function replaceShift(info: ShiftInfo | null): void {
 
 // Every drawer the store keeps (ADR-0167). Read through the engine: an edge that predates the
 // read, or a blip, leaves whatever is held, and a till that never read one shows one drawer.
-export function loadDrawers(): Promise<void> {
-  return load("drawers");
+//
+// `fresh` for a read a live-link event sets off: a read already out may have been answered before
+// the event's change, so the event's read follows it instead of joining it (`load`).
+export function loadDrawers(fresh = false): Promise<void> {
+  return load("drawers", fresh);
 }
 
 export function applyDrawers(response: DrawersResponse): void {
