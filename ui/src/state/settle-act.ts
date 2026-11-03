@@ -69,7 +69,7 @@ export interface SettleAct extends MoneyAct<BillResponse> {
 
 /** The pay screen's settle: `onSettled` gets the edge's answer, or what a re-read found. */
 export function useSettleAct(onSettled: (bill: BillResponse) => void): SettleAct {
-  const act = useMoneyAct<BillResponse>({ recheck: recheckSettle, committed: onSettled });
+  const act = useMoneyAct<BillResponse>({ act: "settle", recheck: recheckSettle, committed: onSettled });
   const pay = (billId: string, payments: PaymentRequest[], due: number, buyer: BuyerRequest | undefined) =>
     act.run(
       billId,

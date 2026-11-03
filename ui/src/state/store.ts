@@ -1939,16 +1939,14 @@ export async function loadBillCheck(billId: string): Promise<BillCheckResponse> 
   return api.billCheck(billId);
 }
 
-// Splits a bill into parts, each the lines one guest pays for (ADR-0128), and answers with the
-// parts' ids in the order they were given. The parts take the source's place on its table's list,
-// so the first part is the bill the pay screen offers next.
+// A split the edge committed (ADR-0128), whether it answered or a re-read of the table's bills found
+// it later (ADR-0204): the parts take the source's place on its table's list, so the first part is
+// the bill the pay screen offers next.
 //
 // The fan-out brings the same facts — each part's `billing.bill.opened`, then the split — and may
-// land before this answer does. Either order ends with the same list: a part already folded is not
-// added twice, and a source already folded away is simply not there to replace.
-export async function splitBill(billId: string, parts: string[][]): Promise<string[]> {
-  const response = await api.splitBill(billId, { parts });
-  const partIds = response.bill_ids;
+// land before this does. Either order ends with the same list: a part already folded is not added
+// twice, and a source already folded away is simply not there to replace.
+export function applySplit(billId: string, partIds: readonly string[]): void {
   setState(
     produce((draft) => {
       const order = draft.billOrder[billId];
@@ -1971,13 +1969,16 @@ export async function splitBill(billId: string, parts: string[][]): Promise<stri
         at < 0 ? [...partIds, ...others] : [...others.slice(0, at), ...partIds, ...others.slice(at)];
     }),
   );
-  return partIds;
 }
 
-// Folds the other bills open on a table back into this one — undoing a split is a merge, never an
-// edit (ADR-0128 decision 10).
-export async function mergeBills(billId: string, absorbed: string[]): Promise<void> {
-  await api.mergeBills(billId, { absorbed_bill_ids: absorbed });
+/** The order a bill this device knows is on. */
+export function orderOfBill(billId: string): string | undefined {
+  return state.billOrder[billId];
+}
+
+// A merge the edge committed, answered or found by a re-read (ADR-0204): the absorbed bills close.
+// Undoing a split is a merge, never an edit (ADR-0128 decision 10).
+export function applyMerged(absorbed: readonly string[]): void {
   setState(
     produce((draft) => {
       for (const id of absorbed) {

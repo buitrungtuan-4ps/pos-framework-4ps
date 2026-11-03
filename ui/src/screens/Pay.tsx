@@ -39,12 +39,10 @@ import {
   linesForTable,
   loadBillCheck,
   loadCheck,
-  mergeBills,
   openBillFor,
   openBillsFor,
   reasonsFor,
   seatsEnabled,
-  splitBill,
   splitWays,
   tenderAccepted,
   tipPercents,
@@ -55,6 +53,7 @@ import { errorMessage } from "../lib/errors";
 import { endedElsewhere } from "../state/closing";
 import { openForPay } from "../state/open-for-pay";
 import { useSplitPlan } from "../state/split-plan";
+import { useSplitActs } from "../state/split-acts";
 import { printOutcomeKey } from "../lib/print";
 import { asksApprover, can } from "../state/permissions";
 
@@ -396,7 +395,10 @@ export function Pay() {
     },
   });
   const paying = { busy: acts.busy };
-  onMount(() => acts.resume());
+  onMount(() => {
+    acts.resume();
+    shape.resume();
+  });
   // The bill on screen settled or voided on another till; not asked while this till's own act is out.
   const ended = () => (done() === null && !voided() && paying.busy() === null ? endedElsewhere(params.id, billId()) : null);
   const pay = (payments: PaymentRequest[]) => acts.pay(payments, total(), buyer());
@@ -553,21 +555,33 @@ export function Pay() {
     }
     return parts.length > 1 ? parts : null;
   };
-  // One tap: a bill per seat, from the seat each line already carries, and the first on screen.
-  const splitBySeat = async () => {
-    const id = billId();
-    const parts = seatParts();
-    if (id === null || parts === null) {
-      return;
-    }
-    setError(null);
-    try {
-      const [first] = await splitBill(id, parts);
+  // Splitting and putting back as money acts (`../state/split-acts`): the first part goes on screen
+  // once the edge commits the split, and the bill is read again once it commits the merge.
+  const shape = useSplitActs({
+    billId,
+    tableId: () => params.id,
+    onSplit: ([first]) => {
+      setPicking(false);
       if (first !== undefined) {
         switchTo(first);
       }
-    } catch (caught) {
-      setError(errorMessage(caught));
+    },
+    onMerged: () => {
+      setTender(null);
+      setTyping(false);
+      setTypedText("");
+      const id = billId();
+      if (id !== null) {
+        void showBill(id);
+      }
+    },
+  });
+  // One tap: a bill per seat, from the seat each line already carries, and the first on screen.
+  const splitBySeat = () => {
+    const parts = seatParts();
+    if (parts !== null) {
+      setError(null);
+      shape.split(covered() ?? [], parts);
     }
   };
 
@@ -592,44 +606,21 @@ export function Pay() {
   // Splits the picked lines off into a bill of their own and puts it on screen; the rest stay open
   // on the table as the next bill. A partition of exactly what the bill covers, which is the one
   // shape the edge accepts.
-  const splitOff = async () => {
-    const id = billId();
+  const splitOff = () => {
     const ids = covered();
-    if (id === null || ids === null || !canSplitOff()) {
-      return;
-    }
-    const chosen = ids.filter((lineId) => picked().has(lineId));
-    const rest = ids.filter((lineId) => !picked().has(lineId));
-    setError(null);
-    try {
-      const [first] = await splitBill(id, [chosen, rest]);
-      setPicking(false);
-      if (first !== undefined) {
-        switchTo(first);
-      }
-    } catch (caught) {
-      setError(errorMessage(caught));
+    if (ids !== null && canSplitOff()) {
+      setError(null);
+      shape.split(ids, [ids.filter((lineId) => picked().has(lineId)), ids.filter((lineId) => !picked().has(lineId))]);
     }
   };
 
   // The table's other open bills, which putting the bill back together folds into this one.
   const otherParts = () => openBillsFor(params.id).filter((id) => id !== billId());
   // Undoing a split is a merge into the bill on screen, never an edit (ADR-0128 decision 10).
-  const putBack = async () => {
-    const id = billId();
-    const others = otherParts();
-    if (id === null || others.length === 0) {
-      return;
-    }
-    setError(null);
-    try {
-      await mergeBills(id, others);
-      setTender(null);
-      setTyping(false);
-      setTypedText("");
-      await showBill(id);
-    } catch (caught) {
-      setError(errorMessage(caught));
+  const putBack = () => {
+    if (otherParts().length > 0) {
+      setError(null);
+      shape.merge(otherParts());
     }
   };
 
@@ -854,7 +845,7 @@ export function Pay() {
               <button
                 type="button"
                 class="mt-2 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted"
-                onClick={() => void putBack()}
+                onClick={() => putBack()}
               >
                 {t("pay.put_back", { count: otherParts().length + 1 })}
               </button>
@@ -881,6 +872,10 @@ export function Pay() {
             </Show>
 
             <RefusalPanel message={acts.refusal()} onDismiss={acts.dismiss} />
+            <Show when={shape.pending()}>
+              {(out) => <PendingSettle act={out().act} phase={out().phase} amount="" onLeave={() => navigate("/")} />}
+            </Show>
+            <RefusalPanel message={shape.refusal()} onDismiss={shape.dismiss} />
             <Show when={error()}>
               {(message) => (
                 <p class="mt-3 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
@@ -1004,7 +999,7 @@ export function Pay() {
                       class="min-h-touch flex-1 rounded-token border border-line bg-surface disabled:opacity-50"
                       disabled={ways() !== null || taken().length > 0}
                       data-step="splitBySeat"
-                      onClick={() => void splitBySeat()}
+                      onClick={() => splitBySeat()}
                     >
                       {t("pay.split_by_seat", { count: parts().length })}
                     </button>
@@ -1039,7 +1034,7 @@ export function Pay() {
                   class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
                   disabled={!canSplitOff()}
                   data-step="splitOff"
-                  onClick={() => void splitOff()}
+                  onClick={() => splitOff()}
                 >
                   {t("pay.split_off", { count: picked().size })}
                 </button>

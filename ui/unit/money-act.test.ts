@@ -35,11 +35,17 @@ function fakeTime() {
   };
 }
 
-function setup(recheck: (subject: string) => Promise<Recheck<string>>) {
+function setup(recheck: (subject: string) => Promise<Recheck<string>>, kind?: string) {
   const time = fakeTime();
   const committed: string[] = [];
   const act = createRoot(() =>
-    useMoneyAct<string>({ recheck, committed: (value) => committed.push(value), timers: time.timers, now: time.now }),
+    useMoneyAct<string>({
+      act: kind,
+      recheck,
+      committed: (value) => committed.push(value),
+      timers: time.timers,
+      now: time.now,
+    }),
   );
   return { act, committed, time };
 }
@@ -118,6 +124,25 @@ describe("a money act", () => {
     expect(act.phase()).toBe("idle");
     expect(act.refusal()).toBe("Not taken.");
     expect(committed).toEqual([]);
+  });
+});
+
+describe("a money act left unconfirmed", () => {
+  it("is picked up again only by the act that left it", async () => {
+    const split = setup(async () => null, "split");
+    await split.act.run("bill-5", () => null, async () => {
+      throw new TypeError("network");
+    });
+    // A screen opened again: the settle there does not take the split's subject as its own.
+    const settle = setup(async () => ({ committed: "settled" }), "settle");
+    settle.act.resume("bill-5");
+    expect(settle.act.phase()).toBe("idle");
+    const again = setup(async () => ({ committed: "split" }), "split");
+    again.act.resume("bill-5");
+    expect(again.act.phase()).toBe("checking");
+    await again.time.advance(2_000);
+    expect(again.committed).toEqual(["split"]);
+    expect(isUnconfirmed("bill-5")).toBe(false);
   });
 });
 

@@ -26,18 +26,19 @@ export const RECHECK_EVERY_MS = 2_000;
 export const RECHECK_FAST_FOR_MS = 30_000;
 export const RECHECK_SLOW_MS = 10_000;
 
-const [unconfirmed, setUnconfirmed] = createSignal<ReadonlySet<string>>(new Set<string>());
+// Each unconfirmed subject, with the act that left it so: only that act picks it up again.
+const [unconfirmed, setUnconfirmed] = createSignal<ReadonlyMap<string, string>>(new Map<string, string>());
 
 /** Whether an act on this subject went unanswered and the edge has not yet said what came of it. */
 export function isUnconfirmed(subject: string | null): boolean {
   return subject !== null && unconfirmed().has(subject);
 }
 
-function mark(subject: string, on: boolean): void {
+function mark(subject: string, act: string | null): void {
   setUnconfirmed((current) => {
-    const next = new Set(current);
-    if (on) {
-      next.add(subject);
+    const next = new Map(current);
+    if (act !== null) {
+      next.set(subject, act);
     } else {
       next.delete(subject);
     }
@@ -61,6 +62,8 @@ export interface MoneyAct<T> {
 }
 
 interface Options<T> {
+  /** Which act this is, so a screen opened again resumes only the act left unconfirmed. */
+  readonly act?: string;
   readonly recheck: (subject: string) => Promise<Recheck<T>>;
   readonly committed: (value: T) => void;
   /** The sentence for an edge refusal, where the act says it better than `errorMessage`. */
@@ -87,7 +90,7 @@ function createRechecker<T>(
     }
   });
   const answered = (subject: string, answer: NonNullable<Recheck<T>>) => {
-    mark(subject, false);
+    mark(subject, null);
     setPhase("idle");
     if ("committed" in answer) {
       options.committed(answer.committed);
@@ -113,7 +116,7 @@ function createRechecker<T>(
   };
   /** Starts checking `subject`, marked unconfirmed until the edge answers. */
   return (subject: string) => {
-    mark(subject, true);
+    mark(subject, options.act ?? "");
     setPhase("checking");
     check(subject, now());
   };
@@ -125,7 +128,7 @@ export function useMoneyAct<T>(options: Options<T>): MoneyAct<T> {
   const startChecking = createRechecker(options, setPhase, setRefusal);
 
   const resume = (subject: string) => {
-    if (isUnconfirmed(subject) && phase() === "idle") {
+    if (unconfirmed().get(subject) === (options.act ?? "") && phase() === "idle") {
       startChecking(subject);
     }
   };
