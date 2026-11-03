@@ -180,13 +180,14 @@ struct Projection {
     /// clock stepped back.
     order_lines: HashMap<OrderId, Vec<OrderLineId>>,
     /// The orders still owing money — [`Self::open_orders`]'s rule, held exactly rather than
-    /// recomputed by a scan: at least one line, no bill or a bill that has not settled, and not
-    /// refused by staff.
+    /// recomputed by a scan: at least one line, no bill or a bill that has not settled, not
+    /// refused by staff, and not ended by a bill voided after payment (ADR-0184).
     ///
     /// Recomputed for one order by [`Self::refresh_live`] whenever an input to that rule changes —
     /// a line added, a bill opened, a bill's state moved, a staff decision — and never simply
-    /// inserted on the first line and removed on settle: voiding an order's only bill puts it
-    /// back, so an order can leave the set and come back.
+    /// inserted on the first line and removed on settle: voiding an order's only bill before it is
+    /// paid puts it back, so an order can leave the set and come back. Voiding it after payment
+    /// does not: that sale has ended, and its correction is a new one.
     live: BTreeSet<OrderId>,
     /// Paid orders without a table whose kitchen is not done: at least one fired line no station
     /// has bumped ([ADR-0161](../../../../docs/adr/0161-a-paid-order-without-a-table-stays-on-the-kitchen-board-until-it-is-done.md)).

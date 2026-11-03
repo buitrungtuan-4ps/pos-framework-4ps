@@ -12,7 +12,7 @@
 //! (ADR-0028) and are not touched.
 
 use pos_core::error::DomainError;
-use pos_proto::ids::{BillId, ShiftId};
+use pos_proto::ids::{BillId, OrderId, ShiftId};
 use pos_proto::money::Money;
 use pos_proto::{BillState, PaymentMethod};
 
@@ -70,6 +70,26 @@ impl Projection {
         }
         self.void_bill_record(bill_id);
         Ok(())
+    }
+
+    /// Whether `order_id`'s sale ended with a bill voided after payment: no bill of it is open, and
+    /// one that settled was voided since. A settled bill keeps its receipt when it is voided, which
+    /// is how such a bill is told from one voided before anybody paid it.
+    ///
+    /// Such an order has ended as a paid one has (ADR-0184 decision 2: the correction is a new
+    /// bill on a new sale), so it is not owing again. Before this it was, and the live read and the
+    /// kitchen board brought its fired lines back as tickets nobody would bump.
+    pub(in crate::app) fn voided_after_payment(&self, order_id: OrderId) -> bool {
+        self.latest_bill_in(order_id, BillState::Open).is_none()
+            && self.order_bill_ids.get(&order_id).is_some_and(|ids| {
+                ids.iter().any(|bill_id| {
+                    self.settled.contains_key(bill_id)
+                        && self
+                            .bills
+                            .get(bill_id)
+                            .is_some_and(|bill| bill.state == BillState::Voided)
+                })
+            })
     }
 
     /// Whether `bill_id` is settled, so a `billing.bill.voided` is a void after payment.

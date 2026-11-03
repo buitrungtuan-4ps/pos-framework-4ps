@@ -35,7 +35,7 @@ impl Projection {
             .and_then(|bill_id| self.bills.get(&bill_id))
             .is_some_and(|bill| bill.state == BillState::Settled);
         let refused = self.staff_decision(order_id) == Some(StaffDecision::Rejected);
-        let closed = self.closed_orders.contains(&order_id);
+        let closed = self.closed_orders.contains(&order_id) || self.voided_after_payment(order_id);
         if has_lines && !settled && !refused && !closed {
             self.live.insert(order_id);
         } else {
