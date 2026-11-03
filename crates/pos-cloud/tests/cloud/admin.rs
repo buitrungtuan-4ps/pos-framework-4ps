@@ -234,6 +234,30 @@ async fn setup_with_a_short_password_names_the_field_it_is_about() {
 }
 
 #[tokio::test]
+async fn setup_with_too_long_a_password_is_refused() {
+    let (router, admin) = setup_router(Some(SETUP_TOKEN));
+    let long_password = "a".repeat(pos_cloud_api::auth::enrol::MAX_PASSWORD_LEN + 1);
+    let body = serde_json::json!({ "setup_token": SETUP_TOKEN, "password": long_password });
+    let response = router
+        .oneshot(post_json("/admin/setup", &body))
+        .await
+        .expect("route the setup");
+    assert_eq!(
+        response.status(),
+        StatusCode::BAD_REQUEST,
+        "too long a password is refused to protect against hashing DoS"
+    );
+    let body = json_body(response).await;
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "got {body}");
+    assert_eq!(body["error"]["details"][0]["field"], "password");
+    assert_eq!(body["error"]["details"][0]["reason"], "OUT_OF_RANGE");
+    assert!(
+        admin.load_credential().await.expect("load").is_none(),
+        "a refused setup provisions nothing"
+    );
+}
+
+#[tokio::test]
 async fn logout_clears_the_cookie_and_revokes_the_session() {
     let router = http::router(app_with_admin(
         Cloud::new(FakeStore::new()),

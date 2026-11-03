@@ -20,6 +20,11 @@ use serde::{Deserialize, Serialize};
 /// ([ADR-0045](../../../../docs/adr/0045-first-boot-admin-enrolment.md)).
 pub const MIN_PASSWORD_LEN: usize = 12;
 
+/// The longest password first-boot or invite enrolment will accept (128 characters), mitigating
+/// denial-of-service attacks that exhaust memory and CPU by sending arbitrarily large strings to
+/// Argon2id hashing (OWASP Password Storage guidance).
+pub const MAX_PASSWORD_LEN: usize = 128;
+
 /// The length of a freshly-minted TOTP shared secret, in bytes — 256 bits, well above RFC 4226's
 /// 160-bit floor and independent of the HMAC hash the verifier uses
 /// ([ADR-0034](../../../../docs/adr/0034-super-admin-auth.md)).
