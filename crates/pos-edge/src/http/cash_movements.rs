@@ -16,8 +16,10 @@ use axum::extract::{Extension, Path, State};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
+use pos_core::cash_count::CountBreakdown;
 use pos_core::decision::Actor;
 use pos_ports::event_store::EventStore;
+use pos_proto::events::DenominationCount;
 use pos_proto::ids::{DeviceId, ReasonCodeId, ShiftId};
 use pos_proto::money::Money;
 
@@ -33,6 +35,21 @@ use crate::printing::{DrawerOutcome, Printers};
 pub(crate) struct MovementRequest {
     amount_minor: i64,
     reason_code_id: ReasonCodeId,
+    #[serde(default)]
+    approver_code: Option<String>,
+    #[serde(default)]
+    approver_pin: Option<String>,
+}
+
+/// Surplus cash taken from the drawer to the safe (ADR-0186 decision 5): how much, in minor units,
+/// optionally note by note, and the approver for a drawer assigned to somebody else.
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub(crate) struct DropRequest {
+    amount_minor: i64,
+    /// The drop note by note, adding up to `amount_minor`.
+    #[serde(default)]
+    denomination_counts: Vec<DenominationCount>,
     #[serde(default)]
     approver_code: Option<String>,
     #[serde(default)]
@@ -176,6 +193,90 @@ where
     S: EventStore + Send + Sync + 'static,
 {
     movement(&edge, actor, printers, &id, CashMovement::PaidOut, request).await
+}
+
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/shifts/{id}/safe-drop",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!(["cash.movement.record", "cash.drawer.override_assignment"]))),
+    params(
+        ("id" = String, Path, description = "The shift's id, a ULID"),
+    ),
+    request_body(
+        content = DropRequest, description = "`amount_minor`, greater than zero, with optional `denomination_counts`, \
+                       which must add up to the amount, and `approver_code` and `approver_pin` for a drawer assigned to \
+                       somebody else. Both are secrets and are never logged (ADR-0186)",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = ShiftResponse, description = "Recorded: the shift, with `dropped_amount` and `drawer_open` saying \
+                                      whether the drawer opened for the cash"),
+        (status = 400, description = "The id is not a ULID, or the amount is not greater than zero"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; a drawer \
+                                      assigned to somebody else needs an approval that was missing or \
+                                      refused, or the approver is locked out; or this box was superseded by \
+                                      a replacement"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to, a counted shift included. \
+                                      `pos-error-reason` names which"),
+        (status = 422, description = "`COUNT_DOES_NOT_ADD_UP`: the notes do not add up to the amount; \
+                                      nothing was recorded"),
+        (status = 503, description = "The store is unavailable, or the till this device is could not be \
+                                      read; nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "shifts",
+))]
+/// `POST /api/shifts/{id}/safe-drop` — surplus cash taken from the drawer to the safe (ADR-0186),
+/// recorded first, and the drawer opened after.
+pub(crate) async fn record_safe_drop<S>(
+    State(edge): State<Arc<Edge<S>>>,
+    Extension(actor): Extension<Actor>,
+    printers: Option<Extension<Arc<Printers>>>,
+    Path(id): Path<String>,
+    Json(request): Json<DropRequest>,
+) -> Response
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    let Some(shift_id) = parse_ulid(&id).map(ShiftId::new) else {
+        return bad_request("a shift id is a ULID");
+    };
+    if request.amount_minor <= 0 {
+        return bad_request("an amount dropped to the safe is greater than zero");
+    }
+    let amount = Money::new(edge.session().currency, request.amount_minor);
+    let scope = match till_scope(&edge, printers.as_deref(), actor, None).await {
+        Ok(scope) => scope,
+        Err(error) => return error_response(&error),
+    };
+    let approval = approval(
+        request.approver_code.as_ref(),
+        request.approver_pin.as_ref(),
+    );
+    let breakdown = CountBreakdown {
+        denomination_counts: request.denomination_counts,
+        uncounted_amount: None,
+    };
+    let view = match edge
+        .record_safe_drop_at(
+            actor,
+            scope,
+            shift_id,
+            (amount, breakdown),
+            approval.as_ref(),
+        )
+        .await
+    {
+        Ok(view) => view,
+        Err(error) => return error_response(&error),
+    };
+    let opened = open_drawer_through(printers.as_deref(), &edge, view.till).await;
+    let mut response = ShiftResponse::from(view);
+    response.drawer_open = Some(opened.as_wire().to_owned());
+    Json(response).into_response()
 }
 
 /// Records a paid in or a paid out, then opens the drawer for the cash to go in or come out.

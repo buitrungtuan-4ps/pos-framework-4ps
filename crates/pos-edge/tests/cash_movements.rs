@@ -747,3 +747,73 @@ fn a_restart_reads_a_closes_reason_back_and_the_drawer_stays_closed() {
         assert_ne!(next, shift, "the next shift opens");
     });
 }
+
+#[test]
+fn a_drop_to_the_safe_lowers_the_expectation_apart_from_the_paid_out() {
+    // ADR-0186 decision 5: its own event, permitted and refused as a paid out is, and a breakdown
+    // that must add up.
+    use pos_core::cash_count::CountBreakdown;
+    use pos_proto::events::{CashDrawerDropped, DenominationCount};
+    run_ready(async {
+        let store = FakeStore::new();
+        let edge = edge_over(store.clone(), session());
+        let shift = open_with_float(&edge, 500_000).await;
+        a_cash_sale(&edge).await;
+        let notes = |rows: &[(i64, u32)]| CountBreakdown {
+            denomination_counts: rows
+                .iter()
+                .map(|&(note, quantity)| DenominationCount {
+                    denomination: vnd(note),
+                    quantity,
+                })
+                .collect(),
+            uncounted_amount: None,
+        };
+        let here = TillScope::default();
+        let short = (vnd(600_000), notes(&[(500_000, 1)]));
+        assert!(matches!(
+            edge.record_safe_drop_at(cashier(), here, shift, short, None)
+                .await,
+            Err(AppError::CountDoesNotAddUp)
+        ));
+        let drop = (vnd(600_000), notes(&[(500_000, 1), (100_000, 1)]));
+        let dropped = edge
+            .record_safe_drop_at(cashier(), here, shift, drop, None)
+            .await
+            .expect("drops to the safe");
+        assert_eq!((dropped.dropped, dropped.paid_out), (vnd(600_000), vnd(0)));
+
+        let log = logged(&store).await;
+        let event: CashDrawerDropped = log
+            .iter()
+            .find(|envelope| envelope.event_type.as_str() == "cash.drawer.dropped")
+            .expect("the drop is its own event")
+            .data
+            .decode()
+            .expect("decodes");
+        assert_eq!(event.amount, vnd(600_000));
+        assert_eq!(event.denomination_counts.len(), 2);
+
+        // A restart folds it back; then 500k float + 165k taken - 600k dropped is expected.
+        let restarted = edge_over(store.clone(), session());
+        restarted.rebuild().await.expect("replays the log");
+        restarted
+            .count_shift(cashier(), shift, 65_000)
+            .await
+            .expect("counts");
+        let again = (vnd(10_000), CountBreakdown::default());
+        assert!(matches!(
+            restarted
+                .record_safe_drop_at(cashier(), here, shift, again, None)
+                .await,
+            Err(AppError::ShiftNotOpen)
+        ));
+        let closed = restarted
+            .close_shift(cashier(), shift)
+            .await
+            .expect("closes");
+        assert_eq!(closed.expected_amount, Some(vnd(65_000)));
+        let report = closed.report.expect("the close carries its report");
+        assert_eq!((report.dropped, report.paid_out), (vnd(600_000), vnd(0)));
+    });
+}

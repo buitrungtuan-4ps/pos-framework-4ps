@@ -103,6 +103,7 @@ use utoipa::{Modify, OpenApi};
         super::shifts::count_shift,
         super::cash_movements::record_paid_in,
         super::cash_movements::record_paid_out,
+        super::cash_movements::record_safe_drop,
         super::shifts::close_shift,
         super::shifts::batch_close_shifts,
         super::cash_movements::open_drawer,

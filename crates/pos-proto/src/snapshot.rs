@@ -78,6 +78,11 @@ const PARTS: &[(EventType, &str, &[&str])] = &[
         "denomination_counts[]",
         DenominationCount::FIELD_NAMES,
     ),
+    (
+        EventType::CashDrawerDropped,
+        "denomination_counts[]",
+        DenominationCount::FIELD_NAMES,
+    ),
 ];
 
 /// Renders the catalogue in the committed format.

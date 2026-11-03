@@ -3243,6 +3243,79 @@
         ]
       }
     },
+    "/api/shifts/{id}/safe-drop": {
+      "post": {
+        "tags": [
+          "shifts"
+        ],
+        "summary": "`POST /api/shifts/{id}/safe-drop` — surplus cash taken from the drawer to the safe (ADR-0186),\nrecorded first, and the drawer opened after.",
+        "operationId": "record_safe_drop",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The shift's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`amount_minor`, greater than zero, with optional `denomination_counts`, which must add up to the amount, and `approver_code` and `approver_pin` for a drawer assigned to somebody else. Both are secrets and are never logged (ADR-0186)",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DropRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Recorded: the shift, with `dropped_amount` and `drawer_open` saying whether the drawer opened for the cash",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShiftResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The id is not a ULID, or the amount is not greater than zero"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; a drawer assigned to somebody else needs an approval that was missing or refused, or the approver is locked out; or this box was superseded by a replacement"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to, a counted shift included. `pos-error-reason` names which"
+          },
+          "422": {
+            "description": "`COUNT_DOES_NOT_ADD_UP`: the notes do not add up to the amount; nothing was recorded"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, or the till this device is could not be read; nothing was recorded"
+          }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": [
+          "cash.movement.record",
+          "cash.drawer.override_assignment"
+        ]
+      }
+    },
     "/api/shifts:batch_close": {
       "post": {
         "tags": [
@@ -4830,6 +4903,38 @@
           "waiting_drawer_model": {
             "type": "string",
             "description": "The model the store has published, while open shifts keep the edge on the other."
+          }
+        }
+      },
+      "DropRequest": {
+        "type": "object",
+        "description": "Surplus cash taken from the drawer to the safe (ADR-0186 decision 5): how much, in minor units,\noptionally note by note, and the approver for a drawer assigned to somebody else.",
+        "required": [
+          "amount_minor"
+        ],
+        "properties": {
+          "amount_minor": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "approver_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approver_pin": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "denomination_counts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DenominationCount"
+            },
+            "description": "The drop note by note, adding up to `amount_minor`."
           }
         }
       },
@@ -6768,6 +6873,10 @@
           "drawer_open": {
             "$ref": "#/components/schemas/DrawerOutcomeSchema",
             "description": "What came of opening the drawer, on a paid in or a paid out: `OPENED`, `NO_DRAWER` or\n`DRAWER_UNAVAILABLE`. Absent on every other command."
+          },
+          "dropped_amount": {
+            "$ref": "#/components/schemas/Money",
+            "description": "Cash taken from the drawer to the safe so far (ADR-0186), apart from the paid out. Absent\nwhile there is none."
           },
           "expected_amount": {
             "$ref": "#/components/schemas/Money",

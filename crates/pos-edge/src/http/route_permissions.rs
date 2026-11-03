@@ -232,6 +232,14 @@ pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
             Permission::OverrideDrawerAssignment,
         ]),
     ),
+    // A drop to the safe is permitted as a paid out is (ADR-0186 decision 5).
+    (
+        "POST /api/shifts/{id}/safe-drop",
+        RouteGate::Person(&[
+            Permission::RecordCashMovement,
+            Permission::OverrideDrawerAssignment,
+        ]),
+    ),
     (
         "POST /api/shifts:batch_close",
         RouteGate::Person(&[

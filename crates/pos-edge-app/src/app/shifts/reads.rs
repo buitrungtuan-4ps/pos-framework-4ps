@@ -55,6 +55,7 @@ impl<S: EventStore> Edge<S> {
             variance: None,
             paid_in: record.paid_in,
             paid_out: record.paid_out,
+            dropped: record.dropped,
             print_shift_report: false,
             report: None,
             day_ended: self.day_ended(shift_id, record),

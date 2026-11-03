@@ -305,6 +305,7 @@ impl<S: EventStore> Edge<S> {
             cash_collected: record.cash_collected,
             paid_in: record.paid_in,
             paid_out: record.paid_out,
+            dropped: record.dropped,
             expected_amount,
             counted_amount,
             count_breakdown: record.count_breakdown.clone(),

@@ -94,6 +94,7 @@ impl Projection {
             match movement {
                 CashMovement::PaidIn => record.paid_in = record.paid_in.checked_add(amount)?,
                 CashMovement::PaidOut => record.paid_out = record.paid_out.checked_add(amount)?,
+                CashMovement::Dropped => record.dropped = record.dropped.checked_add(amount)?,
             }
         }
         Ok(())

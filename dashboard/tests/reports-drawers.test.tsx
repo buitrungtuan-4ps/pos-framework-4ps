@@ -126,9 +126,9 @@ describe("the X/Z report's drawers", () => {
     render(() => <Reports />);
 
     expect(await drawerRowsShown()).toEqual([
-      ["The store's drawer", vnd(200_000), vnd(50_000), vnd(20_000), vnd(200_000), vnd(230_000), vnd(230_000), vnd(0), vnd(0)],
-      ["Bar till", vnd(500_000), vnd(100_000), vnd(30_000), vnd(500_000), vnd(1_570_000), vnd(1_560_000), vnd(0), vnd(-10_000)],
-      [`A till no longer listed${GONE}`, vnd(100_000), vnd(10_000), vnd(0), "—", "—", "—", vnd(0), "—"],
+      ["The store's drawer", vnd(200_000), vnd(50_000), vnd(20_000), vnd(0), vnd(200_000), vnd(230_000), vnd(230_000), vnd(0), vnd(0)],
+      ["Bar till", vnd(500_000), vnd(100_000), vnd(30_000), vnd(0), vnd(500_000), vnd(1_570_000), vnd(1_560_000), vnd(0), vnd(-10_000)],
+      [`A till no longer listed${GONE}`, vnd(100_000), vnd(10_000), vnd(0), vnd(0), "—", "—", "—", vnd(0), "—"],
     ]);
   });
 
@@ -140,7 +140,7 @@ describe("the X/Z report's drawers", () => {
     render(() => <Reports />);
 
     const [, row] = await drawerRowsShown();
-    expect(row?.slice(0, 6)).toEqual(["Bar till", vnd(800_000), vnd(100_000), vnd(30_000), vnd(500_000), vnd(1_570_000)]);
+    expect(row?.slice(0, 7)).toEqual(["Bar till", vnd(800_000), vnd(100_000), vnd(30_000), vnd(0), vnd(500_000), vnd(1_570_000)]);
   });
 
   it("shows a till's drawer even when it is the day's only one", async () => {
@@ -177,6 +177,16 @@ describe("the X/Z report's drawers", () => {
     expect(screen.getByText("Cash handed back").nextElementSibling?.textContent).toBe(
       vnd(113_000),
     );
-    expect((await drawerRowsShown())[0]?.[7]).toBe(vnd(113_000));
+    expect((await drawerRowsShown())[0]?.[8]).toBe(vnd(113_000));
+  });
+
+  // ADR-0186: cash dropped to the safe is shown apart from what was paid out, not inside it.
+  it("shows what each drawer dropped to the safe beside what it paid out", async () => {
+    const bar = { ...drawer(500_000, [0, 30_000]), dropped: 1_000_000 };
+    xzReport.mockResolvedValue(report(bar, { [BAR]: bar }, { [BAR]: "Bar till" }));
+    render(() => <Reports />);
+    const [row] = await drawerRowsShown();
+    expect(row?.slice(3, 5)).toEqual([vnd(30_000), vnd(1_000_000)]);
+    expect(screen.getByText("Dropped to safe")).toBeTruthy();
   });
 });

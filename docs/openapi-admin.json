@@ -26107,6 +26107,11 @@
             "format": "int64",
             "description": "Sum of counted amounts across closes (the blind counts)."
           },
+          "dropped": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The cash this drawer dropped to the safe (ADR-0186), apart from its paid out. Left out while\nthere was none."
+          },
           "expected": {
             "type": "integer",
             "format": "int64",
@@ -27807,6 +27812,11 @@
           "currency_code": {
             "type": "string",
             "description": "ISO 4217 code, or empty until a cash event on the day sets it."
+          },
+          "dropped": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of the cash dropped from the drawers to the safe on the day\n([ADR-0186](../../../docs/adr/0186-a-drawer-is-counted-by-denomination.md) decision 5): out of\nthe drawer like a paid out, and no expense, so apart from `paid_out`. Left out while there\nwas none."
           },
           "expected": {
             "type": "integer",

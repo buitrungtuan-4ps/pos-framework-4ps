@@ -336,7 +336,7 @@ fn add_to_drawer(sum: &mut CashTotals, figures: &CashTotals) {
 
 /// Sets `slot` to `code` only if it is still empty — the first cash event of the day fixes the
 /// currency, and a store is single-currency (`docs/pos-spec.md` §19).
-fn set_currency(slot: &mut String, code: String) {
+pub(super) fn set_currency(slot: &mut String, code: String) {
     if slot.is_empty() {
         *slot = code;
     }
@@ -1011,6 +1011,7 @@ mod tests {
             variance: day.variance,
             voided_cash: day.voided_cash,
             closed_float: day.closed_float,
+            dropped: day.dropped,
         }
     }
 
@@ -1086,6 +1087,7 @@ mod tests {
                 variance: sum.variance + drawer.variance,
                 voided_cash: sum.voided_cash + drawer.voided_cash,
                 closed_float: sum.closed_float + drawer.closed_float,
+                dropped: sum.dropped + drawer.dropped,
             });
         assert_eq!(
             summed,

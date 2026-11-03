@@ -1180,6 +1180,7 @@ fn a_combined_close_report_is_the_sum_of_the_drawers_closed_together() {
                 cash_collected: vnd(165_000),
                 paid_in: vnd(100_000),
                 paid_out: vnd(50_000),
+                dropped: vnd(0),
                 expected_amount: vnd(1_015_000),
                 counted_amount: vnd(1_015_000),
                 variance: vnd(0),

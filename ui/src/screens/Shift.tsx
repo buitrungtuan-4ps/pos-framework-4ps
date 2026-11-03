@@ -35,6 +35,7 @@ import { useInFlight } from "../lib/in-flight";
 import { printOutcomeKey } from "../lib/print";
 import { asksApprover, can } from "../state/permissions";
 import { overrideAsks } from "../state/drawer-access";
+import { recordSafeDrop } from "../state/safe-drop";
 
 // The reason list's three acts for the drawer (ADR-0115), as `/api/reason-codes` spells them.
 const PAID_IN = "REASON_ACTION_CASH_PAID_IN";
@@ -217,6 +218,14 @@ export function Shift() {
       setMovementPad(false);
     });
   };
+
+  // Surplus cash to the safe (ADR-0186 decision 5): no reason asked, and apart from a paid out.
+  const dropToSafe = (shiftId: string, value: number) =>
+    own.run("drop", async () => {
+      setMovementDrawer((await recordSafeDrop(shiftId, value)) ?? null);
+      setMoved({ key: "shift.safe_drop_recorded", amount: money(storeCurrency(), value) });
+      setMovementAmount("");
+    });
 
   const closeDrawerPanel = () => {
     setOpeningDrawer(false);
@@ -655,6 +664,14 @@ export function Shift() {
               onClick={() => askPaidOut()}
             >
               {t("shift.paid_out")}
+            </button>
+            <button
+              type="button"
+              class="col-span-2 min-h-touch rounded-token border border-line bg-surface font-semibold disabled:opacity-50"
+              disabled={movementParsed() === null || own.busy() !== null}
+              onClick={() => void dropToSafe(shift()?.shiftId ?? "", movementParsed() ?? 0)}
+            >
+              {own.busy() === "drop" ? t("common.sending") : t("shift.safe_drop")}
             </button>
           </div>
           <WhyUnavailable entry="reason_codes" id="why-movement-reasons" />
