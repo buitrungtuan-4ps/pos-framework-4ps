@@ -2,7 +2,9 @@ import { For, Show, createMemo, createSignal, onMount } from "solid-js";
 import { useNavigate, useParams } from "@solidjs/router";
 
 import { ApiError, api } from "../api/client";
-import { ApproverFields } from "../components/ApproverFields";
+import { ApproverFields, createApprover } from "../components/ApproverFields";
+import { DISCOUNT, DiscountPanel, useDiscount } from "../components/DiscountPanel";
+import { VOID_BILL, VoidBillPanel, useVoidBill } from "../components/VoidBillPanel";
 import { BillEnded } from "../components/BillEnded";
 import { DrawerOwner } from "../components/DrawerOwner";
 import { CheckRow } from "../components/ui";
@@ -26,7 +28,6 @@ import {
   roundToIncrement,
 } from "../lib/money";
 import {
-  applyDiscount,
   cashDenominations,
   cashRoundingIncrement,
   currencyExponent,
@@ -44,7 +45,6 @@ import {
   tenderAccepted,
   tipPercents,
   tipsEnabled,
-  voidBill,
   waiveFee,
   formatAmount,
 } from "../state/store";
@@ -54,17 +54,7 @@ import { endedElsewhere } from "../state/closing";
 import { openForPay } from "../state/open-for-pay";
 import { useSplitPlan } from "../state/split-plan";
 import { printOutcomeKey } from "../lib/print";
-import { asksApprover, can, permissionsEnforced } from "../state/permissions";
-
-// The action voiding a whole bill cites (ADR-0115). A separate action from voiding a line, so a
-// store can hold reasons for one and not the other — and the picker here offers only the entries
-// that declare this one.
-const VOID_BILL = "REASON_ACTION_VOID_BILL";
-
-// The action a discount cites. Its own action, like the void's: a store may publish "Goodwill" for
-// knocking money off and not for cancelling a bill, and the edge refuses a reason published for
-// the wrong one — so a picker that offered both would offer a refusal.
-const DISCOUNT = "REASON_ACTION_DISCOUNT";
+import { asksApprover, can } from "../state/permissions";
 
 // The action waiving a fee cites (ADR-0159 decision 5), its own again: a reason for forgiving a
 // service charge is not necessarily one for taking money off the food.
@@ -174,20 +164,11 @@ export function Pay() {
   // guest paying now. Nothing reaches the edge until the split is confirmed.
   const [picking, setPicking] = createSignal(false);
   const [picked, setPicked] = createSignal<ReadonlySet<string>>(new Set<string>());
-  // Voiding this bill before it settles (ADR-0115, §6). Always a manager: a bill is money whether
-  // or not the kitchen started, so unlike a line there is no shape of it that passes without one.
-  // The badge and PIN live here for the length of the refusal and are cleared with the panel.
-  const [voidingBill, setVoidingBill] = createSignal(false);
+  // Whether this bill was voided here (`../components/VoidBillPanel`). The manager's badge and PIN
+  // are one pair for the void, the discount and the waive: only one of their panels is ever open,
+  // and they live for the length of one refusal and are cleared with the panel.
   const [voided, setVoided] = createSignal(false);
-  const [approverCode, setApproverCode] = createSignal("");
-  const [approverPin, setApproverPin] = createSignal("");
-  // Taking money off before it settles. The manager fields above are shared with the void, which is
-  // correct rather than lazy: only one of the two panels is ever open, and a cashier who typed a
-  // badge for one and then changed their mind should not type it again for the other.
-  const [discounting, setDiscounting] = createSignal(false);
-  // What comes off, as typed. A string, not a number, because a half-typed "1" must stay "1" rather
-  // than becoming a figure the screen then reformats under the operator's fingers.
-  const [discountText, setDiscountText] = createSignal("");
+  const approver = createApprover();
   // The fee whose waive is being reasoned about (ADR-0159 decision 5), and the name of the last one
   // waived, which the screen says back. The manager fields are the void's and the discount's: only
   // one panel is ever open.
@@ -511,11 +492,8 @@ export function Pay() {
     setBuyerName("");
     setBuyerTaxCode("");
     setBuyerAddress("");
-    setDiscounting(false);
-    setDiscountText("");
-    setVoidingBill(false);
-    setApproverCode("");
-    setApproverPin("");
+    discount.closeDiscount();
+    voiding.closeVoid();
     setBillId(id);
     void showBill(id);
   };
@@ -660,119 +638,22 @@ export function Pay() {
   // After one guest's part is paid: the next bill still open on the table.
   const nextBill = (id: string) => switchTo(id);
 
-  // The manager's badge and PIN, once both are typed. Each act below asks for them only where the
-  // person needs an approver (ADR-0158): where the store does not enforce each person's own set,
-  // always, as the till always has.
-  const approverTyped = () => approverCode().trim() !== "" && approverPin() !== "";
-  const approval = () =>
-    approverTyped()
-      ? { approver_code: approverCode().trim(), approver_pin: approverPin() }
-      : undefined;
-  const voidAsks = () => asksApprover("billing.bill.void");
-  const readyToVoid = () => !voidAsks() || approverTyped();
-
-  const closeVoid = () => {
-    setVoidingBill(false);
-    setApproverCode("");
-    setApproverPin("");
-  };
-
-  // The first tap: open the picker. Nothing is written until a reason is chosen — the reason is
-  // mandatory, not a question asked afterwards.
-  const askVoidBill = () => {
-    setError(null);
-    setVoidingBill(true);
-  };
-
-  // The second tap: void the bill, citing this reason and the manager standing at the till. The
-  // panel stays open on a refusal — a settled bill is refused by the bill machine, and reading why
-  // is the point.
-  const voidBillReason = (reasonCodeId: string) => {
-    const id = billId();
-    if (id === null) {
-      return;
-    }
-    void paying.run("void", async () => {
-      await voidBill(id, reasonCodeId, voidAsks() ? approval() : undefined);
-      closeVoid();
-      setVoided(true);
-    });
-  };
-
-  // Minor units, or null while what has been typed is not a number the till can send. Integer the
-  // whole way (ADR-0028): the field takes digits and nothing else, so there is no decimal to lose.
-  const discountAmount = () => {
-    const typed = discountText().trim();
-    if (typed === "" || !/^[0-9]+$/.test(typed)) {
-      return null;
-    }
-    const amount = Number(typed);
-    return amount > 0 ? amount : null;
-  };
-
-  // The reason buttons stay disabled until there is an amount and a manager, for the reason the
-  // void's are: a button that can only produce a refusal teaches an operator the till is unreliable.
-  //
-  // Where the store enforces each person's own set, a person holding the override with approval is
-  // offered the manager's fields rather than made to fill them: the till does not know their
-  // ceiling, so a discount within it goes through alone, and one above it is refused until a
-  // manager approves (ADR-0158). One half-typed is waited for, never dropped.
-  const discountAsks = () => asksApprover("billing.discount.override_ceiling");
-  const discountOptional = () => discountAsks() && permissionsEnforced();
-  const readyToDiscount = () =>
-    discountAmount() !== null &&
-    (approverTyped() ||
-      !discountAsks() ||
-      (discountOptional() && approverCode().trim() === "" && approverPin() === ""));
-
-  const closeDiscount = () => {
-    setDiscounting(false);
-    setDiscountText("");
-    setApproverCode("");
-    setApproverPin("");
-  };
-
-  const askDiscount = () => {
-    setError(null);
-    setDiscounting(true);
-  };
-
-  // The second tap: apply it, citing this reason and the manager. The edge answers with the whole
-  // re-priced bill and the screen takes that figure — it never subtracts the discount itself,
-  // because the tax follows the reduced base and a second opinion about it is a second price.
-  const discountReason = (reasonCodeId: string) => {
-    const id = billId();
-    const amount = discountAmount();
-    if (id === null || amount === null) {
-      return;
-    }
-    setError(null);
-    const approver = discountAsks() ? approval() : undefined;
-    void applyDiscount(id, money(currency(), amount), reasonCodeId, approver)
-      .then((totals) => {
-        setCheck(totals);
-        closeDiscount();
-      })
-      .catch((caught: unknown) =>
-        // Above the ceiling with no manager typed, the edge names the override that was missing:
-        // for a person who holds it with approval, that is a manager to fetch, not a refusal.
-        setError(
-          caught instanceof ApiError &&
-            caught.reason === "PERMISSION_DENIED" &&
-            discountOptional() &&
-            approver === undefined
-            ? t("error.approval_required")
-            : errorMessage(caught),
-        ),
-      );
-  };
+  // Voiding the bill and taking money off (`../components/VoidBillPanel`, `../components/DiscountPanel`).
+  const voiding = useVoidBill({
+    billId,
+    approver,
+    report: setError,
+    run: (act) => paying.run("void", act),
+    onVoided: () => setVoided(true),
+  });
+  const discount = useDiscount({ billId, currency, approver, report: setError, onApplied: setCheck });
 
   // Waiving a fee (ADR-0159 decision 5): offered on a fee whose rule allows it, on a bill nothing
   // has been taken against yet, to a person who may waive and where the store publishes a reason to
   // cite. `billing.fee.waive` asks for an approver where the person holds it with approval, and
   // where the store does not enforce each person's own set, always.
   const waiveAsks = () => asksApprover("billing.fee.waive");
-  const readyToWaive = () => !waiveAsks() || approverTyped();
+  const readyToWaive = () => !waiveAsks() || approver.typed();
   const canWaive = (fee: FeeLine) =>
     fee.waivable === true &&
     billId() !== null &&
@@ -782,8 +663,7 @@ export function Pay() {
 
   const closeWaive = () => {
     setWaiving(null);
-    setApproverCode("");
-    setApproverPin("");
+    approver.clear();
   };
 
   // The first tap opens the reasons for this fee; nothing is written until one is chosen. A
@@ -791,8 +671,8 @@ export function Pay() {
   const askWaiveFee = (fee: FeeLine) => {
     setError(null);
     setWaivedFee(null);
-    closeDiscount();
-    closeVoid();
+    discount.closeDiscount();
+    voiding.closeVoid();
     setWaiving(fee);
   };
 
@@ -805,7 +685,7 @@ export function Pay() {
       return;
     }
     setError(null);
-    void waiveFee(id, fee.fee_id, reasonCodeId, waiveAsks() ? approval() : undefined)
+    void waiveFee(id, fee.fee_id, reasonCodeId, waiveAsks() ? approver.approval() : undefined)
       .then((totals) => {
         setCheck(totals);
         setWaivedFee(fee.display_name);
@@ -918,10 +798,10 @@ export function Pay() {
                     <p class="mt-1 text-sm text-ink-muted">{t("pay.waive_manager")}</p>
                     <ApproverFields
                       id="waive-fee-approver"
-                      code={approverCode()}
-                      pin={approverPin()}
-                      onCode={setApproverCode}
-                      onPin={setApproverPin}
+                      code={approver.code()}
+                      pin={approver.pin()}
+                      onCode={approver.setCode}
+                      onPin={approver.setPin}
                       codeLabel={t("pay.approver_code")}
                       pinLabel={t("pay.approver_pin")}
                     />
@@ -1338,35 +1218,9 @@ export function Pay() {
             </div>
             </Show>
 
-            {/*
-              Voiding the bill (ADR-0115, §6). Secondary to the tender buttons on purpose: it is the
-              rare act, and it is the one that needs a second person. Always a manager — a bill is
-              money whether or not the kitchen started — so unlike a line there is no shape of this
-              the till lets through on its own, unless the store enforces each person's own set and
-              the person holds the void directly (ADR-0158).
-
-              The reason buttons stay disabled until the manager's badge and PIN are filled, which
-              keeps the void at the three taps §6 allows a rare action (pay, void, reason) rather
-              than spending one on a request that could only come back `403`.
-            */}
-            {/*
-              Taking money off (roadmap B2.2). Three taps from the order screen — pay, discount,
-              reason — which is §6's ceiling for a rare action and the same shape the bill void has.
-              The amount and the manager's badge are **typed**, and typing is not a tap, exactly as
-              the shift float and the void's PIN are not.
-
-              The manager is not this screen's rule. `billing.discount.apply` is granted to a server
-              and carries no PIN flag — but no store publishes the discount ceiling that permission's
-              own description refers to, so the edge reads the ceiling as zero and answers `403`
-              naming `billing.discount.override_ceiling`. The fields are here because that is the
-              answer today; when a store publishes a ceiling, a small discount will start going
-              through and this panel will not have to change. Where the store enforces each person's
-              own set, the fields are offered only to a person who holds the override with approval,
-              and the button only to one who holds `billing.discount.apply`, which every discount
-              needs whatever its size.
-            */}
+            {/* Taking money off and voiding the bill: each its own panel, shared with the counter. */}
             <Show
-              when={discounting()}
+              when={discount.open()}
               fallback={
                 <Show when={can("billing.discount.apply")}>
                 <button
@@ -1375,73 +1229,18 @@ export function Pay() {
                   disabled={billId() === null || reasonsFor(DISCOUNT).length === 0 || taken().length > 0}
                   aria-describedby="why-reasons"
                   data-step="askDiscount"
-                  onClick={() => askDiscount()}
+                  onClick={() => discount.askDiscount()}
                 >
                   {t("pay.discount")}
                 </button>
                 </Show>
               }
             >
-              <div class="mt-6 rounded-token border border-line bg-surface p-3">
-                <h2 class="font-semibold">{t("pay.discount_title")}</h2>
-                <label class="mt-2 block text-sm">
-                  {t("pay.discount_amount")}
-                  <input
-                    id="discount-amount"
-                    type="text"
-                    inputmode="numeric"
-                    class="mt-1 min-h-touch w-full rounded-token border border-line bg-surface px-2 tabular-nums"
-                    value={discountText()}
-                    onInput={(event) => setDiscountText(event.currentTarget.value)}
-                  />
-                </label>
-                <Keypad
-                  value={discountText()}
-                  onChange={setDiscountText}
-                  data-step="discountKeypad"
-                />
-                <Show when={discountAsks()}>
-                <p class="mt-2 text-sm text-ink-muted">
-                  {t(discountOptional() ? "pay.discount_over_limit" : "pay.discount_manager")}
-                </p>
-                <ApproverFields
-                  id="discount-approver"
-                  code={approverCode()}
-                  pin={approverPin()}
-                  onCode={setApproverCode}
-                  onPin={setApproverPin}
-                  codeLabel={t("pay.approver_code")}
-                  pinLabel={t("pay.approver_pin")}
-                />
-                </Show>
-                <p class="mt-3 text-sm text-ink-muted">{t("pay.discount_reason")}</p>
-                <div class="mt-2 grid grid-cols-2 gap-2">
-                  <For each={reasonsFor(DISCOUNT)}>
-                    {(reason) => (
-                      <button
-                        type="button"
-                        class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
-                        disabled={!readyToDiscount()}
-                        data-step="discountReason"
-                        onClick={() => discountReason(reason.reason_code_id)}
-                      >
-                        {reason.display_name}
-                      </button>
-                    )}
-                  </For>
-                </div>
-                <button
-                  type="button"
-                  class="mt-3 min-h-touch rounded-token border border-line px-3 text-sm"
-                  onClick={() => closeDiscount()}
-                >
-                  {t("common.cancel")}
-                </button>
-              </div>
+              <DiscountPanel state={discount} approver={approver} data-step="discountReason" onSubmit={(id) => discount.discountReason(id)} />
             </Show>
 
             <Show
-              when={voidingBill()}
+              when={voiding.open()}
               fallback={
                 <Show when={can("billing.bill.void")}>
                 <button
@@ -1450,7 +1249,7 @@ export function Pay() {
                   disabled={billId() === null || reasonsFor(VOID_BILL).length === 0 || taken().length > 0}
                   aria-describedby="why-reasons"
                   data-step="askVoidBill"
-                  onClick={() => askVoidBill()}
+                  onClick={() => voiding.askVoidBill()}
                 >
                   {t("pay.void")}
                 </button>
@@ -1458,44 +1257,7 @@ export function Pay() {
                 </Show>
               }
             >
-              <div class="mt-6 rounded-token border border-line bg-surface p-3">
-                <h2 class="font-semibold">{t("pay.void_title")}</h2>
-                <Show when={voidAsks()}>
-                <p class="mt-1 text-sm text-ink-muted">{t("pay.void_manager")}</p>
-                <ApproverFields
-                  id="void-bill-approver"
-                  code={approverCode()}
-                  pin={approverPin()}
-                  onCode={setApproverCode}
-                  onPin={setApproverPin}
-                  codeLabel={t("pay.approver_code")}
-                  pinLabel={t("pay.approver_pin")}
-                />
-                </Show>
-                <p class="mt-3 text-sm text-ink-muted">{t("pay.void_reason")}</p>
-                <div class="mt-2 grid grid-cols-2 gap-2">
-                  <For each={reasonsFor(VOID_BILL)}>
-                    {(reason) => (
-                      <button
-                        type="button"
-                        class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
-                        disabled={!readyToVoid()}
-                        data-step="voidBillReason"
-                        onClick={() => voidBillReason(reason.reason_code_id)}
-                      >
-                        {reason.display_name}
-                      </button>
-                    )}
-                  </For>
-                </div>
-                <button
-                  type="button"
-                  class="mt-3 min-h-touch rounded-token border border-line px-3 text-sm"
-                  onClick={() => closeVoid()}
-                >
-                  {t("common.cancel")}
-                </button>
-              </div>
+              <VoidBillPanel state={voiding} approver={approver} data-step="voidBillReason" onSubmit={(id) => voiding.voidBillReason(id)} />
             </Show>
           </Show>
         }
