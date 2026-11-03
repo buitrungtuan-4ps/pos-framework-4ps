@@ -436,11 +436,14 @@ where
     T: Clone + Send + Sync + 'static,
     W: Clone + Send + Sync + 'static,
 {
-    if request.password.len() < MIN_PASSWORD_LEN || request.password.len() > MAX_PASSWORD_LEN {
+    // Characters, not bytes: the limits and the message are in characters, and a Vietnamese
+    // passphrase takes up to three bytes per letter.
+    let password_len = request.password.chars().count();
+    if !(MIN_PASSWORD_LEN..=MAX_PASSWORD_LEN).contains(&password_len) {
         // One field, out of range — a `400`, not the `422` this answered before ADR-0096. The
         // difference is what it tells the reader to do: there *is* a field to go and fix, which is
         // exactly what separates `INVALID_ARGUMENT` from `UNPROCESSABLE`.
-        let message = if request.password.len() < MIN_PASSWORD_LEN {
+        let message = if password_len < MIN_PASSWORD_LEN {
             format!("the password must be at least {MIN_PASSWORD_LEN} characters")
         } else {
             format!("the password must be at most {MAX_PASSWORD_LEN} characters")
