@@ -2292,6 +2292,8 @@
   "storeSettings.businessDate": "Business date now:",
   "storeSettings.cashNotes": "Quick-cash notes (minor units)",
   "storeSettings.cashNotesHint": "The notes a guest hands over, comma-separated, smallest first — 10000, 20000, 50000. Blank offers the exact amount only.",
+  "storeSettings.cashCountNotes": "Notes and coins to count a drawer by (minor units)",
+  "storeSettings.cashCountNotesHint": "Every note and coin the till counts a drawer by, comma-separated, smallest first — 1000, 2000, 5000. Choosing the country fills its list. Blank means no counter: the till takes one amount.",
   "storeSettings.cashRounding": "Cash rounding (minor units)",
   "storeSettings.cashRoundingHint": "What the total rounds to when settling in cash — 1000 for Vietnam, 100 for India's rupee. Blank means no rounding.",
   "storeSettings.contact": "Contact lines",
