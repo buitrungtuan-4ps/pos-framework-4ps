@@ -194,6 +194,12 @@ pub struct DailyCash {
     /// leaves it out. Left out while there was none.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub voided_cash: i64,
+    /// Sum of the opening floats of the shifts that closed on the day, counted on the day of the
+    /// close, beside the expected amount the float went into. `opening_float` counts a float on
+    /// the day its shift opens, so a shift still open counts there and not here. Left out while
+    /// there was none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub closed_float: i64,
     /// The same figures for each drawer, keyed by the till's `terminal_device_id`, or by
     /// [`STORE_DRAWER`] for the store's one drawer
     /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 10 and 13).
@@ -245,6 +251,12 @@ pub struct CashTotals {
     /// there was none.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub voided_cash: i64,
+    /// Sum of the opening floats of this drawer's shifts that closed on the day, beside its
+    /// expected amount: float + paid in − paid out + cash taken − voided cash is what a close
+    /// expects. A shift still open counts in `opening_float` and not here. Left out while there was
+    /// none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub closed_float: i64,
 }
 
 /// Whether a figure is zero, so a field that is is left off the wire as it was before it existed.
