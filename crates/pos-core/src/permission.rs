@@ -587,6 +587,21 @@ permissions! {
         default_roles: [Manager, Owner],
         description: "Edit store-level configuration",
     },
+    /// Choose which of the package versions HQ allows the store runs
+    /// ([ADR-0189](../../../docs/adr/0189-a-store-runs-a-package-version-hq-pins.md) decision 2).
+    ///
+    /// A store's people choose; they never edit. The choice is a write to cloud configuration, so
+    /// no till or edge route checks it: until a store's own people can sign in to the console (a
+    /// later ADR), the console's choose route is gated by `console.config.publish`, and this
+    /// permission is the catalogue's record of who should hold it.
+    ChoosePackage {
+        id: "admin.package.choose",
+        group: StoreAdministration,
+        risk: Medium,
+        pin: false,
+        default_roles: [Manager, Owner],
+        description: "Choose which allowed package version the store runs",
+    },
 
     // ---- Cloud administration ----
     /// Manage tenants, brands and cross-store settings.

@@ -17,6 +17,7 @@ use crate::backup::{DEFAULT_INTERVAL_HOURS, PublishedBackup};
 use crate::billing::PublishedBilling;
 use crate::counter::PublishedCounter;
 use crate::locale::LocaleSettings;
+use crate::package::PublishedPackage;
 use crate::people::PublishedPermissions;
 use crate::printing::{DEFAULT_FONT_SIZE_DOTS, PublishedPrinting};
 use crate::qr::PublishedQr;
@@ -191,6 +192,55 @@ fn a_switch_takes_true_or_false_and_nothing_else() {
     }
 }
 
+const V1: &str = "01J00000000000000000000V01";
+const V2: &str = "01J00000000000000000000V02";
+
+/// An identifier takes a ULID string or `null`; a list takes distinct ULID strings, at most its
+/// maximum. Neither is a free-text field.
+#[test]
+fn an_identifier_takes_a_ulid_or_none_and_a_list_takes_distinct_ulids_up_to_its_maximum() {
+    let one = SettingShape::Ulid;
+    let setting = |shape: SettingShape| Setting {
+        node: "example",
+        field: "version_id",
+        shape,
+        scopes: &[SettingScope::Tenant],
+        since: "0.0.0",
+        confirm: None,
+        summary: "An identifier.",
+    };
+    let id = setting(one);
+    assert_eq!(id.kind(), SettingKind::Ulid);
+    assert_eq!(id.default_value(), Value::Null);
+    assert_eq!(id.check(&json!(V1)), Ok(()));
+    assert_eq!(id.check(&Value::Null), Ok(()));
+    for wrong in [json!("not-a-ulid"), json!(1), json!([V1])] {
+        assert_eq!(
+            id.check(&wrong),
+            Err(ValueRefusal::NotAnIdentifier),
+            "{wrong}"
+        );
+    }
+
+    let list = setting(SettingShape::UlidList { max: 2 });
+    assert_eq!(list.kind(), SettingKind::UlidList);
+    assert_eq!(list.default_value(), json!([]));
+    assert_eq!(list.check(&json!([V1, V2])), Ok(()));
+    assert_eq!(list.check(&json!([])), Ok(()));
+    assert_eq!(
+        list.check(&json!([V1, V2, "01J00000000000000000000V03"])),
+        Err(ValueRefusal::OutOfRange)
+    );
+    for wrong in [json!([V1, V1]), json!([V1, "x"]), json!(V1), Value::Null] {
+        assert_eq!(
+            list.check(&wrong),
+            Err(ValueRefusal::NotAnIdentifier),
+            "{wrong}"
+        );
+    }
+    assert!(render_snapshot_of(&[list]).contains("example.version_id\tmax=2\n"));
+}
+
 #[test]
 fn a_whole_number_and_a_switch_carry_their_values_as_json() {
     assert_eq!(seconds().kind(), SettingKind::Int);
@@ -291,7 +341,8 @@ fn assert_well_formed(setting: &Setting) {
             assert!(min <= max, "{key}: its bounds are the wrong way round");
             assert_ne!(*unit, SettingUnit::Unspecified, "{key} counts nothing");
         }
-        SettingShape::Bool { .. } => {}
+        SettingShape::Bool { .. } | SettingShape::Ulid => {}
+        SettingShape::UlidList { max } => assert!(*max > 0, "{key} holds nothing"),
     }
     assert!(!setting.scopes.is_empty(), "{key} can be set nowhere");
     assert!(
@@ -416,6 +467,8 @@ fn samples(setting: &Setting) -> Vec<Value> {
             .map(|value| json!(value))
             .collect(),
         SettingShape::Bool { .. } => vec![json!(false), json!(true)],
+        SettingShape::Ulid => vec![Value::Null, json!(V1)],
+        SettingShape::UlidList { .. } => vec![json!([]), json!([V1, V2])],
     }
 }
 
@@ -513,6 +566,7 @@ fn read_back(node: &str, field: &str, value: Option<&Value>) -> Option<Value> {
                 _ => None,
             }
         }
+        PublishedPackage::NODE => read_back_package(field, document),
         PublishedBilling::NODE if field == "settled_void_window" => {
             let billing: PublishedBilling = serde_json::from_value(document).ok()?;
             Some(json!(billing.settled_void_window().as_wire()))
@@ -528,6 +582,26 @@ fn read_back(node: &str, field: &str, value: Option<&Value>) -> Option<Value> {
                 _ => None,
             }
         }
+        _ => None,
+    }
+}
+
+/// [`read_back`] for the `package` node (ADR-0189): an absent id reads as `null`.
+fn read_back_package(field: &str, document: Value) -> Option<Value> {
+    let package: PublishedPackage = serde_json::from_value(document).ok()?;
+    let id = |id: Option<crate::ids::PackageVersionId>| json!(id.map(|id| id.to_string()));
+    match field {
+        "mode" => Some(json!(package.mode.known().as_wire())),
+        "locked_version_id" => Some(id(package.locked_version_id)),
+        "allowed_version_ids" => Some(json!(
+            package
+                .allowed_version_ids
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        )),
+        "default_version_id" => Some(id(package.default_version_id)),
+        "chosen_version_id" => Some(id(package.chosen_version_id)),
         _ => None,
     }
 }

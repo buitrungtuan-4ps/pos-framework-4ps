@@ -1782,9 +1782,11 @@ export const api = {
   // Reads are behind console.data.read. A write, a clear, the presets and a republish all publish
   // to every store they reach, so they are behind console.config.publish, and each answers how
   // every one of those stores' publish went — a `200` is not "every store has it".
+  // The `package` node's settings are left out: a store's package pin is set on the package page,
+  // which checks the versions it names and the lock above it (ADR-0189), not as a plain setting.
   settingsCatalogue: () =>
     requestJson<{ settings: SettingDefinition[] }>("GET", "/admin/settings/catalogue").then(
-      (body) => body.settings,
+      (body) => body.settings.filter((setting) => setting.node !== "package"),
     ),
   listSettingValues: (tenantId: string) =>
     requestJson<{ values: WrittenSetting[] }>("GET", `/admin/settings?${tenantQuery(tenantId)}`).then(

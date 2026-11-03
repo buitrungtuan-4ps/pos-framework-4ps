@@ -89,6 +89,12 @@ Each is an ADR, accepted with this plan. The numbers were reserved together.
 | B9.2 and B10.3 the card terminal, Program C's container image and host agent, the Android spike of ADR-0147 | Phase 8 (the spike in phase 0) |
 | Everything else still open: A·P4 O2 and O3, PF2 to PF4, A·P5, B6.1, B6.5, the rest of B2 and B3, B9.4, B10.4 | Phase 9 |
 
+## Open items the phases raised
+
+| Item | Phase |
+|---|---|
+| A store's own people choose their package version in the console. `admin.package.choose` is in the store permission catalogue ([ADR-0189](adr/0189-a-store-runs-a-package-version-hq-pins.md)). Nobody at a store signs in to the console, so until an ADR decides store-scoped console sign-in, HQ chooses for a store through `console.config.publish` | Phase 4 |
+
 ## Gates
 
 - **Milestone 1**, after phase 0: the thirteen decisions are Accepted and the baselines are measured.

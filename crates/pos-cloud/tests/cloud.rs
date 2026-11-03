@@ -90,6 +90,8 @@ mod ota_releases;
 mod ota_report;
 #[path = "cloud/ota_rollout.rs"]
 mod ota_rollout;
+#[path = "cloud/package_pin.rs"]
+mod package_pin;
 #[path = "cloud/packages.rs"]
 mod packages;
 #[path = "cloud/people.rs"]
@@ -11458,6 +11460,14 @@ fn settings_app() -> (axum::Router, FakeConfigTrees, FakeStoreGroups) {
 fn settings_app_with(
     audit: Arc<dyn AuditRecorder>,
 ) -> (axum::Router, FakeConfigTrees, FakeStoreGroups) {
+    settings_app_with_packages(audit, pos_cloud_config::packages::InMemoryPackages::new())
+}
+
+/// [`settings_app_with`], with the package versions the `package` settings may name (ADR-0189).
+fn settings_app_with_packages(
+    audit: Arc<dyn AuditRecorder>,
+    packages: pos_cloud_config::packages::InMemoryPackages,
+) -> (axum::Router, FakeConfigTrees, FakeStoreGroups) {
     let admin = provisioned_admin();
     let config_trees = FakeConfigTrees::default();
     let registry = FakeRegistry::default();
@@ -11517,7 +11527,7 @@ fn settings_app_with(
     let router = http::router(app)
         .merge(http::settings_router(
             &pos_cloud::countries::registry(),
-            FakeSettings::default(),
+            pos_cloud_config::package_pin::WithPackages::new(FakeSettings::default(), packages),
             registry,
             groups.clone(),
             config_trees.clone(),
