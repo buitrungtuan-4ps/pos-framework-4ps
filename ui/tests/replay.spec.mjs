@@ -2799,6 +2799,32 @@ test("before anyone signs in, the status bar offers no destinations and no sign-
 // Stacked under the fields, the pad's digit row sat below the fold of a 1366x768 till — the
 // commonest Windows POS screen — so a PIN needed a scroll before its first digit. From a terminal
 // up the fields and the pad sit side by side.
+// On a 1024px till the status bar is one row in either language (UX-13). It wrapped to two or three
+// rows, pushing every screen down. What does not fit of the destinations scrolls sideways, and the
+// screen being shown is scrolled into view, so the cashier on the shift screen sees "Shift" lit.
+test("on a 1024px till the status bar is one row, and the screen shown is in view", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await pair(page, edge);
+    await signIn(page, edge);
+    const header = page.locator("header");
+    for (const language of ["en", "vi"]) {
+      for (const path of ["/", "/shift"]) {
+        await navigateTo(page, path);
+        const box = await header.boundingBox();
+        expect(box?.height ?? 0, `${language} ${path}`).toBeLessThan(96);
+        const shown = header.locator(`nav a[href="${path}"]`);
+        await expect(shown).toBeInViewport({ ratio: 0.9 });
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(1024);
+      await page.getByRole("button", { name: language === "en" ? "Language" : "Ngôn ngữ" }).click();
+    }
+  } finally {
+    await edge.stop();
+  }
+});
+
 test("on a 1366x768 terminal the sign-in pad's digits are on screen without scrolling", async ({
   page,
 }) => {

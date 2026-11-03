@@ -1,4 +1,4 @@
-import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
+import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
 import { A, useLocation } from "@solidjs/router";
 
 import { api, deviceToken } from "../api/client";
@@ -102,6 +102,23 @@ const NAV: { href: string; key: MessageKey; needs?: () => boolean }[] = [
 // sideways on a phone, against `app.css`'s own promise not to. The bar wraps now and each
 // destination is padded to the token, which costs vertical room on a phone and is the correct
 // trade: a target a finger cannot hit during service is not navigation.
+// On a till (terminal, 1024px up) the bar is one row (UX-13): it wrapped to two or three rows,
+// pushing the work down on every screen. What does not fit of the destinations scrolls sideways,
+// as the kitchen board's station tabs do, and the screen being shown is scrolled into view. Answers
+// the ref for the destinations' `nav`.
+function keepShownInView(path: () => string): (nav: HTMLElement) => void {
+  let held: HTMLElement | undefined;
+  createEffect(() => {
+    void path();
+    queueMicrotask(() =>
+      held?.querySelector("a.text-ink")?.scrollIntoView({ block: "nearest", inline: "nearest" }),
+    );
+  });
+  return (nav) => {
+    held = nav;
+  };
+}
+
 export function StatusBar() {
   const linkKey = (): MessageKey => {
     switch (state.link) {
@@ -155,21 +172,21 @@ export function StatusBar() {
   };
 
   return (
-    <header class="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-line bg-surface px-4 py-2 text-sm">
+    <header class="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-line bg-surface px-4 py-2 text-sm terminal:flex-nowrap">
       <A
         href="/"
-        class="inline-flex min-h-touch items-center rounded-token font-semibold no-underline text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        class="inline-flex min-h-touch shrink-0 items-center whitespace-nowrap rounded-token font-semibold no-underline text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       >
         {t("app.brand")}
       </A>
-      <span class="inline-flex items-center gap-2 text-ink-muted">
+      <span class="inline-flex shrink-0 items-center gap-2 whitespace-nowrap text-ink-muted">
         <span class={`inline-block h-2.5 w-2.5 rounded-full ${linkColour()}`} aria-hidden="true" />
         {t(linkKey())}
       </span>
       <Show when={cloudNotice()}>
         {(notice) => (
           <span
-            class="inline-flex items-center gap-2"
+            class="inline-flex shrink-0 items-center gap-2 whitespace-nowrap"
             classList={{
               "text-ink-muted": notice().tone === "muted",
               "text-awaiting": notice().tone === "warn",
@@ -198,10 +215,10 @@ export function StatusBar() {
       </Show>
       <Show
         when={state.shift}
-        fallback={<span class="text-ink-muted">{t("status.no_shift")}</span>}
+        fallback={<span class="shrink-0 whitespace-nowrap text-ink-muted">{t("status.no_shift")}</span>}
       >
         {(shift) => (
-          <span class="text-ink-muted">
+          <span class="shrink-0 whitespace-nowrap text-ink-muted">
             {/* A sentence per state, not the wire token spliced into one: "Ca open" is what a
                 Vietnamese till read when the state was lower-cased into a translated template. */}
             {t(SHIFT_STATE_LABELS[shift().state] ?? "status.shift_open")}
@@ -225,19 +242,19 @@ export function StatusBar() {
       </button>
       <div
         id="status-menu"
-        class="w-full flex-col items-stretch gap-1 tablet:flex tablet:w-auto tablet:flex-1 tablet:flex-row tablet:flex-wrap tablet:items-center tablet:gap-x-3"
+        class="w-full flex-col items-stretch gap-1 tablet:flex tablet:w-auto tablet:flex-1 tablet:flex-row tablet:flex-wrap tablet:items-center tablet:gap-x-3 terminal:min-w-0 terminal:flex-nowrap terminal:gap-x-2"
         classList={{ hidden: !menuOpen(), flex: menuOpen() }}
       >
         <Show when={!beforeSignIn()}>
-        <nav
+        <nav ref={keepShownInView(() => location.pathname)}
           aria-label={t("nav.menu")}
-          class="flex flex-col gap-1 text-ink-muted tablet:flex-row tablet:flex-wrap tablet:items-center"
+          class="flex flex-col gap-1 overflow-x-auto text-ink-muted tablet:flex-row tablet:flex-wrap tablet:items-center terminal:min-w-0 terminal:flex-1 terminal:flex-nowrap"
         >
           <For each={NAV.filter((item) => item.needs === undefined || item.needs())}>
             {(item) => (
               <A
                 href={item.href}
-                class="inline-flex min-h-touch items-center rounded-token px-3 no-underline hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                class="inline-flex min-h-touch shrink-0 items-center whitespace-nowrap rounded-token px-2 no-underline hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
                 activeClass="text-ink"
                 onClick={() => setMenuOpen(false)}
                 end
@@ -250,7 +267,7 @@ export function StatusBar() {
         </Show>
         <button
           type="button"
-          class="min-h-touch rounded-token border border-line px-3 text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          class="min-h-touch shrink-0 whitespace-nowrap rounded-token border border-line px-3 text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           aria-label={t("status.language")}
           onClick={() => setLocale(locale() === "vi" ? "en" : "vi")}
         >
@@ -258,7 +275,7 @@ export function StatusBar() {
         </button>
         <button
           type="button"
-          class="min-h-touch rounded-token border border-line px-3 text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          class="min-h-touch shrink-0 whitespace-nowrap rounded-token border border-line px-3 text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           aria-label={theme() === "dark" ? t("status.theme_light") : t("status.theme_dark")}
           onClick={cycleTheme}
         >
@@ -267,7 +284,7 @@ export function StatusBar() {
         <Show when={!beforeSignIn()}>
           <button
             type="button"
-            class="min-h-touch rounded-token border border-line px-3 text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            class="min-h-touch shrink-0 whitespace-nowrap rounded-token border border-line px-3 text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
             onClick={() => void signOut()}
           >
             {t("nav.signout")}
