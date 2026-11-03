@@ -335,6 +335,27 @@ async fn accept_rejects_a_bad_token_and_a_short_password() {
 }
 
 #[tokio::test]
+async fn accepting_an_invite_with_too_long_a_password_is_refused() {
+    let admin = FakeAdmin::default();
+    let router = registry_app(admin, FakeRegistry::default());
+    let long_password = "a".repeat(pos_cloud_api::auth::enrol::MAX_PASSWORD_LEN + 1);
+    let too_long = router
+        .oneshot(post_json(
+            "/admin/invites/accept",
+            &serde_json::json!({ "token": "not-a-real-token", "password": long_password }),
+        ))
+        .await
+        .expect("route accept");
+    assert_eq!(too_long.status(), StatusCode::BAD_REQUEST);
+    let body = json_body(too_long).await;
+    assert_eq!(
+        body["error"]["details"][0]["field"], "password",
+        "got {body}"
+    );
+    assert_eq!(body["error"]["details"][0]["reason"], "OUT_OF_RANGE");
+}
+
+#[tokio::test]
 async fn the_last_active_owner_cannot_be_demoted_or_suspended() {
     // The one thing this test needs is *exactly one* active owner, so it starts from an empty store
     // and lets `role_session_cookie` seed that owner. `provisioned_admin()` would add the migrated

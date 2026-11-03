@@ -15,7 +15,9 @@ use crate::auth::admin::{
     AdminRole, AdminStore, IMPLICIT_OWNER_EMAIL, IMPLICIT_OWNER_ID, LoginRequest, NewAdminUser,
     SessionMint, authenticate_session, authenticated_admin, login, logout,
 };
-use crate::auth::enrol::{MIN_PASSWORD_LEN, SetupRequest, build_enrolment, constant_time_eq};
+use crate::auth::enrol::{
+    MAX_PASSWORD_LEN, MIN_PASSWORD_LEN, SetupRequest, build_enrolment, constant_time_eq,
+};
 use crate::auth::session::{clear_cookie, set_cookie};
 use crate::http::{
     CloudApp, Json, client_ip, header_str, mint_credential, mint_session_token,
@@ -157,13 +159,18 @@ where
     if !constant_time_eq(&request.setup_token, expected) {
         return api_error(ErrorStatus::Unauthenticated, "setup failed");
     }
-    if request.password.len() < MIN_PASSWORD_LEN {
+    if request.password.len() < MIN_PASSWORD_LEN || request.password.len() > MAX_PASSWORD_LEN {
         // One field, out of range — a `400`, not the `422` this answered before ADR-0096. The
         // difference is what it tells the reader to do: there *is* a field to go and fix, which is
         // exactly what separates `INVALID_ARGUMENT` from `UNPROCESSABLE`.
+        let message = if request.password.len() < MIN_PASSWORD_LEN {
+            format!("the password must be at least {MIN_PASSWORD_LEN} characters")
+        } else {
+            format!("the password must be at most {MAX_PASSWORD_LEN} characters")
+        };
         return api_error_with_details(
             ErrorStatus::InvalidArgument,
-            format!("the password must be at least {MIN_PASSWORD_LEN} characters"),
+            message,
             &[("password", "OUT_OF_RANGE")],
         );
     }

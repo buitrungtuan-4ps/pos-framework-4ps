@@ -19,7 +19,7 @@ use crate::auth::admin::{
     AdminContext, AdminRole, AdminStore, NewAdminInvite, NewAdminUser, hash_session_token,
 };
 use crate::auth::console_rbac::ConsolePermission;
-use crate::auth::enrol::{MIN_PASSWORD_LEN, build_enrolment};
+use crate::auth::enrol::{MAX_PASSWORD_LEN, MIN_PASSWORD_LEN, build_enrolment};
 use crate::http::{CloudApp, Json, enum_refusal, mint_credential, random_hex_32};
 
 /// A request to invite a new console admin.
@@ -436,13 +436,18 @@ where
     T: Clone + Send + Sync + 'static,
     W: Clone + Send + Sync + 'static,
 {
-    if request.password.len() < MIN_PASSWORD_LEN {
+    if request.password.len() < MIN_PASSWORD_LEN || request.password.len() > MAX_PASSWORD_LEN {
         // One field, out of range — a `400`, not the `422` this answered before ADR-0096. The
         // difference is what it tells the reader to do: there *is* a field to go and fix, which is
         // exactly what separates `INVALID_ARGUMENT` from `UNPROCESSABLE`.
+        let message = if request.password.len() < MIN_PASSWORD_LEN {
+            format!("the password must be at least {MIN_PASSWORD_LEN} characters")
+        } else {
+            format!("the password must be at most {MAX_PASSWORD_LEN} characters")
+        };
         return api_error_with_details(
             ErrorStatus::InvalidArgument,
-            format!("the password must be at least {MIN_PASSWORD_LEN} characters"),
+            message,
             &[("password", "OUT_OF_RANGE")],
         );
     }
