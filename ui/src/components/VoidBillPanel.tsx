@@ -14,7 +14,8 @@ import { For, Show, createSignal, type Accessor } from "solid-js";
 
 import { t } from "../i18n";
 import { asksApprover } from "../state/permissions";
-import { reasonsFor, voidBill } from "../state/store";
+import type { ApproverRequest } from "../api/schemas";
+import { reasonsFor } from "../state/store";
 import { ApproverFields, type Approver } from "./ApproverFields";
 
 // The action voiding a whole bill cites (ADR-0115). A separate action from voiding a line, so a
@@ -28,9 +29,11 @@ export function useVoidBill(options: {
   approver: Approver;
   /** The screen's error line: cleared when the panel opens. */
   report: (message: string | null) => void;
-  /** Runs the request, guarded and reported by the screen (`../lib/in-flight`). */
-  run: (act: () => Promise<unknown>) => Promise<void>;
-  onVoided: () => void;
+  /**
+   * Sends the void as a money act (`../state/pay-acts`): the screen shows it pending, and closes
+   * the panel once the edge commits it.
+   */
+  voidWith: (reasonCodeId: string, asks: boolean, approval: ApproverRequest | undefined) => void;
 }) {
   const [open, setOpen] = createSignal(false);
   const asks = () => asksApprover("billing.bill.void");
@@ -50,17 +53,11 @@ export function useVoidBill(options: {
 
   // The second tap: void the bill, citing this reason and the manager standing at the till. The
   // panel stays open on a refusal — a settled bill is refused by the bill machine, and reading why
-  // is the point.
+  // is the point — and closes once the edge commits the void.
   const voidBillReason = (reasonCodeId: string) => {
-    const id = options.billId();
-    if (id === null) {
-      return;
+    if (options.billId() !== null) {
+      options.voidWith(reasonCodeId, asks(), asks() ? options.approver.approval() : undefined);
     }
-    void options.run(async () => {
-      await voidBill(id, reasonCodeId, asks() ? options.approver.approval() : undefined);
-      closeVoid();
-      options.onVoided();
-    });
   };
 
   return { open, asks, ready, closeVoid, askVoidBill, voidBillReason };

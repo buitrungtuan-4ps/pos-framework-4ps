@@ -8,6 +8,9 @@ import type {
   VoidSettledResponse,
 } from "../api/schemas";
 import { ApproverFields } from "../components/ApproverFields";
+import { PendingSettle } from "../components/PendingSettle";
+import { RefusalPanel } from "../components/RefusalPanel";
+import { useVoidSettledAct } from "../state/void-settled-act";
 import { ReadFailed } from "../components/StoreData";
 import { PageHeader } from "../components/ui";
 import { type MessageKey, t } from "../i18n";
@@ -133,7 +136,7 @@ function Tiles(props: { takings: TakingsResponse | null }) {
 // invoice, and the panel says so in place. What it gives back is the edge's figure.
 function VoidPaidBill(props: {
   bill: SettledBill;
-  onVoided: (voided: VoidSettledResponse) => void;
+  onVoided: (voided: VoidSettledResponse | null) => void;
 }) {
   const [open, setOpen] = createSignal(false);
   const [code, setCode] = createSignal("");
@@ -147,21 +150,13 @@ function VoidPaidBill(props: {
     setError(null);
     setOpen(true);
   };
-  const voidPaidBillReason = async (reasonCodeId: string) => {
-    setError(null);
-    const approval =
-      asks() && typed() ? { approver_code: code().trim(), approver_pin: pin() } : {};
-    try {
-      const voided = await api.voidSettledBill(props.bill.bill_id, {
-        reason_code_id: reasonCodeId,
-        ...approval,
-      });
-      setOpen(false);
-      props.onVoided(voided);
-    } catch (caught) {
-      setError(errorMessage(caught));
-    }
-  };
+  // A money act (ADR-0196, ADR-0204): pending until the edge answers, never re-sent.
+  const voiding = useVoidSettledAct(props.bill.bill_id, (voided) => {
+    setOpen(false);
+    props.onVoided(voided);
+  });
+  const voidPaidBillReason = (reasonCodeId: string) =>
+    voiding.voidWith(reasonCodeId, asks(), asks() && typed() ? { approver_code: code().trim(), approver_pin: pin() } : undefined);
 
   return (
     <Show
@@ -200,22 +195,19 @@ function VoidPaidBill(props: {
               <button
                 type="button"
                 class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
-                disabled={asks() && !typed()}
+                disabled={(asks() && !typed()) || voiding.phase() !== "idle" || voiding.refusal() !== null}
                 data-step="voidPaidBillReason"
-                onClick={() => void voidPaidBillReason(reason.reason_code_id)}
+                onClick={() => voidPaidBillReason(reason.reason_code_id)}
               >
                 {reason.display_name}
               </button>
             )}
           </For>
         </div>
-        <Show when={error()}>
-          {(message) => (
-            <p class="mt-2 text-sm text-danger" role="alert">
-              {message()}
-            </p>
-          )}
+        <Show when={voiding.phase() !== "idle"}>
+          <PendingSettle act="void" phase={voiding.phase()} amount="" onLeave={() => setOpen(false)} />
         </Show>
+        <RefusalPanel message={voiding.refusal() ?? error()} onDismiss={() => (voiding.dismiss(), setError(null))} />
         <button
           type="button"
           class="mt-3 min-h-touch rounded-token border border-line px-3 text-sm"
@@ -230,7 +222,24 @@ function VoidPaidBill(props: {
 
 // What a void after payment gave back, as the edge answered it: the cash to hand back, the card to
 // reverse on the terminal, and what came of the slip.
-function VoidedOutcome(props: { voided: VoidSettledResponse }) {
+// A void the till learned of by reading the day's bills again carries no figures (ADR-0204): it says
+// so, rather than a sum the edge did not give.
+function VoidedOutcome(props: { voided: VoidSettledResponse | null }) {
+  return (
+    <Show
+      when={props.voided}
+      fallback={
+        <p class="mt-2 text-sm" role="status" data-outcome="paid-bill-voided">
+          {t("today.voided_unread")}
+        </p>
+      }
+    >
+      {(voided) => <VoidedFigures voided={voided()} />}
+    </Show>
+  );
+}
+
+function VoidedFigures(props: { voided: VoidSettledResponse }) {
   return (
     <div class="mt-2 text-sm" role="status" data-outcome="paid-bill-voided">
       <p class="font-semibold">
@@ -265,7 +274,7 @@ export function Today() {
   const [error, setError] = createSignal<string | null>(null);
   const [takings, setTakings] = createSignal<TakingsResponse | null>(null);
   // The bills voided from this screen, over what the list was read with (ADR-0184).
-  const [voidedHere, setVoidedHere] = createSignal<Readonly<Record<string, VoidSettledResponse>>>(
+  const [voidedHere, setVoidedHere] = createSignal<Readonly<Record<string, VoidSettledResponse | null>>>(
     {},
   );
   const isVoided = (bill: SettledBill) => bill.voided || voidedHere()[bill.bill_id] !== undefined;
@@ -386,8 +395,8 @@ export function Today() {
                           </p>
                         )}
                       </Show>
-                      <Show when={voidedHere()[bill.bill_id]}>
-                        {(voided) => <VoidedOutcome voided={voided()} />}
+                      <Show when={bill.bill_id in voidedHere()}>
+                        <VoidedOutcome voided={voidedHere()[bill.bill_id] ?? null} />
                       </Show>
                       <Show when={!isVoided(bill) && can("billing.bill.void_settled")}>
                         <VoidPaidBill

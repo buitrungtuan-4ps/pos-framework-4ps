@@ -1866,6 +1866,11 @@ export async function voidBill(
   approval?: ApproverRequest,
 ): Promise<void> {
   await api.voidBill(billId, { reason_code_id: reasonCodeId, ...approval });
+  applyVoided(billId);
+}
+
+// A void the edge committed, whether it answered or a re-read found it later (ADR-0204).
+export function applyVoided(billId: string): void {
   setState(
     produce((draft) => {
       const closed = closeBill(draft, billId);
