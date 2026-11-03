@@ -240,12 +240,12 @@ pub use sync::{MAX_PUBLISHED_EVENTS, MAX_PUBLISHED_EVENTS_BYTES};
 use sync::{edge_config_sync, edge_events_hello, edge_heartbeat, edge_publish_events};
 // What the people, fee, settings, store-group and release routes refuse a registry failure with.
 use pos_cloud_config::route::registry_error_response;
-pub use settings::settings_router;
 pub(crate) use settings::{
     __path_admin_apply_setting_presets, __path_admin_choose_package, __path_admin_clear_setting,
     __path_admin_effective_settings, __path_admin_list_settings, __path_admin_publish_settings,
     __path_admin_put_setting, __path_admin_settings_catalogue, __path_admin_store_package,
 };
+pub use settings::{CATCH_UP_QUEUE, PackageCatchUp, package_catch_up, settings_router};
 use store_groups::unknown_batch_node;
 pub(crate) use store_groups::{
     __path_admin_create_store_group, __path_admin_list_store_group_batches,

@@ -82,7 +82,7 @@ Every settings publish, from a write, a choice or `POST /admin/settings/publish`
 - `PIN_UNRESOLVED`: the pin names no version the store may run.
 - `UNREADABLE`: the package store or the store's release could not be read.
 
-A waiting store is compiled again on the next publish that reaches it, such as `POST /admin/settings/publish`. `GET /admin/stores/{store_id}/package` answers the version the store is pinned to, the one its document carries, and why it waits when the two differ. Rolling back is pinning the previous version again, which publishes like any other write.
+A waiting store is compiled again on the next publish that reaches it. It is also compiled when it reports a new release: the OTA report hands the store to a bounded queue (256 stores; a report beyond that is dropped and the next publish covers it). A worker then republishes the store's settings only if its pinned version can now be compiled in and its document does not carry it yet. A publish never makes a report, so the two cannot feed each other. `GET /admin/stores/{store_id}/package` answers the version the store is pinned to, the one its document carries, and why it waits when the two differ. Rolling back is pinning the previous version again, which publishes like any other write.
 
 The store's current time slot is the first slot in the package's `time_slots`, in the order they are listed, that has a weekly window holding the store's local time. A store is therefore in at most one slot. Every part has one base variant, which states nothing. A version is refused at publish, and again on apply, if two of its variants share a selector, if a variant names its device twice or if a variant names an undeclared slot (`pos_core::package::check_variants`).
 

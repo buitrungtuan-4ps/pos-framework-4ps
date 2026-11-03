@@ -2680,6 +2680,7 @@ async fn an_internal_route_with_no_secret_configured_refuses_rather_than_admits(
         clock(),
         FakeKeys::default(),
         None,
+        None,
     );
     let response = router
         .oneshot(post_internal("/internal/ota/report", &report_body(None)))
@@ -7305,6 +7306,7 @@ fn ota_report_app(reports: FakeOtaReports) -> axum::Router {
         clock(),
         FakeKeys::default(),
         Some(internal_secret()),
+        None,
     ))
 }
 
@@ -7324,6 +7326,7 @@ fn store_report_app(reports: FakeOtaReports) -> (axum::Router, FakeKeys) {
         clock(),
         keys.clone(),
         Some(internal_secret()),
+        None,
     ));
     (router, keys)
 }
@@ -11531,20 +11534,41 @@ fn settings_app_with_packages(
         config_trees.clone(),
         FakeWebhooks::default(),
     );
+    let settings = pos_cloud_config::package_pin::WithPackages::new(
+        FakeSettings::default(),
+        packages,
+        releases,
+    );
+    // The package catch-up over the very same fakes, handed to the OTA report route below
+    // (ADR-0189 decision 5); its worker runs on the test's runtime.
+    let (catch_up, worker) = http::package_catch_up(
+        &pos_cloud::countries::registry(),
+        settings.clone(),
+        registry.clone(),
+        groups.clone(),
+        config_trees.clone(),
+        admin.clone(),
+        clock(),
+        Arc::clone(&audit),
+    );
+    tokio::spawn(worker);
     let router = http::router(app)
         .merge(http::settings_router(
             &pos_cloud::countries::registry(),
-            pos_cloud_config::package_pin::WithPackages::new(
-                FakeSettings::default(),
-                packages,
-                releases,
-            ),
+            settings,
             registry,
             groups.clone(),
             config_trees.clone(),
             admin.clone(),
             clock(),
             audit,
+        ))
+        .merge(http::ota_report_router(
+            FakeOtaReports::default(),
+            clock(),
+            FakeKeys::default(),
+            Some(internal_secret()),
+            Some(catch_up),
         ))
         // The tender publish, whose node the tip keys share (ADR-0160).
         .merge(http::config_channels_router(
