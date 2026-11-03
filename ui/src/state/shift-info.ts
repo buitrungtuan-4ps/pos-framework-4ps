@@ -21,6 +21,7 @@ export function shiftInfo(response: ShiftResponse): ShiftInfo {
     reportPrint: response.shift_report_print,
     paidIn: response.paid_in_amount,
     paidOut: response.paid_out_amount,
+    dropped: response.dropped_amount,
     dayEnded: response.day_ended === true,
     voided: response.voided_after_payment,
     assignee: response.assigned_employee_id,

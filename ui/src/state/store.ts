@@ -130,6 +130,8 @@ export interface ShiftInfo {
   // added up here: a device reads them back rather than counting events it may have seen twice.
   paidIn?: Money;
   paidOut?: Money;
+  // Cash taken to the safe so far (ADR-0186 decision 5), apart from what was paid out.
+  dropped?: Money;
   // Still open past the business day it opened on, which the Shift screen flags (ADR-0167
   // decision 11). The edge's judgement, read with the shift: the till keeps no business day.
   dayEnded?: boolean;
@@ -1693,6 +1695,7 @@ function replaceShift(info: ShiftInfo | null): void {
           reportPrint: info.reportPrint,
           paidIn: info.paidIn,
           paidOut: info.paidOut,
+          dropped: info.dropped,
           dayEnded: info.dayEnded,
           voided: info.voided,
           assignee: info.assignee,
@@ -2128,10 +2131,9 @@ export async function recordCashMovement(
   const movement = { amount_minor: amountMinor, reason_code_id: reasonCodeId, ...ownOverride() };
   const response =
     direction === "in" ? await api.paidIn(shiftId, movement) : await api.paidOut(shiftId, movement);
-  setState("shift", "paidIn", response.paid_in_amount);
-  setState("shift", "paidOut", response.paid_out_amount);
-  // A movement moves what the drawer should hold, which a store whose count is not blind is shown.
-  setState("shift", "expected", response.expected_amount);
+  // The shift as the edge answered: what was paid in and out, and what the drawer should hold, which
+  // a store whose count is not blind is shown.
+  applyShift(response);
   return response.drawer_open;
 }
 

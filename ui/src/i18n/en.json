@@ -432,6 +432,8 @@
   "shift.drawers_title": "Every till's drawer",
   "shift.drop_amount_label": "Cash to the safe ({currency})",
   "shift.drop_confirm": "Drop {amount} to the safe",
+  "shift.drop_reason": "Why is it going to the safe? A reason is optional.",
+  "shift.dropped": "Dropped to safe",
   "shift.enter_count": "Enter count",
   "shift.expected": "Expected",
   "shift.expected_now": "The drawer should hold {amount}.",

@@ -6,7 +6,7 @@ import { AssigneeField, DrawerOwner } from "../components/DrawerOwner";
 import { Keypad } from "../components/Keypad";
 import { PageHeader } from "../components/ui";
 import { SafeDrop } from "../components/SafeDrop";
-import { ShiftCashLines } from "../components/ShiftCashLines";
+import { CashTotals, ShiftCashLines } from "../components/ShiftCashLines";
 import type { ApproverRequest, DrawerEntry, DrawerOutcome, ShiftResponse } from "../api/schemas";
 import { t, type MessageKey } from "../i18n";
 import { WhyUnavailable } from "../components/StoreData";
@@ -59,10 +59,6 @@ function drawerKey(outcome: DrawerOutcome): MessageKey {
       return "pay.drawer_unavailable";
   }
 }
-
-// Whether a total is worth a line: nothing paid in or out shows nothing, so a shift that moved no
-// cash reads as it always did.
-const nonZero = (amount: Money | undefined) => amount !== undefined && amount.amount_minor !== 0;
 
 // The refusals an act on a drawer in the list words for itself (ADR-0167): the till's one sentence
 // for each speaks of a table or of this device, where it is the drawer picked that changed.
@@ -725,14 +721,7 @@ export function Shift() {
               </p>
             )}
           </Show>
-          <Show when={nonZero(shift()?.paidIn) || nonZero(shift()?.paidOut)}>
-            <p class="mt-2 text-sm text-ink-muted tabular-nums" data-outcome="cash-totals">
-              {t("shift.cash_totals", {
-                paid_in: formatAmount(shift()?.paidIn ?? money(storeCurrency(), 0)),
-                paid_out: formatAmount(shift()?.paidOut ?? money(storeCurrency(), 0)),
-              })}
-            </p>
-          </Show>
+          <CashTotals paidIn={shift()?.paidIn} paidOut={shift()?.paidOut} dropped={shift()?.dropped} />
         </div>
         </Show>
 
@@ -837,7 +826,12 @@ export function Shift() {
         {(variance) => (
           <div class="mt-4 rounded-token border border-line bg-surface p-4" data-outcome="shift-closed">
             <p class="font-semibold">{t("shift.closed")}</p>
-            <ShiftCashLines paidIn={shift()?.paidIn} paidOut={shift()?.paidOut} voided={shift()?.voided} />
+            <ShiftCashLines
+              paidIn={shift()?.paidIn}
+              paidOut={shift()?.paidOut}
+              dropped={shift()?.dropped}
+              voided={shift()?.voided}
+            />
             <CountedRows counting={shift()?.counting} />
             <p class="mt-2 text-ink-muted">
               {t("shift.expected")}{" "}

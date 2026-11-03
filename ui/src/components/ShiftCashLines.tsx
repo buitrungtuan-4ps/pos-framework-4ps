@@ -2,7 +2,12 @@ import { Show } from "solid-js";
 
 import { t } from "../i18n";
 import type { Money } from "../lib/money";
-import { formatAmount } from "../state/store";
+import { money } from "../lib/money";
+import { formatAmount, storeCurrency } from "../state/store";
+
+// Whether a total is worth a line: nothing moved shows nothing, so a shift that moved no cash reads
+// as it always did.
+const nonZero = (amount: Money | undefined) => amount !== undefined && amount.amount_minor !== 0;
 
 // The cash a closed shift moved besides its sales, on the close card: what was paid in and out
 // outside a sale (ADR-0165), and the paid bills voided at this till during the shift with the cash
@@ -12,9 +17,9 @@ import { formatAmount } from "../state/store";
 export function ShiftCashLines(props: {
   paidIn?: Money;
   paidOut?: Money;
+  dropped?: Money;
   voided?: { bills: number; cash_returned: Money };
 }) {
-  const nonZero = (amount: Money | undefined) => amount !== undefined && amount.amount_minor !== 0;
   return (
     <>
       <Show when={nonZero(props.paidIn) && props.paidIn}>
@@ -31,6 +36,13 @@ export function ShiftCashLines(props: {
           </p>
         )}
       </Show>
+      <Show when={nonZero(props.dropped) && props.dropped}>
+        {(dropped) => (
+          <p class="text-ink-muted" data-outcome="shift-dropped">
+            {t("shift.dropped")} <span class="tabular-nums">{formatAmount(dropped())}</span>
+          </p>
+        )}
+      </Show>
       <Show when={props.voided}>
         {(voided) => (
           <p class="text-ink-muted" data-outcome="shift-voided-after-payment">
@@ -38,6 +50,31 @@ export function ShiftCashLines(props: {
               count: voided().bills,
               amount: formatAmount(voided().cash_returned),
             })}
+          </p>
+        )}
+      </Show>
+    </>
+  );
+}
+
+// What an open shift has paid in, paid out and dropped to the safe so far, under the cash buttons:
+// the figures the cashier entered, which say nothing about the cash taken on bills.
+export function CashTotals(props: { paidIn?: Money; paidOut?: Money; dropped?: Money }) {
+  const zero = () => money(storeCurrency(), 0);
+  return (
+    <>
+      <Show when={nonZero(props.paidIn) || nonZero(props.paidOut)}>
+        <p class="mt-2 text-sm text-ink-muted tabular-nums" data-outcome="cash-totals">
+          {t("shift.cash_totals", {
+            paid_in: formatAmount(props.paidIn ?? zero()),
+            paid_out: formatAmount(props.paidOut ?? zero()),
+          })}
+        </p>
+      </Show>
+      <Show when={nonZero(props.dropped) && props.dropped}>
+        {(dropped) => (
+          <p class="mt-1 text-sm text-ink-muted tabular-nums" data-outcome="cash-dropped">
+            {t("shift.dropped")} {formatAmount(dropped())}
           </p>
         )}
       </Show>

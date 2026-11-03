@@ -4043,6 +4043,49 @@ test("a drawer is counted note by note, and the close card lists the notes", asy
   }
 });
 
+// A drop to the safe may say why, from the store's reasons for a drop (ADR-0186 amendment), in one
+// tap like a paid out, or go without one; the Shift screen shows what the shift has dropped beside
+// what it paid in and out, and so does the close card.
+test("a drop says why if the cashier picks a reason, and the shift shows what it dropped", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    const drops = [];
+    page.on("request", (request) => {
+      if (request.method() === "POST" && request.url().endsWith("/safe-drop")) {
+        drops.push(request.postDataJSON());
+      }
+    });
+    await pair(page, edge);
+    await signIn(page, edge);
+    await openShift(page);
+
+    await page.getByRole("button", { name: "Drop to safe" }).click();
+    await page.locator("#drop-amount").fill("50000");
+    await page.locator('[data-step="dropReason"]').first().click();
+    await expect(page.locator('[data-outcome="cash-dropped"]')).toHaveText("Dropped to safe 50,000₫");
+    expect(drops[0].reason_code_id).toBeTruthy();
+
+    // Skipped: the plain button records it with no reason.
+    await page.getByRole("button", { name: "Drop to safe" }).click();
+    await page.locator("#drop-amount").fill("30000");
+    await page.locator('[data-step="dropToSafe"]').click();
+    await expect(page.locator('[data-outcome="cash-dropped"]')).toHaveText("Dropped to safe 80,000₫");
+    expect(drops[1].reason_code_id ?? null).toBeNull();
+
+    // 100,000 float - 80,000 dropped.
+    await page.locator("#count").fill("20000");
+    await page.locator('[data-step="countShift"]').click();
+    await page.locator('[data-step="closeShift"]').click();
+    const closed = page.locator('[data-outcome="shift-closed"]');
+    await expect(closed.locator(".text-ok")).toBeVisible();
+    await expect(closed.locator('[data-outcome="shift-dropped"]')).toContainText("80,000₫");
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A shift starts on a terminal with no keyboard of any kind.
 //
 // The float keypad above closed this for cash. It did not close it for the screen that comes first.
