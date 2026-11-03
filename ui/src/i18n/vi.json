@@ -349,6 +349,7 @@
   "pay.share_taken": "Phần {part} · {method}",
   "pay.share_untake": "Bỏ",
   "pay.short_by": "Còn thiếu {amount}",
+  "pay.split_leave_confirm": "Đã có khách trả phần của mình trong lần chia này. Vẫn rời hoá đơn? Phần chia vẫn được giữ trên máy này.",
   "pay.settled_elsewhere": "Hoá đơn này đã được thanh toán ở máy khác",
   "pay.settled_elsewhere_hint": "Không cần thu thêm ở đây. Bàn đang chờ dọn.",
   "pay.split": "Chia đều theo số người",
