@@ -1987,6 +1987,7 @@ dependencies = [
  "pos-proto",
  "proptest",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -53,6 +53,27 @@ wire_enum! {
 }
 
 wire_enum! {
+    /// The class of device a till runs on: the device dimension a package variant may state when it
+    /// names no single device ([ADR-0201](../../../docs/adr/0201-the-till-runs-on-every-device-class.md)
+    /// decision 3, [ADR-0189](../../../docs/adr/0189-a-store-runs-a-package-version-hq-pins.md)
+    /// decision 4).
+    ///
+    /// `DEVICE_CLASS_UNSPECIFIED` means the class is not known: a variant for a class never matches
+    /// it, so such a device runs a variant that names it by id or one that states no device.
+    DeviceClass, prefix = "DEVICE_CLASS";
+    /// A fixed till at the counter or on the floor.
+    Terminal = "TERMINAL",
+    /// A tablet a server carries.
+    Tablet = "TABLET",
+    /// A phone a server carries.
+    Phone = "PHONE",
+    /// A kitchen display.
+    KitchenDisplay = "KITCHEN_DISPLAY",
+    /// A guest-facing self-order device.
+    Kiosk = "KIOSK",
+}
+
+wire_enum! {
     /// How a device is attached — part of its identity, because a cash drawer may be opened only
     /// over USB (`docs/architecture.md` §5).
     DeviceConnection, prefix = "DEVICE_CONNECTION";

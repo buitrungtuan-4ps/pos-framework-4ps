@@ -48,6 +48,7 @@ pub mod lease;
 pub mod machines;
 pub mod menu;
 pub mod ota;
+pub mod package;
 pub mod permission;
 pub mod state_machine;
 

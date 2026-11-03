@@ -248,6 +248,17 @@ resource_id! {
     /// A display sub-category: a second grouping level under a [`DisplayCategoryId`].
     DisplaySubcategoryId
 }
+resource_id! {
+    /// A tenant's customization package: its screens, flows, rules and data definitions, under
+    /// which every published version is kept
+    /// ([ADR-0189](../../../docs/adr/0189-a-store-runs-a-package-version-hq-pins.md)).
+    PackageId
+}
+resource_id! {
+    /// One published version of a package. A published version never changes, so this id names
+    /// one content for good (ADR-0189 decision 1).
+    PackageVersionId
+}
 
 #[cfg(test)]
 mod tests {
