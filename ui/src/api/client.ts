@@ -55,6 +55,10 @@ import type {
   SettledBill,
   SettleRequest,
   ShiftResponse,
+  ShiftXResponse,
+  StoreXResponse,
+  PrintXResponse,
+  HandoverSlipPrintResponse,
   SplitRequest,
   SplitResponse,
   SyncResponse,
@@ -529,6 +533,14 @@ export const api = {
   // Surplus cash taken to the safe, apart from a paid out (ADR-0186 decision 5).
   safeDrop: (shiftId: string, drop: SafeDropRequest) =>
     request<ShiftResponse>("POST", `/api/shifts/${shiftId}/safe-drop`, drop),
+  // A shift's X and the store's, which reset nothing, and their paper (ADR-0187 decision 4); and a
+  // handover's slip printed again (decision 3).
+  shiftX: (shiftId: string) => request<ShiftXResponse>("GET", `/api/shifts/${shiftId}/x`),
+  storeX: () => request<StoreXResponse>("GET", "/api/shifts:x"),
+  printX: (shiftId?: string) =>
+    request<PrintXResponse>("POST", "/api/shifts:print_x", shiftId === undefined ? {} : { shift_id: shiftId }),
+  reprintHandoverSlip: (shiftId: string) =>
+    request<HandoverSlipPrintResponse>("POST", `/api/shifts/${shiftId}/handover-slip/print`),
   openDrawer: (open: OpenDrawerRequest) =>
     request<OpenDrawerResponse>("POST", "/api/drawer/open", open),
 

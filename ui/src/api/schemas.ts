@@ -90,6 +90,11 @@ export type LocaleResponse = Schemas["LocaleResponse"];
 export type SyncResponse = Schemas["SyncResponse"];
 
 export type ShiftResponse = Schemas["ShiftResponse"];
+export type ShiftXResponse = Schemas["ShiftXResponse"];
+export type StoreXResponse = Schemas["StoreXResponse"];
+export type XFigures = Schemas["XFiguresResponse"];
+export type PrintXResponse = Schemas["PrintXResponse"];
+export type HandoverSlipPrintResponse = Schemas["HandoverSlipPrintResponse"];
 export type DrawerEntry = Schemas["DrawerResponse"];
 export type DrawersResponse = Schemas["DrawersResponse"];
 export type DrawerModel = DrawersResponse["drawer_model"];

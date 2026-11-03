@@ -1,12 +1,15 @@
 import { For, Show, createSignal, onMount } from "solid-js";
 
 import { ApproverFields } from "../components/ApproverFields";
-import { CountField, CountedRows } from "../components/CountField";
+import { ClosedCard } from "../components/ClosedCard";
+import { Handover, handingOver } from "../components/Handover";
+import { DayClosed, ShiftXButton } from "../components/ShiftXRead";
+import { CountField } from "../components/CountField";
 import { AssigneeField, DrawerOwner } from "../components/DrawerOwner";
 import { Keypad } from "../components/Keypad";
 import { PageHeader } from "../components/ui";
 import { SafeDrop } from "../components/SafeDrop";
-import { CashTotals, ShiftCashLines } from "../components/ShiftCashLines";
+import { CashTotals } from "../components/ShiftCashLines";
 import type { ApproverRequest, DrawerEntry, DrawerOutcome, ShiftResponse } from "../api/schemas";
 import { t, type MessageKey } from "../i18n";
 import { WhyUnavailable } from "../components/StoreData";
@@ -121,7 +124,6 @@ export function Shift() {
   // A paid in or out (ADR-0165 decision 1): the amount is typed first, then **Paid in** or **Paid
   // out** says which way, then a reason records it. Two taps after the number.
   const [movementAmount, setMovementAmount] = createSignal("");
-  const [movementPad, setMovementPad] = createSignal(false);
   const [direction, setDirection] = createSignal<"in" | "out" | null>(null);
   const [moved, setMoved] = createSignal<{ key: MessageKey; amount: Money } | null>(null);
   // What came of the drawer for that movement, said beside it rather than under the no-sale button.
@@ -216,7 +218,6 @@ export function Shift() {
       setMovementDrawer(outcome ?? null);
       setDirection(null);
       setMovementAmount("");
-      setMovementPad(false);
     });
   };
 
@@ -518,6 +519,7 @@ export function Shift() {
       {/* This device's own drawer, and beside it on a tablet every till's (ADR-0167). */}
       <div>
       <PageHeader title={t("shift.title")} />
+      <DayClosed />
 
       <Show when={error()}>
         {(message) => (
@@ -575,9 +577,19 @@ export function Shift() {
         </p>
       </Show>
 
+      {/* After a close, its card comes first, above the next opening (UX-14). */}
+      <Show when={phase() === "SHIFT_STATE_CLOSED" && !handingOver() && shift()?.variance}>
+        {(variance) => (
+          <div data-outcome="shift-closed">
+            <ClosedCard shift={shift() ?? { shiftId: "", state: "" }} variance={variance()} />
+          </div>
+        )}
+      </Show>
+
       <Show
         when={
           (phase() === "NONE" || phase() === "SHIFT_STATE_CLOSED") &&
+          !handingOver() &&
           can("cash.shift.open") &&
           !noTill()
         }
@@ -628,12 +640,10 @@ export function Shift() {
             inputmode="numeric"
             class="mt-1 w-full rounded-token border border-line bg-surface p-3 tabular-nums"
             value={movementAmount()}
-            onFocus={() => setMovementPad(true)}
             onInput={(event) => setMovementAmount(event.currentTarget.value)}
           />
-          <Show when={movementPad()}>
-            <Keypad value={movementAmount()} onChange={setMovementAmount} notes data-step="movementKeypad" />
-          </Show>
+          {/* At once, with the field (UX-14): the amount is the first thing typed. */}
+          <Keypad value={movementAmount()} onChange={setMovementAmount} notes data-step="movementKeypad" />
           <div class="mt-3 grid grid-cols-2 gap-2">
             <button
               type="button"
@@ -822,43 +832,18 @@ export function Shift() {
         </Show>
       </Show>
 
-      <Show when={phase() === "SHIFT_STATE_CLOSED" && shift()?.variance}>
-        {(variance) => (
-          <div class="mt-4 rounded-token border border-line bg-surface p-4" data-outcome="shift-closed">
-            <p class="font-semibold">{t("shift.closed")}</p>
-            <ShiftCashLines
-              paidIn={shift()?.paidIn}
-              paidOut={shift()?.paidOut}
-              dropped={shift()?.dropped}
-              voided={shift()?.voided}
-            />
-            <CountedRows counting={shift()?.counting} />
-            <p class="mt-2 text-ink-muted">
-              {t("shift.expected")}{" "}
-              <span class="tabular-nums">{formatAmount(shift()?.expected ?? money(storeCurrency(), 0))}</span>
-            </p>
-            <p class="text-ink-muted">
-              {t("shift.counted")}{" "}
-              <span class="tabular-nums">{formatAmount(shift()?.counted ?? money(storeCurrency(), 0))}</span>
-            </p>
-            <p
-              classList={{
-                "text-danger": variance().amount_minor !== 0,
-                "text-ok": variance().amount_minor === 0,
-              }}
-            >
-              {t("shift.variance")} <span class="tabular-nums">{formatAmount(variance())}</span>
-            </p>
-            <Show when={shift()?.reportPrint}>
-              {(outcome) => (
-                <p class="mt-2 text-sm text-ink-muted" role="status" data-outcome="shift-report-print">
-                  {t(printOutcomeKey(outcome(), "shift.report_printed"))}
-                </p>
-              )}
-            </Show>
-          </div>
-        )}
+      {/* The handover, one flow from the outgoing count to the incoming opening (ADR-0187). */}
+      <Show
+        when={
+          (phase() === "SHIFT_STATE_OPEN" || phase() === "SHIFT_STATE_COUNTED" || handingOver()) &&
+          can("cash.shift.close") &&
+          can("cash.shift.open") &&
+          !noTill()
+        }
+      >
+        <Handover />
       </Show>
+      <ShiftXButton />
 
       {/*
         The drawer opened without a sale (ADR-0165 decision 3), in every state of the shift: it moves
@@ -963,7 +948,9 @@ export function Shift() {
                   </span>
                   <span class="block text-sm text-ink-muted">{drawerState(drawer)}</span>
                   <span class="block text-sm text-ink-muted tabular-nums">
-                    {t("shift.drawer_float", { amount: formatAmount(drawer.default_float) })}
+                    {t("shift.drawer_float", {
+                      amount: formatAmount(drawer.shift?.opening_float ?? drawer.default_float),
+                    })}
                   </span>
                   {/* Only where the read carries it: never worked out here. */}
                   <Show when={drawer.shift?.expected_amount}>

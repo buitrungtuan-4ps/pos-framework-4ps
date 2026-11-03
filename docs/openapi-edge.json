@@ -7117,6 +7117,7 @@
         "required": [
           "shift_id",
           "state",
+          "opening_float",
           "paid_in_amount",
           "paid_out_amount",
           "print_shift_report"
@@ -7159,6 +7160,10 @@
           "handover_slip_print": {
             "type": "string",
             "description": "What came of printing that opening's handover slip, as `shift_report_print` says of a\nreport. Absent on every other command."
+          },
+          "opening_float": {
+            "$ref": "#/components/schemas/Money",
+            "description": "The float the shift opened with, which the drawer list shows beside the till's default."
           },
           "paid_in_amount": {
             "$ref": "#/components/schemas/Money",

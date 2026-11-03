@@ -222,6 +222,8 @@ pub(crate) struct ShiftResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(nullable = false))]
     variance: Option<Money>,
+    /// The float the shift opened with, which the drawer list shows beside the till's default.
+    opening_float: Money,
     /// Cash paid into the drawer outside a sale so far (ADR-0165).
     paid_in_amount: Money,
     /// Cash paid out of it outside a sale so far.
@@ -296,6 +298,7 @@ impl From<ShiftView> for ShiftResponse {
             expected_amount: view.expected_amount,
             counted_amount: view.counted_amount,
             variance: view.variance,
+            opening_float: view.opening_float,
             paid_in_amount: view.paid_in,
             paid_out_amount: view.paid_out,
             dropped_amount: view.dropped,
