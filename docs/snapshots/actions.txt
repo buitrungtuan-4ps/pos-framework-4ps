@@ -1,0 +1,423 @@
+# Generated from crates/pos-proto/src/actions/catalogue.rs — do not edit.
+# One line per fact. A bare action id, its effect and its params are contracts; its
+# frequency, route, permission, refusal and since lines may change. ADR-0191 decision 4.
+admin.device.revoke
+admin.device.revoke	effect=ACTION_EFFECT_EDGE_WRITE
+admin.device.revoke	frequency=ACTION_FREQUENCY_RARE
+admin.device.revoke	param=device_id:ACTION_PARAM_KIND_ID:optional
+admin.device.revoke	permission=admin.device.manage
+admin.device.revoke	route=POST /api/pair/revoke
+admin.device.revoke	since=0.14.1
+admin.pairing_code.create
+admin.pairing_code.create	effect=ACTION_EFFECT_EDGE_WRITE
+admin.pairing_code.create	frequency=ACTION_FREQUENCY_RARE
+admin.pairing_code.create	permission=admin.device.manage
+admin.pairing_code.create	route=POST /api/pair/codes
+admin.pairing_code.create	since=0.14.1
+admin.print_agent.claim
+admin.print_agent.claim	effect=ACTION_EFFECT_EDGE_WRITE
+admin.print_agent.claim	frequency=ACTION_FREQUENCY_RARE
+admin.print_agent.claim	param=agent_device_id:ACTION_PARAM_KIND_ID:required
+admin.print_agent.claim	permission=admin.device.manage
+admin.print_agent.claim	route=POST /api/print/agent
+admin.print_agent.claim	since=0.14.1
+admin.print_agent.revoke
+admin.print_agent.revoke	effect=ACTION_EFFECT_EDGE_WRITE
+admin.print_agent.revoke	frequency=ACTION_FREQUENCY_RARE
+admin.print_agent.revoke	param=agent_device_id:ACTION_PARAM_KIND_ID:required
+admin.print_agent.revoke	permission=admin.device.manage
+admin.print_agent.revoke	route=POST /api/print/agent/revoke
+admin.print_agent.revoke	since=0.14.1
+admin.printer.test
+admin.printer.test	effect=ACTION_EFFECT_EDGE_WRITE
+admin.printer.test	frequency=ACTION_FREQUENCY_RARE
+admin.printer.test	param=printer_id:ACTION_PARAM_KIND_ID:required
+admin.printer.test	permission=admin.device.manage
+admin.printer.test	route=POST /api/printers/{id}/test
+admin.printer.test	since=0.14.1
+billing.bill.discount
+billing.bill.discount	effect=ACTION_EFFECT_MONEY
+billing.bill.discount	frequency=ACTION_FREQUENCY_RARE
+billing.bill.discount	param=amount:ACTION_PARAM_KIND_AMOUNT:required
+billing.bill.discount	param=bill_id:ACTION_PARAM_KIND_ID:required
+billing.bill.discount	param=reason_code_id:ACTION_PARAM_KIND_ID:required
+billing.bill.discount	permission=billing.discount.apply
+billing.bill.discount	permission=billing.discount.override_ceiling
+billing.bill.discount	refusal=APPROVAL_REQUIRED
+billing.bill.discount	refusal=REASON_CODE_NOT_VALID
+billing.bill.discount	refusal=REDUCTION_EXCEEDS_BILL
+billing.bill.discount	route=POST /api/bills/{id}/discount
+billing.bill.discount	since=0.14.1
+billing.bill.merge
+billing.bill.merge	effect=ACTION_EFFECT_MONEY
+billing.bill.merge	frequency=ACTION_FREQUENCY_RARE
+billing.bill.merge	param=absorbed_bill_ids:ACTION_PARAM_KIND_ID_LIST:required
+billing.bill.merge	param=bill_id:ACTION_PARAM_KIND_ID:required
+billing.bill.merge	permission=billing.bill.split
+billing.bill.merge	refusal=BILLS_ON_DIFFERENT_ORDERS
+billing.bill.merge	route=POST /api/bills/{id}/merge
+billing.bill.merge	since=0.14.1
+billing.bill.open
+billing.bill.open	effect=ACTION_EFFECT_EDGE_WRITE
+billing.bill.open	frequency=ACTION_FREQUENCY_COMMON
+billing.bill.open	param=order_id:ACTION_PARAM_KIND_ID:optional
+billing.bill.open	param=table_id:ACTION_PARAM_KIND_ID:optional
+billing.bill.open	permission=billing.bill.open
+billing.bill.open	refusal=BILL_ALREADY_OPEN
+billing.bill.open	refusal=NOTHING_TO_BILL
+billing.bill.open	route=POST /api/orders/{id}/bill
+billing.bill.open	route=POST /api/tables/{id}/bill
+billing.bill.open	since=0.14.1
+billing.bill.settle
+billing.bill.settle	effect=ACTION_EFFECT_MONEY
+billing.bill.settle	frequency=ACTION_FREQUENCY_RARE
+billing.bill.settle	param=bill_id:ACTION_PARAM_KIND_ID:required
+billing.bill.settle	param=buyer:ACTION_PARAM_KIND_ENTERED:optional
+billing.bill.settle	param=payments:ACTION_PARAM_KIND_ENTERED:required
+billing.bill.settle	permission=billing.payment.take
+billing.bill.settle	permission=cash.drawer.override_assignment
+billing.bill.settle	refusal=DRAWER_ASSIGNED_TO_ANOTHER
+billing.bill.settle	refusal=DRAWER_COUNTED
+billing.bill.settle	refusal=NOT_A_TILL
+billing.bill.settle	refusal=OPEN_SHIFT_REQUIRED
+billing.bill.settle	refusal=PAYMENTS_DO_NOT_SUM_TO_TOTAL
+billing.bill.settle	route=POST /api/bills/{id}/settle
+billing.bill.settle	since=0.14.1
+billing.bill.split
+billing.bill.split	effect=ACTION_EFFECT_MONEY
+billing.bill.split	frequency=ACTION_FREQUENCY_RARE
+billing.bill.split	param=bill_id:ACTION_PARAM_KIND_ID:required
+billing.bill.split	param=parts:ACTION_PARAM_KIND_ENTERED:required
+billing.bill.split	permission=billing.bill.split
+billing.bill.split	refusal=SPLIT_NOT_A_PARTITION
+billing.bill.split	route=POST /api/bills/{id}/split
+billing.bill.split	since=0.14.1
+billing.bill.void
+billing.bill.void	effect=ACTION_EFFECT_MONEY
+billing.bill.void	frequency=ACTION_FREQUENCY_RARE
+billing.bill.void	param=bill_id:ACTION_PARAM_KIND_ID:required
+billing.bill.void	param=reason_code_id:ACTION_PARAM_KIND_ID:required
+billing.bill.void	permission=billing.bill.void
+billing.bill.void	refusal=APPROVAL_REQUIRED
+billing.bill.void	refusal=VOID_REASON_NOT_VALID
+billing.bill.void	route=POST /api/bills/{id}/void
+billing.bill.void	since=0.14.1
+billing.bill.void_settled
+billing.bill.void_settled	effect=ACTION_EFFECT_MONEY
+billing.bill.void_settled	frequency=ACTION_FREQUENCY_RARE
+billing.bill.void_settled	param=bill_id:ACTION_PARAM_KIND_ID:required
+billing.bill.void_settled	param=reason_code_id:ACTION_PARAM_KIND_ID:required
+billing.bill.void_settled	permission=billing.bill.void_settled
+billing.bill.void_settled	permission=cash.drawer.override_assignment
+billing.bill.void_settled	refusal=APPROVAL_REQUIRED
+billing.bill.void_settled	refusal=E_INVOICE_ISSUED
+billing.bill.void_settled	refusal=SETTLED_VOID_WINDOW_CLOSED
+billing.bill.void_settled	refusal=VOID_REASON_NOT_VALID
+billing.bill.void_settled	route=POST /api/bills/{id}/void_settled
+billing.bill.void_settled	since=0.14.1
+billing.check.print
+billing.check.print	effect=ACTION_EFFECT_EDGE_WRITE
+billing.check.print	frequency=ACTION_FREQUENCY_COMMON
+billing.check.print	param=bill_id:ACTION_PARAM_KIND_ID:optional
+billing.check.print	param=order_id:ACTION_PARAM_KIND_ID:optional
+billing.check.print	param=table_id:ACTION_PARAM_KIND_ID:optional
+billing.check.print	permission=billing.bill.open
+billing.check.print	route=POST /api/bills/{id}/check/print
+billing.check.print	route=POST /api/orders/{id}/check/print
+billing.check.print	route=POST /api/tables/{id}/check/print
+billing.check.print	since=0.14.1
+billing.fee.waive
+billing.fee.waive	effect=ACTION_EFFECT_MONEY
+billing.fee.waive	frequency=ACTION_FREQUENCY_RARE
+billing.fee.waive	param=bill_id:ACTION_PARAM_KIND_ID:required
+billing.fee.waive	param=fee_id:ACTION_PARAM_KIND_ID:required
+billing.fee.waive	param=reason_code_id:ACTION_PARAM_KIND_ID:required
+billing.fee.waive	permission=billing.fee.waive
+billing.fee.waive	refusal=APPROVAL_REQUIRED
+billing.fee.waive	refusal=FEE_NOT_WAIVABLE
+billing.fee.waive	refusal=REASON_CODE_NOT_VALID
+billing.fee.waive	route=POST /api/bills/{id}/fees/{fee_id}/waive
+billing.fee.waive	since=0.14.1
+billing.receipt.reprint
+billing.receipt.reprint	effect=ACTION_EFFECT_EDGE_WRITE
+billing.receipt.reprint	frequency=ACTION_FREQUENCY_RARE
+billing.receipt.reprint	param=bill_id:ACTION_PARAM_KIND_ID:required
+billing.receipt.reprint	permission=billing.receipt.reprint
+billing.receipt.reprint	refusal=NOT_SETTLED
+billing.receipt.reprint	route=POST /api/bills/{id}/receipt/reprint
+billing.receipt.reprint	since=0.14.1
+cash.drawer.open
+cash.drawer.open	effect=ACTION_EFFECT_MONEY
+cash.drawer.open	frequency=ACTION_FREQUENCY_RARE
+cash.drawer.open	param=reason_code_id:ACTION_PARAM_KIND_ID:required
+cash.drawer.open	permission=cash.drawer.open_no_sale
+cash.drawer.open	permission=cash.drawer.override_assignment
+cash.drawer.open	refusal=APPROVAL_REQUIRED
+cash.drawer.open	refusal=CASH_REASON_NOT_VALID
+cash.drawer.open	refusal=DRAWER_ASSIGNED_TO_ANOTHER
+cash.drawer.open	refusal=NOT_A_TILL
+cash.drawer.open	route=POST /api/drawer/open
+cash.drawer.open	since=0.14.1
+cash.movement.paid_in
+cash.movement.paid_in	effect=ACTION_EFFECT_MONEY
+cash.movement.paid_in	frequency=ACTION_FREQUENCY_RARE
+cash.movement.paid_in	param=amount:ACTION_PARAM_KIND_AMOUNT:required
+cash.movement.paid_in	param=reason_code_id:ACTION_PARAM_KIND_ID:required
+cash.movement.paid_in	param=shift_id:ACTION_PARAM_KIND_ID:required
+cash.movement.paid_in	permission=cash.drawer.override_assignment
+cash.movement.paid_in	permission=cash.movement.record
+cash.movement.paid_in	refusal=APPROVAL_REQUIRED
+cash.movement.paid_in	refusal=CASH_REASON_NOT_VALID
+cash.movement.paid_in	refusal=DRAWER_ASSIGNED_TO_ANOTHER
+cash.movement.paid_in	refusal=SHIFT_NOT_OPEN
+cash.movement.paid_in	route=POST /api/shifts/{id}/paid-in
+cash.movement.paid_in	since=0.14.1
+cash.movement.paid_out
+cash.movement.paid_out	effect=ACTION_EFFECT_MONEY
+cash.movement.paid_out	frequency=ACTION_FREQUENCY_RARE
+cash.movement.paid_out	param=amount:ACTION_PARAM_KIND_AMOUNT:required
+cash.movement.paid_out	param=reason_code_id:ACTION_PARAM_KIND_ID:required
+cash.movement.paid_out	param=shift_id:ACTION_PARAM_KIND_ID:required
+cash.movement.paid_out	permission=cash.drawer.override_assignment
+cash.movement.paid_out	permission=cash.movement.record
+cash.movement.paid_out	refusal=APPROVAL_REQUIRED
+cash.movement.paid_out	refusal=CASH_REASON_NOT_VALID
+cash.movement.paid_out	refusal=DRAWER_ASSIGNED_TO_ANOTHER
+cash.movement.paid_out	refusal=SHIFT_NOT_OPEN
+cash.movement.paid_out	route=POST /api/shifts/{id}/paid-out
+cash.movement.paid_out	since=0.14.1
+cash.movement.safe_drop
+cash.movement.safe_drop	effect=ACTION_EFFECT_MONEY
+cash.movement.safe_drop	frequency=ACTION_FREQUENCY_RARE
+cash.movement.safe_drop	param=amount:ACTION_PARAM_KIND_AMOUNT:required
+cash.movement.safe_drop	param=denomination_counts:ACTION_PARAM_KIND_ENTERED:optional
+cash.movement.safe_drop	param=reason_code_id:ACTION_PARAM_KIND_ID:optional
+cash.movement.safe_drop	param=shift_id:ACTION_PARAM_KIND_ID:required
+cash.movement.safe_drop	permission=cash.drawer.override_assignment
+cash.movement.safe_drop	permission=cash.movement.record
+cash.movement.safe_drop	refusal=APPROVAL_REQUIRED
+cash.movement.safe_drop	refusal=CASH_REASON_NOT_VALID
+cash.movement.safe_drop	refusal=COUNT_DOES_NOT_ADD_UP
+cash.movement.safe_drop	refusal=DRAWER_ASSIGNED_TO_ANOTHER
+cash.movement.safe_drop	refusal=SHIFT_NOT_OPEN
+cash.movement.safe_drop	route=POST /api/shifts/{id}/safe-drop
+cash.movement.safe_drop	since=0.14.1
+cash.shift.close
+cash.shift.close	effect=ACTION_EFFECT_MONEY
+cash.shift.close	frequency=ACTION_FREQUENCY_RARE
+cash.shift.close	param=reason_code_id:ACTION_PARAM_KIND_ID:optional
+cash.shift.close	param=shift_id:ACTION_PARAM_KIND_ID:required
+cash.shift.close	permission=cash.drawer.override_assignment
+cash.shift.close	permission=cash.shift.close
+cash.shift.close	permission=cash.shift.manage_other_till
+cash.shift.close	refusal=CASH_REASON_NOT_VALID
+cash.shift.close	refusal=VARIANCE_REASON_REQUIRED
+cash.shift.close	route=POST /api/shifts/{id}/close
+cash.shift.close	since=0.14.1
+cash.shift.close_many
+cash.shift.close_many	effect=ACTION_EFFECT_MONEY
+cash.shift.close_many	frequency=ACTION_FREQUENCY_RARE
+cash.shift.close_many	param=shift_ids:ACTION_PARAM_KIND_ID_LIST:required
+cash.shift.close_many	param=variance_reasons:ACTION_PARAM_KIND_ENTERED:optional
+cash.shift.close_many	permission=cash.drawer.override_assignment
+cash.shift.close_many	permission=cash.shift.close
+cash.shift.close_many	permission=cash.shift.manage_other_till
+cash.shift.close_many	refusal=VARIANCE_REASON_REQUIRED
+cash.shift.close_many	route=POST /api/shifts:batch_close
+cash.shift.close_many	since=0.14.1
+cash.shift.count
+cash.shift.count	effect=ACTION_EFFECT_MONEY
+cash.shift.count	frequency=ACTION_FREQUENCY_RARE
+cash.shift.count	param=counted_amount:ACTION_PARAM_KIND_AMOUNT:required
+cash.shift.count	param=denomination_counts:ACTION_PARAM_KIND_ENTERED:optional
+cash.shift.count	param=shift_id:ACTION_PARAM_KIND_ID:required
+cash.shift.count	permission=cash.drawer.override_assignment
+cash.shift.count	permission=cash.shift.close
+cash.shift.count	permission=cash.shift.manage_other_till
+cash.shift.count	refusal=COUNT_DOES_NOT_ADD_UP
+cash.shift.count	route=POST /api/shifts/{id}/count
+cash.shift.count	since=0.14.1
+cash.shift.open
+cash.shift.open	effect=ACTION_EFFECT_MONEY
+cash.shift.open	frequency=ACTION_FREQUENCY_RARE
+cash.shift.open	param=assigned_employee_id:ACTION_PARAM_KIND_ID:optional
+cash.shift.open	param=denomination_counts:ACTION_PARAM_KIND_ENTERED:optional
+cash.shift.open	param=handed_over_from_shift_id:ACTION_PARAM_KIND_ID:optional
+cash.shift.open	param=opening_float:ACTION_PARAM_KIND_AMOUNT:required
+cash.shift.open	param=terminal_device_id:ACTION_PARAM_KIND_ID:optional
+cash.shift.open	permission=cash.shift.manage_other_till
+cash.shift.open	permission=cash.shift.open
+cash.shift.open	refusal=APPROVAL_REQUIRED
+cash.shift.open	refusal=ASSIGNEE_REQUIRED
+cash.shift.open	refusal=COUNT_DOES_NOT_ADD_UP
+cash.shift.open	refusal=NOT_A_TILL
+cash.shift.open	refusal=SHIFT_ALREADY_OPEN
+cash.shift.open	route=POST /api/shifts
+cash.shift.open	since=0.14.1
+reports.shift.print_handover
+reports.shift.print_handover	effect=ACTION_EFFECT_EDGE_WRITE
+reports.shift.print_handover	frequency=ACTION_FREQUENCY_RARE
+reports.shift.print_handover	param=shift_id:ACTION_PARAM_KIND_ID:required
+reports.shift.print_handover	permission=reports.shift.read_x
+reports.shift.print_handover	route=POST /api/shifts/{id}/handover-slip/print
+reports.shift.print_handover	since=0.14.1
+reports.shift.print_x
+reports.shift.print_x	effect=ACTION_EFFECT_EDGE_WRITE
+reports.shift.print_x	frequency=ACTION_FREQUENCY_RARE
+reports.shift.print_x	param=shift_id:ACTION_PARAM_KIND_ID:optional
+reports.shift.print_x	permission=reports.shift.read_x
+reports.shift.print_x	permission=reports.takings.view
+reports.shift.print_x	route=POST /api/shifts:print_x
+reports.shift.print_x	since=0.14.1
+sales.course.fire
+sales.course.fire	effect=ACTION_EFFECT_EDGE_WRITE
+sales.course.fire	frequency=ACTION_FREQUENCY_COMMON
+sales.course.fire	param=course_id:ACTION_PARAM_KIND_ID:required
+sales.course.fire	param=order_id:ACTION_PARAM_KIND_ID:required
+sales.course.fire	param=station_id:ACTION_PARAM_KIND_ID:optional
+sales.course.fire	permission=sales.line.fire
+sales.course.fire	route=POST /api/orders/{id}/fire/{course_id}
+sales.course.fire	since=0.14.1
+sales.item.mark_sold_out
+sales.item.mark_sold_out	effect=ACTION_EFFECT_EDGE_WRITE
+sales.item.mark_sold_out	frequency=ACTION_FREQUENCY_COMMON
+sales.item.mark_sold_out	param=menu_item_id:ACTION_PARAM_KIND_ID:required
+sales.item.mark_sold_out	permission=sales.item.mark_unavailable
+sales.item.mark_sold_out	route=POST /api/menu/{id}/sold-out
+sales.item.mark_sold_out	since=0.14.1
+sales.item.restore
+sales.item.restore	effect=ACTION_EFFECT_EDGE_WRITE
+sales.item.restore	frequency=ACTION_FREQUENCY_COMMON
+sales.item.restore	param=menu_item_id:ACTION_PARAM_KIND_ID:required
+sales.item.restore	permission=sales.item.mark_unavailable
+sales.item.restore	route=POST /api/menu/{id}/restore
+sales.item.restore	since=0.14.1
+sales.line.add
+sales.line.add	effect=ACTION_EFFECT_EDGE_WRITE
+sales.line.add	frequency=ACTION_FREQUENCY_COMMON
+sales.line.add	param=course_id:ACTION_PARAM_KIND_ID:optional
+sales.line.add	param=menu_item_id:ACTION_PARAM_KIND_ID:required
+sales.line.add	param=modifier_menu_item_ids:ACTION_PARAM_KIND_ID_LIST:optional
+sales.line.add	param=note:ACTION_PARAM_KIND_TEXT:optional
+sales.line.add	param=order_id:ACTION_PARAM_KIND_ID:optional
+sales.line.add	param=quantity:ACTION_PARAM_KIND_COUNT:required
+sales.line.add	param=seat:ACTION_PARAM_KIND_COUNT:optional
+sales.line.add	param=table_id:ACTION_PARAM_KIND_ID:optional
+sales.line.add	permission=sales.line.add
+sales.line.add	route=POST /api/orders/{id}/lines
+sales.line.add	route=POST /api/tables/{id}/lines
+sales.line.add	since=0.14.1
+sales.line.fire
+sales.line.fire	effect=ACTION_EFFECT_EDGE_WRITE
+sales.line.fire	frequency=ACTION_FREQUENCY_RARE
+sales.line.fire	param=order_line_id:ACTION_PARAM_KIND_ID:required
+sales.line.fire	param=station_id:ACTION_PARAM_KIND_ID:optional
+sales.line.fire	permission=sales.line.fire
+sales.line.fire	route=POST /api/lines/{id}/fire
+sales.line.fire	since=0.14.1
+sales.line.set_quantity
+sales.line.set_quantity	effect=ACTION_EFFECT_EDGE_WRITE
+sales.line.set_quantity	frequency=ACTION_FREQUENCY_COMMON
+sales.line.set_quantity	param=order_line_id:ACTION_PARAM_KIND_ID:required
+sales.line.set_quantity	param=quantity:ACTION_PARAM_KIND_COUNT:required
+sales.line.set_quantity	permission=sales.line.add
+sales.line.set_quantity	route=POST /api/lines/{id}/quantity
+sales.line.set_quantity	since=0.14.1
+sales.line.void
+sales.line.void	effect=ACTION_EFFECT_EDGE_WRITE
+sales.line.void	frequency=ACTION_FREQUENCY_RARE
+sales.line.void	param=order_line_id:ACTION_PARAM_KIND_ID:required
+sales.line.void	param=reason_code_id:ACTION_PARAM_KIND_ID:required
+sales.line.void	permission=sales.line.add
+sales.line.void	permission=sales.line.void_fired
+sales.line.void	refusal=APPROVAL_REQUIRED
+sales.line.void	refusal=VOID_REASON_NOT_VALID
+sales.line.void	route=POST /api/lines/{id}/void
+sales.line.void	since=0.14.1
+sales.order.confirm
+sales.order.confirm	effect=ACTION_EFFECT_EDGE_WRITE
+sales.order.confirm	frequency=ACTION_FREQUENCY_COMMON
+sales.order.confirm	param=order_id:ACTION_PARAM_KIND_ID:required
+sales.order.confirm	permission=sales.order.confirm_qr
+sales.order.confirm	route=POST /api/orders/{id}/confirm
+sales.order.confirm	since=0.14.1
+sales.order.fire
+sales.order.fire	effect=ACTION_EFFECT_EDGE_WRITE
+sales.order.fire	frequency=ACTION_FREQUENCY_COMMON
+sales.order.fire	param=order_id:ACTION_PARAM_KIND_ID:required
+sales.order.fire	param=station_id:ACTION_PARAM_KIND_ID:optional
+sales.order.fire	permission=sales.line.fire
+sales.order.fire	route=POST /api/orders/{id}/fire
+sales.order.fire	since=0.14.1
+sales.order.open
+sales.order.open	effect=ACTION_EFFECT_EDGE_WRITE
+sales.order.open	frequency=ACTION_FREQUENCY_COMMON
+sales.order.open	param=channel:ACTION_PARAM_KIND_TOKEN:optional
+sales.order.open	permission=sales.line.add
+sales.order.open	route=POST /api/orders
+sales.order.open	since=0.14.1
+sales.order.reject
+sales.order.reject	effect=ACTION_EFFECT_EDGE_WRITE
+sales.order.reject	frequency=ACTION_FREQUENCY_RARE
+sales.order.reject	param=order_id:ACTION_PARAM_KIND_ID:required
+sales.order.reject	param=reason_code_id:ACTION_PARAM_KIND_ID:required
+sales.order.reject	permission=sales.order.confirm_qr
+sales.order.reject	refusal=REASON_CODE_NOT_VALID
+sales.order.reject	route=POST /api/orders/{id}/reject
+sales.order.reject	since=0.14.1
+sales.order.transfer
+sales.order.transfer	effect=ACTION_EFFECT_EDGE_WRITE
+sales.order.transfer	frequency=ACTION_FREQUENCY_COMMON
+sales.order.transfer	param=table_id:ACTION_PARAM_KIND_ID:required
+sales.order.transfer	param=to_table_id:ACTION_PARAM_KIND_ID:required
+sales.order.transfer	permission=sales.order.transfer
+sales.order.transfer	permission=sales.table.manage
+sales.order.transfer	route=POST /api/tables/{id}/transfer
+sales.order.transfer	since=0.14.1
+sales.table.clean
+sales.table.clean	effect=ACTION_EFFECT_EDGE_WRITE
+sales.table.clean	frequency=ACTION_FREQUENCY_COMMON
+sales.table.clean	param=table_id:ACTION_PARAM_KIND_ID:required
+sales.table.clean	permission=sales.table.manage
+sales.table.clean	route=POST /api/tables/{id}/clean
+sales.table.clean	since=0.14.1
+sales.table.release
+sales.table.release	effect=ACTION_EFFECT_EDGE_WRITE
+sales.table.release	frequency=ACTION_FREQUENCY_RARE
+sales.table.release	param=table_id:ACTION_PARAM_KIND_ID:required
+sales.table.release	permission=sales.table.manage
+sales.table.release	refusal=ORDER_NOT_EMPTY
+sales.table.release	route=POST /api/tables/{id}/release
+sales.table.release	since=0.14.1
+sales.table.seat
+sales.table.seat	effect=ACTION_EFFECT_EDGE_WRITE
+sales.table.seat	frequency=ACTION_FREQUENCY_COMMON
+sales.table.seat	param=guest_count:ACTION_PARAM_KIND_COUNT:optional
+sales.table.seat	param=table_id:ACTION_PARAM_KIND_ID:required
+sales.table.seat	permission=sales.table.manage
+sales.table.seat	route=POST /api/tables/{id}/seat
+sales.table.seat	since=0.14.1
+sales.ticket.bump
+sales.ticket.bump	effect=ACTION_EFFECT_EDGE_WRITE
+sales.ticket.bump	frequency=ACTION_FREQUENCY_COMMON
+sales.ticket.bump	param=order_id:ACTION_PARAM_KIND_ID:required
+sales.ticket.bump	param=order_line_ids:ACTION_PARAM_KIND_ID_LIST:required
+sales.ticket.bump	param=station_id:ACTION_PARAM_KIND_ID:required
+sales.ticket.bump	permission=sales.ticket.bump
+sales.ticket.bump	route=POST /api/kds/bump
+sales.ticket.bump	since=0.14.1
+ui.list.filter
+ui.list.filter	effect=ACTION_EFFECT_UI
+ui.list.filter	frequency=ACTION_FREQUENCY_COMMON
+ui.list.filter	param=text:ACTION_PARAM_KIND_TEXT:required
+ui.list.filter	since=0.14.1
+ui.panel.open
+ui.panel.open	effect=ACTION_EFFECT_UI
+ui.panel.open	frequency=ACTION_FREQUENCY_COMMON
+ui.panel.open	param=panel_id:ACTION_PARAM_KIND_ID:required
+ui.panel.open	since=0.14.1
+ui.screen.open
+ui.screen.open	effect=ACTION_EFFECT_UI
+ui.screen.open	frequency=ACTION_FREQUENCY_COMMON
+ui.screen.open	param=screen_id:ACTION_PARAM_KIND_ID:required
+ui.screen.open	since=0.14.1

@@ -42,6 +42,13 @@
 //! `default=`, `preset=` and `since=` may change, and so may a whole number's `min=`, `max=` and
 //! `unit=` (the comment on `MUTABLE_KEYS` says why).
 //!
+//! The action snapshot (`docs/snapshots/actions.txt`) follows it too
+//! ([ADR-0191](../../../docs/adr/0191-every-act-is-in-a-typed-catalogue.md) decision 4): a bare
+//! action id, its `effect=` and its `param=` lines are contracts — a published package names the
+//! act, may bind it as a reaction by its effect, and binds its parameters — while its tabbed
+//! `frequency=`, `route=`, `permission=`, `refusal=` and `since=` may change, because the edge, not
+//! the package, holds what an act calls and what it needs.
+//!
 //! The route snapshot (`docs/snapshots/routes.txt`) has no mutable half at all: every
 //! line is `METHOD /path`, and every line is a contract
 //! ([ADR-0111](../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)). A till
@@ -63,6 +70,7 @@ const SNAPSHOTS: &[&str] = &[
     "docs/snapshots/capabilities.txt",
     "docs/snapshots/routes.txt",
     "docs/snapshots/settings.txt",
+    "docs/snapshots/actions.txt",
 ];
 
 /// Tab-prefixed metadata keys that may change or disappear without breaking a contract.
@@ -85,6 +93,12 @@ const MUTABLE_KEYS: &[&str] = &[
     "\tmin=",
     "\tmax=",
     "\tunit=",
+    // An act's frequency, the routes it calls, what it needs and what the till can predict: the
+    // edge's and the tap budget's, not a package's (ADR-0191 decision 4).
+    "\tfrequency=",
+    "\troute=",
+    "\tpermission=",
+    "\trefusal=",
 ];
 
 /// Lines whose disappearance is a deliberate change rather than a broken contract.
@@ -98,7 +112,11 @@ fn is_mutable(line: &str) -> bool {
 /// hint is the kind a reader skips. The remedy is the same in each case — deprecate in place —
 /// but *who breaks* differs, and naming them is what makes the remedy land.
 fn hint_for(path: &str) -> &'static str {
-    if path.ends_with("settings.txt") {
+    if path.ends_with("actions.txt") {
+        "a published act is a contract: deprecate it, but do not rename or remove it, change its \
+         effect class or drop one of its parameters — a published package names it and binds its \
+         parameters (ADR-0191)"
+    } else if path.ends_with("settings.txt") {
         "a published setting is a contract: deprecate it, but do not rename or remove it, one of \
          its values or one of its scopes — a value stored in the cloud names it, and an edge on an \
          older release still reads it (ADR-0160)"
@@ -241,5 +259,20 @@ mod tests {
     #[test]
     fn a_removed_setting_is_explained_as_a_setting() {
         assert!(super::hint_for("docs/snapshots/settings.txt").contains("setting"));
+    }
+
+    #[test]
+    fn an_act_keeps_its_effect_and_params_and_may_move_its_route() {
+        assert!(super::hint_for("docs/snapshots/actions.txt").contains("act"));
+        assert!(!is_mutable(
+            "billing.bill.settle\teffect=ACTION_EFFECT_MONEY"
+        ));
+        assert!(!is_mutable(
+            "billing.bill.settle\tparam=bill_id:ACTION_PARAM_KIND_ID:required"
+        ));
+        assert!(is_mutable(
+            "billing.bill.settle\troute=POST /api/bills/{id}/settle"
+        ));
+        assert!(is_mutable("billing.bill.settle\trefusal=DRAWER_COUNTED"));
     }
 }

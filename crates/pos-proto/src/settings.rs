@@ -275,7 +275,7 @@ const TENANT_ONLY: &[SettingScope] = &[SettingScope::Tenant];
 
 /// The first release after 0.14.0. Tags are cut from `main`, so the next release carries everything
 /// merged before it, whatever number it is given.
-const NEXT_RELEASE: &str = "0.14.1";
+pub(crate) const NEXT_RELEASE: &str = "0.14.1";
 
 /// The `since` of a setting the cloud applies itself rather than a store's edge: every release
 /// honours it, because the release a store runs does not decide it (ADR-0160 decision 5).
