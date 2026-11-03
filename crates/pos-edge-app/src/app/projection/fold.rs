@@ -12,11 +12,11 @@ use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::events::{
     BillingBillMerged, BillingBillOpened, BillingBillSettled, BillingBillSplit, BillingBillVoided,
     BillingDiscountApplied, BillingFeeWaived, BillingPaymentCaptured, BillingReceiptReprinted,
-    CashDrawerPaidIn, CashDrawerPaidOut, CashShiftClosed, CashShiftCounted, CashShiftOpened,
-    EventType, InventoryItemRestored, InventoryItemSoldOut, KitchenTicketBumped, SalesOrderClosed,
-    SalesOrderConfirmedByStaff, SalesOrderLineAdded, SalesOrderLineFired, SalesOrderLineUpdated,
-    SalesOrderLineVoided, SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed,
-    SalesTableMerged, SalesTableOpened, SalesTableTransferred,
+    CashDrawerDropped, CashDrawerPaidIn, CashDrawerPaidOut, CashShiftClosed, CashShiftCounted,
+    CashShiftOpened, EventType, InventoryItemRestored, InventoryItemSoldOut, KitchenTicketBumped,
+    SalesOrderClosed, SalesOrderConfirmedByStaff, SalesOrderLineAdded, SalesOrderLineFired,
+    SalesOrderLineUpdated, SalesOrderLineVoided, SalesOrderOpened, SalesOrderRejectedByStaff,
+    SalesTableClosed, SalesTableMerged, SalesTableOpened, SalesTableTransferred,
 };
 use pos_proto::time::Timestamp;
 use pos_proto::{BillState, OrderLineState, PaymentMethod, ShiftState, TableState};
@@ -376,7 +376,9 @@ impl<S: EventStore> Edge<S> {
             EventType::CashShiftOpened
             | EventType::CashShiftCounted
             | EventType::CashShiftClosed => Self::fold_shift(projection, envelope, known)?,
-            EventType::CashDrawerPaidIn | EventType::CashDrawerPaidOut => {
+            EventType::CashDrawerPaidIn
+            | EventType::CashDrawerPaidOut
+            | EventType::CashDrawerDropped => {
                 Self::fold_movement(projection, envelope, known)?;
             }
             EventType::KitchenTicketBumped => {
@@ -502,6 +504,9 @@ impl<S: EventStore> Edge<S> {
         let (movement, amount) = if known == EventType::CashDrawerPaidIn {
             let event: CashDrawerPaidIn = envelope.data.decode().map_err(AppError::Encode)?;
             (CashMovement::PaidIn, event.amount)
+        } else if known == EventType::CashDrawerDropped {
+            let event: CashDrawerDropped = envelope.data.decode().map_err(AppError::Encode)?;
+            (CashMovement::Dropped, event.amount)
         } else {
             let event: CashDrawerPaidOut = envelope.data.decode().map_err(AppError::Encode)?;
             (CashMovement::PaidOut, event.amount)

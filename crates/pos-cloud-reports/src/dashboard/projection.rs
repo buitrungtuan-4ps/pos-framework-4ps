@@ -26,6 +26,7 @@ use pos_proto::ids::{EventId, StoreId, TenantId};
 
 use crate::types::{AdmittedDevice, DailyCash, DailyRevenue, DailyRollup, XzReport};
 
+use super::drops::fold_drops;
 use super::floats::{KeptFloats, fold_closed_floats};
 use super::mix::{KeptLines, fold_line_updates};
 use super::voids::{KeptBills, fold_voids};
@@ -193,6 +194,7 @@ where
             fold_line_updates(&mut state.lines, &mut state.revenue, event);
             fold_cash(&mut state.cash, event);
             fold_closed_floats(&mut state.floats, &mut state.cash, event);
+            fold_drops(&mut state.cash, event);
             fold_voids(&mut state.voids, &mut state.revenue, &mut state.cash, event);
             fold_devices(&mut state.devices, event);
             folded = folded.saturating_add(1);

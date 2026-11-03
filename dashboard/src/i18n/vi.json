@@ -1876,6 +1876,7 @@
   "reports.drawerOverShort": "Thừa/thiếu",
   "reports.drawerPaidIn": "Thu tiền",
   "reports.drawerPaidOut": "Chi tiền",
+  "reports.drawerDropped": "Nộp két",
   "reports.drawerStore": "Ngăn kéo của cửa hàng",
   "reports.drawerTill": "Máy POS",
   "reports.drawerUnlisted": "Máy POS không còn trong danh sách",

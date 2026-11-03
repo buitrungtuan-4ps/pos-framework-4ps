@@ -200,6 +200,12 @@ pub struct DailyCash {
     /// there was none.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub closed_float: i64,
+    /// Sum of the cash dropped from the drawers to the safe on the day
+    /// ([ADR-0186](../../../docs/adr/0186-a-drawer-is-counted-by-denomination.md) decision 5): out of
+    /// the drawer like a paid out, and no expense, so apart from `paid_out`. Left out while there
+    /// was none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub dropped: i64,
     /// The same figures for each drawer, keyed by the till's `terminal_device_id`, or by
     /// [`STORE_DRAWER`] for the store's one drawer
     /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 10 and 13).
@@ -257,6 +263,10 @@ pub struct CashTotals {
     /// none.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub closed_float: i64,
+    /// The cash this drawer dropped to the safe (ADR-0186), apart from its paid out. Left out while
+    /// there was none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub dropped: i64,
 }
 
 /// Whether a figure is zero, so a field that is is left off the wire as it was before it existed.

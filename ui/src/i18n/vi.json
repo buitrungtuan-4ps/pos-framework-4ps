@@ -444,6 +444,8 @@
   "shift.paid_out": "Chi tiền",
   "shift.paid_out_reason": "Lý do chi tiền?",
   "shift.paid_out_recorded": "Đã chi {amount}.",
+  "shift.safe_drop": "Nộp két",
+  "shift.safe_drop_recorded": "Đã nộp két {amount}.",
   "shift.report_printed": "Đã in báo cáo ca",
   "shift.start_drawers": "{count, plural, other {Mở ca # két}}",
   "shift.title": "Ca tiền mặt",

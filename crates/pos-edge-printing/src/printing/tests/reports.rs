@@ -28,6 +28,7 @@ fn a_shift_report_adds_up_on_paper_and_says_over_or_short_in_words() {
         cash_collected: vnd(1_250_000),
         paid_in: vnd(0),
         paid_out: vnd(0),
+        dropped: vnd(0),
         expected_amount: vnd(1_750_000),
         counted_amount: vnd(counted),
         count_breakdown: CountBreakdown::default(),
@@ -83,6 +84,7 @@ fn a_combined_slip_prints_the_store_totals_then_each_drawer_under_its_tills_name
         cash_collected: vnd(100_000),
         paid_in: vnd(0),
         paid_out: vnd(0),
+        dropped: vnd(0),
         expected_amount: vnd(float + 100_000),
         counted_amount: vnd(counted),
         count_breakdown: CountBreakdown::default(),
@@ -99,6 +101,7 @@ fn a_combined_slip_prints_the_store_totals_then_each_drawer_under_its_tills_name
             cash_collected: vnd(200_000),
             paid_in: vnd(0),
             paid_out: vnd(0),
+            dropped: vnd(0),
             expected_amount: vnd(1_000_000),
             counted_amount: vnd(990_000),
             variance: vnd(-10_000),
@@ -153,6 +156,7 @@ fn a_shift_report_prints_what_was_paid_in_and_out_so_the_expectation_adds_up() {
         cash_collected: vnd(1_250_000),
         paid_in: vnd(200_000),
         paid_out: vnd(150_000),
+        dropped: vnd(0),
         expected_amount: vnd(1_800_000),
         counted_amount: vnd(1_800_000),
         count_breakdown: CountBreakdown::default(),
@@ -236,6 +240,7 @@ fn a_vietnamese_store_prints_its_bill_and_its_drawer_in_vietnamese() {
         cash_collected: vnd(1_250_000),
         paid_in: vnd(0),
         paid_out: vnd(0),
+        dropped: vnd(0),
         expected_amount: vnd(1_750_000),
         counted_amount: vnd(1_730_000),
         count_breakdown: CountBreakdown::default(),
@@ -262,6 +267,7 @@ fn a_shift_report_prints_the_cash_voids_handed_back() {
         cash_collected: vnd(1_250_000),
         paid_in: vnd(0),
         paid_out: vnd(0),
+        dropped: vnd(0),
         expected_amount: vnd(1_635_000),
         counted_amount: vnd(1_635_000),
         count_breakdown: CountBreakdown::default(),
@@ -309,6 +315,7 @@ fn a_count_made_note_by_note_lists_its_notes_under_the_figures() {
         cash_collected: vnd(703_000),
         paid_in: vnd(0),
         paid_out: vnd(0),
+        dropped: vnd(0),
         expected_amount: vnd(1_203_000),
         counted_amount: vnd(1_203_000),
         count_breakdown: CountBreakdown {
@@ -334,4 +341,38 @@ fn a_count_made_note_by_note_lists_its_notes_under_the_figures() {
             "Other / uncounted  VND 3,000",
         ]
     );
+}
+
+#[test]
+fn a_drop_to_the_safe_prints_apart_from_the_paid_out() {
+    // ADR-0186 decision 5: it lowers the expectation as a paid out does, under its own words, so
+    // nobody reads it as an expense.
+    let vnd = |minor| Money::new(CurrencyCode::VND, minor);
+    let report = ShiftReport {
+        shift_id: pos_proto::ids::ShiftId::new(Ulid::from_u128(7)),
+        opening_float: vnd(500_000),
+        cash_collected: vnd(1_250_000),
+        paid_in: vnd(0),
+        paid_out: vnd(150_000),
+        dropped: vnd(1_000_000),
+        expected_amount: vnd(600_000),
+        counted_amount: vnd(600_000),
+        count_breakdown: CountBreakdown::default(),
+        variance: vnd(0),
+        voided_bills: 0,
+        voided_cash: vnd(0),
+        tax_components: Vec::new(),
+    };
+    let english = shift_report_document(&StoreProfile::default(), &style(0), &ENGLISH, &report);
+    assert_eq!(
+        lines_of(&english)[4..7],
+        [
+            "Paid out  VND 150,000",
+            "Dropped to safe  VND 1,000,000",
+            "Expected in drawer  VND 600,000",
+        ]
+    );
+    let vietnamese =
+        shift_report_document(&StoreProfile::default(), &style(0), &VIETNAMESE, &report);
+    assert!(lines_of(&vietnamese).contains(&"Nộp két  VND 1,000,000"));
 }

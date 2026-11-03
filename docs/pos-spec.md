@@ -272,7 +272,7 @@ bump.
 sales.order.closed · sales.order_line.held
 sales.table.opened / .closed
 billing.bill.opened · billing.receipt.reprinted · billing.fee.waived
-cash.shift.counted
+cash.shift.counted · cash.drawer.dropped
 inventory.stock.received / .wasted
 promotion.voucher.reserved
 security.permission.overridden
@@ -283,6 +283,7 @@ config.version.activated
 |---|---|
 | `security.permission.overridden` | §11.4 makes a manager-PIN override above a ceiling a fraud control. Nothing carried it, so the control had **no auditable record at all** |
 | `cash.shift.counted` | §6 requires the close to be **blind** — the count entered before the expected amount is revealed. Folded into `shift.closed`, the blindness is unverifiable afterwards, which defeats the control |
+| `cash.drawer.dropped` | §6 and [ADR-0186](adr/0186-a-drawer-is-counted-by-denomination.md) decision 5: taking surplus notes to the safe lowers what the drawer should hold, as a paid out does, but is no expense. Recorded as a paid out, reports counted it with expenses |
 | `inventory.stock.wasted` | §8: cancelling a fired line records waste and does *not* return stock. The ledger has waste entries; the catalogue had no waste event |
 | `inventory.stock.received` | §8 names receipt as one of the five ledger entry kinds |
 | `promotion.voucher.reserved` | §7 makes redemption an atomic check-and-mark, so reserve and redeem are distinct states. With only redemption, a settlement that then failed would burn the voucher |
@@ -304,6 +305,8 @@ config.version.activated
 **A close may name its reason** ([ADR-0167](adr/0167-a-till-has-its-own-cash-drawer.md) decision 12). `cash.shift.closed` carries an optional `reason_code_id`, for `REASON_ACTION_CASH_VARIANCE`, where the drawer closed over or short by more than the store's `shift.variance_reason_minor` (§6). Absent otherwise, and left out, so a close that owed no reason writes the same bytes as before.
 
 **A count may name its notes** ([ADR-0186](adr/0186-a-drawer-is-counted-by-denomination.md) decision 2). `cash.shift.opened` and `cash.shift.counted` carry an optional `denomination_counts`, a list of `{denomination, quantity}`, and an optional `uncounted_amount` for anything the list does not name. Together they add up to `opening_float` or `counted_amount`, which keep their meaning; the edge refuses a float or a count whose rows do not, with `422 COUNT_DOES_NOT_ADD_UP`, and records nothing. Both are left out when absent, so a count typed as one amount writes the same bytes as before. Money and quantities only, no person. The printed shift report lists the count's rows under its figures, and the close answers them as `counted_denominations` and `uncounted_amount`.
+
+**A drop to the safe is its own act** ([ADR-0186](adr/0186-a-drawer-is-counted-by-denomination.md) decision 5). `cash.drawer.dropped` carries `amount`, the optional `terminal_device_id`, and an optional `denomination_counts`, which must add up to the amount. It is permitted by `cash.movement.record` at `POST /api/shifts/{id}/safe-drop`, refused on a counted shift as a paid out is, and lowers the expected amount as a paid out does; the shift report and the close card show it as **Dropped to safe**, and the cloud's cash rollup carries it as `dropped`, apart from `paid_out`.
 
 This catalogue is the single source for chain reporting, reconciliation, ERP posting, and webhooks. It is rendered to `docs/snapshots/events.txt` from the code, down to each field of a part a payload nests (`tax_lines[].components[].name`), and CI refuses any removal from that file.
 

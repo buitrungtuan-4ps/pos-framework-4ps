@@ -222,6 +222,10 @@ pub(crate) struct ShiftResponse {
     paid_in_amount: Money,
     /// Cash paid out of it outside a sale so far.
     paid_out_amount: Money,
+    /// Cash taken from the drawer to the safe so far (ADR-0186), apart from the paid out. Absent
+    /// while there is none.
+    #[serde(skip_serializing_if = "no_money")]
+    dropped_amount: Money,
     print_shift_report: bool,
     /// What came of printing the shift report, on the close that asked for one — the same wire
     /// tokens a settle reports its receipt with. Absent on every other command.
@@ -253,6 +257,11 @@ pub(crate) struct ShiftResponse {
     uncounted_amount: Option<Money>,
 }
 
+/// Whether a figure is nothing, so a field that is stays off the wire as before it existed.
+fn no_money(amount: &Money) -> bool {
+    amount.is_zero()
+}
+
 /// A closed shift's voids after payment, for its close card (ADR-0184).
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -275,6 +284,7 @@ impl From<ShiftView> for ShiftResponse {
             variance: view.variance,
             paid_in_amount: view.paid_in,
             paid_out_amount: view.paid_out,
+            dropped_amount: view.dropped,
             print_shift_report: view.print_shift_report,
             shift_report_print: None,
             drawer_open: None,

@@ -444,6 +444,8 @@
   "shift.paid_out": "Paid out",
   "shift.paid_out_reason": "Why is cash coming out?",
   "shift.paid_out_recorded": "Paid out {amount}.",
+  "shift.safe_drop": "Drop to safe",
+  "shift.safe_drop_recorded": "Dropped {amount} to the safe.",
   "shift.report_printed": "Shift report printed",
   "shift.start_drawers": "{count, plural, one {Start this drawer} other {Start # drawers}}",
   "shift.title": "Cash shift",

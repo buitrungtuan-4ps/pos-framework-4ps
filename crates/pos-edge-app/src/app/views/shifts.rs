@@ -33,6 +33,8 @@ pub struct ShiftReport {
     pub paid_in: Money,
     /// Cash taken out of it outside a sale (`cash.drawer.paid_out`).
     pub paid_out: Money,
+    /// Cash taken from it to the safe (`cash.drawer.dropped`, ADR-0186), apart from the paid out.
+    pub dropped: Money,
     /// The float, plus the cash taken, plus paid in, minus paid out, minus the cash voids handed back.
     pub expected_amount: Money,
     /// What the cashier counted.
@@ -63,6 +65,7 @@ impl ShiftReport {
             cash_collected: self.cash_collected,
             paid_in: self.paid_in,
             paid_out: self.paid_out,
+            dropped: self.dropped,
             expected_amount: self.expected_amount,
             counted_amount: self.counted_amount,
             variance: self.variance,
@@ -83,6 +86,8 @@ pub struct DrawerFigures {
     pub paid_in: Money,
     /// Cash taken out of it outside a sale.
     pub paid_out: Money,
+    /// Cash taken from it to the safe (ADR-0186).
+    pub dropped: Money,
     /// What it should hold.
     pub expected_amount: Money,
     /// What was counted.
@@ -107,6 +112,7 @@ impl DrawerFigures {
             cash_collected: zero,
             paid_in: zero,
             paid_out: zero,
+            dropped: zero,
             expected_amount: zero,
             counted_amount: zero,
             variance: zero,
@@ -118,6 +124,7 @@ impl DrawerFigures {
                 cash_collected: sum.cash_collected.checked_add(report.cash_collected)?,
                 paid_in: sum.paid_in.checked_add(report.paid_in)?,
                 paid_out: sum.paid_out.checked_add(report.paid_out)?,
+                dropped: sum.dropped.checked_add(report.dropped)?,
                 expected_amount: sum.expected_amount.checked_add(report.expected_amount)?,
                 counted_amount: sum.counted_amount.checked_add(report.counted_amount)?,
                 variance: sum.variance.checked_add(report.variance)?,
@@ -184,6 +191,9 @@ pub struct ShiftView {
     pub paid_in: Money,
     /// Cash paid out of the drawer outside a sale so far.
     pub paid_out: Money,
+    /// Cash taken from the drawer to the safe so far (ADR-0186). Like paid in and out, entered by
+    /// the cashier, so nothing the close keeps blind.
+    pub dropped: Money,
     /// Whether closing asked for the shift report to print, for the caller to run after commit.
     pub print_shift_report: bool,
     /// The figures that report prints — present only on the close, which is the one command that
@@ -251,6 +261,8 @@ pub enum CashMovement {
     PaidIn,
     /// Cash taken out: a supplier paid at the door, petty cash.
     PaidOut,
+    /// Surplus cash taken to the safe (ADR-0186): out of the drawer like a paid out, and no expense.
+    Dropped,
 }
 
 impl CashMovement {
@@ -258,7 +270,8 @@ impl CashMovement {
     pub(in crate::app) const fn reason_action(self) -> ReasonAction {
         match self {
             Self::PaidIn => ReasonAction::CashPaidIn,
-            Self::PaidOut => ReasonAction::CashPaidOut,
+            // A drop asks no reason yet; its own action follows (ADR-0186 amendment).
+            Self::PaidOut | Self::Dropped => ReasonAction::CashPaidOut,
         }
     }
 }

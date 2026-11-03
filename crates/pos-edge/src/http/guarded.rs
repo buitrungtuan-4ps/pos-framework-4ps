@@ -217,6 +217,10 @@ where
             "/api/shifts/{id}/paid-out",
             post(cash_movements::record_paid_out::<S>),
         )
+        .route(
+            "/api/shifts/{id}/safe-drop",
+            post(cash_movements::record_safe_drop::<S>),
+        )
         .route("/api/drawer/open", post(cash_movements::open_drawer::<S>))
 }
 

@@ -1876,6 +1876,7 @@
   "reports.drawerOverShort": "Over/short",
   "reports.drawerPaidIn": "Paid in",
   "reports.drawerPaidOut": "Paid out",
+  "reports.drawerDropped": "Dropped to safe",
   "reports.drawerStore": "The store's drawer",
   "reports.drawerTill": "Till",
   "reports.drawerUnlisted": "A till no longer listed",

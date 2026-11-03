@@ -20,6 +20,7 @@ import type {
   BumpRequest,
   BumpResponse,
   CashMovementRequest,
+  SafeDropRequest,
   CheckResponse,
   ClaimStatus,
   CloseShiftRequest,
@@ -525,6 +526,9 @@ export const api = {
     request<ShiftResponse>("POST", `/api/shifts/${shiftId}/paid-in`, movement),
   paidOut: (shiftId: string, movement: CashMovementRequest) =>
     request<ShiftResponse>("POST", `/api/shifts/${shiftId}/paid-out`, movement),
+  // Surplus cash taken to the safe, apart from a paid out (ADR-0186 decision 5).
+  safeDrop: (shiftId: string, drop: SafeDropRequest) =>
+    request<ShiftResponse>("POST", `/api/shifts/${shiftId}/safe-drop`, drop),
   openDrawer: (open: OpenDrawerRequest) =>
     request<OpenDrawerResponse>("POST", "/api/drawer/open", open),
 

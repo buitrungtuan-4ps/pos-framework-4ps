@@ -440,6 +440,10 @@ fn figure_blocks(
     if figures.paid_out.amount_minor != 0 {
         blocks.push(amount_line(labels.paid_out, figures.paid_out, money));
     }
+    // Apart from the paid out, so a drop to the safe is not read as an expense (ADR-0186).
+    if figures.dropped.amount_minor != 0 {
+        blocks.push(amount_line(labels.dropped_to_safe, figures.dropped, money));
+    }
     // The cash handed back for bills voided after payment (ADR-0184), which the expectation leaves
     // out: without it the paper would not add up. Only when there was some, as for paid in and out.
     if figures.voided_cash.amount_minor != 0 {

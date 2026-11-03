@@ -3,11 +3,12 @@
 
 //! Cash paid into and out of a drawer outside a sale, and the drawer opened without one.
 
+use pos_core::cash_count::CountBreakdown;
 use pos_core::decision::Actor;
 use pos_core::permission::Permission;
 use pos_ports::event_store::EventStore;
 use pos_proto::ShiftState;
-use pos_proto::events::{CashDrawerOpened, CashDrawerPaidIn, CashDrawerPaidOut};
+use pos_proto::events::{CashDrawerDropped, CashDrawerOpened, CashDrawerPaidIn, CashDrawerPaidOut};
 use pos_proto::ids::{DeviceId, ReasonCodeId, ShiftId};
 use pos_proto::money::Money;
 use pos_proto::reason_codes::ReasonAction;
@@ -73,13 +74,57 @@ impl<S: EventStore> Edge<S> {
         reason_code_id: ReasonCodeId,
         approval: Option<&Approval>,
     ) -> Result<ShiftView, AppError> {
+        let reason = Some(reason_code_id);
+        let act = (movement, amount, reason, CountBreakdown::default());
+        self.move_cash(actor, scope, shift_id, act, approval).await
+    }
+
+    /// Records surplus cash taken from the drawer to the safe (`cash.drawer.dropped`,
+    /// [ADR-0186](../../../../../docs/adr/0186-a-drawer-is-counted-by-denomination.md) decision 5).
+    ///
+    /// Permitted and refused as a paid out is, a counted shift included, and it lowers what the
+    /// close expects as a paid out does; reports keep it apart from expenses. It asks no reason yet:
+    /// the drop's own reasons follow with their action. The breakdown, where given, adds up to the
+    /// amount with nothing left uncounted.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::CountDoesNotAddUp`] for a breakdown that does not, and otherwise as
+    /// [`Self::record_cash_movement_at`].
+    pub async fn record_safe_drop_at(
+        &self,
+        actor: Actor,
+        scope: TillScope,
+        shift_id: ShiftId,
+        (amount, breakdown): (Money, CountBreakdown),
+        approval: Option<&Approval>,
+    ) -> Result<ShiftView, AppError> {
+        if breakdown.uncounted_amount.is_some() || !breakdown.adds_up_to(amount) {
+            return Err(AppError::CountDoesNotAddUp);
+        }
+        let act = (CashMovement::Dropped, amount, None, breakdown);
+        self.move_cash(actor, scope, shift_id, act, approval).await
+    }
+
+    /// A paid in, a paid out or a drop on `shift_id`'s drawer: the checks they share, the event,
+    /// and the projection.
+    async fn move_cash(
+        &self,
+        actor: Actor,
+        scope: TillScope,
+        shift_id: ShiftId,
+        (movement, amount, reason, breakdown): (
+            CashMovement,
+            Money,
+            Option<ReasonCodeId>,
+            CountBreakdown,
+        ),
+        approval: Option<&Approval>,
+    ) -> Result<ShiftView, AppError> {
         let mut ctx = self.decision_ctx(actor)?;
         ctx.require(Permission::RecordCashMovement)?;
-        if !self
-            .session()
-            .reason_codes
-            .accepts(reason_code_id, movement.reason_action())
-        {
+        let reasons = &self.session().reason_codes;
+        if reason.is_some_and(|reason| !reasons.accepts(reason, movement.reason_action())) {
             return Err(AppError::CashReasonNotValid);
         }
         let drawer = self.cash_drawer(scope)?;
@@ -103,8 +148,8 @@ impl<S: EventStore> Edge<S> {
         // On the shift's own drawer, and stamped with it, whichever drawer that is (ADR-0167).
         let shift = Some(shift_id);
         let till = record.till;
-        match movement {
-            CashMovement::PaidIn => {
+        match (movement, reason) {
+            (CashMovement::PaidIn, Some(reason_code_id)) => {
                 let paid = CashDrawerPaidIn {
                     amount,
                     reason_code_id,
@@ -112,13 +157,26 @@ impl<S: EventStore> Edge<S> {
                 };
                 self.commit_approved(&ctx, &paid, shift, &step_ups).await?;
             }
-            CashMovement::PaidOut => {
+            (CashMovement::PaidOut, Some(reason_code_id)) => {
                 let paid = CashDrawerPaidOut {
                     amount,
                     reason_code_id,
                     terminal_device_id: till,
                 };
                 self.commit_approved(&ctx, &paid, shift, &step_ups).await?;
+            }
+            (CashMovement::Dropped, _) => {
+                let dropped = CashDrawerDropped {
+                    amount,
+                    terminal_device_id: till,
+                    denomination_counts: breakdown.denomination_counts,
+                };
+                self.commit_approved(&ctx, &dropped, shift, &step_ups)
+                    .await?;
+            }
+            // A paid in or out always carries its reason: the callers above give one.
+            (CashMovement::PaidIn | CashMovement::PaidOut, None) => {
+                return Err(AppError::CashReasonNotValid);
             }
         }
         let record = {

@@ -102,6 +102,8 @@ pub struct PaperLabels {
     pub count_by_denomination: &'static str,
     /// What a count's rows do not name.
     pub uncounted: &'static str,
+    /// Cash taken from the drawer to the safe, apart from the paid out (ADR-0186).
+    pub dropped_to_safe: &'static str,
 }
 
 /// English, and the fallback for every case the module documentation names.
@@ -144,6 +146,7 @@ pub static ENGLISH: PaperLabels = PaperLabels {
     voided_after_payment: "Voided after payment",
     count_by_denomination: "COUNT BY NOTE",
     uncounted: "Other / uncounted",
+    dropped_to_safe: "Dropped to safe",
 };
 
 /// Vietnamese, in the words a Vietnamese receipt and cash-up sheet use.
@@ -186,6 +189,7 @@ pub static VIETNAMESE: PaperLabels = PaperLabels {
     voided_after_payment: "Hủy sau thanh toán",
     count_by_denomination: "ĐẾM THEO MỆNH GIÁ",
     uncounted: "Khác / không đếm",
+    dropped_to_safe: "Nộp két",
 };
 
 impl PaperLabels {
@@ -274,6 +278,7 @@ mod tests {
             ENGLISH.voided_after_payment,
             ENGLISH.count_by_denomination,
             ENGLISH.uncounted,
+            ENGLISH.dropped_to_safe,
         ] {
             assert!(label.is_ascii(), "{label}");
         }

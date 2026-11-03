@@ -55,6 +55,7 @@ export type CloseShiftRequest = Schemas["CloseRequest"];
 export type VarianceReason = Schemas["VarianceReason"];
 export type BatchCloseRequest = Schemas["BatchCloseRequest"];
 export type CashMovementRequest = Schemas["MovementRequest"];
+export type SafeDropRequest = Schemas["DropRequest"];
 export type OpenDrawerRequest = Schemas["OpenDrawerRequest"];
 export type PairRequest = Schemas["PairRequest"];
 export type PairAccepted = Schemas["PairAccepted"];
