@@ -496,7 +496,8 @@ impl DeviceRegistry for FakeDeviceRegistry {
 /// An in-memory `CloudSync`: one recognised activation code and one published release, served with
 /// a detached signature.
 ///
-/// Its only state is the signature it serves. [`Self::new`] serves one that genuinely verifies
+/// Its state is the signature it serves and whether it keeps store archives
+/// ([`Self::without_archives`]). [`Self::new`] keeps them, and serves one that genuinely verifies
 /// against [`FakeSigner::key(1)`](FakeSigner::key), because an artifact and its signature now arrive
 /// together ([ADR-0092](../../../docs/adr/0092-artifact-trust-chain.md)) and the faithful default is
 /// a cloud whose artifact passes. [`Self::serving_signature`] is how a test builds a cloud that
@@ -505,6 +506,9 @@ impl DeviceRegistry for FakeDeviceRegistry {
 #[derive(Debug, Clone)]
 pub struct FakeCloudSync {
     signature: Signature,
+    /// Whether this cloud keeps store archives; `false` is one configured without archive storage
+    /// ([ADR-0185](../../../docs/adr/0185-the-cloud-says-when-it-keeps-no-archives.md)).
+    keeps_archives: bool,
 }
 
 impl Default for FakeCloudSync {
@@ -531,6 +535,18 @@ impl FakeCloudSync {
     pub fn new() -> Self {
         Self {
             signature: Self::artifact_signature(),
+            keeps_archives: true,
+        }
+    }
+
+    /// A channel to a cloud configured without archive storage: it refuses every archive key as
+    /// [`PortError::failed_precondition`]
+    /// ([ADR-0185](../../../docs/adr/0185-the-cloud-says-when-it-keeps-no-archives.md)).
+    #[must_use]
+    pub fn without_archives() -> Self {
+        Self {
+            keeps_archives: false,
+            ..Self::new()
         }
     }
 
@@ -542,7 +558,10 @@ impl FakeCloudSync {
     /// this type can be in.
     #[must_use]
     pub fn serving_signature(signature: Signature) -> Self {
-        Self { signature }
+        Self {
+            signature,
+            ..Self::new()
+        }
     }
 
     /// The device [`Self::VALID_CODE`] grants.
@@ -638,6 +657,12 @@ impl CloudSync for FakeCloudSync {
     }
 
     async fn archive_key(&self, _store: StoreId) -> Result<String, PortError> {
+        if !self.keeps_archives {
+            return Err(PortError::failed_precondition(
+                PortName::CloudSync,
+                "the cloud keeps no store archives: its archive storage is not configured",
+            ));
+        }
         // The same key on every ask, which is the property that matters: a store sealing under two
         // different keys has archives it cannot open
         // ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)). A fixed value
