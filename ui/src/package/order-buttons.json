@@ -1,0 +1,47 @@
+{
+  "component": "stack",
+  "children": [
+    {
+      "component": "grid",
+      "when": "no_layout",
+      "each": "headline_items",
+      "as": "item",
+      "template": { "component": "item_button", "props": { "item": "$item" } }
+    },
+    { "component": "tabs", "when": "many_categories", "props": { "source": "categories" } },
+    {
+      "component": "each",
+      "each": "shown_categories",
+      "as": "category",
+      "template": {
+        "component": "section",
+        "props": { "title": "$category.name", "level": 3 },
+        "children": [
+          {
+            "component": "grid",
+            "each": "$category.buttons",
+            "as": "button",
+            "template": { "component": "item_button", "props": { "button": "$button" } }
+          },
+          {
+            "component": "each",
+            "each": "$category.subcategories",
+            "as": "sub",
+            "template": {
+              "component": "section",
+              "props": { "title": "$sub.name", "level": 4 },
+              "children": [
+                {
+                  "component": "grid",
+                  "each": "$sub.buttons",
+                  "as": "button",
+                  "template": { "component": "item_button", "props": { "button": "$button" } }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,4 +1,7 @@
 import { For, Show, createMemo, createResource, createSignal } from "solid-js";
+import { Render, useCatalogue, type Node } from "../package/render";
+import { orderCatalogue } from "../package/catalogue";
+import orderButtons from "../package/order-buttons.json";
 import { useLocation, useNavigate, useParams, useSearchParams } from "@solidjs/router";
 
 import { api } from "../api/client";
@@ -614,6 +617,24 @@ export function Order() {
   const arrangedButton = (button: LayoutButton) => {
     const item = menuItemMap().get(button.menu_item_id);
     return <Show when={item}>{(found) => sellButton(found(), button.label)}</Show>;
+  };
+
+  // SPIKE: what the package region reads, and the actions its catalogue calls.
+  useCatalogue(
+    orderCatalogue({
+      sellItem: (item, caption) => sellButton(item as MenuItemResponse, caption),
+      sellButton: (button) => arrangedButton(button as LayoutButton),
+      isShown: (category) => isShown(category as LayoutCategory),
+      pick: (category) => setPickedCategory((category as LayoutCategory).display_category_id),
+      label: (key) => t(key as "order.categories"),
+    }),
+  );
+  const packageScope = {
+    no_layout: () => arranged().length === 0,
+    many_categories: () => arranged().length > 1,
+    headline_items: headlineItems,
+    categories: arranged,
+    shown_categories: shownCategories,
   };
 
   return (
@@ -1468,73 +1489,8 @@ export function Order() {
         </label>
 
         <Show when={!searching()} fallback={searchResults()}>
-          {/*
-            Two ways to draw the same price book. When the console has arranged buttons on the
-            `layout` node (ADR-0066, C4) the till groups by the categories it authored, in the order
-            it authored them; when it has arranged nothing, the flat list is the honest fallback and
-            is what the till drew before that node had a reader.
-          */}
-          <Show
-            when={arranged().length > 0}
-            fallback={
-              <div class="grid grid-cols-2 gap-2 tablet:grid-cols-3 terminal:grid-cols-1">
-                <For
-                  each={headlineItems()}
-                  fallback={<p class="text-ink-muted">{t("order.menu_empty")}</p>}
-                >
-                  {(item) => sellButton(item, item.display_name)}
-                </For>
-              </div>
-            }
-          >
-            <Show when={arranged().length > 1}>
-              <div
-                class="-mx-1 mb-3 flex gap-2 overflow-x-auto px-1 pb-1"
-                role="tablist"
-                aria-label={t("order.categories")}
-              >
-                <For each={arranged()}>
-                  {(category) => (
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={isShown(category)}
-                      class="min-h-touch shrink-0 rounded-token border px-3 text-sm"
-                      classList={{
-                        "border-primary bg-selected text-selected-ink font-semibold": isShown(category),
-                        "border-line bg-surface text-ink": !isShown(category),
-                      }}
-                      onClick={() => setPickedCategory(category.display_category_id)}
-                    >
-                      {category.name}
-                    </button>
-                  )}
-                </For>
-              </div>
-            </Show>
-            <For each={shownCategories()}>
-              {(category) => (
-                <section class="mb-4">
-                  <h3 class="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-muted">
-                    {category.name}
-                  </h3>
-                  <div class="grid grid-cols-2 gap-2 tablet:grid-cols-3 terminal:grid-cols-1">
-                    <For each={category.buttons}>{(button) => arrangedButton(button)}</For>
-                  </div>
-                  <For each={category.subcategories}>
-                    {(subcategory) => (
-                      <div class="mt-3">
-                        <h4 class="mb-2 text-xs text-ink-muted">{subcategory.name}</h4>
-                        <div class="grid grid-cols-2 gap-2 tablet:grid-cols-3 terminal:grid-cols-1">
-                          <For each={subcategory.buttons}>{(button) => arrangedButton(button)}</For>
-                        </div>
-                      </div>
-                    )}
-                  </For>
-                </section>
-              )}
-            </For>
-          </Show>
+          {/* SPIKE: the button area drawn from a package (src/package/order-buttons.json). */}
+          <Render node={orderButtons as Node} scope={packageScope} />
         </Show>
       </aside>
     </section>
