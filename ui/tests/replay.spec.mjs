@@ -4754,6 +4754,13 @@ test("a till's own drawer comes first on its own float, and another till's shift
 }) => {
   const edge = await startEdge("drawers");
   const other = await browser.newPage();
+  const heardOnLink = [];
+  page.on("websocket", (socket) =>
+    socket.on("framereceived", (frame) => {
+      const text = String(frame.payload);
+      if (text.includes("cash.shift.opened")) heardOnLink.push(text);
+    }),
+  );
   try {
     await pair(page, edge);
     await signIn(page, edge);
@@ -4780,8 +4787,28 @@ test("a till's own drawer comes first on its own float, and another till's shift
 
     // The counter opens its own drawer. This till hears it, reads the drawers again — the read that
     // shows the counter's open is the one the event set off — and still shows its own closed.
+    //
+    // The Shift screen reads the drawers as it opens. That read is held here, answered by the edge
+    // before the counter opens but delivered after the event, which is the race that made this test
+    // flaky under load: the event's read used to join the read already out, whose answer predates
+    // the open, and the till never read again.
+    let deliver = () => {};
+    const delivered = new Promise((resolve) => {
+      deliver = resolve;
+    });
+    let heldOne = false;
+    await page.route("**/api/shifts", async (route) => {
+      if (heldOne || route.request().method() !== "GET") {
+        await route.continue();
+        return;
+      }
+      heldOne = true;
+      const response = await fetchWhole(route);
+      await delivered;
+      await route.fulfill({ response });
+    });
     await navigateTo(page, "/shift");
-    await expect(page.locator("#float")).toHaveValue("200000");
+    await expect.poll(() => heldOne).toBe(true);
     const heard = page.waitForResponse(
       async (response) =>
         new URL(response.url()).pathname === "/api/shifts" &&
@@ -4790,6 +4817,10 @@ test("a till's own drawer comes first on its own float, and another till's shift
     );
     await other.locator('[data-step="openShift"]').click();
     await expect(other.locator('[data-outcome="shift-open"]')).toBeVisible();
+    // The held read lands only once this till's live link has heard the open.
+    await expect.poll(() => heardOnLink.length).toBeGreaterThan(0);
+    deliver();
+    await expect(page.locator("#float")).toHaveValue("200000");
     await heard;
     await expect(page.locator('[data-outcome="shift-open"]')).toHaveCount(0);
     await expect(page.locator("header").getByText("No shift open")).toBeVisible();
