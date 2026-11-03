@@ -2737,7 +2737,7 @@
         "operationId": "current_session",
         "responses": {
           "200": {
-            "description": "Whether anyone is signed in on this device and who; the box's lease standing; whether anyone can sign in; the person's permissions, held directly and with approval; the till's idle lock; and the opening float",
+            "description": "Whether anyone is signed in on this device and who; the box's lease standing; whether anyone can sign in; the person's permissions, held directly and with approval; the till's idle lock; the opening float; and the store's display language",
             "content": {
               "application/json": {
                 "schema": {
@@ -6517,6 +6517,10 @@
           "opening_float_minor"
         ],
         "properties": {
+          "display_language": {
+            "type": "string",
+            "description": "The store's display language (a BCP 47 tag from the `locale` node), absent when it sets\nnone — the one `locale` fact sent before sign-in. `GET /api/locale` answers only a signed-in\nperson, so without it a device that has never signed in draws its sign-in screen in English\non a Vietnamese store (pilot run 2, N8). A fact about the store, not the person."
+          },
           "employee_id": {
             "type": "string"
           },
