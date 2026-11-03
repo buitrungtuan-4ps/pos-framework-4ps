@@ -235,6 +235,9 @@ pub struct ShiftView {
     pub counted_amount: Option<Money>,
     /// Counted minus expected, revealed only at close. Negative means short.
     pub variance: Option<Money>,
+    /// The float the shift opened with, which the drawer list shows rather than the till's default
+    /// float.
+    pub opening_float: Money,
     /// Cash paid into the drawer outside a sale so far
     /// ([ADR-0165](../../../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)).
     ///

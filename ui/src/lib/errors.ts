@@ -59,6 +59,8 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
   ASSIGNEE_REQUIRED: "error.assignee_required",
   // A float or a count typed note by note whose rows do not come to its amount (ADR-0186).
   COUNT_DOES_NOT_ADD_UP: "error.count_does_not_add_up",
+  // A handover naming a shift other than the one just closed on this drawer (ADR-0187).
+  NOT_THE_SHIFT_HANDED_OVER: "error.not_the_shift_handed_over",
   MODIFIER_SELECTION_INVALID: "error.modifier_selection_invalid",
   CHANNEL_NOT_ACCEPTED: "error.channel_not_accepted",
   ITEM_NOT_SELLABLE: "error.item_not_sellable",

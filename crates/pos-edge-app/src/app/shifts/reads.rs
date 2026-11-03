@@ -53,6 +53,7 @@ impl<S: EventStore> Edge<S> {
             expected_amount: self.expectation_shown(record),
             counted_amount: record.counted,
             variance: None,
+            opening_float: record.opening_float,
             paid_in: record.paid_in,
             paid_out: record.paid_out,
             dropped: record.dropped,

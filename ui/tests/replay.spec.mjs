@@ -4043,6 +4043,72 @@ test("a drawer is counted note by note, and the close card lists the notes", asy
   }
 });
 
+// A shift is handed over at the till (ADR-0187): the outgoing cashier counts and closes, the
+// incoming one signs in on the same till and counts; a count that differs is counted once more and
+// then confirmed, and the opening names the shift it took over. The X reads the shift without
+// closing it, and once the day's only drawer is closed the till says every till is.
+test("a shift is handed over at the till, the X reads it, and the day closes on the till", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    const opened = [];
+    page.on("request", (request) => {
+      if (request.method() === "POST" && request.url().endsWith("/api/shifts")) {
+        opened.push(request.postDataJSON());
+      }
+    });
+    await pair(page, edge);
+    await signIn(page, edge);
+    await openShift(page);
+
+    // The X, which closes nothing: the shift is still open after it.
+    await page.locator('[data-step="readX"]').click();
+    await expect(page.locator('[data-outcome="x-figures"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="x-expected"]')).toHaveText("100,000₫");
+    await expect(page.locator('[data-outcome="shift-open"]')).toBeVisible();
+
+    // The cash in and out keypad shows at once (UX-14).
+    await expect(page.locator('[data-step="movementKeypad"]')).toBeVisible();
+
+    await page.locator('[data-step="beginHandover"]').click();
+    await page.locator("#handover-out").fill("100000");
+    await page.locator('[data-step="handOut"]').click();
+    await expect(page.locator('[data-outcome="handover-closed"]')).toContainText("100,000₫");
+    // No other opening is offered in the middle of a handover.
+    await expect(page.locator('[data-step="openShift"]')).toHaveCount(0);
+
+    await page.locator("#handover-incoming-code").fill(edge.staffCode);
+    await page.locator("#handover-incoming-pin").fill(edge.staffPin);
+    await page.locator('[data-step="handoverSignIn"]').click();
+    await page.locator("#handover-in").fill("90000");
+    await page.locator('[data-step="handIn"]').click();
+    await expect(page.locator('[data-outcome="handover-differs"]')).toContainText("Count the drawer once more");
+    await page.locator("#handover-in").fill("90000");
+    await page.locator('[data-step="handIn"]').click();
+    await expect(page.locator('[data-outcome="handover-differs"]')).toContainText("Confirm");
+    await page.locator('[data-step="confirmHandIn"]').click();
+    await expect(page.locator('[data-outcome="handover-done"]')).toContainText("-10,000₫");
+    expect(opened.at(-1).opening_float.amount_minor).toBe(90_000);
+    expect(opened.at(-1).handed_over_from_shift_id).toBeTruthy();
+    await expect(page.locator('[data-outcome="shift-open"]')).toBeVisible();
+
+    // The day's last drawer closes: the till says every till is closed, with the store's figures.
+    await page.locator("#count").fill("90000");
+    await page.locator('[data-step="countShift"]').click();
+    await page.locator('[data-step="closeShift"]').click();
+    await expect(page.locator('[data-outcome="shift-closed"]')).toBeVisible();
+    const day = page.locator('[data-outcome="all-tills-closed"]');
+    await expect(day).toContainText("All tills closed for the day");
+    // The close card comes first, above the next opening (UX-14).
+    const closedBox = await page.locator('[data-outcome="shift-closed"]').boundingBox();
+    const openBox = await page.locator('[data-step="openShift"]').boundingBox();
+    expect(closedBox.y).toBeLessThan(openBox.y);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A drop to the safe may say why, from the store's reasons for a drop (ADR-0186 amendment), in one
 // tap like a paid out, or go without one; the Shift screen shows what the shift has dropped beside
 // what it paid in and out, and so does the close card.
@@ -4893,7 +4959,7 @@ test("two counted drawers close together, and each shows its figures", async ({ 
 
     const closes = [];
     page.on("request", (request) => {
-      if (new URL(request.url()).pathname.startsWith("/api/shifts:")) {
+      if (request.method() === "POST" && new URL(request.url()).pathname.startsWith("/api/shifts:")) {
         closes.push(request.postDataJSON());
       }
     });
@@ -4995,7 +5061,7 @@ test("drawers closed together each take the reason the store asks, under the one
 
     const closes = [];
     page.on("request", (request) => {
-      if (new URL(request.url()).pathname.startsWith("/api/shifts:")) {
+      if (request.method() === "POST" && new URL(request.url()).pathname.startsWith("/api/shifts:")) {
         closes.push(request.postDataJSON());
       }
     });
