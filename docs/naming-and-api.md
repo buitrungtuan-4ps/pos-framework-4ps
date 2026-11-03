@@ -264,7 +264,7 @@ One published field predates the time rule and stays, since nothing published is
 **Language.** Code is in English: identifiers, comments, log lines and error messages. Vietnamese
 prose appears only in the i18n catalogues (`ui/src/i18n/vi.json`, `dashboard/src/i18n/vi.json`) and
 in the archive of the original design documents (`docs/archive/vi/`). A Vietnamese *value* is data,
-not prose: a test fixture's dish (`"Phở bò"`) or a comment naming the currency's unit (đồng).
+not prose: a test fixture's dish (`"Phở bò"`) or a comment naming the currency's unit (đồng). The till's Vietnamese catalogue says *đơn* for an order, never the English word inside a Vietnamese sentence; `ui/tests/catalogue.spec.mjs` holds it to that.
 
 ## 11. Versioning
 
