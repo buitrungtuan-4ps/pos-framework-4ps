@@ -501,10 +501,10 @@ export function Takeaway() {
                       <p class="tabular-nums">{t("pay.receipt", { number: number() })}</p>
                     )}
                   </Show>
-                  <p class="mt-2 text-sm text-ink-muted">
-                    {t("pay.change")}:{" "}
-                    <span class="tabular-nums">{formatAmount(money(currency(), change()))}</span>
-                  </p>
+                  {/* The change is what the cashier acts on next, so it is the largest figure (UX-15). */}
+                  <Show when={change() > 0}>
+                    <p class="mt-3 text-sm text-ink-muted">{t("pay.change")}<span class="block text-4xl font-semibold text-ink tabular-nums" data-outcome="change-due">{formatAmount(money(currency(), change()))}</span></p>
+                  </Show>
                   <Show when={settled().drawer_open === "DRAWER_UNAVAILABLE"}>
                     <p class="mt-1 text-sm text-danger" role="status" data-outcome="drawer-unavailable">
                       {t("pay.drawer_unavailable")}
