@@ -12,16 +12,17 @@
 //! - **The choice is the store's.** `package.chosen_version_id` is written only through the choose
 //!   route, at the store, and only with a version the store is allowed.
 
-use core::future::Future;
-
-use pos_proto::ids::TenantId;
 use pos_proto::package::PackageMode;
 use pos_proto::settings::SettingScope;
 use pos_proto::wire_enum::WireEnum as _;
 
-use crate::packages::PackageStore;
-use crate::settings::{
-    ResolvedSetting, SettingValue, SettingsStore, SettingsStoreError, StorePlacement, rank_at,
+mod compile;
+mod seams;
+
+use crate::settings::{ResolvedSetting, SettingValue, StorePlacement, rank_at};
+pub use compile::{ContentChange, Pin, WaitReason, compile, pinned_version, with_content};
+pub use seams::{
+    IN_MEMORY_RELEASES, InMemoryReleases, SettingsPackages, StoreReleases, WithPackages,
 };
 
 /// The node the package settings are on, as a key prefix.
@@ -105,68 +106,6 @@ pub enum ChoiceRefusal {
     NotChoosing,
     /// The version is not one the store is allowed.
     NotAllowed,
-}
-
-/// A settings store that can also read the package versions its `package` values name, which a
-/// write of one checks.
-pub trait SettingsPackages {
-    /// The package store.
-    type Packages: PackageStore + Sync;
-
-    /// The tenant's packages.
-    fn packages(&self) -> &Self::Packages;
-}
-
-/// A settings store with the tenant's package store beside it: the settings routes' store, so a
-/// write of a `package` value can check the versions it names.
-#[derive(Clone, Debug)]
-pub struct WithPackages<St, P> {
-    settings: St,
-    packages: P,
-}
-
-impl<St, P> WithPackages<St, P> {
-    /// The settings store `settings`, with `packages` beside it.
-    #[must_use]
-    pub const fn new(settings: St, packages: P) -> Self {
-        Self { settings, packages }
-    }
-}
-
-impl<St, P: PackageStore + Sync> SettingsPackages for WithPackages<St, P> {
-    type Packages = P;
-
-    fn packages(&self) -> &P {
-        &self.packages
-    }
-}
-
-impl<St: SettingsStore + Sync, P: Sync> SettingsStore for WithPackages<St, P> {
-    fn list(
-        &self,
-        tenant_id: TenantId,
-    ) -> impl Future<Output = Result<Vec<SettingValue>, SettingsStoreError>> + Send {
-        self.settings.list(tenant_id)
-    }
-
-    fn put(
-        &self,
-        tenant_id: TenantId,
-        value: &SettingValue,
-    ) -> impl Future<Output = Result<(), SettingsStoreError>> + Send {
-        self.settings.put(tenant_id, value)
-    }
-
-    fn delete(
-        &self,
-        tenant_id: TenantId,
-        setting_key: &str,
-        scope: SettingScope,
-        scope_id: &str,
-    ) -> impl Future<Output = Result<bool, SettingsStoreError>> + Send {
-        self.settings
-            .delete(tenant_id, setting_key, scope, scope_id)
-    }
 }
 
 #[cfg(test)]

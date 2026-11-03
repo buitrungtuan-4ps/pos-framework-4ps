@@ -22,6 +22,7 @@ use crate::registry::RegistryStore;
 use crate::settings::SettingValueSchema;
 use crate::settings::SettingsStore;
 use crate::store_groups::StoreGroupStore;
+use pos_cloud_config::package_pin::SettingsPackages;
 
 /// The store whose effective settings to read.
 #[derive(Debug, Clone, Deserialize)]
@@ -81,7 +82,7 @@ pub(super) async fn admin_effective_settings<St, Rg, Grp, Cfg, A, C>(
     Query(query): Query<EffectiveSettingsQuery>,
 ) -> Response
 where
-    St: SettingsStore + Clone + Send + Sync + 'static,
+    St: SettingsStore + SettingsPackages + Clone + Send + Sync + 'static,
     Rg: RegistryStore + Clone + Send + Sync + 'static,
     Grp: StoreGroupStore + Clone + Send + Sync + 'static,
     Cfg: Clone + Send + Sync + 'static,

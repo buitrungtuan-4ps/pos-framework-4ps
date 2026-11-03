@@ -74,6 +74,16 @@ The pin is five settings on the `package` node (`docs/configuration.md`). `packa
 
 The console's Settings page leaves the `package` settings out, because the package page sets them.
 
+Every settings publish, from a write, a choice or `POST /admin/settings/publish`, also compiles the pinned version into the store's document, as `content` on the `package` node of its Tenant layer (`pos_cloud_config::package_pin::compile`). A lock compiles `locked_version_id`. A choice compiles `chosen_version_id` while it is allowed, and otherwise `default_version_id` while that is allowed. No pin removes `content`, so the store runs its release's default package. The pinned version is compiled in only when the release the store last reported ([ADR-0078](adr/0078-sync-and-ota-closure.md)) is at least the version's `min_edge_version`. Otherwise the store keeps the content it runs and waits, for one of these reasons:
+
+- `EDGE_TOO_OLD`: its reported release is older than the version needs.
+- `RELEASE_UNKNOWN`: it has never reported a release.
+- `VERSION_MISSING`: the pinned version is not a published version.
+- `PIN_UNRESOLVED`: the pin names no version the store may run.
+- `UNREADABLE`: the package store or the store's release could not be read.
+
+A waiting store is compiled again on the next publish that reaches it, such as `POST /admin/settings/publish`. `GET /admin/stores/{store_id}/package` answers the version the store is pinned to, the one its document carries, and why it waits when the two differ. Rolling back is pinning the previous version again, which publishes like any other write.
+
 The store's current time slot is the first slot in the package's `time_slots`, in the order they are listed, that has a weekly window holding the store's local time. A store is therefore in at most one slot. Every part has one base variant, which states nothing. A version is refused at publish, and again on apply, if two of its variants share a selector, if a variant names its device twice or if a variant names an undeclared slot (`pos_core::package::check_variants`).
 
 A package's **conditions** are written in a restricted dialect of CEL ([ADR-0193](adr/0193-conditions-and-reactions-are-written-in-cel.md)) and evaluated by one crate, `pos-rules`, which the cloud, the edge and (compiled to `wasm32`) the till share. `Rules::compile` refuses a condition outside the dialect before it can run: a loop macro (`all`, `exists`, `exists_one`, `map`, `filter`) or any function off the allow-list (comparison, boolean logic, integer arithmetic, `in`, indexing, `size`, `contains`, `startsWith`, `endsWith`, and `has()`); more than 1,024 characters, 256 nodes or a depth of 32, where brackets nested deeper than 32 are refused from the text before the parser recurses; a `double` literal or `double()`; a struct literal; and any name but the views `order`, `line`, `bill`, `channel`, `device`, `role` and `now`. The facts a condition reads hold no fraction, so an amount is an integer in minor units. A field the facts lack, an overflow or a division by zero is an evaluation error, never a guess.

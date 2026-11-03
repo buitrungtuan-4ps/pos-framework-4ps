@@ -180,6 +180,7 @@ fn fees_and_settings_app() -> (axum::Router, FakeConfigTrees) {
             pos_cloud_config::package_pin::WithPackages::new(
                 FakeSettings::default(),
                 pos_cloud_config::packages::InMemoryPackages::new(),
+                pos_cloud_config::package_pin::InMemoryReleases::new(),
             ),
             registry,
             FakeStoreGroups::default(),

@@ -157,6 +157,7 @@ async fn a_pin_set_once_the_tenant_asks_for_more_digits_has_at_least_that_many()
         pos_cloud_config::package_pin::WithPackages::new(
             settings,
             pos_cloud_config::packages::InMemoryPackages::new(),
+            pos_cloud_config::package_pin::InMemoryReleases::new(),
         ),
         registry,
         FakeStoreGroups::default(),
