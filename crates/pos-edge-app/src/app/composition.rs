@@ -141,6 +141,7 @@ impl<S: EventStore> Edge<S> {
             ids: Mutex::new(EdgeIdGenerator::new(SystemClock)?),
             fanout: Fanout::new(),
             projection: Mutex::new(Projection::default()),
+            packages: Mutex::new(super::flows::Retained::default()),
             receipts,
             standing: Arc::new(CurrentStanding::new()),
             sync: SyncStatus::new(),
