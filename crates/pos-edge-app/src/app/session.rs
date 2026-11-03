@@ -24,6 +24,7 @@ use pos_proto::integrations::PublishedIntegrations;
 use pos_proto::locale::{NumberFormat, TaxRateTable, TaxRounding};
 use pos_proto::menu::{MenuBook, MenuCatalog};
 use pos_proto::money::CurrencyCode;
+use pos_proto::package::PackageContent;
 use pos_proto::printing::PublishedPrinting;
 use pos_proto::qr::PublishedQr;
 use pos_proto::reason_codes::PublishedReasonCodes;
@@ -291,6 +292,11 @@ pub struct EdgeSession {
     /// decision 6). Empty in the bootstrap and wherever the node sets none, which leaves the
     /// archive loop on this box's own interval (`pos_edge::backup_client`).
     pub backup: PublishedBackup,
+    /// The package version this store runs: the `package` node's `content`, as the edge last
+    /// applied it ([ADR-0189](../../../../docs/adr/0189-a-store-runs-a-package-version-hq-pins.md)
+    /// decisions 3 and 6). `None` in the bootstrap and while nothing is pinned, which is the default
+    /// package of this release. Shared, so a copy of the session does not copy a package.
+    pub package: Option<std::sync::Arc<PackageContent>>,
     /// Whether a QR order (one that names a table) waits for staff before the kitchen sees it — the
     /// `qr.staff_confirmation_required` guardrail ([ADR-0057], authored via ADR-0080's `qr` node, M7).
     /// Defaults to `true` (ADR-0057: a guest order waits unless the store turns confirmation off); the
