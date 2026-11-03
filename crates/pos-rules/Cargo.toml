@@ -1,0 +1,24 @@
+[package]
+name        = "pos-rules"
+version     = "0.1.0"
+description = "Compiles and evaluates the CEL conditions of a package, in a restricted dialect."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+[dependencies]
+# The CEL evaluator (ADR-0193 decision 1). No default features: no regex, chrono or base64, so the
+# dialect has no `matches()` and no time library, and the till's wasm32 build stays small.
+cel = { version = "0.15.0", default-features = false }
+thiserror.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.pos]
+layer = "core"
+purpose = "Compiles and evaluates a package's CEL conditions in a restricted dialect, the same on the cloud, the edge and the till."
+adrs = [193]
+owners = ["@maintainers-architecture"]

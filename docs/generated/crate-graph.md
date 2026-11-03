@@ -9,6 +9,7 @@ flowchart LR
   subgraph core
     pos_core["pos-core"]
     pos_proto["pos-proto"]
+    pos_rules["pos-rules"]
   end
   subgraph port
     pos_ports["pos-ports"]
@@ -247,6 +248,7 @@ flowchart LR
 | `pos-proto` | core | `crates/pos-proto` | Wire types, the event catalogue and envelope, value types, and PROTOCOL_VERSION. | `cloud-sync-http`, `erp-sap`, `link-nats`, `metrics-vm`, `minimal-edge`, `pos-cloud`, `pos-cloud-api`, `pos-cloud-catalog`, `pos-cloud-config`, `pos-cloud-devices`, `pos-cloud-floor`, `pos-cloud-inventory`, `pos-cloud-people`, `pos-cloud-reports`, `pos-contract-tests`, `pos-core`, `pos-country`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-edge`, `pos-edge-app`, `pos-edge-printing`, `pos-fakes`, `pos-ports`, `pos-print-agent`, `pos-providers`, `printer-escpos`, `shipping-ahamove`, `shipping-grabexpress`, `store-postgres`, `store-sqlite` | `pos-proto` |
 | `pos-providers` | port | `crates/pos-providers` | The vendor catalogue: the descriptor each vendor adapter exports, and the registry built from them. | `erp-sap`, `pos-cloud`, `shipping-ahamove`, `shipping-grabexpress` | — |
 | `pos-render` | app | `crates/pos-render` | Turns a line of text in any script into the 1-bit raster a thermal printer prints. | `pos-edge`, `pos-edge-printing` | — |
+| `pos-rules` | core | `crates/pos-rules` | Compiles and evaluates a package's CEL conditions in a restricted dialect, the same on the cloud, the edge and the till. | — | — |
 | `pos-simulator` | testing | `crates/pos-simulator` | The virtual-fleet simulator: an executable capacity model and deterministic fleet scenarios. | — | — |
 | `printer-escpos` | adapter | `crates/adapters/printer-escpos` | The ESC/POS thermal-printer adapter for the PrinterDriver port. | `pos-edge`, `pos-edge-printing`, `pos-print-agent` | — |
 | `shipping-ahamove` | adapter | `crates/adapters/shipping-ahamove` | The Ahamove ShippingDispatch adapter: book, cancel and track a courier job over HTTPS. | `pos-cloud` | — |

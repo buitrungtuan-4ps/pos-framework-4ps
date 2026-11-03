@@ -31,7 +31,7 @@ clippy:
     cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 clippy-backbone:
-    for crate in pos-core pos-ports pos-proto; do \
+    for crate in pos-core pos-ports pos-proto pos-rules; do \
         cargo clippy -p "$crate" --all-targets -- \
             -F clippy::unwrap_used -F clippy::expect_used -F clippy::panic \
             -F clippy::todo -F clippy::unimplemented \
