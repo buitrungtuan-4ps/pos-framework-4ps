@@ -41,6 +41,7 @@ wire_enum! {
 
 /// One flow of a package.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Flow {
     /// The flow's id within its package. Its variants share it.
     pub flow_id: String,
@@ -53,14 +54,17 @@ pub struct Flow {
 
 /// One step of a flow. It names exactly one of `screen_id` and `action_id`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct FlowStep {
     /// The step's id within its flow.
     pub step_id: String,
     /// The package screen the step shows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub screen_id: Option<String>,
     /// The catalogue action the step runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub action_id: Option<String>,
     /// Required or optional.
     #[serde(default, skip_serializing_if = "is_absent")]
@@ -68,6 +72,7 @@ pub struct FlowStep {
     /// When the step applies at all. Absent: always. A step that does not apply is passed over,
     /// and counts as done for the steps that wait on it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub applies_when: Option<String>,
     /// The steps of the same flow that must be done before this one can run.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -75,6 +80,7 @@ pub struct FlowStep {
     /// When the edge sees the step as done, from its own facts. Present only on a step the edge
     /// enforces; a condition over state the edge does not hold is refused at publish.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub done_when: Option<String>,
 }
 
