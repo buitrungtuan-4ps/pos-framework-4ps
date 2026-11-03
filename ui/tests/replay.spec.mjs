@@ -3205,6 +3205,53 @@ test("once the bill is open the menu is locked, and voiding the bill gives it ba
   }
 });
 
+// A pay screen whose bill is settled or voided on another till says so at once, with the way back
+// (`docs/ui-ux.md` §3), rather than failing on the next tap against a bill that is closed. A till of
+// its own does not see the notice for its own settle or void.
+test("a pay screen says when another till paid or voided its bill, and offers the way back", async ({
+  context,
+}) => {
+  const edge = await startEdge();
+  try {
+    const here = await context.newPage();
+    await pair(here, edge);
+    await signIn(here, edge);
+    await seatTable(here);
+    await addItem(here);
+    await sendThenTakePayment(here);
+    await expect(here.locator('[data-step="payCash"]')).toBeEnabled();
+    const payUrl = here.url();
+    const ended = here.locator('[data-outcome="bill-ended-elsewhere"]');
+
+    // Voided on another till: the order is still on the table, so the way back is the order.
+    const other = await context.newPage();
+    await other.goto(payUrl);
+    await other.locator('[data-step="askVoidBill"]').click();
+    await other.locator("#void-bill-approver-code").fill(edge.staffCode);
+    await other.locator("#void-bill-approver-pin").fill(edge.staffPin);
+    await other.locator('[data-step="voidBillReason"]').first().click();
+    await expect(other.locator('[data-outcome="bill-voided"]')).toBeVisible();
+    await expect(other.locator('[data-outcome="bill-ended-elsewhere"]')).toHaveCount(0);
+    await expect(ended).toContainText("This bill was voided on another till");
+    await here.locator('[data-step="leaveEndedBill"]').click();
+    await expect(here.locator('[data-outcome="order-open"]')).toBeVisible();
+
+    // Paid on another till: the table is done, so the way back is the floor.
+    await sendThenTakePayment(here);
+    await expect(here.locator('[data-step="payCash"]')).toBeEnabled();
+    await other.goto(here.url());
+    await other.locator('[data-step="payCash"]').click();
+    await expect(other.locator('[data-outcome="settled"]')).toBeVisible();
+    await expect(other.locator('[data-outcome="bill-ended-elsewhere"]')).toHaveCount(0);
+    await expect(ended).toContainText("This bill was paid on another till");
+    await expect(here.locator('[data-step="payCash"]')).toHaveCount(0);
+    await here.locator('[data-step="leaveEndedBill"]').click();
+    await expect(here.locator('[data-outcome="floor"]')).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A counter order on the kitchen board and the pass is called by the guest's number.
 //
 // Both screens labelled a counter ticket with the last four characters of the order's internal id

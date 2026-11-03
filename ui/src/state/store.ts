@@ -10,7 +10,7 @@ import { adoptStoreLanguage } from "../i18n";
 import { load, reload } from "./engine";
 import { ownOverride } from "./drawer-access";
 import { keptShift, shiftInfo } from "./shift-info";
-import { afterLastVoid, closeBill, forgetLines, settleBill } from "./closing";
+import { afterLastVoid, closeBill, forgetLines, settleBill, voidBillClosed } from "./closing";
 import { noteWalkInOpened, walkInsOpenedSince, type LiveOrdersRead } from "./live-orders-read";
 import type { LinkStatus, ServerEvent } from "../api/live";
 import type {
@@ -764,14 +764,7 @@ export function fold(event: ServerEvent): void {
     case "billing.bill.voided": {
       const bill = str(payload, "bill_id");
       if (bill !== null) {
-        setState(
-          produce((draft) => {
-            const closed = closeBill(draft, bill);
-            if (closed !== null && closed.stillOpen === 0) {
-              afterLastVoid(draft, closed.table, draft.billOrder[bill]);
-            }
-          }),
-        );
+        setState(produce((draft) => voidBillClosed(draft, bill)));
       }
       break;
     }
