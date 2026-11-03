@@ -877,3 +877,62 @@ async fn a_close_owed_a_reason_answers_the_figures_to_show_and_closes_when_given
     assert_eq!(status, StatusCode::OK, "{closed}");
     assert_eq!(closed["shifts"][1]["state"], "SHIFT_STATE_CLOSED");
 }
+
+#[tokio::test]
+async fn a_count_by_note_must_add_up_and_its_close_card_lists_the_notes() {
+    // ADR-0186 decision 2: the breakdown is refused by name when it does not come to the amount,
+    // and nothing is recorded; one that does is read back on the close card.
+    let tills = drawers_app(false).await;
+    let row = |denomination: i64, quantity: u32| json!({ "denomination": vnd(denomination), "quantity": quantity });
+    let float = json!({
+        "opening_float": vnd(500_000),
+        "denomination_counts": [row(200_000, 2)],
+    });
+    let (status, reason, _) = post(&tills, &tills.bar, "/api/shifts", float).await;
+    assert_eq!(
+        (status, reason.as_deref()),
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Some("COUNT_DOES_NOT_ADD_UP")
+        )
+    );
+    let float = json!({
+        "opening_float": vnd(500_000),
+        "denomination_counts": [row(200_000, 2)],
+        "uncounted_amount": vnd(100_000),
+    });
+    let (status, _, opened) = post(&tills, &tills.bar, "/api/shifts", float).await;
+    assert_eq!(status, StatusCode::OK, "{opened}");
+    let shift = opened["shift_id"].as_str().unwrap_or_default().to_owned();
+
+    let uri = format!("/api/shifts/{shift}/count");
+    let wrong = json!({ "counted_minor": 500_000, "denomination_counts": [row(100_000, 4)] });
+    let (status, reason, _) = post(&tills, &tills.bar, &uri, wrong).await;
+    assert_eq!(
+        (status, reason.as_deref()),
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Some("COUNT_DOES_NOT_ADD_UP")
+        )
+    );
+    let current = get(&tills, &tills.bar, "/api/shifts/current").await;
+    assert_eq!(current["state"], "SHIFT_STATE_OPEN", "nothing was counted");
+
+    let right = json!({
+        "counted_minor": 500_000,
+        "denomination_counts": [row(100_000, 4), row(50_000, 1)],
+        "uncounted_amount": vnd(50_000),
+    });
+    let (status, _, counted) = post(&tills, &tills.bar, &uri, right).await;
+    assert_eq!(status, StatusCode::OK, "{counted}");
+    let close = format!("/api/shifts/{shift}/close");
+    let (status, _, closed) = post(&tills, &tills.bar, &close, json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{closed}");
+    assert_eq!(
+        closed["counted_denominations"],
+        json!([row(100_000, 4), row(50_000, 1)]),
+        "{closed}"
+    );
+    assert_eq!(closed["uncounted_amount"], json!(vnd(50_000)));
+    assert!(tills.written.last_says(BAR_DRAWER, "COUNT BY NOTE"));
+}

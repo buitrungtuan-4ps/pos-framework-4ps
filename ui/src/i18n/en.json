@@ -127,6 +127,7 @@
   "error.approver_locked_out": "Too many wrong PINs for that manager. Try again in a few minutes.",
   "error.approval_required": "This needs a manager's PIN.",
   "error.assignee_required": "Another till's drawer is started for one person. Type the staff code of someone on the store's staff.",
+  "error.count_does_not_add_up": "The notes counted do not add up to the amount. Check each row and the other amount, then try again.",
   "error.awaiting_staff_confirmation": "A member of staff must confirm or refuse this guest order first.",
   "error.bill_already_open": "A bill is already open for this order.",
   "error.drawer_assigned_to_another": "This drawer is another person's for their shift. A manager's code and PIN let you take cash into it, open it, count it or close it. Cards still work.",

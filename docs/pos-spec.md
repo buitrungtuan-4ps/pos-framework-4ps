@@ -303,6 +303,8 @@ config.version.activated
 
 **A close may name its reason** ([ADR-0167](adr/0167-a-till-has-its-own-cash-drawer.md) decision 12). `cash.shift.closed` carries an optional `reason_code_id`, for `REASON_ACTION_CASH_VARIANCE`, where the drawer closed over or short by more than the store's `shift.variance_reason_minor` (§6). Absent otherwise, and left out, so a close that owed no reason writes the same bytes as before.
 
+**A count may name its notes** ([ADR-0186](adr/0186-a-drawer-is-counted-by-denomination.md) decision 2). `cash.shift.opened` and `cash.shift.counted` carry an optional `denomination_counts`, a list of `{denomination, quantity}`, and an optional `uncounted_amount` for anything the list does not name. Together they add up to `opening_float` or `counted_amount`, which keep their meaning; the edge refuses a float or a count whose rows do not, with `422 COUNT_DOES_NOT_ADD_UP`, and records nothing. Both are left out when absent, so a count typed as one amount writes the same bytes as before. Money and quantities only, no person. The printed shift report lists the count's rows under its figures, and the close answers them as `counted_denominations` and `uncounted_amount`.
+
 This catalogue is the single source for chain reporting, reconciliation, ERP posting, and webhooks. It is rendered to `docs/snapshots/events.txt` from the code, down to each field of a part a payload nests (`tax_lines[].components[].name`), and CI refuses any removal from that file.
 
 ## 19. Scope

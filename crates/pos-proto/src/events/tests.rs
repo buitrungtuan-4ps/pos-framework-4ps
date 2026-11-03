@@ -708,6 +708,8 @@ fn a_shift_event_that_names_no_till_writes_the_bytes_it_always_did() {
         opening_float: vnd(500_000),
         terminal_device_id: None,
         assigned_employee_id: None,
+        denomination_counts: Vec::new(),
+        uncounted_amount: None,
     };
     names_its_till_only_when_it_has_one(
         &opened,
@@ -866,6 +868,8 @@ fn a_shift_opened_names_its_person_only_where_its_drawer_is_assigned() {
         opening_float: Money::new(CurrencyCode::VND, 500_000),
         terminal_device_id: None,
         assigned_employee_id: Some(person),
+        denomination_counts: Vec::new(),
+        uncounted_amount: None,
     };
     let written = RawPayload::encode(&assigned).expect("encodes");
     assert_eq!(
@@ -879,4 +883,48 @@ fn a_shift_opened_names_its_person_only_where_its_drawer_is_assigned() {
         assigned
     );
     assert_eq!(check_field_name("assigned_employee_id"), Ok(()));
+}
+
+#[test]
+fn a_count_names_its_notes_only_where_it_was_counted_note_by_note() {
+    // ADR-0186 decision 2: an optional breakdown, so a count typed as one amount writes the bytes
+    // it always did, and one counted note by note reads back as written.
+    use super::{CashShiftCounted, DenominationCount};
+    use crate::ids::ShiftId;
+    use crate::money::{CurrencyCode, Money};
+
+    let vnd = |minor| Money::new(CurrencyCode::VND, minor);
+    let typed = CashShiftCounted {
+        counted_shift_id: ShiftId::new(Ulid::from_u128(7)),
+        counted_amount: vnd(1_203_000),
+        count_time: Timestamp::from_milliseconds_since_epoch(1_767_225_600_000).expect("instant"),
+        denomination_counts: Vec::new(),
+        uncounted_amount: None,
+    };
+    let written = RawPayload::encode(&typed).expect("encodes");
+    assert!(!written.as_json().contains("denomination_counts"));
+    assert!(!written.as_json().contains("uncounted_amount"));
+
+    let counted = CashShiftCounted {
+        denomination_counts: vec![
+            DenominationCount {
+                denomination: vnd(500_000),
+                quantity: 2,
+            },
+            DenominationCount {
+                denomination: vnd(100_000),
+                quantity: 2,
+            },
+        ],
+        uncounted_amount: Some(vnd(3_000)),
+        ..typed
+    };
+    let written = RawPayload::encode(&counted).expect("encodes");
+    assert!(written.as_json().contains(
+        r#""denomination_counts":[{"denomination":{"currency_code":"VND","amount_minor":500000},"quantity":2}"#
+    ));
+    assert_eq!(
+        written.decode::<CashShiftCounted>().expect("decodes"),
+        counted
+    );
 }

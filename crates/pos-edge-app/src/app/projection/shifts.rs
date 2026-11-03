@@ -4,6 +4,7 @@
 //! What the projection records of shifts: opening, counting and closing one, the drawer model the
 //! open shifts run, the day-end warning, and the cash moved in and out.
 
+use pos_core::cash_count::CountBreakdown;
 use pos_core::error::DomainError;
 use pos_proto::ShiftState;
 use pos_proto::ids::{DeviceId, ShiftId};
@@ -61,10 +62,12 @@ impl Projection {
         &mut self,
         shift_id: ShiftId,
         counted: Money,
+        breakdown: CountBreakdown,
         state: ShiftState,
     ) {
         if let Some(record) = self.shifts.get_mut(&shift_id) {
             record.counted = Some(counted);
+            record.count_breakdown = breakdown;
             record.state = state;
         }
     }

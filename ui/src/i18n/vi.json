@@ -127,6 +127,7 @@
   "error.approver_locked_out": "Quản lý này đã nhập sai PIN quá nhiều lần. Vui lòng thử lại sau vài phút.",
   "error.approval_required": "Thao tác này cần mã PIN của quản lý.",
   "error.assignee_required": "Ngăn kéo của máy POS khác được mở cho một người. Hãy nhập mã nhân viên của một người trong cửa hàng.",
+  "error.count_does_not_add_up": "Số tờ tiền đã đếm không khớp với tổng số tiền. Hãy kiểm tra từng dòng và số tiền khác, rồi thử lại.",
   "error.awaiting_staff_confirmation": "Cần nhân viên xác nhận hoặc từ chối order này của khách trước đã.",
   "error.bill_already_open": "Order này đã có hoá đơn đang mở.",
   "error.drawer_assigned_to_another": "Ngăn kéo này là của người khác trong ca của họ. Mã và PIN của quản lý cho phép bạn nhận tiền mặt vào, mở, kiểm đếm hoặc đóng ca ngăn kéo này. Thanh toán thẻ vẫn dùng được.",

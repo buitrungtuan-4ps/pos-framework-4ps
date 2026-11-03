@@ -98,6 +98,10 @@ pub struct PaperLabels {
     pub reverse_on_terminal: &'static str,
     /// The cash a shift's drawer handed back for bills voided after payment, on its report.
     pub voided_after_payment: &'static str,
+    /// The heading over a count's rows, note by note (ADR-0186).
+    pub count_by_denomination: &'static str,
+    /// What a count's rows do not name.
+    pub uncounted: &'static str,
 }
 
 /// English, and the fallback for every case the module documentation names.
@@ -138,6 +142,8 @@ pub static ENGLISH: PaperLabels = PaperLabels {
     card_to_reverse: "Card and other",
     reverse_on_terminal: "Reverse it on the card terminal",
     voided_after_payment: "Voided after payment",
+    count_by_denomination: "COUNT BY NOTE",
+    uncounted: "Other / uncounted",
 };
 
 /// Vietnamese, in the words a Vietnamese receipt and cash-up sheet use.
@@ -178,6 +184,8 @@ pub static VIETNAMESE: PaperLabels = PaperLabels {
     card_to_reverse: "Thẻ và hình thức khác",
     reverse_on_terminal: "Hoàn tiền trên máy quẹt thẻ",
     voided_after_payment: "Hủy sau thanh toán",
+    count_by_denomination: "ĐẾM THEO MỆNH GIÁ",
+    uncounted: "Khác / không đếm",
 };
 
 impl PaperLabels {
@@ -264,6 +272,8 @@ mod tests {
             ENGLISH.card_to_reverse,
             ENGLISH.reverse_on_terminal,
             ENGLISH.voided_after_payment,
+            ENGLISH.count_by_denomination,
+            ENGLISH.uncounted,
         ] {
             assert!(label.is_ascii(), "{label}");
         }

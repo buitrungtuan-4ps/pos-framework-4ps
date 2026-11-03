@@ -30,7 +30,7 @@
 //! from here rather than arriving fully formed with no history.
 
 use crate::envelope::{EventPayload, PayloadPart};
-use crate::events::{BillFeeLine, BillTaxComponent, BillTaxLine, EventType};
+use crate::events::{BillFeeLine, BillTaxComponent, BillTaxLine, DenominationCount, EventType};
 use crate::fees::FrozenFee;
 
 /// Where the rendered snapshot is committed, relative to the repository root.
@@ -67,6 +67,16 @@ const PARTS: &[(EventType, &str, &[&str])] = &[
         EventType::BillingBillSettled,
         "tax_lines[].components[]",
         BillTaxComponent::FIELD_NAMES,
+    ),
+    (
+        EventType::CashShiftOpened,
+        "denomination_counts[]",
+        DenominationCount::FIELD_NAMES,
+    ),
+    (
+        EventType::CashShiftCounted,
+        "denomination_counts[]",
+        DenominationCount::FIELD_NAMES,
     ),
 ];
 

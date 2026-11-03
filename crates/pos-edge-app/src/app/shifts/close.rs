@@ -307,6 +307,7 @@ impl<S: EventStore> Edge<S> {
             paid_out: record.paid_out,
             expected_amount,
             counted_amount,
+            count_breakdown: record.count_breakdown.clone(),
             variance,
             voided_bills: record.voided_bills,
             voided_cash: record.voided_cash,

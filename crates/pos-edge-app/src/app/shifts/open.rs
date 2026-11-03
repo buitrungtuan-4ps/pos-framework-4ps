@@ -3,6 +3,7 @@
 
 //! Opening a drawer's shift with its starting float.
 
+use pos_core::cash_count::CountBreakdown;
 use pos_core::decision::Actor;
 use pos_core::permission::Permission;
 use pos_ports::event_store::EventStore;
@@ -61,6 +62,30 @@ impl<S: EventStore> Edge<S> {
         approval: Option<&Approval>,
         assignee: Option<EmployeeId>,
     ) -> Result<ShiftView, AppError> {
+        let float = (opening_float, CountBreakdown::default());
+        self.open_shift_counted(actor, scope, float, approval, assignee)
+            .await
+    }
+
+    /// [`Self::open_shift_at`] with the float counted note by note
+    /// ([ADR-0186](../../../../../docs/adr/0186-a-drawer-is-counted-by-denomination.md)), which
+    /// `cash.shift.opened` records beside the amount.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::CountDoesNotAddUp`] where the breakdown does not come to the float, before
+    /// anything else is checked, and otherwise as [`Self::open_shift_at`].
+    pub async fn open_shift_counted(
+        &self,
+        actor: Actor,
+        scope: TillScope,
+        (opening_float, breakdown): (Money, CountBreakdown),
+        approval: Option<&Approval>,
+        assignee: Option<EmployeeId>,
+    ) -> Result<ShiftView, AppError> {
+        if !breakdown.adds_up_to(opening_float) {
+            return Err(AppError::CountDoesNotAddUp);
+        }
         // A replaced machine does not open a new trading day (ADR-0123). Before the
         // already-open check, so a box that is superseded says so rather than reporting whichever
         // state it happens to be in.
@@ -82,6 +107,8 @@ impl<S: EventStore> Edge<S> {
             terminal_device_id: till,
             // Absent where drawers are shared, which writes today's bytes too (decision 9).
             assigned_employee_id: owner,
+            denomination_counts: breakdown.denomination_counts,
+            uncounted_amount: breakdown.uncounted_amount,
         };
         let step_ups = [(Permission::ManageOtherTill, approver)];
         self.commit_approved(&ctx, &payload, self.current_shift_id(), &step_ups)

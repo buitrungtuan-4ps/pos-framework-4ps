@@ -473,6 +473,10 @@ impl<S: EventStore> Edge<S> {
                 projection.record_shift_count(
                     event.counted_shift_id,
                     event.counted_amount,
+                    pos_core::cash_count::CountBreakdown {
+                        denomination_counts: event.denomination_counts,
+                        uncounted_amount: event.uncounted_amount,
+                    },
                     ShiftState::Counted,
                 );
             }

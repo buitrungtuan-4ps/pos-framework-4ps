@@ -185,6 +185,7 @@ no_pii!(
     events::BillFeeLine,
     events::BillTaxLine,
     events::BillTaxComponent,
+    events::DenominationCount,
 );
 
 impl<T: NoPii> sealed::Sealed for Option<T> {}

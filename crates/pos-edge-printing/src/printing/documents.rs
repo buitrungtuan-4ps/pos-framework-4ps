@@ -311,6 +311,7 @@ pub fn shift_report_document(
         false,
     ));
     figure_blocks(&mut blocks, money, labels, &report.figures());
+    count_blocks(&mut blocks, money, labels, report);
     component_blocks(&mut blocks, money, labels, &report.tax_components);
     blocks.push(PrintBlock::Cut);
     PrintDocument { blocks }
@@ -344,10 +345,45 @@ pub fn combined_shift_report_document(
             false,
         ));
         figure_blocks(&mut blocks, money, labels, &report.figures());
+        count_blocks(&mut blocks, money, labels, report);
         component_blocks(&mut blocks, money, labels, &report.tax_components);
     }
     blocks.push(PrintBlock::Cut);
     PrintDocument { blocks }
+}
+
+/// A drawer's count note by note under its heading (ADR-0186): each note, how many, and what they
+/// come to, then what the rows do not name. Nothing where the count was typed as one amount, so such
+/// a shift prints the report it always did. The rows add up to the count printed above them, which
+/// the edge checked before it recorded it.
+fn count_blocks(
+    blocks: &mut Vec<PrintBlock>,
+    money: &MoneyStyle,
+    labels: &PaperLabels,
+    report: &ShiftReport,
+) {
+    let breakdown = &report.count_breakdown;
+    if breakdown.is_empty() {
+        return;
+    }
+    blocks.push(centred(labels.count_by_denomination, true));
+    for row in &breakdown.denomination_counts {
+        // The edge refused a count whose rows overflow before it recorded one, so this never
+        // falls back; it keeps the paper off a panic path all the same.
+        let value = row
+            .denomination
+            .checked_mul(i64::from(row.quantity))
+            .unwrap_or(row.denomination);
+        let label = format!(
+            "{} x {}",
+            format_money(row.denomination, money),
+            row.quantity
+        );
+        blocks.push(amount_line(&label, value, money));
+    }
+    if let Some(uncounted) = breakdown.uncounted_amount {
+        blocks.push(amount_line(labels.uncounted, uncounted, money));
+    }
 }
 
 /// A shift's tax by component and rate under its heading, each as its tax line prints it on a
