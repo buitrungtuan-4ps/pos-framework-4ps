@@ -349,6 +349,7 @@
   "pay.share_taken": "Phần {part} · {method}",
   "pay.share_untake": "Bỏ",
   "pay.short_by": "Còn thiếu {amount}",
+  "pay.split_leave_confirm": "Đã có khách trả phần của mình trong lần chia này. Vẫn rời hoá đơn? Phần chia vẫn được giữ trên máy này.",
   "pay.split": "Chia đều theo số người",
   "pay.split_by_item": "Tách theo món",
   "pay.split_by_seat": "{count, plural, other {Tách theo ghế (# hoá đơn)}}",

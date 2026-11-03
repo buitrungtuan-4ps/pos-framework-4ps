@@ -2506,6 +2506,49 @@ test("a bill split three ways settles with each guest's own tender, and the cash
   }
 });
 
+// An even split is kept for its bill (UX-5): a reload, or leaving and coming back, finds the share
+// already taken still taken, and only the rest owed. It used to be forgotten, and the reopened bill
+// was taken whole after a guest had paid their half. Leaving with a share taken asks first.
+test("an even split survives a reload and leaving the screen, and leaving asks first", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    await addItem(page);
+    await sendThenTakePayment(page);
+    await page.getByRole("button", { name: "Split between 2 guests" }).click();
+    const share = page.locator('[data-outcome="share-due"]');
+    await expect(share).toBeVisible();
+    await page.locator('[data-step="payCard"]').click();
+    await expect(page.locator('[data-outcome="share-taken"]')).toHaveCount(1);
+    const rest = await share.textContent();
+
+    await page.reload();
+    await expect(page.locator('[data-outcome="share-taken"]')).toHaveCount(1);
+    await expect(share).toHaveText(rest ?? "");
+
+    // Leaving asks; staying keeps the screen, leaving keeps the split for when the bill is back.
+    page.once("dialog", (dialog) => void dialog.dismiss());
+    await page.getByRole("link", { name: "← Order" }).click();
+    await expect(page).toHaveURL(/\/pay$/);
+    page.once("dialog", (dialog) => void dialog.accept());
+    await page.getByRole("link", { name: "← Order" }).click();
+    await expect(page.locator('[data-outcome="order-open"]')).toBeVisible();
+    await page.locator('[data-step="takePayment"]').click();
+    await expect(page.locator('[data-outcome="share-taken"]')).toHaveCount(1);
+    await expect(share).toHaveText(rest ?? "");
+
+    await page.locator('[data-step="payCash"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A table split by item charges each guest their own part, and waits for the last one (ADR-0128).
 //
 // The guest who only had a drink pays for the drink: the iced tea is split off, its part reads what
