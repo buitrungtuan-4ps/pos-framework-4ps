@@ -902,13 +902,7 @@ export function fold(event: ServerEvent): void {
       const variance = asMoney(payload["variance"]);
       const own = ownDrawer(str(payload, "terminal_device_id"));
       if (shiftId !== null && own === true) {
-        replaceShift({
-          shiftId,
-          state: "SHIFT_STATE_CLOSED",
-          expected: expected ?? undefined,
-          counted: counted ?? undefined,
-          variance: variance ?? undefined,
-        });
+        heardClosed(shiftId, expected, counted, variance);
       } else if (own === null) {
         void loadShift();
       }
@@ -1667,6 +1661,16 @@ function heardShift(shiftId: string, shiftState: string, counted?: Money): void 
   const kept = keptShift(state.shift, shiftId, shiftState, counted);
   replaceShift(kept ?? { shiftId, state: shiftState, counted });
   if (kept === null) void loadShift();
+}
+
+// This device's shift closed, as its live link heard it. The shift already held keeps the figures the
+// close's answer gave it (paid in and out, dropped, voided, the report), which the event does not
+// carry: it can reach the link after that answer, and replacing the shift with its four figures lost
+// them.
+function heardClosed(shiftId: string, expected: Money | null, counted: Money | null, variance: Money | null): void {
+  const held = state.shift?.shiftId === shiftId ? state.shift : null;
+  const figures = { expected: expected ?? held?.expected, counted: counted ?? held?.counted, variance: variance ?? held?.variance };
+  replaceShift({ ...held, ...figures, shiftId, state: "SHIFT_STATE_CLOSED" });
 }
 
 // Sets the shift outright. A store *merges* an object set at a path, so setting an open shift over a
