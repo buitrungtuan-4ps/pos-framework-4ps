@@ -22,6 +22,8 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 - [ADR-0197](../adr/0197-every-tap-paints-within-ten-milliseconds.md) Every tap paints within ten milliseconds
 - [ADR-0198](../adr/0198-a-store-reaches-the-internet-only-through-the-cloud.md) A store reaches the internet only through the cloud
 - [ADR-0199](../adr/0199-a-function-is-signed-pure-webassembly-that-returns-a-decision.md) A function is signed, pure WebAssembly that returns a decision
+- [ADR-0200](../adr/0200-six-business-type-templates-ship-with-the-framework.md) Six business-type templates ship with the framework
+- [ADR-0201](../adr/0201-the-till-runs-on-every-device-class.md) The till runs on every device class, through one shell
 
 ## Citations of ADRs that do not exist
 
