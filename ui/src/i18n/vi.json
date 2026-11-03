@@ -298,6 +298,7 @@
   "pair.title": "Ghép nối thiết bị",
   "pair.too_many": "Nhập sai quá nhiều lần. Đợi một phút rồi thử lại.",
   "pay.amount_due": "Số tiền cần thu",
+  "pay.amount_loading": "Đang lấy số tiền…",
   "pay.approver_code": "Mã thẻ quản lý",
   "pay.approver_pin": "Mã PIN quản lý",
   "pay.back_floor": "Về sơ đồ bàn",

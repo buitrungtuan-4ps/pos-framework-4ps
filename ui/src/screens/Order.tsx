@@ -27,7 +27,6 @@ import {
   loadCheck,
   modifierNames,
   noteLost,
-  openBill,
   openBillFor,
   openBillsFor,
   reasonsFor,
@@ -215,7 +214,7 @@ export function Order() {
         navigate(`/counter?charge=${params.id}`);
         return;
       }
-      await openBill(params.id);
+      // The pay screen opens the bill, so the cashier is there at once (`../state/open-for-pay`).
       navigate(`/table/${params.id}/pay`);
     });
 
