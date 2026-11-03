@@ -1010,6 +1010,7 @@ mod tests {
             counted: day.counted,
             variance: day.variance,
             voided_cash: day.voided_cash,
+            closed_float: day.closed_float,
         }
     }
 
@@ -1049,7 +1050,7 @@ mod tests {
                 expected,
                 counted,
                 variance: counted - expected,
-                voided_cash: 0,
+                ..CashTotals::default()
             };
         assert_eq!(
             drawer(bar),
@@ -1084,6 +1085,7 @@ mod tests {
                 counted: sum.counted + drawer.counted,
                 variance: sum.variance + drawer.variance,
                 voided_cash: sum.voided_cash + drawer.voided_cash,
+                closed_float: sum.closed_float + drawer.closed_float,
             });
         assert_eq!(
             summed,
@@ -1101,7 +1103,7 @@ mod tests {
                 expected: 1_800_000,
                 counted: 1_790_000,
                 variance: -10_000,
-                voided_cash: 0,
+                ..CashTotals::default()
             },
             "and the store's figures are the sums they always were"
         );
@@ -1123,7 +1125,7 @@ mod tests {
             expected: 570_000,
             counted: 565_000,
             variance: -5_000,
-            voided_cash: 0,
+            ..CashTotals::default()
         };
         assert_eq!(store_figures(&day), figures);
         assert_eq!(

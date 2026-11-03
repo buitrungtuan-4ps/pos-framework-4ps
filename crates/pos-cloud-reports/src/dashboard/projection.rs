@@ -26,6 +26,7 @@ use pos_proto::ids::{EventId, StoreId, TenantId};
 
 use crate::types::{AdmittedDevice, DailyCash, DailyRevenue, DailyRollup, XzReport};
 
+use super::floats::{KeptFloats, fold_closed_floats};
 use super::mix::{KeptLines, fold_line_updates};
 use super::voids::{KeptBills, fold_voids};
 
@@ -92,6 +93,11 @@ pub struct StoredRollups {
     /// written before it loads with none, and an update of a line added before then changes nothing.
     #[serde(default)]
     pub lines: KeptLines,
+    /// Each open shift's float, kept so its close can set it beside the close's figures; see
+    /// [`fold_closed_floats`]. In this blob for `devices`' reason. `#[serde(default)]`, so a blob
+    /// written before it loads with none, and a shift opened before then adds no closed float.
+    #[serde(default)]
+    pub floats: KeptFloats,
 }
 
 /// The store that persists materialised rollups (a table in `store-postgres`; a fake in tests).
@@ -186,6 +192,7 @@ where
             fold_revenue(&mut state.revenue, event);
             fold_line_updates(&mut state.lines, &mut state.revenue, event);
             fold_cash(&mut state.cash, event);
+            fold_closed_floats(&mut state.floats, &mut state.cash, event);
             fold_voids(&mut state.voids, &mut state.revenue, &mut state.cash, event);
             fold_devices(&mut state.devices, event);
             folded = folded.saturating_add(1);
