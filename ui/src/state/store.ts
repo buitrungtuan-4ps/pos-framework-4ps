@@ -902,12 +902,17 @@ export function fold(event: ServerEvent): void {
       const variance = asMoney(payload["variance"]);
       const own = ownDrawer(str(payload, "terminal_device_id"));
       if (shiftId !== null && own === true) {
+        // The shift already held keeps the figures the close's answer gave it (what was paid in and
+        // out, dropped, voided, the report), which the event does not carry: it can reach the live
+        // link after that answer, and replacing the shift with its four figures lost them.
+        const held = state.shift?.shiftId === shiftId ? state.shift : null;
         replaceShift({
+          ...held,
           shiftId,
           state: "SHIFT_STATE_CLOSED",
-          expected: expected ?? undefined,
-          counted: counted ?? undefined,
-          variance: variance ?? undefined,
+          expected: expected ?? held?.expected,
+          counted: counted ?? held?.counted,
+          variance: variance ?? held?.variance,
         });
       } else if (own === null) {
         void loadShift();
