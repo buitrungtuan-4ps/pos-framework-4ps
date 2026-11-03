@@ -26117,6 +26117,11 @@
             "format": "int64",
             "description": "Sum of expected drawer amounts across closes. Only a close carries one: the edge works out\nwhat a drawer should hold at its close, so a shift still open adds nothing here."
           },
+          "handover_difference": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of this drawer's handover differences (ADR-0187): each incoming float less the outgoing\ncount it took over. Left out while there was none."
+          },
           "opening_float": {
             "type": "integer",
             "format": "int64",
@@ -27799,6 +27804,16 @@
               "type": "string"
             }
           },
+          "by_shift": {
+            "type": "object",
+            "description": "Each shift's own figures, keyed by shift id, so a drawer whose shifts are not linked by a\nhandover reads one row per shift rather than a sum that may count carried cash twice. Left\nout while there was none.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ShiftCash"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "closed_float": {
             "type": "integer",
             "format": "int64",
@@ -27822,6 +27837,11 @@
             "type": "integer",
             "format": "int64",
             "description": "Sum of expected drawer amounts across closes."
+          },
+          "handover_difference": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of the handover differences on the day\n([ADR-0187](../../../docs/adr/0187-a-shift-is-handed-over-at-the-till-and-read-there.md)\ndecision 2): each incoming float less the outgoing count it took over. Left out while there\nwas none."
           },
           "opening_float": {
             "type": "integer",
@@ -33520,6 +33540,68 @@
           "setup_token": {
             "type": "string",
             "description": "The one-time setup token (`bootstrap.sh` minted it into `cloud.toml`)."
+          }
+        }
+      },
+      "ShiftCash": {
+        "type": "object",
+        "description": "One shift's cash on a day (part of [`DailyCash`]): its drawer, its float, its movements, and its\nclose's figures once it closed. T2, money only: no person.",
+        "required": [
+          "drawer",
+          "opening_float",
+          "paid_in",
+          "paid_out",
+          "expected",
+          "counted",
+          "variance"
+        ],
+        "properties": {
+          "closed": {
+            "type": "boolean",
+            "description": "Whether it closed on the day, which gives the three figures below."
+          },
+          "counted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its close's count."
+          },
+          "drawer": {
+            "type": "string",
+            "description": "The drawer, as [`DailyCash::by_drawer`] keys it."
+          },
+          "dropped": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its drops to the safe."
+          },
+          "expected": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its close's expected amount."
+          },
+          "handed_over": {
+            "type": "boolean",
+            "description": "Whether it opened by taking the drawer over from the shift just closed on it (ADR-0187)."
+          },
+          "opening_float": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its opening float, where it opened on the day."
+          },
+          "paid_in": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its paid-in movements."
+          },
+          "paid_out": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its paid-out movements."
+          },
+          "variance": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Its close's variance; negative is short."
           }
         }
       },

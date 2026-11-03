@@ -63,7 +63,7 @@ impl<S: EventStore> Edge<S> {
         assignee: Option<EmployeeId>,
     ) -> Result<ShiftView, AppError> {
         let float = (opening_float, CountBreakdown::default());
-        self.open_shift_counted(actor, scope, float, approval, assignee)
+        self.open_shift_counted(actor, scope, float, approval, assignee, None)
             .await
     }
 
@@ -73,8 +73,16 @@ impl<S: EventStore> Edge<S> {
     ///
     /// # Errors
     ///
+    /// Where the opening takes the drawer over at a handover
+    /// ([ADR-0187](../../../../../docs/adr/0187-a-shift-is-handed-over-at-the-till-and-read-there.md)
+    /// decision 2), `handed_over_from` names the shift just closed on that drawer, which
+    /// `cash.shift.opened` records: the float is then that shift's cash carried on.
+    ///
+    /// # Errors
+    ///
     /// [`AppError::CountDoesNotAddUp`] where the breakdown does not come to the float, before
-    /// anything else is checked, and otherwise as [`Self::open_shift_at`].
+    /// anything else is checked; [`AppError::NotTheShiftHandedOver`] where `handed_over_from` is not
+    /// the shift that drawer closed last; and otherwise as [`Self::open_shift_at`].
     pub async fn open_shift_counted(
         &self,
         actor: Actor,
@@ -82,6 +90,7 @@ impl<S: EventStore> Edge<S> {
         (opening_float, breakdown): (Money, CountBreakdown),
         approval: Option<&Approval>,
         assignee: Option<EmployeeId>,
+        handed_over_from: Option<ShiftId>,
     ) -> Result<ShiftView, AppError> {
         if !breakdown.adds_up_to(opening_float) {
             return Err(AppError::CountDoesNotAddUp);
@@ -91,8 +100,14 @@ impl<S: EventStore> Edge<S> {
         // state it happens to be in.
         self.refuse_if_superseded()?;
         let (till, another) = self.drawer_named(scope)?;
-        if self.lock_projection().open_shift_of(till).is_some() {
-            return Err(AppError::ShiftAlreadyOpen);
+        {
+            let projection = self.lock_projection();
+            if projection.open_shift_of(till).is_some() {
+                return Err(AppError::ShiftAlreadyOpen);
+            }
+            if handed_over_from.is_some() && handed_over_from != projection.last_closed_of(till) {
+                return Err(AppError::NotTheShiftHandedOver);
+            }
         }
         let owner = self.owner_of_start(actor, another, assignee)?;
         let mut ctx = self.decision_ctx(actor)?;
@@ -109,6 +124,8 @@ impl<S: EventStore> Edge<S> {
             assigned_employee_id: owner,
             denomination_counts: breakdown.denomination_counts,
             uncounted_amount: breakdown.uncounted_amount,
+            // Absent for a float brought to the drawer, which writes today's bytes (ADR-0187).
+            handed_over_from_shift_id: handed_over_from,
         };
         let step_ups = [(Permission::ManageOtherTill, approver)];
         self.commit_approved(&ctx, &payload, self.current_shift_id(), &step_ups)

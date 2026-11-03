@@ -189,4 +189,39 @@ describe("the X/Z report's drawers", () => {
     expect(row?.slice(3, 5)).toEqual([vnd(30_000), vnd(1_000_000)]);
     expect(screen.getByText("Dropped to safe")).toBeTruthy();
   });
+
+  // ADR-0187 and UX-3: a drawer handed over at the till is one row whose cash counts once, with its
+  // handover difference; one whose shifts name no handover lists each shift, not a sum.
+  it("reads a handed-over drawer once and lists the shifts of one that was not", async () => {
+    const shift = (drawer: string, float: number, closed: [number, number], handed_over = false) => ({
+      drawer,
+      handed_over,
+      opening_float: float,
+      paid_in: 0,
+      paid_out: 0,
+      closed: true,
+      expected: closed[0],
+      counted: closed[1],
+      variance: closed[1] - closed[0],
+    });
+    const bar = { ...drawer(1_000_000, [0, 85_000], [2_212_000, 2_195_000]), shifts_opened: 2, shifts_closed: 2, handover_difference: -10_000 };
+    const counter = { ...drawer(1_280_000, [0, 0], [3_000_000, 2_990_000]), shifts_opened: 2, shifts_closed: 2 };
+    const day = report(bar, { [BAR]: bar, [GONE]: counter }, { [BAR]: "Bar till", [GONE]: "Counter" });
+    day.cash.by_shift = {
+      "01SHIFTA": shift(BAR, 1_000_000, [1_787_000, 1_780_000]),
+      "01SHIFTB": shift(BAR, 1_770_000, [2_195_000, 2_195_000], true),
+      "01SHIFTC": shift(GONE, 500_000, [1_073_000, 1_043_000]),
+      "01SHIFTD": shift(GONE, 780_000, [1_927_000, 1_947_000]),
+    };
+    xzReport.mockResolvedValue(day);
+    render(() => <Reports />);
+
+    const rows = await drawerRowsShown();
+    expect(rows.map((row) => [row[0], row[1], row[6], row[9], row[10]])).toEqual([
+      ["Bar till", vnd(1_000_000), vnd(2_212_000), vnd(-10_000), vnd(-17_000)],
+      ["CounterShift 1", vnd(500_000), vnd(1_073_000), vnd(0), vnd(-30_000)],
+      ["CounterShift 2", vnd(780_000), vnd(1_927_000), vnd(0), vnd(20_000)],
+    ]);
+    expect(screen.getByText("Handover difference")).toBeTruthy();
+  });
 });

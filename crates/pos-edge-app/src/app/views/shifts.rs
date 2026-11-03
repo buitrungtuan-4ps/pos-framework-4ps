@@ -80,6 +80,34 @@ pub struct ShiftHeader {
     pub variance_reason: Option<PublishedReasonCode>,
 }
 
+/// The slip a handover prints
+/// ([ADR-0187](../../../../../docs/adr/0187-a-shift-is-handed-over-at-the-till-and-read-there.md)
+/// decision 3): the till, the time, what the outgoing shift counted and what the incoming one counted
+/// as its float, each with its notes, and the difference. Names no person: the shifts' own records
+/// say who acted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandoverSlip {
+    /// The till's name, as its `TERMINAL` entry gives it; `None` for the store's one drawer.
+    pub till_name: Option<DisplayName>,
+    /// When the incoming shift opened, `YYYY-MM-DD HH:MM` in the store's timezone.
+    pub handed_over_at: Option<String>,
+    /// The shift that closed.
+    pub outgoing_shift_id: ShiftId,
+    /// What it counted at its close.
+    pub outgoing_count: Money,
+    /// That count note by note, where it was counted so; empty for one typed amount.
+    pub outgoing_breakdown: CountBreakdown,
+    /// The shift that took the drawer over.
+    pub incoming_shift_id: ShiftId,
+    /// What it counted in, its float.
+    pub incoming_count: Money,
+    /// That count note by note, where it was counted so.
+    pub incoming_breakdown: CountBreakdown,
+    /// The incoming count less the outgoing one: zero where both agree, negative where less was
+    /// found than was counted out.
+    pub difference: Money,
+}
+
 impl ShiftReport {
     /// The drawer's figures, as its report prints them.
     #[must_use]

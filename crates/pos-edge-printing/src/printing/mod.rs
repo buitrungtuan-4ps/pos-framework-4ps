@@ -74,6 +74,7 @@ use crate::paper_labels::PaperLabels;
 
 mod agents;
 mod blocks;
+mod cash_reads;
 mod devices;
 mod dispatch;
 mod documents;
@@ -85,6 +86,7 @@ mod transports;
 
 pub use agents::{AgentDispatch, AgentLane};
 pub use blocks::{MoneyStyle, short_reference};
+pub use cash_reads::handover_slip_document;
 pub use devices::{
     TillPrinting, connection_of, drawer_printer, published_printers, published_terminals,
     receipt_printer, station_printer,

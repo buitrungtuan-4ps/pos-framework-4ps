@@ -62,7 +62,7 @@ pub use session::EdgeSession;
 pub use views::{
     BillCheckView, BillView, BumpView, BuyerDetails, CashMovement, ClosedDrawers, CombinedReport,
     CounterOrderLine, CounterOrderOpened, CounterOrderView, DrawerFigures, DrawerView, DrawersView,
-    FiredLine, LineDraft, LineView, LiveOrderLine, LiveOrderView, MAX_SETTLED_LISTED,
+    FiredLine, HandoverSlip, LineDraft, LineView, LiveOrderLine, LiveOrderView, MAX_SETTLED_LISTED,
     OrderLineChoice, PreBill, ReceiptCopy, ReceiptLine, SettledBillView, SettledVoidView,
     ShiftHeader, ShiftReport, ShiftView, TableView, Takings, TillScope, TransferView, WaitingLine,
 };
@@ -155,6 +155,9 @@ struct Projection {
     /// every event minted while the store's is open carries its id. A drawer leaves when its shift
     /// closes, so this holds at most one entry per drawer the store keeps.
     open_shifts: HashMap<Option<DeviceId>, ShiftId>,
+    /// The shift each drawer closed last, which a handover may take over (ADR-0187 decision 2). One
+    /// entry a drawer, as `open_shifts`.
+    last_closed: HashMap<Option<DeviceId>, ShiftId>,
     /// The lines a station has bumped (marked prepared, `kitchen.ticket.bumped`). Tracked apart from
     /// [`OrderLineState`] because a bump is orthogonal to the line's order state (a fired line is
     /// still "fired" once made); this is what lets a second KDS agree that a ticket is done.

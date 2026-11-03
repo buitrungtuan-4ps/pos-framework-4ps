@@ -585,6 +585,7 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
         AppError::DrawerAssignedToAnother => "DRAWER_ASSIGNED_TO_ANOTHER",
         AppError::AssigneeRequired => "ASSIGNEE_REQUIRED",
         AppError::CountDoesNotAddUp => "COUNT_DOES_NOT_ADD_UP",
+        AppError::NotTheShiftHandedOver => "NOT_THE_SHIFT_HANDED_OVER",
         AppError::ModifierSelectionInvalid => "MODIFIER_SELECTION_INVALID",
         AppError::ChannelNotAccepted => "CHANNEL_NOT_ACCEPTED",
         AppError::ItemNotSellable => "ITEM_NOT_SELLABLE",
@@ -646,6 +647,7 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::DrawerCounted
         | AppError::DrawerAssignedToAnother
         | AppError::AssigneeRequired
+        | AppError::NotTheShiftHandedOver
         | AppError::ModifierSelectionInvalid
         | AppError::ChannelNotAccepted
         | AppError::ItemNotSellable

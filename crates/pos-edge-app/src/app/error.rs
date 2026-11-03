@@ -226,6 +226,11 @@ pub enum AppError {
     /// amount it records ([ADR-0186](../../../../docs/adr/0186-a-drawer-is-counted-by-denomination.md)).
     #[error("the notes counted do not add up to the amount")]
     CountDoesNotAddUp,
+    /// An opening named a shift it took over that is not the shift last closed on that drawer
+    /// ([ADR-0187](../../../../docs/adr/0187-a-shift-is-handed-over-at-the-till-and-read-there.md)
+    /// decision 2): a handover carries on the cash of the shift just closed, and no other.
+    #[error("a handover takes over the shift just closed on this drawer")]
+    NotTheShiftHandedOver,
 
     /// The modifiers a line names break a group's selection rule, or belong to no group the item
     /// attaches ([ADR-0127](../../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).

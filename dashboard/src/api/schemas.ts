@@ -25,6 +25,7 @@ export type TaxComponentTotal = Schemas["TaxComponentTotal"];
 export type FeeTotal = Schemas["FeeTotal"];
 export type CashTotals = Schemas["CashTotals"];
 export type DailyCash = Schemas["DailyCash"];
+export type ShiftCash = Schemas["ShiftCash"];
 export type TranslationGrid = Schemas["TranslationGrid"];
 export type TranslationImportRow = Schemas["ImportRow"];
 export type TranslationImportReport = Schemas["ImportReport"];

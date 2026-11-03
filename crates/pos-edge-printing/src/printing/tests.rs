@@ -23,6 +23,7 @@ use std::sync::{Arc, Mutex};
 use super::{AgentDispatch, KICK_WAIT};
 
 mod agents;
+mod cash_reads;
 mod devices;
 mod drawer;
 mod fonts;

@@ -10,6 +10,7 @@
 pub mod drops;
 pub mod floats;
 pub mod from_log;
+pub mod handovers;
 pub mod mix;
 pub mod projection;
 pub mod rollup;

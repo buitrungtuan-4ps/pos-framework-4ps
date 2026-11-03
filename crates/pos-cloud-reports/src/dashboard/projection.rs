@@ -28,6 +28,7 @@ use crate::types::{AdmittedDevice, DailyCash, DailyRevenue, DailyRollup, XzRepor
 
 use super::drops::fold_drops;
 use super::floats::{KeptFloats, fold_closed_floats};
+use super::handovers::{KeptHandovers, fold_handovers};
 use super::mix::{KeptLines, fold_line_updates};
 use super::voids::{KeptBills, fold_voids};
 
@@ -99,6 +100,12 @@ pub struct StoredRollups {
     /// written before it loads with none, and a shift opened before then adds no closed float.
     #[serde(default)]
     pub floats: KeptFloats,
+    /// Each drawer's last close and each open shift that took a drawer over, kept so a handover's
+    /// cash counts once; see [`fold_handovers`]. In this blob for `devices`' reason.
+    /// `#[serde(default)]`, so a blob written before it loads with none, and a handover opened
+    /// before then reads as two shifts until the rollup is reset.
+    #[serde(default)]
+    pub handovers: KeptHandovers,
 }
 
 /// The store that persists materialised rollups (a table in `store-postgres`; a fake in tests).
@@ -195,6 +202,7 @@ where
             fold_cash(&mut state.cash, event);
             fold_closed_floats(&mut state.floats, &mut state.cash, event);
             fold_drops(&mut state.cash, event);
+            fold_handovers(&mut state.handovers, &mut state.cash, event);
             fold_voids(&mut state.voids, &mut state.revenue, &mut state.cash, event);
             fold_devices(&mut state.devices, event);
             folded = folded.saturating_add(1);
