@@ -2506,6 +2506,51 @@ test("a bill split three ways settles with each guest's own tender, and the cash
   }
 });
 
+/** The rendered font size of the first element `locator` matches, in pixels. */
+async function fontSize(locator) {
+  return locator.first().evaluate((element) => Number.parseFloat(getComputedStyle(element).fontSize));
+}
+
+// The change is what the cashier does next, so it is the largest figure once a cash payment settles,
+// at a table and at the counter (UX-15). It was a line of small grey text under the receipt number.
+test("the change to hand back is the largest figure once cash settles", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await page.route("**/api/locale", async (route) => {
+      const response = await fetchWhole(route);
+      const body = await response.json();
+            // One note, larger than either sale: the key after "Exact" is that note whether or not the
+      // amount has landed when it is tapped, so the change is never nothing.
+      const notes = [500_000]; await route.fulfill({ response, json: { ...body, cash_denominations: notes } });
+    });
+    await pair(page, edge);
+    await signIn(page, edge);
+    for (const reach of [
+      async () => {
+        await seatTable(page);
+        await addItem(page);
+        await sendThenTakePayment(page);
+      },
+      async () => {
+        await aWalkInToCharge(page);
+        await page.locator('[data-step="charge"]').first().click();
+      },
+    ]) {
+      await reach();
+      await page.locator('[data-step="setTender"]').nth(1).click();
+      await page.locator('[data-step="payCash"]').click();
+      const settled = page.locator('[data-outcome="settled"]');
+      await expect(settled).toBeVisible();
+      const change = page.locator('[data-outcome="change-due"]');
+      await expect(change).toBeVisible();
+      expect(await fontSize(change)).toBeGreaterThan(await fontSize(settled));
+      await page.locator('a[href="/"]').first().click();
+    }
+  } finally {
+    await edge.stop();
+  }
+});
+
 // An even split is kept for its bill (UX-5): a reload, or leaving and coming back, finds the share
 // already taken still taken, and only the rest owed. It used to be forgotten, and the reopened bill
 // was taken whole after a guest had paid their half. Leaving with a share taken asks first.

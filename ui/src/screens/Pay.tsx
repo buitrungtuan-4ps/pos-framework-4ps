@@ -1506,10 +1506,10 @@ export function Pay() {
             <p class="mt-2 tabular-nums">
               {t("pay.receipt", { number: bill().receipt_number ?? 0 })}
             </p>
-            <p class="mt-1 text-ink-muted">
-              {t("pay.change")}:{" "}
-              <span class="tabular-nums">{formatAmount(money(currency(), givenChange()))}</span>
-            </p>
+            {/* The change is what the cashier acts on next, so it is the largest figure here (UX-15). */}
+            <Show when={givenChange() > 0}>
+              <p class="mt-3 text-sm text-ink-muted">{t("pay.change")}<span class="block text-4xl font-semibold text-ink tabular-nums" data-outcome="change-due">{formatAmount(money(currency(), givenChange()))}</span></p>
+            </Show>
             <Show when={bill().print_receipt}>
               <p
                 class="mt-1 text-sm"
