@@ -33,7 +33,7 @@
     "max-lines-per-function": 129
   },
   "src/screens/Takeaway.tsx": {
-    "max-lines-per-function": 449
+    "max-lines-per-function": 447
   },
   "src/screens/Today.tsx": {
     "max-lines-per-function": 163

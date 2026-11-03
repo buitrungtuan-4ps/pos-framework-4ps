@@ -3665,6 +3665,47 @@ test("a new counter order is opened by its first item, and leaving before then l
   }
 });
 
+// A counter bill takes money off and is voided as a table's is (UX-10), with the same panels: the
+// counter's pay pad offered neither, so a walk-in that needed either went to a manager elsewhere.
+test("a counter bill takes a discount and is voided like a table's", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await aWalkInToCharge(page);
+    await page.locator('[data-step="charge"]').first().click();
+    const total = page.locator("p.text-2xl.tabular-nums").first();
+    await expect(total).toHaveText(/\d/);
+    const before = Number((await total.textContent()).replace(/[^0-9]/g, ""));
+
+    const manager = async (panel) => {
+      const code = page.locator(`#${panel}-approver-code`);
+      if ((await code.count()) > 0) {
+        await code.fill(edge.staffCode);
+        await page.locator(`#${panel}-approver-pin`).fill(edge.staffPin);
+      }
+    };
+    await page.locator('[data-outcome="counter-discount"]').click();
+    await page.locator("#discount-amount").fill("10000");
+    await manager("discount");
+    await page.locator('[data-step="discountReason"]').first().click();
+    await expect(page.locator("#discount-amount")).toHaveCount(0);
+    const after = Number((await total.textContent()).replace(/[^0-9]/g, ""));
+    expect(after).toBeLessThan(before);
+
+    await page.locator('[data-outcome="counter-void"]').click();
+    await manager("void-bill");
+    await page.locator('[data-step="voidBillReason"]').first().click();
+    await expect(page.locator('[data-outcome="bill-voided"]')).toBeVisible();
+    // The order is still there to charge again, on a new bill.
+    await page.locator('[data-step="charge"]').first().click();
+    await page.locator('[data-step="payCard"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A store whose walk-ins are eaten in sells them from the dining room's book (ADR-0160 decision 2).
 //
 // `POS_DEMO_PROFILE=walk-in-dine-in` prices the garden salad at 89,000₫ in the dining room and
