@@ -137,6 +137,7 @@ pub struct TimeSlot {
 
 /// One variant of a package part: what a till shows or runs when its selector is the one chosen.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Variant<T> {
     /// When the variant applies. Empty for the part's base variant.
     #[serde(default, skip_serializing_if = "VariantSelector::is_base")]
@@ -151,21 +152,25 @@ pub struct Variant<T> {
 /// The device dimension is stated by `device_id` or by `device_class`, never both, which the cloud
 /// refuses at publish. A token from a newer release states its dimension and matches nothing here.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct VariantSelector {
     /// One device.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub device_id: Option<DeviceId>,
     /// Every device of a class.
     #[serde(default, skip_serializing_if = "is_absent")]
     pub device_class: Open<DeviceClass>,
     /// The role a signed-in person holds, by its role id in the tenant's people.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub role_id: Option<Ulid>,
     /// The sales channel of the order on screen.
     #[serde(default, skip_serializing_if = "is_absent")]
     pub sales_channel: Open<SalesChannel>,
     /// A time slot of the package, by its id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub time_slot_id: Option<String>,
 }
 

@@ -35,6 +35,7 @@ fn version(seed: u128, package: &PackageRecord, n: u128, label: &str) -> Package
             version_label: label.to_owned(),
             min_edge_version: ReleaseTag::new("0.14.1"),
             time_slots: Vec::new(),
+            flows: Vec::new(),
         },
         create_time: at(2_000),
     }
