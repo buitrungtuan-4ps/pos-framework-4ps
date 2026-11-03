@@ -175,6 +175,7 @@
   "error.shift_already_open": "Đã có ca đang mở. Hãy kiểm đếm và đóng ca đó trước.",
   "error.shift_not_open": "Ca này không còn nhận thu, chi tiền: ca đã đếm tiền hoặc đã đóng.",
   "error.drawer_counted": "Két này đang được chốt ca. Hãy thu khoản này ở máy POS khác, hoặc bằng thẻ.",
+  "error.flow_prerequisite_unmet": "Quy trình của cửa hàng yêu cầu làm bước khác trước ({step}). Hãy làm bước đó rồi thử lại.",
   "error.split_not_a_partition": "Mỗi món phải nằm đúng ở một phần khi tách hoá đơn.",
   "error.store_unavailable": "Cửa hàng chưa lưu được thao tác. Hãy thử lại; nếu vẫn lỗi, khởi động lại máy chủ cửa hàng hoặc gọi hỗ trợ.",
   "error.superseded": "Máy này đã được thay thế. Hãy hoàn tất các bàn đang mở và nhập đơn mới ở máy mới.",

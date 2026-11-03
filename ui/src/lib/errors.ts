@@ -115,6 +115,12 @@ export function errorMessage(
   if (!(caught instanceof ApiError)) {
     return t("common.store_error");
   }
+  // A step of the store's flow comes first (ADR-0192): named, so the operator can do it and a
+  // manager can fix the guard. The edge's sentence carries the step's id.
+  if (caught.reason === "FLOW_PREREQUISITE_UNMET") {
+    const step = /step (\S+) of flow/.exec(caught.message)?.[1] ?? "";
+    return t("error.flow_prerequisite_unmet", { step });
+  }
   const key = caught.reason === null ? undefined : (own[caught.reason] ?? REASONS[caught.reason]);
   return key === undefined ? caught.message : t(key);
 }

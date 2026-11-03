@@ -9,13 +9,17 @@
 //! when the node does not read as a `package` node, when its content breaks a rule the cloud checks
 //! at publish, or when it needs a newer edge than this one.
 //!
-//! The flows a package carries are re-checked by the flow engine's own apply (ADR-0192), which
-//! needs the rule evaluator this crate does not hold.
+//! The flows a package carries are checked here too (ADR-0192 decision 2), with the rule evaluator
+//! `pos_edge_app::app::flows` holds: limits, ids, references, cycles, and every condition compiled,
+//! an edge guard's reading only what the edge holds. Until a package carries its screens (ADR-0190),
+//! a step's `screen_id` is not resolved here.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
+use pos_core::flow::check_flows;
 use pos_core::ota::ReleaseVersion;
 use pos_core::package::check_content;
+use pos_edge_app::app::flows::EdgeConditions;
 use pos_proto::package::{PackageContent, PublishedPackage};
 
 /// Why the edge refuses a document's package.
@@ -99,6 +103,12 @@ pub fn checked_package(
         return Ok(None);
     };
     check_content(&content).map_err(|refusal| PackageRefusal::Invalid(refusal.to_string()))?;
+    check_flows(
+        &content.flows,
+        &|_screen| true,
+        &EdgeConditions::for_apply(),
+    )
+    .map_err(|refusal| PackageRefusal::Invalid(refusal.to_string()))?;
     let needed = ReleaseVersion::parse(content.min_edge_version.as_str().trim_start_matches('v'));
     match (needed, edge_release) {
         (Some(needed), Some(release)) if release >= needed => Ok(Some(Arc::new(content))),
@@ -181,6 +191,61 @@ mod tests {
     }
 
     const EDGE: Option<ReleaseVersion> = Some(ReleaseVersion::new(0, 14, 1));
+
+    /// The document with `flows` in its content.
+    fn with_flows(flows: Value) -> Value {
+        let mut document = document("0.14.1", "March");
+        document["package"]["content"]["flows"] = flows;
+        document
+    }
+
+    /// Guest count first, as roadmap-v3 B8.4 asks: the edge sees it from the order's own count.
+    fn guest_count_first(done_when: &str) -> Value {
+        json!([{ "body": {
+            "flow_id": "dine_in",
+            "start_action_id": "sales.table.seat",
+            "steps": [
+                { "step_id": "guests", "action_id": "sales.table.seat",
+                  "kind": "STEP_KIND_REQUIRED", "done_when": done_when },
+                { "step_id": "first_line", "action_id": "sales.line.add",
+                  "kind": "STEP_KIND_REQUIRED", "prerequisites": ["guests"] },
+            ],
+        }}])
+    }
+
+    /// A package's flows are checked on apply (ADR-0192 decision 2): a guard over the order's own
+    /// facts passes; one that reads the till's view, does not compile, or waits on itself in a
+    /// cycle refuses the whole package.
+    #[test]
+    fn a_packages_flows_are_checked_on_apply() {
+        let passes = with_flows(guest_count_first(
+            "has(order.guest_count) && order.guest_count > 0",
+        ));
+        let content = checked_package(&passes, EDGE)
+            .expect("passes")
+            .expect("a package");
+        assert_eq!(content.flows.len(), 1);
+
+        for done_when in [
+            "device == 'DEVICE_CLASS_TABLET'",
+            "order.items.all(i, i > 0)",
+            "order.total * 1.5 > 0",
+        ] {
+            assert_eq!(
+                checked_package(&with_flows(guest_count_first(done_when)), EDGE)
+                    .map_err(|refusal| refusal.reason()),
+                Err("PACKAGE_INVALID"),
+                "{done_when}"
+            );
+        }
+
+        let mut cycle = guest_count_first("has(order.guest_count)");
+        cycle[0]["body"]["steps"][0]["prerequisites"] = json!(["first_line"]);
+        assert_eq!(
+            checked_package(&with_flows(cycle), EDGE).map_err(|refusal| refusal.reason()),
+            Err("PACKAGE_INVALID")
+        );
+    }
 
     #[test]
     fn a_document_that_pins_nothing_carries_no_package() {

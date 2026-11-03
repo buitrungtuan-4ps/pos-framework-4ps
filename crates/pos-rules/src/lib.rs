@@ -152,6 +152,13 @@ pub struct Condition {
 }
 
 impl Condition {
+    /// Whether the condition reads `variable`: an edge guard may read only what the edge holds
+    /// (ADR-0192 decision 4).
+    #[must_use]
+    pub fn reads(&self, variable: Variable) -> bool {
+        self.program.references().has_variable(variable.as_str())
+    }
+
     /// Answers the condition over `facts`.
     ///
     /// # Errors
