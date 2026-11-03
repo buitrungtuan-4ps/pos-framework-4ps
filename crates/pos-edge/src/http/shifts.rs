@@ -48,9 +48,11 @@ use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
 use pos_core::business_date::StoreTimeZone;
+use pos_core::cash_count::CountBreakdown;
 use pos_core::decision::Actor;
 use pos_ports::event_store::EventStore;
 use pos_proto::WireEnum;
+use pos_proto::events::DenominationCount;
 use pos_proto::ids::{DeviceId, EmployeeId, EventId, ReasonCodeId, ShiftId};
 use pos_proto::money::Money;
 use pos_proto::shift::{DrawerAccess, DrawerModel};
@@ -94,6 +96,12 @@ pub(crate) struct OpenRequest {
     approver_code: Option<String>,
     #[serde(default)]
     approver_pin: Option<String>,
+    /// The float note by note (ADR-0186), adding up to `opening_float` with `uncounted_amount`.
+    #[serde(default)]
+    denomination_counts: Vec<DenominationCount>,
+    /// What `denomination_counts` does not name.
+    #[serde(default)]
+    uncounted_amount: Option<Money>,
 }
 
 /// The blind count: the physical cash counted, in minor units. Nothing about what was expected.
@@ -105,6 +113,12 @@ pub(crate) struct CountRequest {
     approver_code: Option<String>,
     #[serde(default)]
     approver_pin: Option<String>,
+    /// The count note by note (ADR-0186), adding up to `counted_minor` with `uncounted_amount`.
+    #[serde(default)]
+    denomination_counts: Vec<DenominationCount>,
+    /// What `denomination_counts` does not name.
+    #[serde(default)]
+    uncounted_amount: Option<Money>,
 }
 
 /// A close's optional body: the approver for another till's drawer, and the reason for an over or
@@ -229,6 +243,14 @@ pub(crate) struct ShiftResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(nullable = false))]
     voided_after_payment: Option<VoidedAfterPaymentResponse>,
+    /// At its close, the count note by note where it was counted so (ADR-0186), for the close
+    /// card. Absent before the close and for a count typed as one amount.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    counted_denominations: Vec<DenominationCount>,
+    /// At its close, what that count's rows do not name. Absent where there is none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    uncounted_amount: Option<Money>,
 }
 
 /// A closed shift's voids after payment, for its close card (ADR-0184).
@@ -257,6 +279,15 @@ impl From<ShiftView> for ShiftResponse {
             shift_report_print: None,
             drawer_open: None,
             day_ended: view.day_ended,
+            counted_denominations: view
+                .report
+                .as_ref()
+                .map(|report| report.count_breakdown.denomination_counts.clone())
+                .unwrap_or_default(),
+            uncounted_amount: view
+                .report
+                .as_ref()
+                .and_then(|report| report.count_breakdown.uncounted_amount),
             voided_after_payment: view.report.filter(|report| report.voided_bills > 0).map(
                 |report| VoidedAfterPaymentResponse {
                     bills: report.voided_bills,
@@ -275,7 +306,9 @@ impl From<ShiftView> for ShiftResponse {
     request_body(
         content = OpenRequest, description = "`opening_float`, with optional `terminal_device_id` for another till's drawer, \
                        `assigned_employee_id` or `assigned_staff_code` for whom it is for, and \
-                       `approver_code` and `approver_pin`. Both are secrets and are never logged",
+                       `approver_code` and `approver_pin`. Both are secrets and are never logged. \
+                       Optionally `denomination_counts` and `uncounted_amount`, the float note by \
+                       note, which must add up to `opening_float` (ADR-0186)",
         content_type = "application/json",
     ),
     responses(
@@ -288,6 +321,8 @@ impl From<ShiftView> for ShiftResponse {
                                       approver is locked out; or this box was superseded by a replacement"),
         (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
                                       state the command applies to. `pos-error-reason` names which"),
+        (status = 422, description = "`COUNT_DOES_NOT_ADD_UP`: the notes counted and the uncounted amount do \
+                                      not add up to the amount (ADR-0186); nothing was recorded"),
         (status = 503, description = "The store is unavailable, or the till this device is could not be \
                                       read; nothing was recorded"),
         (status = 500, description = "The edge could not apply the command"),
@@ -324,11 +359,15 @@ where
         let code = request.assigned_staff_code.as_deref()?;
         edge.employee_with_code(code.trim())
     });
+    let breakdown = CountBreakdown {
+        denomination_counts: request.denomination_counts,
+        uncounted_amount: request.uncounted_amount,
+    };
     respond(
-        edge.open_shift_at(
+        edge.open_shift_counted(
             actor,
             scope,
-            request.opening_float,
+            (request.opening_float, breakdown),
             approval.as_ref(),
             assignee,
         )
@@ -526,7 +565,9 @@ where
     ),
     request_body(
         content = CountRequest, description = "`counted_minor`, the cash counted in minor units, with `approver_code` and \
-                       `approver_pin` for another till's drawer. Both are secrets and are never logged",
+                       `approver_pin` for another till's drawer. Both are secrets and are never logged. \
+                       Optionally `denomination_counts` and `uncounted_amount`, the count note by note, \
+                       which must add up to `counted_minor` (ADR-0186)",
         content_type = "application/json",
     ),
     responses(
@@ -540,6 +581,8 @@ where
                                       approver is locked out; or this box was superseded by a replacement"),
         (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
                                       state the command applies to. `pos-error-reason` names which"),
+        (status = 422, description = "`COUNT_DOES_NOT_ADD_UP`: the notes counted and the uncounted amount do \
+                                      not add up to the amount (ADR-0186); nothing was recorded"),
         (status = 503, description = "The store is unavailable, or the till this device is could not be \
                                       read; nothing was recorded"),
         (status = 500, description = "The edge could not apply the command"),
@@ -568,12 +611,16 @@ where
         request.approver_code.as_ref(),
         request.approver_pin.as_ref(),
     );
+    let breakdown = CountBreakdown {
+        denomination_counts: request.denomination_counts,
+        uncounted_amount: request.uncounted_amount,
+    };
     respond(
-        edge.count_shift_at(
+        edge.count_shift_counted(
             actor,
             scope,
             shift_id,
-            request.counted_minor,
+            (request.counted_minor, breakdown),
             approval.as_ref(),
         )
         .await,

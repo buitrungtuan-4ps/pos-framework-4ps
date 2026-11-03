@@ -37,6 +37,7 @@ pub mod billing;
 pub mod business_date;
 pub mod campaign;
 pub mod capability;
+pub mod cash_count;
 pub mod channels;
 pub mod decision;
 pub mod device_revocation;

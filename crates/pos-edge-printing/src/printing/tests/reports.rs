@@ -3,6 +3,7 @@
 
 //! The shift reports on paper, and a Vietnamese store's bill and drawer in Vietnamese.
 
+use pos_core::cash_count::CountBreakdown;
 use pos_ports::printer::PrintBlock;
 use pos_proto::money::{CurrencyCode, Money};
 use pos_proto::store_profile::StoreProfile;
@@ -29,6 +30,7 @@ fn a_shift_report_adds_up_on_paper_and_says_over_or_short_in_words() {
         paid_out: vnd(0),
         expected_amount: vnd(1_750_000),
         counted_amount: vnd(counted),
+        count_breakdown: CountBreakdown::default(),
         variance: vnd(counted - 1_750_000),
         voided_bills: 0,
         voided_cash: vnd(0),
@@ -83,6 +85,7 @@ fn a_combined_slip_prints_the_store_totals_then_each_drawer_under_its_tills_name
         paid_out: vnd(0),
         expected_amount: vnd(float + 100_000),
         counted_amount: vnd(counted),
+        count_breakdown: CountBreakdown::default(),
         variance: vnd(counted - float - 100_000),
         voided_bills: 0,
         voided_cash: vnd(0),
@@ -152,6 +155,7 @@ fn a_shift_report_prints_what_was_paid_in_and_out_so_the_expectation_adds_up() {
         paid_out: vnd(150_000),
         expected_amount: vnd(1_800_000),
         counted_amount: vnd(1_800_000),
+        count_breakdown: CountBreakdown::default(),
         variance: vnd(0),
         voided_bills: 0,
         voided_cash: vnd(0),
@@ -176,6 +180,7 @@ fn a_shift_report_prints_what_was_paid_in_and_out_so_the_expectation_adds_up() {
         paid_in: vnd(0),
         expected_amount: vnd(1_600_000),
         counted_amount: vnd(1_600_000),
+        count_breakdown: CountBreakdown::default(),
         ..report.clone()
     };
     let vietnamese = shift_report_document(
@@ -233,6 +238,7 @@ fn a_vietnamese_store_prints_its_bill_and_its_drawer_in_vietnamese() {
         paid_out: vnd(0),
         expected_amount: vnd(1_750_000),
         counted_amount: vnd(1_730_000),
+        count_breakdown: CountBreakdown::default(),
         variance: vnd(-20_000),
         voided_bills: 0,
         voided_cash: vnd(0),
@@ -258,6 +264,7 @@ fn a_shift_report_prints_the_cash_voids_handed_back() {
         paid_out: vnd(0),
         expected_amount: vnd(1_635_000),
         counted_amount: vnd(1_635_000),
+        count_breakdown: CountBreakdown::default(),
         variance: vnd(0),
         voided_bills: 1,
         voided_cash: vnd(115_000),
@@ -284,5 +291,47 @@ fn a_shift_report_prints_the_cash_voids_handed_back() {
             .iter()
             .any(|line| line.starts_with("Voided")),
         "no void, no line"
+    );
+}
+
+#[test]
+fn a_count_made_note_by_note_lists_its_notes_under_the_figures() {
+    // ADR-0186: the rows a supervisor can check pile by pile, and nothing for a typed count.
+    use pos_proto::events::DenominationCount;
+    let vnd = |minor| Money::new(CurrencyCode::VND, minor);
+    let row = |denomination, quantity| DenominationCount {
+        denomination: vnd(denomination),
+        quantity,
+    };
+    let report = ShiftReport {
+        shift_id: pos_proto::ids::ShiftId::new(Ulid::from_u128(7)),
+        opening_float: vnd(500_000),
+        cash_collected: vnd(703_000),
+        paid_in: vnd(0),
+        paid_out: vnd(0),
+        expected_amount: vnd(1_203_000),
+        counted_amount: vnd(1_203_000),
+        count_breakdown: CountBreakdown {
+            denomination_counts: vec![row(500_000, 2), row(100_000, 2)],
+            uncounted_amount: Some(vnd(3_000)),
+        },
+        variance: vnd(0),
+        voided_bills: 0,
+        voided_cash: vnd(0),
+        tax_components: Vec::new(),
+    };
+    let document = shift_report_document(&StoreProfile::default(), &style(0), &ENGLISH, &report);
+    let lines = lines_of(&document);
+    let at = lines
+        .iter()
+        .position(|line| *line == "COUNT BY NOTE")
+        .expect("the rows have a heading");
+    assert_eq!(
+        lines[at + 1..at + 4],
+        [
+            "VND 500,000 x 2  VND 1,000,000",
+            "VND 100,000 x 2  VND 200,000",
+            "Other / uncounted  VND 3,000",
+        ]
     );
 }

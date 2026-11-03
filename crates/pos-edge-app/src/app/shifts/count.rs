@@ -3,6 +3,7 @@
 
 //! Counting a drawer's shift, blind where the store says so.
 
+use pos_core::cash_count::CountBreakdown;
 use pos_core::decision::{Actor, ShiftCommand, decide_shift};
 use pos_core::permission::Permission;
 use pos_ports::event_store::EventStore;
@@ -51,6 +52,31 @@ impl<S: EventStore> Edge<S> {
         counted_minor: i64,
         approval: Option<&Approval>,
     ) -> Result<ShiftView, AppError> {
+        let count = (counted_minor, CountBreakdown::default());
+        self.count_shift_counted(actor, scope, shift_id, count, approval)
+            .await
+    }
+
+    /// [`Self::count_shift_at`] with the drawer counted note by note
+    /// ([ADR-0186](../../../../../docs/adr/0186-a-drawer-is-counted-by-denomination.md)), which
+    /// `cash.shift.counted` records beside the amount and the shift report lists.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::CountDoesNotAddUp`] where the breakdown does not come to the count, and
+    /// otherwise as [`Self::count_shift_at`].
+    pub async fn count_shift_counted(
+        &self,
+        actor: Actor,
+        scope: TillScope,
+        shift_id: ShiftId,
+        (counted_minor, breakdown): (i64, CountBreakdown),
+        approval: Option<&Approval>,
+    ) -> Result<ShiftView, AppError> {
+        let counted_amount = Money::new(self.session().currency, counted_minor);
+        if !breakdown.adds_up_to(counted_amount) {
+            return Err(AppError::CountDoesNotAddUp);
+        }
         let mut ctx = self.decision_ctx(actor)?;
         let record = self
             .lock_projection()
@@ -60,11 +86,12 @@ impl<S: EventStore> Edge<S> {
         let overrider = self.override_assignment(&mut ctx, Some(&record), approval)?;
         let decision = decide_shift(record.state, ShiftCommand::Count { counted_minor }, &ctx)?;
 
-        let counted_amount = Money::new(self.session().currency, counted_minor);
         let payload = CashShiftCounted {
             counted_shift_id: shift_id,
             counted_amount,
             count_time: ctx.now,
+            denomination_counts: breakdown.denomination_counts.clone(),
+            uncounted_amount: breakdown.uncounted_amount,
         };
         let step_ups = [
             (Permission::ManageOtherTill, approver),
@@ -73,8 +100,12 @@ impl<S: EventStore> Edge<S> {
         self.commit_approved(&ctx, &payload, Some(shift_id), &step_ups)
             .await?;
 
-        self.lock_projection()
-            .record_shift_count(shift_id, counted_amount, decision.next_state);
+        self.lock_projection().record_shift_count(
+            shift_id,
+            counted_amount,
+            breakdown,
+            decision.next_state,
+        );
         let counted = ShiftRecord {
             state: decision.next_state,
             counted: Some(counted_amount),

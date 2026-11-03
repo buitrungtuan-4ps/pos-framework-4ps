@@ -4,6 +4,7 @@
 //! What the edge answers about cash shifts and drawers, and the cash movements a drawer takes.
 
 use pos_core::billing::TaxComponentLine;
+use pos_core::cash_count::CountBreakdown;
 use pos_core::error::DomainError;
 use pos_proto::ShiftState;
 use pos_proto::ids::{DeviceId, EmployeeId, ShiftId};
@@ -36,6 +37,8 @@ pub struct ShiftReport {
     pub expected_amount: Money,
     /// What the cashier counted.
     pub counted_amount: Money,
+    /// That count note by note, where it was counted so (ADR-0186); empty for one typed amount.
+    pub count_breakdown: CountBreakdown,
     /// Counted minus expected. Negative means short.
     pub variance: Money,
     /// How many paid bills were voided at this drawer's till during the shift

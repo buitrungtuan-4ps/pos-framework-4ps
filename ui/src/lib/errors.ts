@@ -55,6 +55,8 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
   // approver; another till's drawer started for nobody on the roster (ADR-0167 decision 9).
   DRAWER_ASSIGNED_TO_ANOTHER: "error.drawer_assigned_to_another",
   ASSIGNEE_REQUIRED: "error.assignee_required",
+  // A float or a count typed note by note whose rows do not come to its amount (ADR-0186).
+  COUNT_DOES_NOT_ADD_UP: "error.count_does_not_add_up",
   MODIFIER_SELECTION_INVALID: "error.modifier_selection_invalid",
   CHANNEL_NOT_ACCEPTED: "error.channel_not_accepted",
   ITEM_NOT_SELLABLE: "error.item_not_sellable",

@@ -216,6 +216,10 @@ pub enum AppError {
     /// roster to assign it to (ADR-0167 decision 9).
     #[error("name the person on the store's staff this drawer is for")]
     AssigneeRequired,
+    /// A count or a float entered note by note whose rows and uncounted part do not add up to the
+    /// amount it records ([ADR-0186](../../../../docs/adr/0186-a-drawer-is-counted-by-denomination.md)).
+    #[error("the notes counted do not add up to the amount")]
+    CountDoesNotAddUp,
 
     /// The modifiers a line names break a group's selection rule, or belong to no group the item
     /// attaches ([ADR-0127](../../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).

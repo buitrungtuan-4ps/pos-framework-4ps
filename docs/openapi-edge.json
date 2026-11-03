@@ -2863,7 +2863,7 @@
         "summary": "`POST /api/shifts` — open a shift with a starting float, on the device's own till's drawer or\nthe one the request names.",
         "operationId": "open_shift",
         "requestBody": {
-          "description": "`opening_float`, with optional `terminal_device_id` for another till's drawer, `assigned_employee_id` or `assigned_staff_code` for whom it is for, and `approver_code` and `approver_pin`. Both are secrets and are never logged",
+          "description": "`opening_float`, with optional `terminal_device_id` for another till's drawer, `assigned_employee_id` or `assigned_staff_code` for whom it is for, and `approver_code` and `approver_pin`. Both are secrets and are never logged. Optionally `denomination_counts` and `uncounted_amount`, the float note by note, which must add up to `opening_float` (ADR-0186)",
           "content": {
             "application/json": {
               "schema": {
@@ -2892,6 +2892,9 @@
           },
           "409": {
             "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "422": {
+            "description": "`COUNT_DOES_NOT_ADD_UP`: the notes counted and the uncounted amount do not add up to the amount (ADR-0186); nothing was recorded"
           },
           "500": {
             "description": "The edge could not apply the command"
@@ -3045,7 +3048,7 @@
           }
         ],
         "requestBody": {
-          "description": "`counted_minor`, the cash counted in minor units, with `approver_code` and `approver_pin` for another till's drawer. Both are secrets and are never logged",
+          "description": "`counted_minor`, the cash counted in minor units, with `approver_code` and `approver_pin` for another till's drawer. Both are secrets and are never logged. Optionally `denomination_counts` and `uncounted_amount`, the count note by note, which must add up to `counted_minor` (ADR-0186)",
           "content": {
             "application/json": {
               "schema": {
@@ -3077,6 +3080,9 @@
           },
           "409": {
             "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+          },
+          "422": {
+            "description": "`COUNT_DOES_NOT_ADD_UP`: the notes counted and the uncounted amount do not add up to the amount (ADR-0186); nothing was recorded"
           },
           "500": {
             "description": "The edge could not apply the command"
@@ -4071,7 +4077,7 @@
       },
       "BillFeeLine": {
         "type": "object",
-        "description": "One fee as a settled bill records it\n([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decision 4): which fee, under\nwhich code and name, what it charged, and the tax on it.\n\nThe name is the rule's own as the bill froze it, so a copy of the receipt prints what the\noriginal did after the fee is renamed, as a line's name does (ADR-0129, ADR-0144). No event\ncarries a translation.",
+        "description": "One fee as a settled bill records it\n([ADR-0159](../../../../docs/adr/0159-a-fee-is-configuration.md) decision 4): which fee, under\nwhich code and name, what it charged, and the tax on it.\n\nThe name is the rule's own as the bill froze it, so a copy of the receipt prints what the\noriginal did after the fee is renamed, as a line's name does (ADR-0129, ADR-0144). No event\ncarries a translation.",
         "required": [
           "fee_id",
           "code",
@@ -4105,7 +4111,7 @@
             "items": {
               "$ref": "#/components/schemas/BillTaxComponent"
             },
-            "description": "That tax by component\n([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 3):\nthe tax on each of its class shares split as that class's tax line is, then summed by name\nand rate, so they sum to `tax`.\n\nLeft out when empty, and absent is not zero: it reads as *not split*, which is every fee\ncharged before this field existed and every fee taxed at rates with no components. A\nreader that meets a name it cannot read takes the fee as not split too, and still reads the\nbill."
+            "description": "That tax by component\n([ADR-0168](../../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 3):\nthe tax on each of its class shares split as that class's tax line is, then summed by name\nand rate, so they sum to `tax`.\n\nLeft out when empty, and absent is not zero: it reads as *not split*, which is every fee\ncharged before this field existed and every fee taxed at rates with no components. A\nreader that meets a name it cannot read takes the fee as not split too, and still reads the\nbill."
           }
         }
       },
@@ -4158,7 +4164,7 @@
       },
       "BillTaxComponent": {
         "type": "object",
-        "description": "One named part of a settled tax line's tax, or of a fee's\n([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 3):\n`CGST` at 9 % and the tax it accounts for.",
+        "description": "One named part of a settled tax line's tax, or of a fee's\n([ADR-0168](../../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 3):\n`CGST` at 9 % and the tax it accounts for.",
         "required": [
           "name",
           "rate_basis_points",
@@ -4541,6 +4547,24 @@
           "counted_minor": {
             "type": "integer",
             "format": "int64"
+          },
+          "denomination_counts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DenominationCount"
+            },
+            "description": "The count note by note (ADR-0186), adding up to `counted_minor` with `uncounted_amount`."
+          },
+          "uncounted_amount": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Money",
+                "description": "What `denomination_counts` does not name."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -4626,6 +4650,26 @@
         "type": "string",
         "description": "An ISO 4217 currency code: three upper-case letters",
         "pattern": "^[A-Z]{3}$"
+      },
+      "DenominationCount": {
+        "type": "object",
+        "description": "How many of one note or coin were counted in a drawer: money and a quantity, and nothing about\nwho counted it.\n\n`cash.shift.opened` and `cash.shift.counted` carry a list of these beside an `uncounted_amount`\nfor anything the list does not name; together they add up to the amount the event records.",
+        "required": [
+          "denomination",
+          "quantity"
+        ],
+        "properties": {
+          "denomination": {
+            "$ref": "#/components/schemas/Money",
+            "description": "The note or coin, in the drawer's currency."
+          },
+          "quantity": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many of it were counted.",
+            "minimum": 0
+          }
+        }
       },
       "DeviceId": {
         "type": "string",
@@ -5810,6 +5854,13 @@
             ],
             "description": "The same person by their staff code, which is what a till types. Read only where\n`assigned_employee_id` is absent; a code nobody on the roster has names nobody."
           },
+          "denomination_counts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DenominationCount"
+            },
+            "description": "The float note by note (ADR-0186), adding up to `opening_float` with `uncounted_amount`."
+          },
           "opening_float": {
             "$ref": "#/components/schemas/Money"
           },
@@ -5818,6 +5869,17 @@
               {
                 "$ref": "#/components/schemas/DeviceId",
                 "description": "Another till's drawer to open, where the store keeps one per till. Absent is the device's\nown, and where the store keeps one drawer it is ignored."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "uncounted_amount": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Money",
+                "description": "What `denomination_counts` does not name."
               },
               {
                 "type": "null"
@@ -6692,6 +6754,13 @@
           "counted_amount": {
             "$ref": "#/components/schemas/Money"
           },
+          "counted_denominations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DenominationCount"
+            },
+            "description": "At its close, the count note by note where it was counted so (ADR-0186), for the close\ncard. Absent before the close and for a count typed as one amount."
+          },
           "day_ended": {
             "type": "boolean",
             "description": "`true` while the shift is still open past the business day it opened on, which a till and\nthe console flag (ADR-0167 decision 11). Absent otherwise."
@@ -6729,6 +6798,10 @@
           "terminal_device_id": {
             "type": "string",
             "description": "The till whose drawer it is, absent for the store's one drawer (ADR-0167)."
+          },
+          "uncounted_amount": {
+            "$ref": "#/components/schemas/Money",
+            "description": "At its close, what that count's rows do not name. Absent where there is none."
           },
           "variance": {
             "$ref": "#/components/schemas/Money",

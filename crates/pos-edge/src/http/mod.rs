@@ -583,6 +583,7 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
         AppError::VarianceReasonRequired(_) => "VARIANCE_REASON_REQUIRED",
         AppError::DrawerAssignedToAnother => "DRAWER_ASSIGNED_TO_ANOTHER",
         AppError::AssigneeRequired => "ASSIGNEE_REQUIRED",
+        AppError::CountDoesNotAddUp => "COUNT_DOES_NOT_ADD_UP",
         AppError::ModifierSelectionInvalid => "MODIFIER_SELECTION_INVALID",
         AppError::ChannelNotAccepted => "CHANNEL_NOT_ACCEPTED",
         AppError::ItemNotSellable => "ITEM_NOT_SELLABLE",
@@ -661,6 +662,10 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::ApprovalRefused
         | AppError::ApproverLockedOut
         | AppError::Superseded => refusal(StatusCode::FORBIDDEN, reason, error.to_string()),
+        // The request contradicts itself, so no state of the drawer would make it apply (ADR-0186).
+        AppError::CountDoesNotAddUp => {
+            refusal(StatusCode::UNPROCESSABLE_ENTITY, reason, error.to_string())
+        }
         AppError::Port(_) => refusal(
             StatusCode::SERVICE_UNAVAILABLE,
             reason,
