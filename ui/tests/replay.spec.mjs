@@ -5431,6 +5431,42 @@ test("a double tap on any act on the till's own drawer sends one request", async
   }
 });
 
+// Take payment moves to the pay screen at once (`docs/ui-ux.md` §3). It used to open the bill
+// first and read its figure after that, so the cashier waited on two answers in a row on a screen
+// that looked untouched. The bill is now opened on the pay screen, beside a read of the table's
+// figure, and the tenders wait until the amount is known.
+test("take payment moves at once, and reads the amount while the bill is opened", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    await sendOrder(page);
+
+    const held = await holdPost(page, "**/api/tables/*/bill");
+    const checks = [];
+    page.on("request", (request) => {
+      if (/\/api\/tables\/[^/]+\/check$/.test(new URL(request.url()).pathname)) {
+        checks.push(request.url());
+      }
+    });
+    await page.locator('[data-step="takePayment"]').click();
+    await held.sent;
+    await expect(page).toHaveURL(/\/table\/[^/]+\/pay$/);
+    await expect(page.locator('[data-outcome="amount-loading"]')).toBeVisible();
+    await expect(page.locator('[data-step="payCash"]')).toBeDisabled();
+    expect(checks).toHaveLength(1);
+
+    held.release();
+    await expect(page.locator('[data-outcome="amount-loading"]')).toHaveCount(0);
+    await page.locator('[data-step="payCash"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
 test("a sold-out refusal takes the painted line back off, with its sentence and no ghost", async ({
   page,
 }) => {

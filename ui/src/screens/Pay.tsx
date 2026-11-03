@@ -31,9 +31,7 @@ import {
   linesForTable,
   loadBillCheck,
   loadCheck,
-  loadLiveOrders,
   mergeBills,
-  openBill,
   openBillFor,
   openBillsFor,
   reasonsFor,
@@ -50,6 +48,7 @@ import {
 } from "../state/store";
 import { errorMessage } from "../lib/errors";
 import { useInFlight } from "../lib/in-flight";
+import { openForPay } from "../state/open-for-pay";
 import { printOutcomeKey } from "../lib/print";
 import { asksApprover, can, permissionsEnforced } from "../state/permissions";
 
@@ -255,14 +254,14 @@ export function Pay() {
       void showBill(existing);
       return;
     }
-    // No bill known for this table: the screen was reloaded, or reached by its address, before this
-    // device read what is open. Read that first. The table may already have a bill — or the open
-    // parts of a split one — and asking for another is refused while one is open.
-    loadLiveOrders()
-      .then(() => openBill(params.id))
-      .then((id) => {
-        setBillId(id);
-        return showBill(id);
+    // No bill open for this table yet: Take payment moves here at once and the bill is opened here,
+    // beside a read of the table's figure (`../state/open-for-pay`). The same path serves a screen
+    // reloaded, or reached by its address, before this device read what is open.
+    openForPay(params.id)
+      .then((opened) => {
+        setBillId(opened.billId);
+        setCheck(opened.check);
+        return showBill(opened.billId);
       })
       .catch((caught: unknown) => setError(errorMessage(caught)));
   });
@@ -840,7 +839,7 @@ export function Pay() {
         fallback={
           <Show when={!voided()} fallback={voidedPanel()}>
             <p class="mt-4 text-sm text-ink-muted">{t("pay.amount_due")}</p>
-            <Show when={check()} fallback={<p class="text-2xl font-semibold tabular-nums">{"—"}</p>}>
+            <Show when={check()} fallback={<p class="h-8 w-40 animate-pulse rounded-token bg-surface-raised" role="status" aria-label={t("pay.amount_loading")} data-outcome="amount-loading" />}>
               {(totals) => (
                 <>
                   {/* A reduced bill says so and by how much. A total that simply came out smaller
