@@ -12,7 +12,12 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 - [ADR-0155](../adr/0155-a-qr-payment-is-confirmed-by-its-gateway-through-the-cloud.md) A QR payment is confirmed by its gateway through the cloud, and by hand when it cannot be
 - [ADR-0182](../adr/0182-a-signed-cell-moved-config-node.md) A signed "cell moved" config node
 - [ADR-0189](../adr/0189-a-store-runs-a-package-version-hq-pins.md) A store runs the package version HQ pins
+- [ADR-0190](../adr/0190-a-screen-is-drawn-from-the-package.md) A screen is drawn from the package
+- [ADR-0191](../adr/0191-every-act-is-in-a-typed-catalogue.md) Every act is in a typed catalogue
+- [ADR-0192](../adr/0192-a-flow-is-a-graph-of-steps-the-edge-re-checks.md) A flow is a graph of steps the till runs and the edge re-checks
+- [ADR-0193](../adr/0193-conditions-and-reactions-are-written-in-cel.md) Conditions and reactions are written in CEL
 - [ADR-0195](../adr/0195-the-cloud-wakes-a-store-to-pull-its-config.md) The cloud wakes a store to pull its config
+- [ADR-0196](../adr/0196-every-act-paints-first-and-money-waits-for-the-edge.md) Every act paints first, and money waits for the edge
 - [ADR-0197](../adr/0197-every-tap-paints-within-ten-milliseconds.md) Every tap paints within ten milliseconds
 
 ## Citations of ADRs that do not exist
