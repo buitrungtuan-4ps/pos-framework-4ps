@@ -277,6 +277,10 @@ pub trait CloudSyncHarness: Send + Sync {
     /// A channel that recognises [`Self::valid_code`] and publishes [`Self::known_release`].
     fn fresh(&self) -> impl Future<Output = Setup<Self::Channel>> + Send;
 
+    /// A channel to a cloud that keeps no store archives: it is reachable, and configured without
+    /// archive storage ([ADR-0185](../../../docs/adr/0185-the-cloud-says-when-it-keeps-no-archives.md)).
+    fn without_archives(&self) -> impl Future<Output = Setup<Self::Channel>> + Send;
+
     /// The one activation code the channel accepts.
     fn valid_code(&self) -> String;
 

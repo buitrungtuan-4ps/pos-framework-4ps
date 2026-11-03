@@ -236,10 +236,11 @@ impl<T: HttpTransport> CloudSync for HttpCloudSync<T> {
 
 /// Maps the archive-key response.
 ///
-/// `404` is folded into `unavailable` rather than `not_found`, because it means the cloud is
-/// running without archive storage configured — the route is honestly absent (ADR-0124) — and the
-/// edge's right response is to skip this round and try later, not to invent a key or to treat the
-/// store as unknown.
+/// `404` is `failed_precondition`, not `unavailable` or `not_found`: it means the cloud is running
+/// without archive storage configured, so the route is honestly absent (ADR-0124). The cloud was
+/// reached and keeps no archives, which the edge says once rather than warning about every round
+/// ([ADR-0185](../../../../docs/adr/0185-the-cloud-says-when-it-keeps-no-archives.md)); it is not a
+/// store the cloud does not know.
 fn parse_archive_key(response: &HttpResponse) -> Result<String, PortError> {
     match response.status {
         200..=299 => {
@@ -263,8 +264,8 @@ fn parse_archive_key(response: &HttpResponse) -> Result<String, PortError> {
             "this store's key does not authorise an archive key",
         )),
         // Says so, because "the cloud could not be reached" is what an operator read while sync
-        // worked: a cloud with no archive storage is reachable and keeps no archives.
-        404 => Err(PortError::unavailable(
+        // worked: a cloud with no archive storage is reachable and keeps no archives (ADR-0185).
+        404 => Err(PortError::failed_precondition(
             PORT,
             "the cloud keeps no store archives: its archive storage is not configured (status 404)",
         )),
@@ -586,9 +587,11 @@ mod tests {
     }
 
     #[test]
-    fn a_cloud_without_archive_storage_says_so_and_is_still_skipped_as_unavailable() {
+    fn a_cloud_without_archive_storage_is_a_failed_precondition_and_an_unreachable_one_unavailable()
+    {
+        // ADR-0185: the cloud answered, and keeps no archives — not a fault to retry or warn about.
         let error = parse_archive_key(&response(404, b"")).expect_err("no archive storage");
-        assert_eq!(error.status(), pos_proto::ErrorStatus::Unavailable);
+        assert_eq!(error.status(), pos_proto::ErrorStatus::FailedPrecondition);
         assert!(
             error
                 .message()

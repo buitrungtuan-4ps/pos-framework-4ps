@@ -8,6 +8,7 @@
 //     name the cloud read from the store's devices, then a till no longer listed by its id;
 //   * a drawer none of whose shifts has closed shows no expected amount, count or over/short, as
 //     only a close carries one;
+//   * beside the expected amount is the float of the shifts that closed, not of one still open;
 //   * a day that kept only the store's one drawer shows no table, and reads as it always did.
 
 import { cleanup, render, screen, within } from "@solidjs/testing-library";
@@ -39,6 +40,7 @@ function drawer(float: number, paid: [number, number], closed?: [number, number]
     expected,
     counted,
     variance: counted - expected,
+    closed_float: closed === undefined ? 0 : float,
   };
 }
 
@@ -124,10 +126,21 @@ describe("the X/Z report's drawers", () => {
     render(() => <Reports />);
 
     expect(await drawerRowsShown()).toEqual([
-      ["The store's drawer", vnd(200_000), vnd(50_000), vnd(20_000), vnd(230_000), vnd(230_000), vnd(0), vnd(0)],
-      ["Bar till", vnd(500_000), vnd(100_000), vnd(30_000), vnd(1_570_000), vnd(1_560_000), vnd(0), vnd(-10_000)],
-      [`A till no longer listed${GONE}`, vnd(100_000), vnd(10_000), vnd(0), "—", "—", vnd(0), "—"],
+      ["The store's drawer", vnd(200_000), vnd(50_000), vnd(20_000), vnd(200_000), vnd(230_000), vnd(230_000), vnd(0), vnd(0)],
+      ["Bar till", vnd(500_000), vnd(100_000), vnd(30_000), vnd(500_000), vnd(1_570_000), vnd(1_560_000), vnd(0), vnd(-10_000)],
+      [`A till no longer listed${GONE}`, vnd(100_000), vnd(10_000), vnd(0), "—", "—", "—", vnd(0), "—"],
     ]);
+  });
+
+  it("sets beside a drawer's expected amount only the float of its closed shift, not the open one's", async () => {
+    // The first shift opened on 500,000 and closed expecting 1,570,000; the second opened on
+    // 300,000 and is still open. Floats opened adds both; the closed float is the first's alone.
+    const bar = { ...drawer(800_000, [100_000, 30_000], [1_570_000, 1_570_000]), shifts_opened: 2, closed_float: 500_000 };
+    xzReport.mockResolvedValue(report(bar, { [BAR]: bar, store: drawer(0, [0, 0]) }, { [BAR]: "Bar till" }));
+    render(() => <Reports />);
+
+    const [, row] = await drawerRowsShown();
+    expect(row?.slice(0, 6)).toEqual(["Bar till", vnd(800_000), vnd(100_000), vnd(30_000), vnd(500_000), vnd(1_570_000)]);
   });
 
   it("shows a till's drawer even when it is the day's only one", async () => {
@@ -164,6 +177,6 @@ describe("the X/Z report's drawers", () => {
     expect(screen.getByText("Cash handed back").nextElementSibling?.textContent).toBe(
       vnd(113_000),
     );
-    expect((await drawerRowsShown())[0]?.[6]).toBe(vnd(113_000));
+    expect((await drawerRowsShown())[0]?.[7]).toBe(vnd(113_000));
   });
 });

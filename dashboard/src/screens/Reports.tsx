@@ -84,6 +84,7 @@ function DrawerTable(props: { report: XzReport }) {
               <th class="py-2 pr-4 font-medium">{t("reports.drawerFloat")}</th>
               <th class="py-2 pr-4 font-medium">{t("reports.drawerPaidIn")}</th>
               <th class="py-2 pr-4 font-medium">{t("reports.drawerPaidOut")}</th>
+              <th class="py-2 pr-4 font-medium">{t("reports.drawerClosedFloat")}</th>
               <th class="py-2 pr-4 font-medium">{t("reports.drawerExpected")}</th>
               <th class="py-2 pr-4 font-medium">{t("reports.drawerCounted")}</th>
               <th class="py-2 pr-4 font-medium">{t("reports.drawerVoided")}</th>
@@ -110,6 +111,7 @@ function DrawerTable(props: { report: XzReport }) {
                     <td class="py-2 pr-4">{cash(drawer.figures.opening_float)}</td>
                     <td class="py-2 pr-4">{cash(drawer.figures.paid_in)}</td>
                     <td class="py-2 pr-4">{cash(drawer.figures.paid_out)}</td>
+                    <td class="py-2 pr-4">{closed(drawer.figures.closed_float ?? 0)}</td>
                     <td class="py-2 pr-4">{closed(drawer.figures.expected)}</td>
                     <td class="py-2 pr-4">{closed(drawer.figures.counted)}</td>
                     <td class="py-2 pr-4">{cash(drawer.figures.voided_cash ?? 0)}</td>

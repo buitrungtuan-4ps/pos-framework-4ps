@@ -99,7 +99,7 @@ pub struct SettingValue {
     /// and for the register's preset; a person's later write of the setting leaves it absent. Left
     /// off the wire while absent, so a value stored before it loads with none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schema(value_type = Option<String>, example = "VN")]
+    #[schema(value_type = Option<String>, nullable = false, example = "VN")]
     pub pack_country_code: Option<CountryCode>,
 }
 

@@ -278,6 +278,13 @@ pub(crate) struct SessionState {
     /// the idle lock, sent whoever is signed in. The cashier may change it, and the shift opens with
     /// what they send.
     opening_float_minor: i64,
+    /// The store's display language (a BCP 47 tag from the `locale` node), absent when it sets
+    /// none — the one `locale` fact sent before sign-in. `GET /api/locale` answers only a signed-in
+    /// person, so without it a device that has never signed in draws its sign-in screen in English
+    /// on a Vietnamese store (pilot run 2, N8). A fact about the store, not the person.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    display_language: Option<String>,
 }
 
 /// The ids of the permissions in `set`, sorted, as the session read reports them.
@@ -424,7 +431,7 @@ where
     responses(
         (status = 200, body = SessionState, description = "Whether anyone is signed in on this device and who; the box's lease \
                                       standing; whether anyone can sign in; the person's permissions, held \
-                                      directly and with approval; the till's idle lock; and the opening float"),
+                                      directly and with approval; the till's idle lock; the opening float; and the store's display language"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
     ),
     tag = "session",
@@ -447,6 +454,7 @@ where
     let permissions_enforced = session.permissions_enforced;
     let idle_lock_seconds = session.session_settings.idle_lock_seconds();
     let opening_float_minor = session.shift.opening_float_minor();
+    let display_language = session.display_language.clone();
     let state = match deps.sessions.employee_now(device_id, || SystemClock.now()) {
         Some(employee_id) => SessionState {
             signed_in: true,
@@ -465,6 +473,7 @@ where
             ),
             idle_lock_seconds,
             opening_float_minor,
+            display_language,
         },
         None => SessionState {
             signed_in: false,
@@ -476,6 +485,7 @@ where
             permissions_with_approval: Vec::new(),
             idle_lock_seconds,
             opening_float_minor,
+            display_language,
         },
     };
     Json(state).into_response()

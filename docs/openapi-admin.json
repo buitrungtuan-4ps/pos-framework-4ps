@@ -26097,6 +26097,11 @@
           "variance"
         ],
         "properties": {
+          "closed_float": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of the opening floats of this drawer's shifts that closed on the day, beside its\nexpected amount: float + paid in − paid out + cash taken − voided cash is what a close\nexpects. A shift still open counts in `opening_float` and not here. Left out while there was\nnone."
+          },
           "counted": {
             "type": "integer",
             "format": "int64",
@@ -27779,6 +27784,11 @@
             "propertyNames": {
               "type": "string"
             }
+          },
+          "closed_float": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Sum of the opening floats of the shifts that closed on the day, counted on the day of the\nclose, beside the expected amount the float went into. `opening_float` counts a float on\nthe day its shift opens, so a shift still open counts there and not here. Left out while\nthere was none."
           },
           "counted": {
             "type": "integer",
@@ -33732,10 +33742,7 @@
         ],
         "properties": {
           "pack_country_code": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "The country whose pack gave the value\n([ADR-0183](../../../docs/adr/0183-a-country-pack-seeds-a-new-stores-settings.md)), so the\nconsole can say so rather than show it as set by hand. Absent for a value a person wrote,\nand for the register's preset; a person's later write of the setting leaves it absent. Left\noff the wire while absent, so a value stored before it loads with none.",
             "example": "VN"
           },

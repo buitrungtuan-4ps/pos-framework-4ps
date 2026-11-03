@@ -260,6 +260,10 @@ export interface SessionState {
   // The edge stays the authority: it refuses what the person may not do whatever the till shows.
   permissions?: string[];
   permissions_with_approval?: string[];
+  // The store's display language (a BCP 47 tag), sent whoever is signed in, so a device that has
+  // never signed in draws its sign-in screen in it. Absent where the store sets none, and from an
+  // edge too old to send it.
+  display_language?: string;
 }
 
 // The outcome of a sign-in attempt: the signed-in employee, or a refusal the screen can explain
