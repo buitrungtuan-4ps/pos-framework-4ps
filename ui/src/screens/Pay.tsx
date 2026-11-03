@@ -1245,12 +1245,12 @@ export function Pay() {
 
             <Show when={tenderAccepted("PAYMENT_METHOD_CASH")}>
             <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">{t("pay.cash")}</h2>
-            <div class="grid grid-cols-2 gap-2">
+            <fieldset class="grid min-w-0 grid-cols-2 gap-2" disabled={check() === null} data-outcome="quick-cash">
               <For each={quickCash()}>
                 {(amount) => (
                   <button
                     type="button"
-                    class="min-h-touch rounded-token border border-line bg-surface tabular-nums"
+                    class="min-h-touch rounded-token border border-line bg-surface tabular-nums disabled:opacity-50"
                     classList={{ "border-accent": !typing() && tender() === amount }}
                     data-step="setTender"
                     onClick={() => {
@@ -1264,7 +1264,7 @@ export function Pay() {
               </For>
               <button
                 type="button"
-                class="min-h-touch rounded-token border border-line bg-surface"
+                class="min-h-touch rounded-token border border-line bg-surface disabled:opacity-50"
                 classList={{ "border-accent": typing() }}
                 aria-expanded={typing()}
                 data-step="typeTender"
@@ -1272,7 +1272,7 @@ export function Pay() {
               >
                 {t("pay.other_amount")}
               </button>
-            </div>
+            </fieldset>
             <Show when={typing()}>
               <p class="mt-3 text-sm text-ink-muted">{t("pay.tendered")}</p>
               <p class="text-2xl font-semibold tabular-nums" data-outcome="typed-tender">
@@ -1293,7 +1293,8 @@ export function Pay() {
             </Show>
 
             {/*
-              Every tender waits for the edge's figure. Before it lands the amount owed reads as
+              Every tender waits for the edge's figure, and so do the cash keys above it, whose "Exact"
+              is nothing until the figure lands. Before it lands the amount owed reads as
               nothing, and a tap then would ask the edge to settle for nothing — which it refuses, with
               the guest's money already on the counter. A bill put on screen mid-flow (the next part of
               a split) starts in exactly that state, so the window is not only the first load's.
