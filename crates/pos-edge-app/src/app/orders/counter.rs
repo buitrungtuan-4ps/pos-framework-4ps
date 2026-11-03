@@ -83,6 +83,7 @@ impl<S: EventStore> Edge<S> {
         // The ids first, with the guard released before anything awaits or re-locks.
         let order_ids = self.lock_projection().open_counter_orders();
         let session = self.session();
+        let language = session.display_language.clone().unwrap_or_default();
         let mut views = Vec::with_capacity(order_ids.len());
         for order_id in order_ids {
             let (lines, bill_id) = {
@@ -97,10 +98,11 @@ impl<S: EventStore> Edge<S> {
                 .map(|line| CounterOrderLine {
                     // An item the store has since removed from its menu still has to be chargeable,
                     // so a missing entry falls back to the id rather than dropping the line and
-                    // under-reporting what the guest ordered.
+                    // under-reporting what the guest ordered. The name is the store's language's, as
+                    // the menu route sends it (ADR-0074).
                     display_name: session.menu_entry(line.menu_item_id).map_or_else(
                         || DisplayName::new(line.menu_item_id.to_string()),
-                        |entry| entry.display_name.clone(),
+                        |entry| entry.localized_name(&language).clone(),
                     ),
                     quantity: line.quantity,
                 })
@@ -227,6 +229,32 @@ mod tests {
                 resuming.bill_id,
                 Some(open_bill.bill_id),
                 "the open bill is carried so the screen settles it rather than opening a second one"
+            );
+        });
+    }
+
+    /// The counter list names each item in the store's language, as the menu route does, so a
+    /// Vietnamese counter does not read English (ADR-0074).
+    #[test]
+    fn the_counter_list_names_items_in_the_stores_language() {
+        pos_fakes::executor::run_ready(async {
+            let edge = edge_with_menu();
+            let mut session = (*edge.session()).clone();
+            let item = MenuItemId::new(Ulid::from_u128(500));
+            let mut entry = session.menu.get(item).cloned().expect("the menu's item");
+            entry
+                .display_name_translations
+                .insert("vi".to_owned(), DisplayName::new("Pizza Margherita"));
+            session.menu = pos_proto::menu::MenuCatalog::new().with(entry);
+            session.display_language = Some("vi".to_owned());
+            edge.apply_session(session);
+            a_counter_order(&edge).await;
+
+            let queue = InMemoryQueueNumbers::new();
+            let listed = edge.open_counter_orders(&queue).await.expect("lists");
+            assert_eq!(
+                listed[0].items[0].display_name,
+                DisplayName::new("Pizza Margherita")
             );
         });
     }

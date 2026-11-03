@@ -36,6 +36,16 @@ Each country module names its default language (`default_language` in `countries
 country, not yet supported*. That is a report, not a failure: the language enters the register only
 with its complete, reviewed catalogues.
 
+## The menu's own names
+
+A menu item, a course and a modifier group each carry a default name and, per language, a
+translation (`display_name_translations`, [ADR-0074](adr/0074-localization-and-tax.md)). The edge's
+`GET /api/menu` sends each in the store's display language, the `locale` node's `display_language`,
+and the default name where the item has no translation for it or the store sets no language. A line
+rung on the till takes the name the menu sent, so the kitchen reads it too, and the counter's order
+list names its items the same way. A receipt follows its own language rule (`printing.receipt_language`,
+[ADR-0160](adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
+
 ## When a message is missing
 
 - **A key a catalogue lacks** falls back to the English message for that key, never to a blank or the
