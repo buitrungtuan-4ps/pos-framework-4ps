@@ -45,7 +45,7 @@ export interface VoidAct extends MoneyAct<true> {
 
 /** A screen's bill void as a money act: `onVoided` runs once the edge commits it. */
 export function useVoidAct(billId: Accessor<string | null>, onVoided: () => void): VoidAct {
-  const act = useMoneyAct<true>({ recheck: recheckVoid, committed: onVoided });
+  const act = useMoneyAct<true>({ act: "void", recheck: recheckVoid, committed: onVoided });
   const voidWith = (reasonCodeId: string, asks: boolean, approval: ApproverRequest | undefined) => {
     const id = billId();
     if (id !== null) {

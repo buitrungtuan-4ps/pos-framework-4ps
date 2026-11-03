@@ -1,5 +1,5 @@
-// A money act on its way to the edge (ADR-0196 decision 1, ADR-0204), a settle by default and a
-// bill's void with `act`: the amount the edge confirmed, and what the till is waiting for. Never the change, the receipt or a second way to pay: the
+// A money act on its way to the edge (ADR-0196 decision 1, ADR-0204), a settle by default and
+// another act with `act`: the amount the edge confirmed, and what the till is waiting for. Never the change, the receipt or a second way to pay: the
 // drawer opens and the receipt prints only once the edge commits (safeguard 1). Once the store server
 // cannot be reached, a manager may leave it to be looked up later; the bill then offers no settle on
 // this till until the edge says what came of it.
@@ -11,13 +11,15 @@ import { holdsOwn } from "../state/permissions";
 import type { MoneyPhase } from "../state/money-act";
 
 /** What each act says while it is out, and once the store server cannot be reached. */
-export type PendingActKind = "settle" | "void" | "discount" | "waive";
+export type PendingActKind = "settle" | "void" | "discount" | "waive" | "split" | "merge";
 
 const ACTS: Readonly<Record<PendingActKind, { doing: MessageKey; unreachable: MessageKey; outcome: string }>> = {
   settle: { doing: "pay.paying", unreachable: "pay.unreachable", outcome: "settle-pending" },
   void: { doing: "pay.voiding", unreachable: "pay.void_unreachable", outcome: "void-pending" },
   discount: { doing: "pay.discounting", unreachable: "pay.reduction_unreachable", outcome: "discount-pending" },
   waive: { doing: "pay.waiving", unreachable: "pay.reduction_unreachable", outcome: "waive-pending" },
+  split: { doing: "pay.splitting", unreachable: "pay.reduction_unreachable", outcome: "split-pending" },
+  merge: { doing: "pay.merging", unreachable: "pay.reduction_unreachable", outcome: "merge-pending" },
 };
 
 export function PendingSettle(props: {

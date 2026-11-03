@@ -2782,6 +2782,123 @@ test("a split made by mistake is put back together", async ({ page }) => {
   }
 });
 
+// ADR-0204 for a split: a split the edge committed but whose answer never reached the till is not
+// rolled back. The till reads the table's bills again and puts the part it split off on screen.
+test("a split whose answer is lost is checked, not rolled back, and shows the part", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addByName(page, "salad");
+    await addByName(page, "iced");
+    await sendThenTakePayment(page);
+    await page.route("**/api/bills/*/split", async (route) => {
+      await route.fetch();
+      await route.abort("connectionreset");
+    });
+    await page.locator('[data-step="splitByItem"]').click();
+    await page.locator('[data-step="pickLine"]', { hasText: "Iced tea" }).click();
+    await page.locator('[data-step="splitOff"]').click();
+    await expect(page.locator('[data-outcome="split-pending"]')).toContainText("Checking with the store server");
+    await expect(page.locator('[data-outcome="bill-part"]')).toHaveText("For: 1 × Iced tea");
+    await expect(page.locator('[data-outcome="money-refused"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// ADR-0204 for a split that never reached the edge: found not made, and only then rolled back.
+test("a split that never reached the store server is found not made, and the bill is as it was", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addByName(page, "salad");
+    await addByName(page, "iced");
+    await sendThenTakePayment(page);
+    await page.route("**/api/bills/*/split", (route) => route.abort("connectionreset"));
+    await page.locator('[data-step="splitByItem"]').click();
+    await page.locator('[data-step="pickLine"]', { hasText: "Iced tea" }).click();
+    await page.locator('[data-step="splitOff"]').click();
+    await expect(page.locator('[data-outcome="split-pending"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="money-refused"]')).toContainText("The bill was not split");
+    await page.locator('[data-step="dismissRefusal"]').click();
+    await expect(page.locator('[data-outcome="bill-part"]')).toHaveCount(0);
+    await expect(page.getByText("141,350₫", { exact: true })).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// Safeguard 3 for a split (ADR-0196): the edge's refusal rolls the screen back with its own
+// sentence, which the cashier dismisses; nothing is split.
+test("a split the store server refuses says why and leaves the bill whole", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addByName(page, "salad");
+    await addByName(page, "iced");
+    await sendThenTakePayment(page);
+    await refusePost(page, "**/api/bills/*/split", "SPLIT_NOT_A_PARTITION");
+    await page.locator('[data-step="splitByItem"]').click();
+    await page.locator('[data-step="pickLine"]', { hasText: "Iced tea" }).click();
+    await page.locator('[data-step="splitOff"]').click();
+    await expect(page.locator('[data-outcome="money-refused"]')).toContainText(
+      "Each item must be on exactly one part of the split.",
+    );
+    await expect(page.getByRole("alertdialog")).toBeVisible();
+    await page.locator('[data-step="dismissRefusal"]').click();
+    await expect(page.locator('[data-outcome="bill-part"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// ADR-0204 for a merge: committed with its answer lost, the till finds the absorbed bill merged and
+// shows the bill whole again.
+test("a merge whose answer is lost is checked, and the bill is whole again", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await aTableWithTheDrinkSplitOff(page);
+    await page.route("**/api/bills/*/merge", async (route) => {
+      await route.fetch();
+      await route.abort("connectionreset");
+    });
+    await page.getByRole("button", { name: "Put the 2 bills back together" }).click();
+    await expect(page.locator('[data-outcome="merge-pending"]')).toBeVisible();
+    await expect(page.getByText("141,350₫", { exact: true })).toBeVisible();
+    await expect(page.locator('[data-outcome="bill-part"]')).toHaveCount(0);
+    await expect(page.locator('[data-outcome="money-refused"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// Safeguard 3 for a merge: the edge refuses bills of different orders with its own sentence.
+test("a merge the store server refuses says why and keeps the parts", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await aTableWithTheDrinkSplitOff(page);
+    await refusePost(page, "**/api/bills/*/merge", "BILLS_ON_DIFFERENT_ORDERS");
+    await page.getByRole("button", { name: "Put the 2 bills back together" }).click();
+    await expect(page.locator('[data-outcome="money-refused"]')).toContainText("Bills on different orders cannot be merged");
+    await page.locator('[data-step="dismissRefusal"]').click();
+    await expect(page.locator('[data-outcome="bill-part"]')).toHaveText("For: 1 × Iced tea");
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A till that reloads mid-split still has every part to settle.
 //
 // The live read named one bill per order, the newest open one. A till that reloaded with both parts
