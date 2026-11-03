@@ -16,6 +16,7 @@ use super::{
     localized_book, roster_from,
 };
 
+use crate::origins::Origins;
 use pos_proto::billing::PublishedBilling;
 
 /// The store's display language from the `locale` node, and the `menu` node in it (ADR-0066,
@@ -633,5 +634,55 @@ pub(super) fn apply_updates(session: &mut EdgeSession, document: &serde_json::Va
         tracing::warn!(
             "the published lease node did not parse; keeping the previous lease generation"
         );
+    }
+}
+
+/// Applies the `origins` node to the shared allow-list, if the document carries a usable one
+/// ([ADR-0111](../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
+///
+/// **Beside [`session_from_config`](super::session_from_config), not inside it.** That function produces an `EdgeSession`, which is
+/// what the application layer decides against; this list is read by the CORS layer on the front of
+/// every request, before any handler. Different reader, different carrier.
+///
+/// The config tree's never-blank rule is enforced here and stated as three cases, because they are
+/// three different operator intentions and only one of them is a mistake:
+///
+/// - **The node is absent** — this document says nothing about origins, so the previous list stands.
+///   Every store that has never published one is in this case, and it is not an error.
+/// - **The node is present and is a list of strings that validate** — replaced, including an empty
+///   list, which is a person deliberately withdrawing every second origin.
+/// - **The node is present and does not validate** — refused whole, logged, and the previous list
+///   stands. A malformed publish must not open the edge to nobody, or to everybody.
+pub(super) fn apply_origins(origins: &Origins, document: &serde_json::Value) {
+    let Some(node) = document.get("origins") else {
+        return;
+    };
+    // `{"origins": {"allowed": [...]}}` — an object with a named field rather than a bare array, so
+    // the node can gain a sibling later without changing shape. A bare array is accepted too,
+    // because refusing it would be a refusal about punctuation.
+    let listed = node
+        .get("allowed")
+        .unwrap_or(node)
+        .as_array()
+        .map(|entries| {
+            entries
+                .iter()
+                .map(|entry| entry.as_str().map(str::to_owned))
+                .collect::<Option<Vec<String>>>()
+        });
+    let Some(Some(listed)) = listed else {
+        tracing::warn!(
+            "the origins node is not a list of strings; keeping the origins already applied"
+        );
+        return;
+    };
+    match origins.replace(&listed) {
+        Ok(count) => tracing::info!(count, "applied the published origin allow-list"),
+        // The entries are published configuration, never secrets, so the reason names the offender:
+        // an operator who cannot see which entry was refused cannot fix it.
+        Err(error) => tracing::warn!(
+            %error,
+            "the origins node was refused whole; keeping the origins already applied"
+        ),
     }
 }
