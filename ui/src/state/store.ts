@@ -36,7 +36,7 @@ import {
 import type { BillCheckResponse, BuyerRequest, CheckResponse, CourseResponse } from "../api/schemas";
 import type { DiscountResponse, FloorResponse, LayoutCategory, LayoutResponse } from "../api/schemas";
 import type { MenuItemResponse, ModifierGroup, PaymentRequest } from "../api/schemas";
-import type { ReasonCodeEntry, ReasonCodesResponse } from "../api/schemas";
+import type { CountBreakdown, ReasonCodeEntry, ReasonCodesResponse } from "../api/schemas";
 
 export interface OrderLine {
   // The edge's id, or a provisional one beginning `PENDING` while the edge has not answered.
@@ -137,6 +137,8 @@ export interface ShiftInfo {
   voided?: { bills: number; cash_returned: Money };
   // Whose the drawer is, where the store assigns drawers: an id, never a name (decision 9).
   assignee?: string;
+  // At its close, the count note by note where it was counted so (ADR-0186), for the close card.
+  counting?: CountBreakdown;
 }
 
 export interface StoreShape {
@@ -1694,6 +1696,7 @@ function replaceShift(info: ShiftInfo | null): void {
           dayEnded: info.dayEnded,
           voided: info.voided,
           assignee: info.assignee,
+          counting: info.counting,
         },
   );
 }
@@ -2008,15 +2011,14 @@ export async function settle(
 
 // ---- shift, driven by the operator's own commands ---------------------------
 
-export async function openShift(openingFloatMinor: number): Promise<void> {
-  const response = await api.openShift({
-    opening_float: { currency_code: storeCurrency(), amount_minor: openingFloatMinor },
-  });
-  replaceShift(shiftInfo(response));
+// Each with the note-by-note breakdown where the till counted one (ADR-0186), which adds up to it.
+export async function openShift(floatMinor: number, breakdown?: CountBreakdown): Promise<void> {
+  const opening = { currency_code: storeCurrency(), amount_minor: floatMinor };
+  replaceShift(shiftInfo(await api.openShift({ opening_float: opening, ...breakdown })));
 }
 
-export async function countShift(shiftId: string, countedMinor: number): Promise<void> {
-  const response = await api.countShift(shiftId, { counted_minor: countedMinor, ...ownOverride() });
+export async function countShift(shiftId: string, countedMinor: number, breakdown?: CountBreakdown): Promise<void> {
+  const response = await api.countShift(shiftId, { counted_minor: countedMinor, ...breakdown, ...ownOverride() });
   setState("shift", "state", response.state);
   setState("shift", "counted", response.counted_amount);
   setState("shift", "expected", response.expected_amount);

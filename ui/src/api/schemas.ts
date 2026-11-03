@@ -56,6 +56,9 @@ export type VarianceReason = Schemas["VarianceReason"];
 export type BatchCloseRequest = Schemas["BatchCloseRequest"];
 export type CashMovementRequest = Schemas["MovementRequest"];
 export type SafeDropRequest = Schemas["DropRequest"];
+export type DenominationCount = Schemas["DenominationCount"];
+// The note-by-note breakdown an open, a count or a drop carries beside its amount (ADR-0186).
+export type CountBreakdown = Pick<OpenShiftRequest, "denomination_counts" | "uncounted_amount">;
 export type OpenDrawerRequest = Schemas["OpenDrawerRequest"];
 export type PairRequest = Schemas["PairRequest"];
 export type PairAccepted = Schemas["PairAccepted"];

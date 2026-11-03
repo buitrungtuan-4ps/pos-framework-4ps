@@ -24,6 +24,10 @@ export function shiftInfo(response: ShiftResponse): ShiftInfo {
     dayEnded: response.day_ended === true,
     voided: response.voided_after_payment,
     assignee: response.assigned_employee_id,
+    counting: response.counted_denominations && {
+      denomination_counts: response.counted_denominations,
+      uncounted_amount: response.uncounted_amount,
+    },
   };
 }
 

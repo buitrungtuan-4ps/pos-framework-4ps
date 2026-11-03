@@ -29,6 +29,7 @@ import type {
 import { configApplied, load, loadAll, register, type Entry } from "./engine";
 import { readLiveOrders, type LiveOrdersRead } from "./live-orders-read";
 import { takeSession } from "./session";
+import { applyCountDenominations } from "./cash-count";
 import {
   DINE_IN,
   TAKEAWAY,
@@ -103,7 +104,11 @@ const ENTRIES: readonly Entry[] = [
     key: "locale",
     kind: "configuration",
     path: () => "/api/locale",
-    apply: (body) => applyLocale(body as LocaleResponse),
+    // The counting list (ADR-0186) is kept apart from the store's money settings by the size rule.
+    apply: (body) => {
+      applyLocale(body as LocaleResponse);
+      applyCountDenominations((body as LocaleResponse).cash_count_denominations);
+    },
     required: true,
     nodes: ["locale"],
   },

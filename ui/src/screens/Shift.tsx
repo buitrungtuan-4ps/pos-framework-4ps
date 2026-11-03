@@ -1,9 +1,11 @@
 import { For, Show, createSignal, onMount } from "solid-js";
 
 import { ApproverFields } from "../components/ApproverFields";
+import { CountField, CountedRows } from "../components/CountField";
 import { AssigneeField, DrawerOwner } from "../components/DrawerOwner";
 import { Keypad } from "../components/Keypad";
 import { PageHeader } from "../components/ui";
+import { SafeDrop } from "../components/SafeDrop";
 import { ShiftCashLines } from "../components/ShiftCashLines";
 import type { ApproverRequest, DrawerEntry, DrawerOutcome, ShiftResponse } from "../api/schemas";
 import { t, type MessageKey } from "../i18n";
@@ -35,7 +37,7 @@ import { useInFlight } from "../lib/in-flight";
 import { printOutcomeKey } from "../lib/print";
 import { asksApprover, can } from "../state/permissions";
 import { overrideAsks } from "../state/drawer-access";
-import { recordSafeDrop } from "../state/safe-drop";
+import { EMPTY_COUNT, fieldAmount } from "../state/cash-count";
 
 // The reason list's three acts for the drawer (ADR-0115), as `/api/reason-codes` spells them.
 const PAID_IN = "REASON_ACTION_CASH_PAID_IN";
@@ -117,6 +119,8 @@ export function Shift() {
   // The float field holds the store's float until the cashier types, and what they typed from then
   // on, an emptied field included. Set back after each act, so the next opening fills it in again.
   const [floatTyped, setFloatTyped] = createSignal(false);
+  // The float or the count note by note, where the store counts so (ADR-0186): its total is sent.
+  const [counted, setCounted] = createSignal(EMPTY_COUNT);
   const [error, setError] = createSignal<string | null>(null);
   // A paid in or out (ADR-0165 decision 1): the amount is typed first, then **Paid in** or **Paid
   // out** says which way, then a reason records it. Two taps after the number.
@@ -172,6 +176,7 @@ export function Shift() {
       await action();
       setAmount("");
       setFloatTyped(false);
+      setCounted(EMPTY_COUNT);
     });
 
   // A float as the cashier would type it: whole units of the currency, which is all the keypad
@@ -182,19 +187,19 @@ export function Shift() {
     return minor > 0 && minor % unit === 0 ? String(minor / unit) : "";
   };
   // The store's float, or where the store keeps a drawer per till this till's own (decision 4).
-  const storeFloat = () =>
-    wholeUnits(ownDrawer()?.default_float.amount_minor ?? openingFloatMinor());
+  const floatMinor = () => ownDrawer()?.default_float.amount_minor ?? openingFloatMinor();
+  const storeFloat = () => wholeUnits(floatMinor());
   const floatText = () => (floatTyped() ? amount() : storeFloat());
   const typeFloat = (text: string) => {
     setFloatTyped(true);
     setAmount(text);
   };
-  const floatParsed = () => parseAmount(floatText());
+  const floatParsed = () => fieldAmount(floatText(), counted());
 
   // Parsed in the store's own currency, not a literal (roadmap E5): the minor-unit scale differs
   // between currencies, so parsing a typed figure as VND on a two-decimal currency would be out by
   // a factor of a hundred on the store's own cash count.
-  const parsed = () => parseAmount(amount());
+  const parsed = () => fieldAmount(amount(), counted());
   const movementParsed = () => {
     const value = parseAmount(movementAmount());
     return value !== null && value > 0 ? value : null;
@@ -218,14 +223,6 @@ export function Shift() {
       setMovementPad(false);
     });
   };
-
-  // Surplus cash to the safe (ADR-0186 decision 5): no reason asked, and apart from a paid out.
-  const dropToSafe = (shiftId: string, value: number) =>
-    own.run("drop", async () => {
-      setMovementDrawer((await recordSafeDrop(shiftId, value)) ?? null);
-      setMoved({ key: "shift.safe_drop_recorded", amount: money(storeCurrency(), value) });
-      setMovementAmount("");
-    });
 
   const closeDrawerPanel = () => {
     setOpeningDrawer(false);
@@ -589,17 +586,16 @@ export function Shift() {
           !noTill()
         }
       >
-        <label class="block text-sm text-ink-muted" for="float">
-          {t("shift.float_label", { currency: storeCurrency() })}
-        </label>
-        <input
+        <CountField
           id="float"
-          inputmode="numeric"
-          class="mt-1 w-full rounded-token border border-line bg-surface p-3 tabular-nums"
-          value={floatText()}
-          onInput={(event) => typeFloat(event.currentTarget.value)}
+          label={t("shift.float_label", { currency: storeCurrency() })}
+          text={floatText()}
+          onText={typeFloat}
+          count={counted()}
+          onCount={setCounted}
+          step="floatKeypad"
+          target={floatMinor() > 0 ? money(storeCurrency(), floatMinor()) : undefined}
         />
-        <Keypad value={floatText()} onChange={typeFloat} notes data-step="floatKeypad" />
         <button
           type="button"
           class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
@@ -608,7 +604,7 @@ export function Shift() {
           onClick={() => {
             const value = floatParsed();
             if (value !== null) {
-              void run("open", () => openShift(value));
+              void run("open", () => openShift(value.minor, value.breakdown));
             }
           }}
         >
@@ -665,14 +661,15 @@ export function Shift() {
             >
               {t("shift.paid_out")}
             </button>
-            <button
-              type="button"
-              class="col-span-2 min-h-touch rounded-token border border-line bg-surface font-semibold disabled:opacity-50"
-              disabled={movementParsed() === null || own.busy() !== null}
-              onClick={() => void dropToSafe(shift()?.shiftId ?? "", movementParsed() ?? 0)}
-            >
-              {own.busy() === "drop" ? t("common.sending") : t("shift.safe_drop")}
-            </button>
+            <SafeDrop
+              shiftId={shift()?.shiftId ?? ""}
+              busy={own.busy()}
+              run={own.run}
+              onDropped={(dropped, outcome) => {
+                setMoved({ key: "shift.safe_drop_recorded", amount: dropped });
+                setMovementDrawer(outcome ?? null);
+              }}
+            />
           </div>
           <WhyUnavailable entry="reason_codes" id="why-movement-reasons" />
           <Show when={direction()}>
@@ -740,25 +737,24 @@ export function Shift() {
         </Show>
 
         <Show when={can("cash.shift.close")}>
-        <label class="mt-4 block text-sm text-ink-muted" for="count">
-          {t("shift.count_label", { currency: storeCurrency() })}
-        </label>
-        {/* Only where the store's count is not blind: a blind store is sent no expectation. */}
-        <Show when={shift()?.expected}>
-          {(expected) => (
-            <p class="mt-1 text-sm tabular-nums" data-outcome="shift-expected">
-              {t("shift.expected_now", { amount: formatAmount(expected()) })}
-            </p>
-          )}
-        </Show>
-        <input
+        <CountField
           id="count"
-          inputmode="numeric"
-          class="mt-1 w-full rounded-token border border-line bg-surface p-3 tabular-nums"
-          value={amount()}
-          onInput={(event) => setAmount(event.currentTarget.value)}
-        />
-        <Keypad value={amount()} onChange={setAmount} notes data-step="countKeypad" />
+          label={t("shift.count_label", { currency: storeCurrency() })}
+          text={amount()}
+          onText={setAmount}
+          count={counted()}
+          onCount={setCounted}
+          step="countKeypad"
+        >
+          {/* Only where the store's count is not blind: a blind store is sent no expectation. */}
+          <Show when={shift()?.expected}>
+            {(expected) => (
+              <p class="mt-1 text-sm tabular-nums" data-outcome="shift-expected">
+                {t("shift.expected_now", { amount: formatAmount(expected()) })}
+              </p>
+            )}
+          </Show>
+        </CountField>
         <button
           type="button"
           class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
@@ -768,7 +764,7 @@ export function Shift() {
             const value = parsed();
             const current = shift();
             if (value !== null && current) {
-              void run("count", () => countShift(current.shiftId, value));
+              void run("count", () => countShift(current.shiftId, value.minor, value.breakdown));
             }
           }}
         >
@@ -842,6 +838,7 @@ export function Shift() {
           <div class="mt-4 rounded-token border border-line bg-surface p-4" data-outcome="shift-closed">
             <p class="font-semibold">{t("shift.closed")}</p>
             <ShiftCashLines paidIn={shift()?.paidIn} paidOut={shift()?.paidOut} voided={shift()?.voided} />
+            <CountedRows counting={shift()?.counting} />
             <p class="mt-2 text-ink-muted">
               {t("shift.expected")}{" "}
               <span class="tabular-nums">{formatAmount(shift()?.expected ?? money(storeCurrency(), 0))}</span>
