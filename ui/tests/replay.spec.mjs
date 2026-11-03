@@ -3642,6 +3642,51 @@ test("a cashier with no keyboard can enter a float on the keypad", async ({ page
   }
 });
 
+// Đồng has no minor unit, so every amount ends in zeros: the pad has a `000` key, and the float,
+// the cash paid in or out and the count add the store's own notes with one tap each
+// (`docs/ui-ux.md` §2).
+test("a till trading in đồng types thousands with one key, and adds a note with one tap", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    // The demo store publishes no notes of its own, so this one is given Vietnam's larger notes.
+    await page.route("**/api/locale", async (route) => {
+      const response = await fetchWhole(route);
+      const body = await response.json();
+      const notes = [10_000, 20_000, 50_000, 100_000, 200_000, 500_000];
+      await route.fulfill({ response, json: { ...body, cash_denominations: notes } });
+    });
+    await pair(page, edge);
+    await signIn(page, edge);
+    await navigateTo(page, "/shift");
+    const keypad = page.locator('[data-step="floatKeypad"]');
+    await keypad.getByRole("button", { name: "Clear the amount" }).click();
+    await keypad.getByRole("button", { name: "000", exact: true }).click();
+    await expect(page.locator("#float")).toHaveValue("0");
+    for (const key of ["1", "5", "000"]) {
+      await keypad.getByRole("button", { name: key, exact: true }).click();
+    }
+    await expect(page.locator("#float")).toHaveValue("15000");
+
+    // Each note key adds one note to what is typed, in whole đồng: the largest four are offered.
+    await keypad.getByRole("button", { name: "Clear the amount" }).click();
+    const notes = keypad.locator('[data-outcome="keypad-notes"] button');
+    await expect(notes).toHaveText(["+50,000₫", "+100,000₫", "+200,000₫", "+500,000₫"]);
+    await notes.last().click();
+    await notes.last().click();
+    await notes.first().click();
+    await expect(page.locator("#float")).toHaveValue("1050000");
+    await page.locator('[data-step="openShift"]').click();
+    await expect(page.locator('[data-outcome="shift-open"]')).toBeVisible();
+
+    // The count's pad offers them too.
+    await expect(page.locator('[data-step="countKeypad"] [data-outcome="keypad-notes"]')).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A shift starts on a terminal with no keyboard of any kind.
 //
 // The float keypad above closed this for cash. It did not close it for the screen that comes first.

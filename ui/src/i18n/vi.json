@@ -201,6 +201,7 @@
   "kds.stations": "Trạm bếp",
   "kds.title": "Bếp",
   "keypad.aria_label": "Bàn phím số",
+  "keypad.add_note": "+{amount}",
   "keypad.backspace": "Xoá chữ số cuối",
   "keypad.clear": "Xoá số tiền",
   "keypad.clear_short": "C",

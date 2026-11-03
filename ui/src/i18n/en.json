@@ -201,6 +201,7 @@
   "kds.stations": "Kitchen stations",
   "kds.title": "Kitchen",
   "keypad.aria_label": "Numeric keypad",
+  "keypad.add_note": "+{amount}",
   "keypad.backspace": "Delete the last digit",
   "keypad.clear": "Clear the amount",
   "keypad.clear_short": "C",

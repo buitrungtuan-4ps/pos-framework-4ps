@@ -590,7 +590,7 @@ export function Shift() {
           value={floatText()}
           onInput={(event) => typeFloat(event.currentTarget.value)}
         />
-        <Keypad value={floatText()} onChange={typeFloat} data-step="floatKeypad" />
+        <Keypad value={floatText()} onChange={typeFloat} notes data-step="floatKeypad" />
         <button
           type="button"
           class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
@@ -631,7 +631,7 @@ export function Shift() {
             onInput={(event) => setMovementAmount(event.currentTarget.value)}
           />
           <Show when={movementPad()}>
-            <Keypad value={movementAmount()} onChange={setMovementAmount} data-step="movementKeypad" />
+            <Keypad value={movementAmount()} onChange={setMovementAmount} notes data-step="movementKeypad" />
           </Show>
           <div class="mt-3 grid grid-cols-2 gap-2">
             <button
@@ -741,7 +741,7 @@ export function Shift() {
           value={amount()}
           onInput={(event) => setAmount(event.currentTarget.value)}
         />
-        <Keypad value={amount()} onChange={setAmount} data-step="countKeypad" />
+        <Keypad value={amount()} onChange={setAmount} notes data-step="countKeypad" />
         <button
           type="button"
           class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
