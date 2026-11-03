@@ -1981,6 +1981,13 @@ export async function settle(
   buyer?: BuyerRequest,
 ): Promise<BillResponse> {
   const response = await api.settleBill(billId, { payments, buyer, ...ownOverride() });
+  applySettled(billId, response);
+  return response;
+}
+
+// A settle the edge committed, whether it answered or a re-read found it later (ADR-0204): the bill
+// leaves its table, and the table takes the state the edge gave it.
+export function applySettled(billId: string, response: BillResponse): void {
   setState(
     produce((draft) => {
       const closed = closeBill(draft, billId);
@@ -1999,7 +2006,6 @@ export async function settle(
       }
     }),
   );
-  return response;
 }
 
 // ---- shift, driven by the operator's own commands ---------------------------

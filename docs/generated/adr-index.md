@@ -16,7 +16,6 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 - [ADR-0199](../adr/0199-a-function-is-signed-pure-webassembly-that-returns-a-decision.md) A function is signed, pure WebAssembly that returns a decision
 - [ADR-0200](../adr/0200-six-business-type-templates-ship-with-the-framework.md) Six business-type templates ship with the framework
 - [ADR-0202](../adr/0202-cel-as-the-crate-and-the-spike-found-it.md) CEL as the crate and the spike found it
-- [ADR-0204](../adr/0204-a-money-act-with-no-answer-is-never-rolled-back-blind.md) A money act with no answer is never rolled back blind
 
 ## Citations of ADRs that do not exist
 
