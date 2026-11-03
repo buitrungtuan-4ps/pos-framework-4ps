@@ -100,6 +100,7 @@ cash.drawer.dropped	field=amount
 cash.drawer.dropped	field=denomination_counts
 cash.drawer.dropped	field=denomination_counts[].denomination
 cash.drawer.dropped	field=denomination_counts[].quantity
+cash.drawer.dropped	field=reason_code_id
 cash.drawer.dropped	field=terminal_device_id
 cash.drawer.dropped	schema_version=1
 cash.drawer.opened	field=reason_code_id

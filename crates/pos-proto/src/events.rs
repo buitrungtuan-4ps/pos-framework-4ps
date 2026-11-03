@@ -600,6 +600,10 @@ event_catalogue! {
         /// The till whose drawer this is, as [`CashShiftOpened::terminal_device_id`] says.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         terminal_device_id: Option<DeviceId>,
+        /// Why, from the store's reasons for a drop (`REASON_ACTION_CASH_DROPPED`, ADR-0186
+        /// amendment). Absent where none was given, and left off the wire.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason_code_id: Option<ReasonCodeId>,
         /// The drop note by note, where it was counted so. Absent is one typed amount.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         denomination_counts: Vec<DenominationCount>,

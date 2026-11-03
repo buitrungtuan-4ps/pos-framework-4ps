@@ -82,11 +82,12 @@ impl ReasonCodePublishSummary {
 /// The actions this node offers no active reason for, and which that blocks, in
 /// `ReasonAction::ALL` order.
 ///
-/// Two are skipped ([`ReasonAction::blocks_when_uncovered`]). `Unspecified` is the wire enum's
-/// mandatory zero value, not an act anyone performs. And a drawer closed over or short still closes
+/// Three are skipped ([`ReasonAction::blocks_when_uncovered`]). `Unspecified` is the wire enum's
+/// mandatory zero value, not an act anyone performs. A drawer closed over or short still closes
 /// where the list offers no reason for it
-/// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 12), so the
-/// notice must not say staff can no longer record it.
+/// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 12), and a drop
+/// to the safe asks its reason only where one is given (ADR-0186 amendment), so the notice must
+/// not say staff can no longer record either.
 fn uncovered_actions(node: &PublishedReasonCodes) -> Vec<String> {
     ReasonAction::ALL
         .iter()
