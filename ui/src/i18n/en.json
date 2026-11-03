@@ -298,6 +298,7 @@
   "pair.title": "Pair this device",
   "pair.too_many": "Too many wrong codes. Wait a minute, then try again.",
   "pay.amount_due": "Amount due",
+  "pay.amount_loading": "Reading the amount owed…",
   "pay.approver_code": "Manager badge code",
   "pay.approver_pin": "Manager PIN",
   "pay.back_floor": "Back to floor",
