@@ -432,6 +432,8 @@
   "shift.drawers_title": "Két của mọi máy POS",
   "shift.drop_amount_label": "Tiền nộp két ({currency})",
   "shift.drop_confirm": "Nộp két {amount}",
+  "shift.drop_reason": "Lý do nộp két? Không bắt buộc.",
+  "shift.dropped": "Đã nộp két",
   "shift.enter_count": "Nhập số đếm",
   "shift.expected": "Dự kiến",
   "shift.expected_now": "Ngăn kéo cần có {amount}.",

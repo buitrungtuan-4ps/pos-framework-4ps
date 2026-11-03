@@ -1,16 +1,20 @@
 // Surplus cash taken from the drawer to the safe (ADR-0186 decision 5), on the Shift screen beside
 // paid in and paid out. **Drop to safe** opens the pile being taken: counted note by note where the
-// store counts so, else typed as one amount; then one tap records it.
+// store counts so, else typed as one amount; then one tap records it, on a reason from the store's
+// list for a drop (ADR-0186 amendment) or on the plain button, since a reason is not required.
 
-import { Show, createSignal } from "solid-js";
+import { For, Show, createSignal } from "solid-js";
 
 import type { DrawerOutcome } from "../api/schemas";
 import { t } from "../i18n";
 import { money, type Money } from "../lib/money";
 import { EMPTY_COUNT, fieldAmount } from "../state/cash-count";
 import { recordSafeDrop } from "../state/safe-drop";
-import { formatAmount, storeCurrency } from "../state/store";
+import { formatAmount, reasonsFor, storeCurrency } from "../state/store";
 import { CountField } from "./CountField";
+
+// The reasons a drop cites, as `/api/reason-codes` spells their act; never the paid-out list.
+const CASH_DROPPED = "REASON_ACTION_CASH_DROPPED";
 
 export function SafeDrop(props: {
   shiftId: string;
@@ -33,13 +37,14 @@ export function SafeDrop(props: {
     setText("");
     setCount(EMPTY_COUNT);
   };
-  const drop = () => {
+  // Keyed by the reason tapped, or `drop` for none, so the button tapped is the one that says so.
+  const drop = (reasonCodeId?: string) => {
     const value = dropped();
     if (value === null) {
       return;
     }
-    void props.run("drop", async () => {
-      const outcome = await recordSafeDrop(props.shiftId, value.minor, value.breakdown);
+    void props.run(reasonCodeId ?? "drop", async () => {
+      const outcome = await recordSafeDrop(props.shiftId, value.minor, value.breakdown, reasonCodeId);
       close();
       props.onDropped(money(storeCurrency(), value.minor), outcome);
     });
@@ -65,6 +70,24 @@ export function SafeDrop(props: {
           onCount={setCount}
           step="dropKeypad"
         />
+        <Show when={reasonsFor(CASH_DROPPED).length > 0}>
+          <p class="mt-3 text-sm text-ink-muted">{t("shift.drop_reason")}</p>
+          <div class="mt-2 grid grid-cols-2 gap-2">
+            <For each={reasonsFor(CASH_DROPPED)}>
+              {(reason) => (
+                <button
+                  type="button"
+                  class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
+                  disabled={dropped() === null || props.busy !== null}
+                  data-step="dropReason"
+                  onClick={() => drop(reason.reason_code_id)}
+                >
+                  {props.busy === reason.reason_code_id ? t("common.sending") : reason.display_name}
+                </button>
+              )}
+            </For>
+          </div>
+        </Show>
         <div class="mt-3 grid grid-cols-2 gap-2">
           <button
             type="button"
@@ -79,7 +102,7 @@ export function SafeDrop(props: {
                   amount: formatAmount(money(storeCurrency(), dropped()?.minor ?? 0)),
                 })}
           </button>
-          <button type="button" class={button} disabled={props.busy === "drop"} onClick={close}>
+          <button type="button" class={button} disabled={props.busy !== null} onClick={close}>
             {t("common.cancel")}
           </button>
         </div>
