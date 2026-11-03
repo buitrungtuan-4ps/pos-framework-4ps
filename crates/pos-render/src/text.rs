@@ -193,6 +193,9 @@ impl TextRenderer {
                 .saturating_add(ascent);
             self.draw_row(&mut canvas, row, size, start, baseline, style.emphasised);
         }
+        // A mark over a capital can rise above the first row's top; lower the line rather than
+        // cut it off.
+        canvas.fit_vertically();
 
         let bitmap = canvas
             .fill()
@@ -649,6 +652,33 @@ mod tests {
             ink(&bold.bitmap) > ink(&plain.bitmap),
             "faux bold should lay down more ink"
         );
+    }
+
+    #[test]
+    fn a_mark_above_a_capital_is_drawn_whole_on_the_first_row() {
+        // The hook above `Ủ` and `Ả` rises past the face's ascender, where the first row's canvas
+        // used to start, so its curl was cut off and "ĐÃ HỦY" printed as "ĐÃ HÚY". A second row has
+        // a whole line above it and was always drawn whole, so two rows of `Ủ` must be exactly
+        // twice the ink of one.
+        let Some(renderer) = on_dejavu() else { return };
+        for emphasised in [false, true] {
+            let style = TextStyle {
+                emphasised,
+                ..TextStyle::default()
+            };
+            let one = renderer.render("Ủ", style, dots(30)).expect("renders");
+            // Narrow enough that the second `Ủ` wraps onto a row of its own.
+            let two = renderer.render("Ủ Ủ", style, dots(30)).expect("renders");
+            assert!(
+                two.bitmap.height() > one.bitmap.height(),
+                "the line wrapped"
+            );
+            assert_eq!(
+                ink(&two.bitmap),
+                ink(&one.bitmap) * 2,
+                "emphasised {emphasised}: the `Ủ` on the first row lost ink the one on the second kept"
+            );
+        }
     }
 
     #[test]

@@ -217,6 +217,36 @@ impl Canvas {
         }
     }
 
+    /// Moves everything drawn down by whole pixels until nothing sits above the top row, and adds
+    /// rows below until nothing sits under the bottom one — at most the canvas's own height each
+    /// way, so a corrupt outline cannot ask for an unbounded raster.
+    ///
+    /// A mark over a capital (the hook above `Ủ`, the tilde over `Ẫ`) rises past the face's
+    /// ascender, which is where a line's first row starts; cut off there, `Ủ` reads as `Ú`. Whole
+    /// pixels keep every edge on the subpixel phase it was drawn at, so the glyphs rasterise to the
+    /// same pixels they would have, only lower.
+    pub(crate) fn fit_vertically(&mut self) {
+        let limit = i32::try_from(self.height).unwrap_or(i32::MAX);
+        let top = self.edges.iter().map(|edge| edge.top.y).min().unwrap_or(0);
+        let above = (top.saturating_neg().max(0) + SUBPIXEL - 1) / SUBPIXEL;
+        let above = above.min(limit);
+        let shift = above.saturating_mul(SUBPIXEL);
+        for edge in &mut self.edges {
+            edge.top.y = edge.top.y.saturating_add(shift);
+            edge.bottom.y = edge.bottom.y.saturating_add(shift);
+        }
+        let bottom = self
+            .edges
+            .iter()
+            .map(|edge| edge.bottom.y)
+            .max()
+            .unwrap_or(0);
+        let rows = (bottom.max(0) + SUBPIXEL - 1) / SUBPIXEL;
+        let grown = limit.saturating_add(above);
+        let wanted = rows.clamp(grown, limit.saturating_mul(2).max(grown));
+        self.height = usize::try_from(wanted).unwrap_or(self.height);
+    }
+
     /// Fills the collected edges under the non-zero winding rule and returns the bitmap, or `None`
     /// when the canvas has no area.
     pub(crate) fn fill(&self) -> Option<Bitmap> {
@@ -457,6 +487,26 @@ mod tests {
         let bitmap = Canvas::new(8, 2).fill().expect("a canvas with area");
         assert!(bitmap.is_blank());
         assert_eq!(bitmap.height(), 2);
+    }
+
+    #[test]
+    fn fitting_lowers_what_rises_above_the_top_and_keeps_its_shape() {
+        // A mark over a capital starts above the first row; fitting moves it down whole pixels.
+        let mut canvas = Canvas::new(4, 4);
+        rectangle(&mut canvas, 1, -2, 3, 3);
+        canvas.fit_vertically();
+        let bitmap = canvas.fill().expect("a canvas with area");
+        assert_eq!(
+            bitmap.height(),
+            6,
+            "two rows added for the two above the top"
+        );
+        for y in 0..6_u16 {
+            for x in 0..4_u16 {
+                let inside = (1..3).contains(&x) && y < 5;
+                assert_eq!(bitmap.pixel(x, y), inside, "pixel ({x}, {y})");
+            }
+        }
     }
 
     #[test]
