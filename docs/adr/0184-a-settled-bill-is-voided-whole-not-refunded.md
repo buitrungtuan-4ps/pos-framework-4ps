@@ -9,7 +9,8 @@
 [ADR-0167](0167-a-till-has-its-own-cash-drawer.md)
 
 Accepted by the owner on 2026-10-31. **Amended** 2026-11-02: the void slip names no person, and
-the edge reports no e-invoice issued until a store issues them (Amendment below).
+the edge reports no e-invoice issued until a store issues them (Amendment below); the reports count
+voids per store, not per person, and each day's rollup keeps its settled bills (second Amendment).
 
 ## Context
 
@@ -96,3 +97,17 @@ the void, and so in the cloud's audit.
 one today ([ADR-0156](0156-a-store-issues-its-e-invoice-and-the-cloud-submits-it.md) is proposed, not
 built), so no bill can carry one. The refusal and the till's message for it ship now, and the record
 that builds issuing supplies the answer from the country module. Everything else in this ADR stands.
+
+**Amendment (2026-11-02, second) — voids are counted per store, and a day keeps its bills.** Two
+things decision 9 left open, decided by the owner. **No per-employee figure**: the reports show how
+many bills were voided after payment and for how much, per store and per drawer, and not per person.
+A void count per employee is a measure of a person's behaviour, which the tenant may keep only on a
+lawful basis it has told its staff about; the store-level figure answers the control's question, and
+the per-person one is dropped from decision 9 until a record decides how that basis is confirmed
+(as [ADR-0169](0169-a-setting-value-can-require-a-recorded-confirmation.md) does for a setting).
+**Each day's rollup keeps the bills settled that day** — the bill's id, what it took, its tax and the
+cash by drawer — so that `billing.bill.voided`, which carries only the bill and the reason, takes
+exactly those figures back out of the day's sales, tax and cash, and adds them to the day's
+"voided after payment". No event changes and the fold stays one event at a time
+([ADR-0036](0036-materialised-rollups.md)); the cost is a rollup row that grows with the day's bills.
+Everything else in this ADR stands.

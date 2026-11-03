@@ -26138,6 +26138,11 @@
             "type": "integer",
             "format": "int64",
             "description": "Sum of variance (counted − expected) across closes; negative is short."
+          },
+          "voided_cash": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The cash this drawer handed back for bills voided after payment (ADR-0184). Left out while\nthere was none."
           }
         }
       },
@@ -27820,6 +27825,11 @@
             "type": "integer",
             "format": "int64",
             "description": "Sum of variance (counted − expected) across closes; negative is short."
+          },
+          "voided_cash": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The cash handed back from the drawers by voiding paid bills on the day\n([ADR-0184](../../../docs/adr/0184-a-settled-bill-is-voided-whole-not-refunded.md) decision 6):\nit left the drawer of the till the void was done at, whose expected amount at close already\nleaves it out. Left out while there was none."
           }
         }
       },
@@ -27904,6 +27914,10 @@
             "type": "integer",
             "format": "int64",
             "description": "Sum of tax, minor units."
+          },
+          "voided_after_payment": {
+            "$ref": "#/components/schemas/VoidedAfterPayment",
+            "description": "The bills settled on the day and voided after payment, and what they had taken\n([ADR-0184](../../../docs/adr/0184-a-settled-bill-is-voided-whole-not-refunded.md) decision 9\nand its second amendment). Every other figure here already leaves them out: a void takes\nback what its bill's settle added, on the bill's own day, so the day's sales, tax, fees and\ncomponents count only the bills that stayed paid. Per store, never per person.\n\nLeft out while nothing was voided, so a day with none serialises as before, and\n`#[serde(default)]`, so a day stored before it loads with none."
           }
         }
       },
@@ -36648,6 +36662,27 @@
           }
         ],
         "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
+      },
+      "VoidedAfterPayment": {
+        "type": "object",
+        "description": "The bills voided after payment on one trading day (part of [`DailyRevenue`]).",
+        "required": [
+          "bills",
+          "amount"
+        ],
+        "properties": {
+          "amount": {
+            "type": "integer",
+            "format": "int64",
+            "description": "What their guests had paid, `total_due` summed, minor units."
+          },
+          "bills": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many.",
+            "minimum": 0
+          }
+        }
       },
       "VoucherStatus": {
         "type": "string",

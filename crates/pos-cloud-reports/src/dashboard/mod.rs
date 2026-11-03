@@ -10,6 +10,7 @@
 pub mod from_log;
 pub mod projection;
 pub mod rollup;
+pub mod voids;
 
 pub use projection::{
     ProjectReport, RollupError, RollupStore, StoredRollups, admitted_devices, dashboard, project,

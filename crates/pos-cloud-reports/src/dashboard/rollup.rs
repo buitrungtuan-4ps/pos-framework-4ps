@@ -21,7 +21,7 @@ use pos_proto::events::{
 
 use crate::types::{
     AdmittedDevice, CashTotals, DailyCash, DailyRevenue, DailyRollup, FeeTotal, STORE_DRAWER,
-    TaxComponentTotal,
+    TaxComponentTotal, VoidedAfterPayment,
 };
 
 /// Folds one event into a store's **admitted-device roster**, keyed by the edge-minted local device
@@ -376,6 +376,7 @@ pub fn empty_revenue(business_date: &str) -> DailyRevenue {
         by_item: BTreeMap::new(),
         by_fee: BTreeMap::new(),
         by_tax_component: Vec::new(),
+        voided_after_payment: VoidedAfterPayment::default(),
     }
 }
 
@@ -1008,6 +1009,7 @@ mod tests {
             expected: day.expected,
             counted: day.counted,
             variance: day.variance,
+            voided_cash: day.voided_cash,
         }
     }
 
@@ -1047,6 +1049,7 @@ mod tests {
                 expected,
                 counted,
                 variance: counted - expected,
+                voided_cash: 0,
             };
         assert_eq!(
             drawer(bar),
@@ -1080,6 +1083,7 @@ mod tests {
                 expected: sum.expected + drawer.expected,
                 counted: sum.counted + drawer.counted,
                 variance: sum.variance + drawer.variance,
+                voided_cash: sum.voided_cash + drawer.voided_cash,
             });
         assert_eq!(
             summed,
@@ -1097,6 +1101,7 @@ mod tests {
                 expected: 1_800_000,
                 counted: 1_790_000,
                 variance: -10_000,
+                voided_cash: 0,
             },
             "and the store's figures are the sums they always were"
         );
@@ -1118,6 +1123,7 @@ mod tests {
             expected: 570_000,
             counted: 565_000,
             variance: -5_000,
+            voided_cash: 0,
         };
         assert_eq!(store_figures(&day), figures);
         assert_eq!(

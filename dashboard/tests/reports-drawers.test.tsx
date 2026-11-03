@@ -124,9 +124,9 @@ describe("the X/Z report's drawers", () => {
     render(() => <Reports />);
 
     expect(await drawerRowsShown()).toEqual([
-      ["The store's drawer", vnd(200_000), vnd(50_000), vnd(20_000), vnd(230_000), vnd(230_000), vnd(0)],
-      ["Bar till", vnd(500_000), vnd(100_000), vnd(30_000), vnd(1_570_000), vnd(1_560_000), vnd(-10_000)],
-      [`A till no longer listed${GONE}`, vnd(100_000), vnd(10_000), vnd(0), "—", "—", "—"],
+      ["The store's drawer", vnd(200_000), vnd(50_000), vnd(20_000), vnd(230_000), vnd(230_000), vnd(0), vnd(0)],
+      ["Bar till", vnd(500_000), vnd(100_000), vnd(30_000), vnd(1_570_000), vnd(1_560_000), vnd(0), vnd(-10_000)],
+      [`A till no longer listed${GONE}`, vnd(100_000), vnd(10_000), vnd(0), "—", "—", vnd(0), "—"],
     ]);
   });
 
@@ -145,5 +145,25 @@ describe("the X/Z report's drawers", () => {
     // The store's expected and counted, as the report has always shown them.
     expect(await screen.findAllByText(vnd(230_000).replace(/\s/g, " "))).toHaveLength(2);
     expect(screen.queryByText("Each drawer")).toBeNull();
+    expect(screen.queryByText("Voided after payment")).toBeNull();
+  });
+
+  // ADR-0184: the bills voided after payment, per store and never per person, and the cash each
+  // drawer handed back for them.
+  it("shows the bills voided after payment and the cash each drawer handed back", async () => {
+    const bar = { ...drawer(500_000, [0, 0]), voided_cash: 113_000 };
+    const day = report({ ...drawer(500_000, [0, 0]), voided_cash: 113_000 }, { [BAR]: bar }, {
+      [BAR]: "Bar till",
+    });
+    day.revenue.voided_after_payment = { bills: 1, amount: 113_000 };
+    xzReport.mockResolvedValue(day);
+    render(() => <Reports />);
+
+    const label = await screen.findByText("Voided after payment");
+    expect(label.nextElementSibling?.textContent).toBe(`1 bill, ${vnd(113_000)}`);
+    expect(screen.getByText("Cash handed back").nextElementSibling?.textContent).toBe(
+      vnd(113_000),
+    );
+    expect((await drawerRowsShown())[0]?.[6]).toBe(vnd(113_000));
   });
 });

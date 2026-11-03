@@ -97,6 +97,33 @@ pub struct DailyRevenue {
     /// rollup's cursor forward. Resetting the rollup re-folds every settled bill on the log into it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub by_tax_component: Vec<TaxComponentTotal>,
+    /// The bills settled on the day and voided after payment, and what they had taken
+    /// ([ADR-0184](../../../docs/adr/0184-a-settled-bill-is-voided-whole-not-refunded.md) decision 9
+    /// and its second amendment). Every other figure here already leaves them out: a void takes
+    /// back what its bill's settle added, on the bill's own day, so the day's sales, tax, fees and
+    /// components count only the bills that stayed paid. Per store, never per person.
+    ///
+    /// Left out while nothing was voided, so a day with none serialises as before, and
+    /// `#[serde(default)]`, so a day stored before it loads with none.
+    #[serde(default, skip_serializing_if = "VoidedAfterPayment::is_none")]
+    pub voided_after_payment: VoidedAfterPayment,
+}
+
+/// The bills voided after payment on one trading day (part of [`DailyRevenue`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, ToSchema)]
+pub struct VoidedAfterPayment {
+    /// How many.
+    pub bills: u64,
+    /// What their guests had paid, `total_due` summed, minor units.
+    pub amount: i64,
+}
+
+impl VoidedAfterPayment {
+    /// Whether nothing was voided after payment.
+    #[must_use]
+    pub const fn is_none(&self) -> bool {
+        self.bills == 0 && self.amount == 0
+    }
 }
 
 /// One tax component's tax on a trading day, at one rate (part of [`DailyRevenue`]).
@@ -161,6 +188,12 @@ pub struct DailyCash {
     pub counted: i64,
     /// Sum of variance (counted − expected) across closes; negative is short.
     pub variance: i64,
+    /// The cash handed back from the drawers by voiding paid bills on the day
+    /// ([ADR-0184](../../../docs/adr/0184-a-settled-bill-is-voided-whole-not-refunded.md) decision 6):
+    /// it left the drawer of the till the void was done at, whose expected amount at close already
+    /// leaves it out. Left out while there was none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub voided_cash: i64,
     /// The same figures for each drawer, keyed by the till's `terminal_device_id`, or by
     /// [`STORE_DRAWER`] for the store's one drawer
     /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decisions 10 and 13).
@@ -208,6 +241,19 @@ pub struct CashTotals {
     pub counted: i64,
     /// Sum of variance (counted − expected) across closes; negative is short.
     pub variance: i64,
+    /// The cash this drawer handed back for bills voided after payment (ADR-0184). Left out while
+    /// there was none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub voided_cash: i64,
+}
+
+/// Whether a figure is zero, so a field that is is left off the wire as it was before it existed.
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if hands the field by reference"
+)]
+const fn is_zero(figure: &i64) -> bool {
+    *figure == 0
 }
 
 /// One device a store has admitted, as the fleet console finally sees it
