@@ -43,6 +43,8 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
   VOID_REASON_NOT_VALID: "error.reason_not_valid",
   CASH_REASON_NOT_VALID: "error.reason_not_valid",
   SHIFT_NOT_OPEN: "error.shift_not_open",
+  // Cash into a drawer already counted for its close (ADR-0186 decision 4); card still settles.
+  DRAWER_COUNTED: "error.drawer_counted",
   // A close over or short by more than the store allows, without a reason (ADR-0167 decision 12).
   // The Shift screen asks the reason instead; this is the sentence anywhere else.
   VARIANCE_REASON_REQUIRED: "error.variance_reason_required",

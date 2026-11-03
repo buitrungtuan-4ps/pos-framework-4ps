@@ -936,3 +936,30 @@ async fn a_count_by_note_must_add_up_and_its_close_card_lists_the_notes() {
     assert_eq!(closed["uncounted_amount"], json!(vnd(50_000)));
     assert!(tills.written.last_says(BAR_DRAWER, "COUNT BY NOTE"));
 }
+
+#[tokio::test]
+async fn a_counted_drawer_takes_no_more_cash_but_still_takes_a_card() {
+    // ADR-0186 decision 4: between Enter count and Close, cash into that drawer is refused by
+    // name, so the expectation the count is checked against cannot move after it.
+    let tills = drawers_app(false).await;
+    let bar = open_over(&tills, &tills.bar).await;
+    count_over(&tills, &tills.bar, &bar).await;
+
+    let (status, reason, _) = settle_over(&tills, &tills.bar, 51, "PAYMENT_METHOD_CASH").await;
+    assert_eq!(
+        (status, reason.as_deref()),
+        (StatusCode::CONFLICT, Some("DRAWER_COUNTED"))
+    );
+    let (status, _, settled) = settle_over(&tills, &tills.bar, 52, "PAYMENT_METHOD_CARD").await;
+    assert_eq!(status, StatusCode::OK, "{settled}");
+
+    let close = format!("/api/shifts/{bar}/close");
+    let (status, _, closed) = post(&tills, &tills.bar, &close, json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{closed}");
+    assert_eq!(
+        closed["expected_amount"],
+        json!(vnd(500_000)),
+        "the refused cash never reached the expectation"
+    );
+    assert_eq!(closed["variance"], json!(vnd(0)));
+}

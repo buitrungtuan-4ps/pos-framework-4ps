@@ -580,6 +580,7 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
         AppError::CashReasonNotValid => "CASH_REASON_NOT_VALID",
         AppError::ShiftNotOpen => "SHIFT_NOT_OPEN",
         AppError::DrawerDayEnded => "DRAWER_DAY_ENDED",
+        AppError::DrawerCounted => "DRAWER_COUNTED",
         AppError::VarianceReasonRequired(_) => "VARIANCE_REASON_REQUIRED",
         AppError::DrawerAssignedToAnother => "DRAWER_ASSIGNED_TO_ANOTHER",
         AppError::AssigneeRequired => "ASSIGNEE_REQUIRED",
@@ -642,6 +643,7 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::CashReasonNotValid
         | AppError::ShiftNotOpen
         | AppError::DrawerDayEnded
+        | AppError::DrawerCounted
         | AppError::DrawerAssignedToAnother
         | AppError::AssigneeRequired
         | AppError::ModifierSelectionInvalid

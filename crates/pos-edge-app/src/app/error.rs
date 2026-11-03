@@ -206,6 +206,12 @@ pub enum AppError {
     /// ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 11).
     #[error("this drawer's shift opened on an earlier business day; count and close it first")]
     DrawerDayEnded,
+    /// Cash into or out of a drawer whose shift is counted
+    /// ([ADR-0186](../../../../docs/adr/0186-a-drawer-is-counted-by-denomination.md) decision 4): the
+    /// count is the drawer's snapshot, and cash after it would belong to no count. Other tenders
+    /// still settle.
+    #[error("this drawer is being closed; take this payment at another till, or by card")]
+    DrawerCounted,
     /// An act on a drawer assigned, for its session, to somebody other than the person acting, who
     /// neither holds `cash.drawer.override_assignment` directly nor brought an approver who does
     /// ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 9). Names no

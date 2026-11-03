@@ -6,9 +6,9 @@
 use pos_core::billing::Payment;
 use pos_core::decision::DecisionCtx;
 use pos_ports::event_store::EventStore;
-use pos_proto::PaymentMethod;
 use pos_proto::ids::{DeviceId, ShiftId};
 use pos_proto::shift::{DrawerModel, NoShiftSelling};
+use pos_proto::{PaymentMethod, ShiftState};
 
 use crate::app::records::is_till;
 use crate::app::{AppError, Approval, Edge, SettleDrawer, TillScope};
@@ -123,7 +123,8 @@ impl<S: EventStore> Edge<S> {
     /// # Errors
     ///
     /// [`AppError::NotATill`], [`AppError::OpenShiftRequired`] for that drawer, the day-end
-    /// refusal, and [`Self::override_assignment`]'s refusals.
+    /// refusal, [`AppError::DrawerCounted`] once that drawer's shift is counted (ADR-0186 decision
+    /// 4), and [`Self::override_assignment`]'s refusals.
     pub(in crate::app) fn cash_drawer_for(
         &self,
         ctx: &mut DecisionCtx,
@@ -140,6 +141,10 @@ impl<S: EventStore> Edge<S> {
         };
         let mut overrider = None;
         if let Some((shift_id, record)) = open {
+            // The count is a snapshot, so the expectation it is checked against cannot move after it.
+            if record.state == ShiftState::Counted {
+                return Err(AppError::DrawerCounted);
+            }
             self.refuse_after_day_end(shift_id, &record)?;
             overrider = self.override_assignment(ctx, Some(&record), approval)?;
         }
