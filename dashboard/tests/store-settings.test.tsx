@@ -41,6 +41,7 @@ const COUNTRIES = [
     prices_include_tax: true,
     cash_rounding_increment: null,
     cash_denominations: [1000, 5000, 10000],
+    cash_count_denominations: [1, 5, 10, 50, 100, 500, 1000, 2000, 5000, 10000],
   },
   {
     code: "VN",
@@ -54,6 +55,7 @@ const COUNTRIES = [
     prices_include_tax: false,
     cash_rounding_increment: null,
     cash_denominations: [],
+    cash_count_denominations: [],
   },
 ];
 
@@ -134,6 +136,16 @@ describe("store settings", () => {
     selectStore(STORE.id, STORE.name);
   });
   afterEach(cleanup);
+
+  it("counts by the store's own list, or by its country's when it has published none (ADR-0186)", async () => {
+    await mount();
+    expect(field("Notes and coins to count a drawer by")).toBe("1, 5, 10, 50, 100, 500, 1000, 2000, 5000, 10000");
+
+    cleanup();
+    effectiveConfig.mockResolvedValue({ ...PUBLISHED, locale: { ...PUBLISHED.locale, cash_count_denominations: [] } });
+    await mount();
+    expect(field("Notes and coins to count a drawer by")).toBe("");
+  });
 
   it("shows what the store is running, not the framework's defaults", async () => {
     await mount();

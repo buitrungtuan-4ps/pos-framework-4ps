@@ -51,6 +51,7 @@ import { errorMessage } from "../lib/errors";
 import { useInFlight } from "../lib/in-flight";
 import { endedElsewhere } from "../state/closing";
 import { openForPay } from "../state/open-for-pay";
+import { useSplitPlan } from "../state/split-plan";
 import { printOutcomeKey } from "../lib/print";
 import { asksApprover, can, permissionsEnforced } from "../state/permissions";
 
@@ -137,10 +138,9 @@ export function Pay() {
   // Splitting the bill evenly between guests who each pay their own share. `ways` is how many shares
   // and `taken` the shares already paid. They are held here until the last share lands and then
   // sent in one settle, because the edge settles a bill in one step: its payments must add up to the
-  // total exactly (`pos_core::billing::settle`), and a half-paid bill is not a state it has. Nothing
-  // survives a reload, so a screen that reloads mid-split asks for the shares again.
-  const [ways, setWays] = createSignal<number | null>(null);
-  const [taken, setTaken] = createSignal<PaymentRequest[]>([]);
+  // total exactly (`pos_core::billing::settle`), and a half-paid bill is not a state it has. The
+  // plan is kept per bill for the tab (`../state/split-plan`), so leaving or reloading keeps it.
+  const { ways, setWays, taken, setTaken } = useSplitPlan(billId, () => done() !== null || voided());
   // The change handed back on the settle that closed the bill, summed over its payments, for the
   // settled panel: one payment's change, or what a split's cash shares were owed between them.
   const [givenChange, setGivenChange] = createSignal(0);
@@ -490,7 +490,6 @@ export function Pay() {
   // carrying nothing over from the last: its own amount, and no tender, tip, share, buyer, open
   // panel or manager's PIN from the guest before.
   const switchTo = (id: string) => {
-    setBillId(id);
     setCheck(null);
     setCovered(null);
     setDone(null);
@@ -511,6 +510,7 @@ export function Pay() {
     setVoidingBill(false);
     setApproverCode("");
     setApproverPin("");
+    setBillId(id);
     void showBill(id);
   };
 

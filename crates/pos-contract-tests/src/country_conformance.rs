@@ -272,6 +272,7 @@ mod tests {
             prices_include_tax: false,
             cash_rounding_increment: None,
             cash_denominations: Vec::new(),
+            cash_count_denominations: Vec::new(),
         }
     }
 

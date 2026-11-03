@@ -99,7 +99,10 @@ half-finished country fails CI rather than looking finished.
   Also fill in the three **till** facts ADR-0105 added, because each is wrong by default in some
   market: `prices_include_tax` (Japan and India quote inclusive, Vietnam exclusive),
   `cash_rounding_increment` (India ₹1, Vietnam 1,000 ₫, Japan none), and `cash_denominations` (the
-  notes a guest hands over, in minor units — empty means "the exact amount only").
+  notes a guest hands over, in minor units — empty means "the exact amount only"). State
+  `cash_count_denominations` too: every note and coin in use, ascending, in minor units, which the
+  till counts a drawer by ([ADR-0186](../adr/0186-a-drawer-is-counted-by-denomination.md)). Empty
+  means no counter, and a store can override it on its locale settings.
   `default_language` is also what a new store's receipts print in
   ([ADR-0160](../adr/0160-everything-a-store-runs-differently-is-published-configuration.md)), where
   [`paper_labels.rs`](../../crates/pos-edge-printing/src/paper_labels.rs) has a table for it.

@@ -32,6 +32,8 @@ export interface PackFields {
   readonly rounding: string;
   /** The quick-cash notes as typed, comma-separated minor units. */
   readonly notes: string;
+  /** The notes and coins a drawer is counted by (ADR-0186), comma-separated minor units. */
+  readonly countNotes: string;
   readonly registrationLabel: string;
 }
 
@@ -44,6 +46,7 @@ export const FRAMEWORK_DEFAULTS: PackFields = {
   pricesIncludeTax: false,
   rounding: "",
   notes: "",
+  countNotes: "",
   registrationLabel: "",
 };
 
@@ -54,6 +57,7 @@ export const PACK_FIELD_LABEL: Readonly<Record<PackField, MessageKey>> = {
   pricesIncludeTax: "storeSettings.pricesIncludeTax",
   rounding: "storeSettings.cashRounding",
   notes: "storeSettings.cashNotes",
+  countNotes: "storeSettings.cashCountNotes",
   registrationLabel: "storeSettings.registrationLabel",
 };
 
@@ -78,6 +82,7 @@ export function packFields(country: Country, registrationLabel: string): PackFie
     pricesIncludeTax: country.prices_include_tax,
     rounding: country.cash_rounding_increment === null ? "" : String(country.cash_rounding_increment),
     notes: country.cash_denominations.join(", "),
+    countNotes: country.cash_count_denominations.join(", "),
     registrationLabel,
   };
 }
@@ -226,6 +231,7 @@ export function useCountryPack(options: {
     pricesIncludeTax: fields.pricesIncludeTax[0](),
     rounding: fields.rounding[0](),
     notes: fields.notes[0](),
+    countNotes: fields.countNotes[0](),
     registrationLabel: fields.registrationLabel[0](),
   });
   const write = (values: PackFields) => {
@@ -234,6 +240,7 @@ export function useCountryPack(options: {
     fields.pricesIncludeTax[1](values.pricesIncludeTax);
     fields.rounding[1](values.rounding);
     fields.notes[1](values.notes);
+    fields.countNotes[1](values.countNotes);
     fields.registrationLabel[1](values.registrationLabel);
   };
   // The label the paper uses is the country's, and the operator can overwrite it — a closed set

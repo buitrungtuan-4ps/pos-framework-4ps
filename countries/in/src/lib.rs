@@ -58,6 +58,9 @@ const CASH_ROUNDING: i64 = 100;
 /// The notes a guest hands over, ascending, in paise.
 const NOTES: [i64; 6] = [1_000, 2_000, 5_000, 10_000, 20_000, 50_000];
 
+/// Every coin and note a drawer is counted by, ascending, in paise (ADR-0186): ₹1 to ₹500.
+const COUNT_DENOMINATIONS: [i64; 9] = [100, 200, 500, 1_000, 2_000, 5_000, 10_000, 20_000, 50_000];
+
 /// India.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct India;
@@ -95,6 +98,7 @@ impl CountryModule for India {
             prices_include_tax: true,
             cash_rounding_increment: Some(CASH_ROUNDING),
             cash_denominations: NOTES.to_vec(),
+            cash_count_denominations: COUNT_DENOMINATIONS.to_vec(),
         }
     }
 
@@ -298,6 +302,15 @@ mod tests {
         assert!(pack.prices_include_tax, "MRP is inclusive by definition");
         assert_eq!(pack.cash_rounding_increment, Some(100), "₹1 in paise");
         assert_eq!(pack.cash_denominations, NOTES.to_vec());
+    }
+
+    #[test]
+    fn a_drawer_is_counted_from_the_rupee_coin_to_the_five_hundred_note() {
+        assert_eq!(
+            India.locale_pack().cash_count_denominations,
+            [100, 200, 500, 1_000, 2_000, 5_000, 10_000, 20_000, 50_000],
+            "₹1 to ₹500, in paise"
+        );
     }
 
     #[test]

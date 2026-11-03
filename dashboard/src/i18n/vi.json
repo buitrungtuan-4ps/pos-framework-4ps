@@ -2292,6 +2292,8 @@
   "storeSettings.businessDate": "Ngày kinh doanh hiện tại:",
   "storeSettings.cashNotes": "Mệnh giá tiền mặt nhanh (đơn vị nhỏ nhất)",
   "storeSettings.cashNotesHint": "Các tờ tiền khách thường đưa, cách nhau bằng dấu phẩy, nhỏ trước — 10000, 20000, 50000. Để trống thì chỉ hiện đúng số tiền phải trả.",
+  "storeSettings.cashCountNotes": "Mệnh giá để đếm két (đơn vị nhỏ nhất)",
+  "storeSettings.cashCountNotesHint": "Mọi tờ tiền và đồng xu dùng để đếm két, cách nhau bằng dấu phẩy, nhỏ trước — 1000, 2000, 5000. Chọn quốc gia sẽ điền danh sách của quốc gia đó. Để trống thì không có bảng đếm: máy chỉ nhận một số tiền.",
   "storeSettings.cashRounding": "Làm tròn tiền mặt (đơn vị nhỏ nhất)",
   "storeSettings.cashRoundingHint": "Tổng tiền được làm tròn tới mức này khi thanh toán tiền mặt — 1000 cho Việt Nam, 100 cho một rupee của Ấn Độ. Để trống là không làm tròn.",
   "storeSettings.contact": "Dòng liên hệ",

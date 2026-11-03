@@ -45,6 +45,11 @@ pub(crate) struct LocaleResponse {
     currency_exponent: u8,
     /// The notes a guest hands over, ascending, in minor units. Empty means the exact amount only.
     cash_denominations: Vec<i64>,
+    /// The notes and coins a drawer is counted by, ascending, in minor units
+    /// ([ADR-0186](../../../../docs/adr/0186-a-drawer-is-counted-by-denomination.md)): the store's
+    /// own list, else its country pack's. Empty means no counter, and the till keeps its single
+    /// amount field.
+    cash_count_denominations: Vec<i64>,
     /// What the grand total is rounded to in cash, in minor units, or `null` for no rounding.
     ///
     /// The till does not apply this — `pos_core::billing` does, and the rounding is already inside
@@ -80,7 +85,8 @@ pub(crate) struct LocaleResponse {
     ),
     responses(
         (status = 200, body = LocaleResponse, description = "The money facts the pay screen needs: the currency, the notes a guest can \
-                                      hand over, and what a total rounds to in cash. Empty until a `locale` node \
+                                      hand over, the notes and coins a drawer is counted by, and what a total rounds \
+                                      to in cash. Empty until a `locale` node \
                                       is published. \
                                       The ETag tags this body"),
         (status = 304, description = "If-None-Match names the current ETag: nothing changed, and no body is sent"),
@@ -101,6 +107,7 @@ where
             currency_code: session.currency.as_str().to_owned(),
             currency_exponent: session.currency_exponent,
             cash_denominations: session.cash_denominations.clone(),
+            cash_count_denominations: session.cash_count_denominations.clone(),
             cash_rounding_increment: session.cash_rounding_increment,
             prices_include_tax: session.prices_include_tax,
             number_format: session.number_format.clone(),

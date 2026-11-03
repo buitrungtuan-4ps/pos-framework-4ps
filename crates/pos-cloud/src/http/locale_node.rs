@@ -63,6 +63,44 @@ pub(super) fn checked_locale_fields(
     Ok((country, currency, denominations))
 }
 
+/// The notes and coins the store's till counts a drawer by
+/// ([ADR-0186](../../../docs/adr/0186-a-drawer-is-counted-by-denomination.md)): the publish's own
+/// list where it states one, sorted and de-duplicated, else its country pack's. An empty list is a
+/// stated answer, no counter, and is kept rather than replaced by the pack's.
+///
+/// # Errors
+///
+/// An AIP-193 `400` naming `cash_count_denominations` when a value is not positive.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the 400 the caller returns"
+)]
+pub(super) fn checked_count_denominations(
+    request: &PublishLocaleRequest,
+    facts: &PackedFacts,
+    country: CountryCode,
+) -> Result<Vec<i64>, Response> {
+    let Some(stated) = &request.cash_count_denominations else {
+        return Ok(facts
+            .count_denominations
+            .get(&country)
+            .cloned()
+            .unwrap_or_default());
+    };
+    if stated.iter().any(|denomination| *denomination <= 0) {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "cash_count_denominations are note and coin values in minor units and must all be \
+             positive",
+            &[("cash_count_denominations", "OUT_OF_RANGE")],
+        ));
+    }
+    let mut denominations = stated.clone();
+    denominations.sort_unstable();
+    denominations.dedup();
+    Ok(denominations)
+}
+
 /// Adds to `locale_value` what the store's country pack says rather than the operator: the
 /// currency's decimals, how long a personal record is kept, how a number is written, and the
 /// country's language. A fact the pack does not have is left out.
@@ -168,3 +206,6 @@ pub(in crate::http) fn published_country(tree: &ConfigTreeState) -> Option<Count
         .as_str()
         .and_then(|code| CountryCode::parse(code).ok())
 }
+
+#[cfg(test)]
+mod tests;
