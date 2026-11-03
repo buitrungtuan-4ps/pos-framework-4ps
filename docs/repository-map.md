@@ -103,6 +103,19 @@ snapshotted to [`snapshots/capabilities.txt`](snapshots/capabilities.txt).
 
 Console permissions are separate: see the cloud route table.
 
+## Act in the action catalogue
+
+An act a package's button, flow step or reaction may name
+([ADR-0191](adr/0191-every-act-is-in-a-typed-catalogue.md)). A new act is a release: its route
+first, then its entry; a new money act also needs its own ADR.
+
+| Step | Files | Checked by |
+|---|---|---|
+| The entry | `CATALOGUE` in `crates/pos-proto/src/actions/catalogue.rs`: id, effect class, frequency, typed parameters, routes, permissions, predictable refusals, release | `pos-proto` tests (`actions::tests`) |
+| Its routes and permissions | equal to the route's row in `crates/pos-edge/src/http/route_permissions.rs`; a money route is in `MONEY_ROUTES` beside the test, `crates/pos-edge/src/http/route_permissions/catalogue.rs` | `an_act_needs_exactly_what_its_routes_need`, `every_route_a_person_acts_through_is_an_act`, `an_act_is_money_exactly_when_its_route_is` |
+| Its refusals | tokens `error_reason` in `crates/pos-edge/src/http/mod.rs` answers with; the permission is implied, not listed | `every_predictable_refusal_is_one_the_edge_answers_with` |
+| Snapshot | [`snapshots/actions.txt`](snapshots/actions.txt), via `just snapshot` | `the_committed_snapshot_matches_the_catalogue`; `xtask snapshot` refuses a removed act, effect or parameter |
+
 ## Event
 
 | Step | Files | Checked by |
