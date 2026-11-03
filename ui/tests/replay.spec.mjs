@@ -3968,6 +3968,81 @@ test("a till trading in đồng types thousands with one key, and adds a note wi
   }
 });
 
+// A store that counts by note (ADR-0186 decision 3) gets a counter on the float, the count and a drop
+// to the safe: − and + per note, the keypad into the row tapped, a loose amount, and the total,
+// which is what is sent with its rows. The sum is the till's, so it always adds up; the close card
+// lists the rows the edge kept. The demo store publishes no counting list, so this one is given
+// Vietnam's.
+test("a drawer is counted note by note, and the close card lists the notes", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await page.route("**/api/locale", async (route) => {
+      const response = await fetchWhole(route);
+      const body = await response.json();
+      const counting = [1_000, 2_000, 5_000, 10_000, 20_000, 50_000, 100_000, 200_000, 500_000];
+      await route.fulfill({ response, json: { ...body, cash_count_denominations: counting } });
+    });
+    const sent = [];
+    page.on("request", (request) => {
+      if (request.method() === "POST" && /\/api\/shifts(\/[^/]+\/(count|safe-drop))?$/.test(request.url())) {
+        sent.push(request.postDataJSON());
+      }
+    });
+    await pair(page, edge);
+    await signIn(page, edge);
+    await navigateTo(page, "/shift");
+
+    // The float: two 500,000₫ notes on +, three 100,000₫ on the keypad, into the row tapped.
+    const counter = page.locator('[data-outcome="denomination-counter"]');
+    await expect(page.locator("#float")).toHaveCount(0);
+    await counter.getByRole("button", { name: "One more 500,000₫" }).click();
+    await counter.getByRole("button", { name: "One more 500,000₫" }).click();
+    await counter.getByRole("textbox", { name: "How many 100,000₫" }).click();
+    await page.locator('[data-step="floatKeypad"]').getByRole("button", { name: "3", exact: true }).click();
+    await expect(page.locator('[data-outcome="counter-total"]')).toHaveText("Total 1,300,000₫");
+    await page.locator('[data-step="openShift"]').click();
+    await expect(page.locator('[data-outcome="shift-open"]')).toBeVisible();
+    expect(sent[0].opening_float.amount_minor).toBe(1_300_000);
+    expect(sent[0].denomination_counts).toEqual([
+      { denomination: { amount_minor: 100_000, currency_code: "VND" }, quantity: 3 },
+      { denomination: { amount_minor: 500_000, currency_code: "VND" }, quantity: 2 },
+    ]);
+
+    // A drop to the safe is counted the same way, and carries its notes.
+    await page.getByRole("button", { name: "Drop to safe" }).click();
+    const drop = page.locator('[data-outcome="safe-drop"]');
+    await drop.getByRole("button", { name: "One more 500,000₫" }).click();
+    await drop.locator('[data-step="dropToSafe"]').click();
+    await expect(page.locator('[data-outcome="cash-moved"]')).toContainText("500,000₫");
+    expect(sent[1].amount_minor).toBe(500_000);
+    expect(sent[1].denomination_counts).toEqual([
+      { denomination: { amount_minor: 500_000, currency_code: "VND" }, quantity: 1 },
+    ]);
+
+    // The count: 800,000₫ left, one note on +, two typed, and 100,000₫ loose that the list does not name.
+    await counter.getByRole("button", { name: "One more 500,000₫" }).click();
+    await counter.getByRole("textbox", { name: "How many 100,000₫" }).fill("2");
+    await counter.locator('[data-outcome="counter-uncounted"]').fill("100000");
+    await expect(page.locator('[data-outcome="counter-total"]')).toHaveText("Total 800,000₫");
+    await page.locator('[data-step="countShift"]').click();
+    await expect(page.locator('[data-outcome="shift-counted"]')).toBeVisible();
+    expect(sent[2].counted_minor).toBe(800_000);
+    expect(sent[2].uncounted_amount).toEqual({ amount_minor: 100_000, currency_code: "VND" });
+
+    await page.locator('[data-step="closeShift"]').click();
+    const closed = page.locator('[data-outcome="shift-closed"]');
+    await expect(closed.locator(".text-ok")).toBeVisible();
+    const rows = closed.locator('[data-outcome="counted-rows"] li');
+    await expect(rows).toHaveText([
+      "100,000₫ × 2 = 200,000₫",
+      "500,000₫ × 1 = 500,000₫",
+      "Other / loose 100,000₫",
+    ]);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A shift starts on a terminal with no keyboard of any kind.
 //
 // The float keypad above closed this for cash. It did not close it for the screen that comes first.
