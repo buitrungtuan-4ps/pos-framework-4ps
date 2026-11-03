@@ -17,10 +17,12 @@ use core::fmt;
 use serde::{Deserialize, Serialize};
 
 /// The shortest password first-boot will accept, so a fork cannot mint a trivially weak super-admin
-/// ([ADR-0045](../../../../docs/adr/0045-first-boot-admin-enrolment.md)).
+/// ([ADR-0045](../../../../docs/adr/0045-first-boot-admin-enrolment.md)). Counted in characters
+/// (`chars().count()`), not bytes.
 pub const MIN_PASSWORD_LEN: usize = 12;
 
-/// The longest password first-boot or invite enrolment will accept (128 characters), mitigating
+/// The longest password first-boot or invite enrolment will accept (128 characters, counted with
+/// `chars().count()` — not bytes, so a Vietnamese passphrase gets the same room), mitigating
 /// denial-of-service attacks that exhaust memory and CPU by sending arbitrarily large strings to
 /// Argon2id hashing (OWASP Password Storage guidance).
 pub const MAX_PASSWORD_LEN: usize = 128;

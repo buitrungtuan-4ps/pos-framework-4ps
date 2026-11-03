@@ -107,7 +107,7 @@ Open `https://<your DOMAIN>/` — Caddy has a real certificate by now. Enrol the
 ```
 curl -X POST https://<your DOMAIN>/admin/setup \
   -H 'content-type: application/json' \
-  -d '{"setup_token":"<the token from the run log>","password":"<a strong passphrase, 12+ chars>"}'
+  -d '{"setup_token":"<the token from the run log>","password":"<a strong passphrase, 12 to 128 characters>"}'
 ```
 
 The response carries an `otpauth://` URI once — add it to your authenticator app (or scan it as a

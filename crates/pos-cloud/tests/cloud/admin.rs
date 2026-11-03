@@ -257,6 +257,67 @@ async fn setup_with_too_long_a_password_is_refused() {
     );
 }
 
+/// A password's length is counted in characters, not bytes: "mật khẩu " is 9 characters but 13
+/// bytes, so a passphrase that is well inside the limits in characters must not be refused because
+/// its UTF-8 encoding is longer.
+fn vietnamese_password(characters: usize) -> String {
+    "mật khẩu ".chars().cycle().take(characters).collect()
+}
+
+#[tokio::test]
+async fn setup_counts_the_password_length_in_characters() {
+    let (router, admin) = setup_router(Some(SETUP_TOKEN));
+    let max = pos_cloud_api::auth::enrol::MAX_PASSWORD_LEN;
+    let too_long = vietnamese_password(max + 1);
+    let body = serde_json::json!({ "setup_token": SETUP_TOKEN, "password": too_long });
+    let response = router
+        .clone()
+        .oneshot(post_json("/admin/setup", &body))
+        .await
+        .expect("route the setup");
+    assert_eq!(
+        response.status(),
+        StatusCode::BAD_REQUEST,
+        "129 characters is over the limit"
+    );
+
+    let min = pos_cloud_api::auth::enrol::MIN_PASSWORD_LEN;
+    let too_short = vietnamese_password(min - 1);
+    assert!(
+        too_short.len() >= min,
+        "the short one is long enough in bytes"
+    );
+    let body = serde_json::json!({ "setup_token": SETUP_TOKEN, "password": too_short });
+    let response = router
+        .clone()
+        .oneshot(post_json("/admin/setup", &body))
+        .await
+        .expect("route the setup");
+    assert_eq!(
+        response.status(),
+        StatusCode::BAD_REQUEST,
+        "11 characters is under the limit"
+    );
+    assert!(admin.load_credential().await.expect("load").is_none());
+
+    let password = vietnamese_password(100);
+    assert!(
+        password.len() > max,
+        "the accepted one is over the limit in bytes"
+    );
+    let body = serde_json::json!({ "setup_token": SETUP_TOKEN, "password": password });
+    let response = router
+        .oneshot(post_json("/admin/setup", &body))
+        .await
+        .expect("route the setup");
+    assert_eq!(
+        response.status(),
+        StatusCode::CREATED,
+        "100 characters is within the limit"
+    );
+    assert!(admin.load_credential().await.expect("load").is_some());
+}
+
 #[tokio::test]
 async fn logout_clears_the_cookie_and_revokes_the_session() {
     let router = http::router(app_with_admin(

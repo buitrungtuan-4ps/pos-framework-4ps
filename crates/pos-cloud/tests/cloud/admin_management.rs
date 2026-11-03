@@ -356,6 +356,47 @@ async fn accepting_an_invite_with_too_long_a_password_is_refused() {
 }
 
 #[tokio::test]
+async fn accepting_an_invite_counts_the_password_length_in_characters() {
+    let router = registry_app(provisioned_admin(), FakeRegistry::default());
+    let max = pos_cloud_api::auth::enrol::MAX_PASSWORD_LEN;
+    let accept = |characters: usize| {
+        // "mật khẩu " is 9 characters but 13 bytes.
+        let password: String = "mật khẩu ".chars().cycle().take(characters).collect();
+        post_json(
+            "/admin/invites/accept",
+            &serde_json::json!({ "token": "not-a-real-token", "password": password }),
+        )
+    };
+    let too_long = router
+        .clone()
+        .oneshot(accept(max + 1))
+        .await
+        .expect("route accept");
+    assert_eq!(
+        too_long.status(),
+        StatusCode::BAD_REQUEST,
+        "129 characters is over the limit"
+    );
+    let too_short = router
+        .clone()
+        .oneshot(accept(11))
+        .await
+        .expect("route accept");
+    assert_eq!(
+        too_short.status(),
+        StatusCode::BAD_REQUEST,
+        "11 characters is under the limit"
+    );
+    // Within the limits, the length check passes and the unknown token is what refuses it.
+    let within = router.oneshot(accept(100)).await.expect("route accept");
+    assert_eq!(
+        within.status(),
+        StatusCode::UNAUTHORIZED,
+        "100 characters (over 128 bytes) passes the length check"
+    );
+}
+
+#[tokio::test]
 async fn the_last_active_owner_cannot_be_demoted_or_suspended() {
     // The one thing this test needs is *exactly one* active owner, so it starts from an empty store
     // and lets `role_session_cookie` seed that owner. `provisioned_admin()` would add the migrated
