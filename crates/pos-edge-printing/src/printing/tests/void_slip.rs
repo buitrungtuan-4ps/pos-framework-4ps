@@ -4,6 +4,7 @@
 //! The void slip and the VOID copy (ADR-0184 decisions 4 to 6, and its amendment of 2026-11-02).
 
 use pos_proto::money::{CurrencyCode, Money};
+use pos_proto::reason_codes::{PublishedReasonCode, PublishedReasonCodes, ReasonCode};
 use pos_proto::store_profile::StoreProfile;
 
 use crate::paper_labels::{ENGLISH, VIETNAMESE};
@@ -14,13 +15,24 @@ fn vnd(minor: i64) -> Money {
     Money::new(CurrencyCode::VND, minor)
 }
 
+/// The framework's own `STAFF_ERROR`, "Staff error" with "Nhân viên nhập sai" for Vietnamese: the
+/// reason the pilot's void slip printed in English under Vietnamese labels.
+fn staff_error() -> PublishedReasonCode {
+    PublishedReasonCodes::framework_default()
+        .codes()
+        .iter()
+        .find(|reason| reason.code == ReasonCode::new("STAFF_ERROR"))
+        .cloned()
+        .expect("the framework's list has STAFF_ERROR")
+}
+
 fn slip(cash: i64, other: i64) -> VoidSlip {
     VoidSlip {
         receipt_number: 42,
         total_due: vnd(cash + other),
         cash_returned: vnd(cash),
         other_reversed: vnd(other),
-        reason: Some("Keyed in error".to_owned()),
+        reason: Some(staff_error()),
         till: Some("Bar".to_owned()),
         voided_at: "2026-11-02 19:05".to_owned(),
     }
@@ -42,7 +54,7 @@ fn a_cash_void_slip_names_the_receipt_the_amount_and_the_reason_and_nobody() {
             "BILL VOIDED",
             "#42",
             "Amount  VND 165,000",
-            "Reason: Keyed in error",
+            "Reason: Staff error",
             "Till: Bar",
             "Time: 2026-11-02 19:05",
             "Cash returned  VND 165,000",
@@ -90,12 +102,32 @@ fn a_vietnamese_store_prints_the_slip_in_vietnamese() {
     );
     let lines = lines_of(&document);
     assert_eq!(lines[0], "HÓA ĐƠN ĐÃ HỦY");
-    assert!(lines.contains(&"Lý do: Keyed in error"));
+    assert!(
+        lines.contains(&"Lý do: Nhân viên nhập sai"),
+        "the reason in the paper's language, as the till shows it: {lines:?}"
+    );
     assert!(lines.contains(&"Hoàn tiền trên máy quẹt thẻ"));
     assert!(
         !lines.iter().any(|line| line.starts_with("Tiền mặt")),
         "no cash, no cash line"
     );
+}
+
+/// A reason the list has no translation for prints its own name, whatever the labels' language.
+#[test]
+fn a_reason_with_no_translation_prints_its_own_name() {
+    let mut reason = staff_error();
+    reason.display_name_translations.clear();
+    let document = void_slip_document(
+        &StoreProfile::default(),
+        &style(0),
+        &VIETNAMESE,
+        &VoidSlip {
+            reason: Some(reason),
+            ..slip(165_000, 0)
+        },
+    );
+    assert!(lines_of(&document).contains(&"Lý do: Staff error"));
 }
 
 /// A copy of a voided bill's receipt is marked VOID above COPY; any other copy is not.

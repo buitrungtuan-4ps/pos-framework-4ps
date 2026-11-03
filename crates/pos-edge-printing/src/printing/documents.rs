@@ -8,6 +8,7 @@ use pos_core::billing::{BillTotals, TaxComponentLine};
 use pos_ports::printer::{PrintBlock, PrintDocument, TextStyle};
 use pos_proto::devices::PublishedDevice;
 use pos_proto::money::Money;
+use pos_proto::reason_codes::PublishedReasonCode;
 use pos_proto::store_profile::StoreProfile;
 
 use crate::app::{BuyerDetails, CombinedReport, DrawerFigures, ReceiptLine, ShiftReport};
@@ -191,8 +192,10 @@ pub struct VoidSlip {
     pub cash_returned: Money,
     /// Card and every other tender, recorded as reversed; the cashier gives it back on the terminal.
     pub other_reversed: Money,
-    /// The reason's name in the store's list.
-    pub reason: Option<String>,
+    /// The reason, as the store's list publishes it: the slip prints its name in the labels'
+    /// language, as the till shows it in the display language, and its own name where the list has
+    /// no translation into that language.
+    pub reason: Option<PublishedReasonCode>,
     /// The till the void was done at.
     pub till: Option<String>,
     /// When, in the store's local time, as the caller formats it.
@@ -215,7 +218,12 @@ pub fn void_slip_document(
     blocks.push(centred(format!("#{}", slip.receipt_number), true));
     blocks.push(amount_line(labels.amount, slip.total_due, money));
     for (label, value) in [
-        (labels.reason, slip.reason.as_deref()),
+        (
+            labels.reason,
+            slip.reason
+                .as_ref()
+                .map(|reason| reason.localized_name(labels.language).as_str()),
+        ),
         (labels.till, slip.till.as_deref()),
         (labels.time, Some(slip.voided_at.as_str())),
     ] {

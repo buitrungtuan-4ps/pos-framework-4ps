@@ -187,8 +187,9 @@ pub struct SettledVoidView {
     pub job_id: pos_proto::ids::EventId,
     /// When the bill was voided.
     pub voided_time: Timestamp,
-    /// The reason's name in the store's list, as the slip prints it.
-    pub reason: Option<DisplayName>,
+    /// The reason, as the store's list publishes it, whose name the slip prints in the paper's
+    /// language.
+    pub reason: Option<pos_proto::reason_codes::PublishedReasonCode>,
     /// The name of the till the void was done at, where the device is one of the store's tills.
     pub till_name: Option<DisplayName>,
 }

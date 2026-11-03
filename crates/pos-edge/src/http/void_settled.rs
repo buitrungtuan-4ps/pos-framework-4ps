@@ -169,7 +169,7 @@ where
         total_due: view.total_due,
         cash_returned: view.cash_returned,
         other_reversed: view.other_reversed,
-        reason: view.reason.as_ref().map(|name| name.as_str().to_owned()),
+        reason: view.reason.clone(),
         till: view.till_name.as_ref().map(|name| name.as_str().to_owned()),
         voided_at: local_time(view.voided_time, &session.timezone)
             .map(|time| time.to_string())
