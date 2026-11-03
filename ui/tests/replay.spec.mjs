@@ -4115,11 +4115,36 @@ test("a shift is handed over at the till, the X reads it, and the day closes on 
 // A drop to the safe may say why, from the store's reasons for a drop (ADR-0186 amendment), in one
 // tap like a paid out, or go without one; the Shift screen shows what the shift has dropped beside
 // what it paid in and out, and so does the close card.
+//
+// The close card used to lose what was dropped when the shift's own `cash.shift.closed` reached the
+// live link after the close's answer: the event replaced the shift with its four figures and dropped
+// the rest. The event is held here until the answer has landed, which is the order that lost it.
 test("a drop says why if the cashier picks a reason, and the shift shows what it dropped", async ({
   page,
 }) => {
   const edge = await startEdge();
   try {
+    let closedHeard = false;
+    let answered = () => {};
+    const closeAnswered = new Promise((resolve) => {
+      answered = resolve;
+    });
+    await page.routeWebSocket(
+      (url) => url.pathname === "/ws",
+      (socket) => {
+        socket.connectToServer().onMessage(async (message) => {
+          const closing = String(message).includes("cash.shift.closed");
+          if (closing) await closeAnswered;
+          socket.send(message);
+          if (closing) closedHeard = true;
+        });
+      },
+    );
+    page.on("response", (response) => {
+      if (response.request().method() === "POST" && /\/api\/shifts\/[^/]+\/close$/.test(response.url())) {
+        answered();
+      }
+    });
     const drops = [];
     page.on("request", (request) => {
       if (request.method() === "POST" && request.url().endsWith("/safe-drop")) {
@@ -4149,6 +4174,9 @@ test("a drop says why if the cashier picks a reason, and the shift shows what it
     await page.locator('[data-step="closeShift"]').click();
     const closed = page.locator('[data-outcome="shift-closed"]');
     await expect(closed.locator(".text-ok")).toBeVisible();
+    await expect(closed.locator('[data-outcome="shift-dropped"]')).toContainText("80,000₫");
+    // And once the held event has landed after it.
+    await expect.poll(() => closedHeard).toBe(true);
     await expect(closed.locator('[data-outcome="shift-dropped"]')).toContainText("80,000₫");
   } finally {
     await edge.stop();
