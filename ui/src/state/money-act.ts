@@ -60,27 +60,31 @@ export interface MoneyAct<T> {
   readonly dismiss: () => void;
 }
 
-export function useMoneyAct<T>(options: {
+interface Options<T> {
   readonly recheck: (subject: string) => Promise<Recheck<T>>;
   readonly committed: (value: T) => void;
   readonly timers?: { set: (run: () => void, ms: number) => number; clear: (id: number) => void };
   readonly now?: () => number;
-}): MoneyAct<T> {
+}
+
+/** The re-reads of ADR-0204: fast, then slow and "unreachable", until the edge answers. */
+function createRechecker<T>(
+  options: Options<T>,
+  setPhase: (phase: MoneyPhase) => void,
+  setRefusal: (message: string | null) => void,
+) {
   const timers = options.timers ?? {
     set: (run: () => void, ms: number) => window.setTimeout(run, ms),
     clear: (id: number) => window.clearTimeout(id),
   };
   const now = options.now ?? (() => performance.now());
-  const [phase, setPhase] = createSignal<MoneyPhase>("idle");
-  const [refusal, setRefusal] = createSignal<string | null>(null);
   let timer: number | null = null;
   onCleanup(() => {
     if (timer !== null) {
       timers.clear(timer);
     }
   });
-
-  const settleWith = (subject: string, answer: NonNullable<Recheck<T>>) => {
+  const answered = (subject: string, answer: NonNullable<Recheck<T>>) => {
     mark(subject, false);
     setPhase("idle");
     if ("committed" in answer) {
@@ -89,7 +93,6 @@ export function useMoneyAct<T>(options: {
       setRefusal(answer.refused);
     }
   };
-
   const check = (subject: string, since: number) => {
     const slow = now() - since >= RECHECK_FAST_FOR_MS;
     if (slow) {
@@ -100,17 +103,28 @@ export function useMoneyAct<T>(options: {
         timer = null;
         options
           .recheck(subject)
-          .then((answer) => (answer === null ? check(subject, since) : settleWith(subject, answer)))
+          .then((answer) => (answer === null ? check(subject, since) : answered(subject, answer)))
           .catch(() => check(subject, since));
       },
       slow ? RECHECK_SLOW_MS : RECHECK_EVERY_MS,
     );
   };
+  /** Starts checking `subject`, marked unconfirmed until the edge answers. */
+  return (subject: string) => {
+    mark(subject, true);
+    setPhase("checking");
+    check(subject, now());
+  };
+}
+
+export function useMoneyAct<T>(options: Options<T>): MoneyAct<T> {
+  const [phase, setPhase] = createSignal<MoneyPhase>("idle");
+  const [refusal, setRefusal] = createSignal<string | null>(null);
+  const startChecking = createRechecker(options, setPhase, setRefusal);
 
   const resume = (subject: string) => {
     if (isUnconfirmed(subject) && phase() === "idle") {
-      setPhase("checking");
-      check(subject, now());
+      startChecking(subject);
     }
   };
 
@@ -134,9 +148,7 @@ export function useMoneyAct<T>(options: {
         setRefusal(errorMessage(caught));
         return;
       }
-      mark(subject, true);
-      setPhase("checking");
-      check(subject, now());
+      startChecking(subject);
     }
   };
 

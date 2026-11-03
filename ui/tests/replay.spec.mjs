@@ -6490,3 +6490,89 @@ test("cash into a counted drawer is refused before sending, and the edge refuses
     await edge.stop();
   }
 });
+
+/** Lets `pattern`'s POST reach the edge, then drops its answer: committed there, unheard here. */
+async function loseAnswer(page, pattern) {
+  await page.route(pattern, async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    await route.fetch();
+    await route.abort("connectionreset");
+  });
+}
+
+/** Opens the pay screen's void panel with the manager's badge and PIN typed. */
+async function openVoidPanel(page, edge) {
+  await page.locator('[data-step="askVoidBill"]').click();
+  await page.locator("#void-bill-approver-code").fill(edge.staffCode);
+  await page.locator("#void-bill-approver-pin").fill(edge.staffPin);
+}
+
+// ADR-0196 safeguard 3 for a bill's void: the edge's refusal keeps the panel and the manager's
+// fields, says why in place, and takes no reason until it is dismissed.
+test("a refused void keeps the panel and its refusal must be dismissed", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    await sendThenTakePayment(page);
+    await refusePost(page, "**/api/bills/*/void", "VOID_REASON_NOT_VALID");
+    await openVoidPanel(page, edge);
+    await page.locator('[data-step="voidBillReason"]').first().click();
+    await expect(page.locator('[data-outcome="money-refused"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="bill-voided"]')).toHaveCount(0);
+    await expect(page.locator("#void-bill-approver-code")).toHaveValue(edge.staffCode);
+    await page.locator('[data-step="dismissRefusal"]').click();
+    await expect(page.locator('[data-outcome="money-refused"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// ADR-0204 for a bill's void: committed at the edge with its answer lost, it is checked and shown
+// voided, never rolled back to an open bill.
+test("a void whose answer is lost is checked, and shows the bill voided", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    await sendThenTakePayment(page);
+    await loseAnswer(page, "**/api/bills/*/void");
+    await openVoidPanel(page, edge);
+    await page.locator('[data-step="voidBillReason"]').first().click();
+    await expect(page.locator('[data-outcome="void-pending"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="bill-voided"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="money-refused"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// ADR-0204 for a paid bill's void: found voided by reading the day's bills again, it says so and
+// names no sum to hand back, since the edge's figures never arrived.
+test("a paid bill's void whose answer is lost is found voided, with no made-up figures", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await aSettledTable(page);
+    await navigateTo(page, "/today");
+    await page.locator('[data-step="chooseBill"]').click();
+    await loseAnswer(page, "**/api/bills/*/void_settled");
+    await page.locator('[data-step="askVoidPaidBill"]').click();
+    await page.locator("#void-paid-bill-approver-code").fill(edge.staffCode);
+    await page.locator("#void-paid-bill-approver-pin").fill(edge.staffPin);
+    await page.locator('[data-step="voidPaidBillReason"]').first().click();
+    const outcome = page.locator('[data-outcome="paid-bill-voided"]');
+    await expect(outcome).toContainText("could not be read on this till");
+    await expect(outcome).not.toContainText("in cash");
+  } finally {
+    await edge.stop();
+  }
+});

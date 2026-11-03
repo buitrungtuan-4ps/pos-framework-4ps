@@ -14,4 +14,6 @@ export const WRITES_PENDING = "WRITES_PENDING";
 
 export const PRECHECKED: Readonly<Partial<Record<ActionId, readonly string[]>>> = {
   "billing.bill.settle": [WRITES_PENDING, "DRAWER_COUNTED", "PAYMENTS_DO_NOT_SUM_TO_TOTAL"],
+  "billing.bill.void": [WRITES_PENDING, "APPROVAL_REQUIRED"],
+  "billing.bill.void_settled": ["APPROVAL_REQUIRED"],
 };
