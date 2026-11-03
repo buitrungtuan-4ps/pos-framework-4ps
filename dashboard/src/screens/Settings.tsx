@@ -61,10 +61,11 @@ import { ApiError, api } from "../api/client";
 import type { Json, SettingPublishOutcome, SettingScope } from "../api/types";
 import { type MessageKey, t, tFromServer } from "../i18n";
 import { useEntityCrud } from "../lib/entity-crud";
-import { formatCount, formatInstant } from "../lib/format";
+import { formatCount } from "../lib/format";
 import { LOADING, type Panel, panelOf } from "../lib/panel";
 import { createAdminResource, failureOf } from "../lib/resource";
 import { RequireContext } from "../lib/scoped";
+import { writtenNote } from "../lib/setting-source";
 import { honouredByEveryRelease, releaseStanding } from "../lib/semver";
 import { actingAdmin, storeId, tenantId } from "../state/session";
 import {
@@ -806,10 +807,7 @@ export function Settings() {
       ]
         .filter((fact): fact is string => fact !== null)
         .join(" · ");
-    const setOn = () => {
-      const at = Date.parse(here()?.update_time ?? "");
-      return Number.isFinite(at) ? t("settings.setOn", { when: formatInstant(at) }) : undefined;
-    };
+    const setOn = () => writtenNote(here());
     /** A choice: the token picked, else the one written here, else none — "Not set here". */
     const choiceShown = () => {
       const picked = draft();

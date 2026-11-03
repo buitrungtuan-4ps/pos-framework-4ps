@@ -2094,6 +2094,7 @@
   "settings.searchBrands": "Search brands",
   "settings.searchGroups": "Search store groups",
   "settings.searchStores": "Search stores",
+  "settings.fromPack": "From the {country} pack.",
   "settings.setHere": "Set here: {value}",
   "settings.setOn": "Set here on {when}.",
   "settings.sinceIs": "Honoured from release {since}",

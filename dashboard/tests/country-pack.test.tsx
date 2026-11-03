@@ -141,7 +141,8 @@ describe("publishing the store's country", () => {
     await chooseVietnam();
     publish();
     await waitFor(() =>
-      expect(putSetting).toHaveBeenCalledWith(TENANT.id, VARIANCE, "SETTING_SCOPE_STORE", STORE.id, 20000),
+      // With the pack's country, so Shared settings says the value came from it (ADR-0183).
+      expect(putSetting).toHaveBeenCalledWith(TENANT.id, VARIANCE, "SETTING_SCOPE_STORE", STORE.id, 20000, undefined, "VN"),
     );
     expect(toastOk).toHaveBeenCalledWith(
       "Set from Vietnam's pack for this store: Reason for a large over or short = 20000. Change it in Shared settings.",

@@ -529,6 +529,42 @@ describe("shared settings", () => {
     );
   });
 
+  it("says a value a country pack wrote came from the pack, and one a person wrote when it was set", async () => {
+    listSettingValues.mockResolvedValue([
+      {
+        setting_key: NO_SHIFT_SELLING.setting_key,
+        scope: "SETTING_SCOPE_TENANT",
+        scope_id: TENANT.id,
+        value: "NO_SHIFT_SELLING_REFUSE",
+        update_time: "2026-10-01T09:00:00Z",
+        pack_country_code: "VN",
+      },
+    ]);
+    await mount();
+    expect(await screen.findByText("From the Vietnam pack.")).toBeTruthy();
+    expect(screen.queryByText(/^Set here on /)).toBeNull();
+    cleanup();
+
+    setLocale("vi");
+    await mount();
+    expect(await screen.findByText("Lấy từ gói Việt Nam.")).toBeTruthy();
+    cleanup();
+
+    setLocale("en");
+    listSettingValues.mockResolvedValue([
+      {
+        setting_key: NO_SHIFT_SELLING.setting_key,
+        scope: "SETTING_SCOPE_TENANT",
+        scope_id: TENANT.id,
+        value: "NO_SHIFT_SELLING_REFUSE",
+        update_time: "2026-10-01T09:00:00Z",
+      },
+    ]);
+    await mount();
+    expect(await screen.findByText(/^Set here on /)).toBeTruthy();
+    expect(screen.queryByText(/pack\.$/)).toBeNull();
+  });
+
   it("gives one store the new-store values it does not set itself, after asking", async () => {
     applySettingPresets.mockResolvedValue({
       applied: [NO_SHIFT_SELLING.setting_key],

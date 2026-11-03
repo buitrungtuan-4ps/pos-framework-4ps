@@ -61,6 +61,20 @@ pub(crate) fn as_node_value(value: SettingDefaultValue) -> serde_json::Value {
     }
 }
 
+/// The country named by `code` when its pack gives `setting_key` exactly `value`, which a write
+/// that says it came from the pack records as its source; `None` otherwise, so a value the pack
+/// does not give is a person's (ADR-0183).
+pub(super) fn pack_gave(
+    countries: &CountrySettingValues,
+    code: Option<&str>,
+    setting_key: &str,
+    value: &serde_json::Value,
+) -> Option<CountryCode> {
+    let country = CountryCode::parse(code?.trim()).ok()?;
+    let given = countries.get(&country)?.get(setting_key)?;
+    (given == value).then_some(country)
+}
+
 /// A store to publish settings to, or every store of the tenant.
 #[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct SettingsStoreRequest {
@@ -165,10 +179,9 @@ where
     let mut applied = Vec::new();
     for setting in pos_proto::settings::register() {
         let key = setting.key();
-        let Some(preset) = country_values
-            .and_then(|values| values.get(&key).cloned())
-            .or_else(|| setting.preset_value())
-        else {
+        let from_pack = country_values.and_then(|values| values.get(&key).cloned());
+        let pack_country_code = country.filter(|_| from_pack.is_some());
+        let Some(preset) = from_pack.or_else(|| setting.preset_value()) else {
             continue;
         };
         let already = held.iter().any(|value| {
@@ -185,6 +198,7 @@ where
             scope_id: store_scope_id.clone(),
             value: preset,
             update_time: state.clock.now(),
+            pack_country_code,
         };
         if let Err(error) = state.settings.put(tenant_id, &value).await {
             return settings_store_error_response(&error);

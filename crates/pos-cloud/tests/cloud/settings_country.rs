@@ -10,8 +10,8 @@ use pos_proto::ids::StoreId;
 use tower::ServiceExt;
 
 use crate::{
-    FakeConfigTrees, admin_cookie, json_body, post_with_cookie, put_with_cookie, settings_app,
-    settings_stores, tenant, tenant_layer_node,
+    FakeConfigTrees, admin_cookie, get_with_cookie, json_body, post_with_cookie, put_with_cookie,
+    settings_app, settings_stores, tenant, tenant_layer_node,
 };
 
 const VARIANCE_REASON: &str = "shift.variance_reason_minor";
@@ -130,5 +130,119 @@ async fn a_vietnamese_store_that_set_its_own_threshold_keeps_it() {
         variance_reason(&config_trees, third).await,
         Some(serde_json::json!(50_000)),
         "the store's own value, not the pack's"
+    );
+}
+
+/// The pack `GET /admin/settings` says `store`'s own value of `key` came from, if any.
+async fn pack_of(router: &axum::Router, cookie: &str, store: StoreId, key: &str) -> Option<String> {
+    let uri = format!("/admin/settings?tenant_id={}", tenant().as_ulid());
+    let listed = router
+        .clone()
+        .oneshot(get_with_cookie(&uri, cookie))
+        .await
+        .expect("route the list");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let values = json_body(listed).await["values"].clone();
+    let value = values
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|value| value["setting_key"] == key && value["scope_id"] == store.to_string())
+        .unwrap_or_else(|| panic!("{key} is written for the store: {values}"))
+        .clone();
+    value
+        .get("pack_country_code")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+}
+
+/// Writes `value` for `store`'s own `key`, saying it came from `pack`'s when given.
+async fn put_own(
+    router: &axum::Router,
+    cookie: &str,
+    store: StoreId,
+    (key, value): (&str, i64),
+    pack: Option<&str>,
+) {
+    let mut body = serde_json::json!({
+        "tenant_id": tenant().as_ulid().to_string(),
+        "setting_key": key,
+        "scope": "SETTING_SCOPE_STORE",
+        "scope_id": store.to_string(),
+        "value": value,
+    });
+    if let Some(pack) = pack {
+        body["pack_country_code"] = serde_json::json!(pack);
+    }
+    let written = router
+        .clone()
+        .oneshot(put_with_cookie("/admin/settings", &body, cookie))
+        .await
+        .expect("route the write");
+    assert_eq!(written.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_value_the_pack_wrote_says_so_until_a_person_saves_it() {
+    let (router, config_trees, _) = settings_app();
+    let cookie = admin_cookie(&router).await;
+    let [_, _, third] = settings_stores();
+    in_country(&config_trees, third, "VN");
+
+    apply_presets(&router, &cookie, third).await;
+    assert_eq!(
+        pack_of(&router, &cookie, third, VARIANCE_REASON)
+            .await
+            .as_deref(),
+        Some("VN"),
+        "the Vietnam pack gave it"
+    );
+    assert_eq!(
+        pack_of(&router, &cookie, third, "session.idle_lock_seconds").await,
+        None,
+        "the register's preset is no country's pack"
+    );
+
+    put_own(&router, &cookie, third, (VARIANCE_REASON, 20_000), None).await;
+    assert_eq!(
+        pack_of(&router, &cookie, third, VARIANCE_REASON).await,
+        None,
+        "a person's save is theirs, even of the pack's figure"
+    );
+}
+
+#[tokio::test]
+async fn the_consoles_pack_write_says_so_only_for_the_value_the_pack_gives() {
+    let (router, _, _) = settings_app();
+    let cookie = admin_cookie(&router).await;
+    let [_, _, third] = settings_stores();
+
+    put_own(
+        &router,
+        &cookie,
+        third,
+        (VARIANCE_REASON, 20_000),
+        Some("VN"),
+    )
+    .await;
+    assert_eq!(
+        pack_of(&router, &cookie, third, VARIANCE_REASON)
+            .await
+            .as_deref(),
+        Some("VN")
+    );
+
+    put_own(
+        &router,
+        &cookie,
+        third,
+        (VARIANCE_REASON, 50_000),
+        Some("VN"),
+    )
+    .await;
+    assert_eq!(
+        pack_of(&router, &cookie, third, VARIANCE_REASON).await,
+        None,
+        "50,000 is not the Vietnam pack's figure, so it is a person's"
     );
 }

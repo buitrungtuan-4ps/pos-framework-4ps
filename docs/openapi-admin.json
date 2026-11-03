@@ -19414,7 +19414,7 @@
         "summary": "`PUT /admin/settings` — writes one value and republishes every store it reaches.",
         "operationId": "admin_put_setting",
         "requestBody": {
-          "description": "The tenant, the setting's key, the scope (SETTING_SCOPE_TENANT, _BRAND, _STORE_GROUP or _STORE), the id it is for, the value, and notice_confirmed (default false), true when the person confirmed the notice of a value its catalogue entry's confirm names",
+          "description": "The tenant, the setting's key, the scope (SETTING_SCOPE_TENANT, _BRAND, _STORE_GROUP or _STORE), the id it is for, the value, and notice_confirmed (default false), true when the person confirmed the notice of a value its catalogue entry's confirm names, and pack_country_code, the country whose pack the value was taken from, recorded only when that pack gives this setting this value",
           "content": {
             "application/json": {
               "schema": {
@@ -31882,6 +31882,14 @@
             "type": "boolean",
             "description": "Whether the person confirmed the notice of a value that needs it (ADR-0169 decision 2)."
           },
+          "pack_country_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The country whose pack the console took the value from (ADR-0183), recorded on the value\nonly when that pack gives the setting exactly this value. Absent for a person's own value,\nwhich clears any pack the value came from before.",
+            "example": "VN"
+          },
           "scope": {
             "type": "string",
             "description": "`SETTING_SCOPE_TENANT`, `_BRAND`, `_STORE_GROUP` or `_STORE`."
@@ -33723,6 +33731,14 @@
           "update_time"
         ],
         "properties": {
+          "pack_country_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The country whose pack gave the value\n([ADR-0183](../../../docs/adr/0183-a-country-pack-seeds-a-new-stores-settings.md)), so the\nconsole can say so rather than show it as set by hand. Absent for a value a person wrote,\nand for the register's preset; a person's later write of the setting leaves it absent. Left\noff the wire while absent, so a value stored before it loads with none.",
+            "example": "VN"
+          },
           "scope": {
             "$ref": "#/components/schemas/OpenSettingScope_SettingScope",
             "description": "The scope the value was written at."

@@ -2094,6 +2094,7 @@
   "settings.searchBrands": "Tìm thương hiệu",
   "settings.searchGroups": "Tìm nhóm cửa hàng",
   "settings.searchStores": "Tìm cửa hàng",
+  "settings.fromPack": "Lấy từ gói {country}.",
   "settings.setHere": "Đặt ở đây: {value}",
   "settings.setOn": "Đặt ở đây lúc {when}.",
   "settings.sinceIs": "Có hiệu lực từ phiên bản {since}",

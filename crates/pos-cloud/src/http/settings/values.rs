@@ -51,6 +51,12 @@ pub(super) struct PutSettingRequest {
     /// Whether the person confirmed the notice of a value that needs it (ADR-0169 decision 2).
     #[serde(default)]
     notice_confirmed: bool,
+    /// The country whose pack the console took the value from (ADR-0183), recorded on the value
+    /// only when that pack gives the setting exactly this value. Absent for a person's own value,
+    /// which clears any pack the value came from before.
+    #[serde(default)]
+    #[schema(example = "VN")]
+    pack_country_code: Option<String>,
 }
 
 #[utoipa::path(
@@ -62,7 +68,9 @@ pub(super) struct PutSettingRequest {
         content = PutSettingRequest, description = "The tenant, the setting's key, the scope (SETTING_SCOPE_TENANT, _BRAND, \
                        _STORE_GROUP or _STORE), the id it is for, the value, and \
                        notice_confirmed (default false), true when the person confirmed the \
-                       notice of a value its catalogue entry's confirm names",
+                       notice of a value its catalogue entry's confirm names, and \
+                       pack_country_code, the country whose pack the value was taken from, \
+                       recorded only when that pack gives this setting this value",
         content_type = "application/json",
     ),
     responses(
@@ -149,6 +157,12 @@ where
         scope_id: scope_id.clone(),
         value: request.value.clone(),
         update_time: state.clock.now(),
+        pack_country_code: super::presets::pack_gave(
+            &state.country_values,
+            request.pack_country_code.as_deref(),
+            &request.setting_key,
+            &request.value,
+        ),
     };
     if let Err(error) = state.settings.put(tenant_id, &value).await {
         return settings_store_error_response(&error);
