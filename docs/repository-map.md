@@ -21,7 +21,7 @@ How to read the **Checked by** column:
   `POS_UPDATE_SNAPSHOTS=1` and the test command given in the row (`just snapshot` does pos-proto and
   pos-core).
 - **`ui build`** and **`dashboard build`** are `pnpm build`. It typechecks, runs the i18n lint and
-  parity, contrast and step-budget scripts, and in `dashboard/` the vitest suite. The same jobs run
+  parity, contrast and step-budget scripts, and the vitest suite (`ui/unit/`, `dashboard/tests/`). The same jobs run
   **`pnpm lint`** first: ESLint's size rules and their baseline ([ADR-0172](adr/0172-eslint-checks-the-front-ends.md)).
 - **replay** and **console-replay** are the Playwright jobs.
 

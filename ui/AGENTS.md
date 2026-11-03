@@ -20,6 +20,8 @@ and serves to every device in the store. See [`README.md`](README.md).
   handler's type, regenerate, and alias it (`xtask hand-types` holds the till at none).
 - A new flow, or a new route a screen calls, gets a flow in `tests/replay.spec.mjs`. Wait for the
   real precondition, never a sleep.
+- A module with no screen in it (a rule, a parse, a store seam) gets a Vitest test in
+  `unit/<module>.test.ts`; `pnpm build` runs them.
 - Naming: components `PascalCase.tsx`, modules `kebab-case.ts`, hooks `useX`
   ([naming §10.1](../docs/naming-and-api.md#101-code-and-files)).
 
@@ -31,7 +33,7 @@ and serves to every device in the store. See [`README.md`](README.md).
 ## Gates
 
 The `ui` job: `pnpm lint` (ESLint and its baseline), then `pnpm build` (tsc, i18n lint and parity,
-contrast, token roles, device classes, step budget). The `replay` job: Playwright against
+contrast, token roles, device classes, step budget, vitest). The `replay` job: Playwright against
 `examples/minimal-edge`. `xtask mirrored-files` · `changes/<topic>.md` for a user-visible change (`docs-gate`, [`changes/README.md`](../changes/README.md)).
 
 ## Read first
