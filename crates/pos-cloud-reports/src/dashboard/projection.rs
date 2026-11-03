@@ -26,6 +26,7 @@ use pos_proto::ids::{EventId, StoreId, TenantId};
 
 use crate::types::{AdmittedDevice, DailyCash, DailyRevenue, DailyRollup, XzReport};
 
+use super::mix::{KeptLines, fold_line_updates};
 use super::voids::{KeptBills, fold_voids};
 
 use super::rollup::{
@@ -86,6 +87,11 @@ pub struct StoredRollups {
     /// a void of a bill settled before then changes nothing until the rollup is reset.
     #[serde(default)]
     pub voids: KeptBills,
+    /// Each open order's lines, kept so a line's new quantity moves the product mix; see
+    /// [`fold_line_updates`]. In this blob for `devices`' reason. `#[serde(default)]`, so a blob
+    /// written before it loads with none, and an update of a line added before then changes nothing.
+    #[serde(default)]
+    pub lines: KeptLines,
 }
 
 /// The store that persists materialised rollups (a table in `store-postgres`; a fake in tests).
@@ -178,6 +184,7 @@ where
         for event in &batch {
             fold_event(&mut state.days, event);
             fold_revenue(&mut state.revenue, event);
+            fold_line_updates(&mut state.lines, &mut state.revenue, event);
             fold_cash(&mut state.cash, event);
             fold_voids(&mut state.voids, &mut state.revenue, &mut state.cash, event);
             fold_devices(&mut state.devices, event);
