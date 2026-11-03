@@ -1,7 +1,22 @@
 // What the store does when a bill or an order closes: the bill comes off its table, the table
 // moves on, and an order off every screen is forgotten (`./store` folds the events that say so).
 
+import { createSignal } from "solid-js";
+
 import type { StoreShape } from "./store";
+
+// How the last bill to close on each table by the fan-out closed, so a pay screen still showing it
+// can say so at once rather than fail on the next tap. One entry per table, so it stays as small as
+// the floor. A bill this till settles or voids itself is closed by its own answer first, or is in
+// flight while the event lands, and the pay screen does not ask then.
+type Ended = { readonly billId: string; readonly how: "settled" | "voided" };
+const [ended, setEnded] = createSignal<Readonly<Record<string, Ended>>>({});
+
+/** How the bill on `table` closed on another till, or null when it has not. */
+export function endedElsewhere(table: string, billId: string | null): Ended["how"] | null {
+  const last = ended()[table];
+  return last !== undefined && last.billId === billId ? last.how : null;
+}
 
 // Takes a closed bill off its table's list: settled, voided, or split or merged away. Answers with
 // the table and how many bills are still open on it, or null for a bill no table holds — a counter
@@ -44,6 +59,7 @@ export function forgetLines(draft: StoreShape, orderId: string): void {
 export function settleBill(draft: StoreShape, bill: string): void {
   const closed = closeBill(draft, bill);
   if (closed !== null) {
+    setEnded((all) => ({ ...all, [closed.table]: { billId: bill, how: "settled" } }));
     if (closed.stillOpen === 0) {
       draft.tableState[closed.table] = "TABLE_STATE_NEEDS_CLEANING";
       delete draft.paidPart[closed.table];
@@ -70,6 +86,18 @@ export function settleBill(draft: StoreShape, bill: string): void {
 // What a table becomes once the last bill open on it is voided. Occupied again — the money was never
 // taken and the order is still there to be charged — unless a part of it was already paid, when that
 // meal is finished: the table wants cleaning and the order leaves the kitchen board, as on the edge.
+// A bill voided, here or on another till: once nothing else on the table is open, the table moves
+// on (`afterLastVoid`); a voided part of a split leaves the other parts owing.
+export function voidBillClosed(draft: StoreShape, bill: string): void {
+  const closed = closeBill(draft, bill);
+  if (closed !== null) {
+    setEnded((all) => ({ ...all, [closed.table]: { billId: bill, how: "voided" } }));
+    if (closed.stillOpen === 0) {
+      afterLastVoid(draft, closed.table, draft.billOrder[bill]);
+    }
+  }
+}
+
 export function afterLastVoid(draft: StoreShape, table: string, orderId: string | undefined): void {
   if (draft.paidPart[table]) {
     draft.tableState[table] = "TABLE_STATE_NEEDS_CLEANING";

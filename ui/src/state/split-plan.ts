@@ -11,7 +11,7 @@
 // the split is cancelled. No person is named: a plan is amounts and tender kinds. Where storage is
 // blocked the split works as before, held on the screen alone.
 
-import { createEffect, type Accessor, type Setter } from "solid-js";
+import { createEffect, createSignal, type Accessor } from "solid-js";
 import { useBeforeLeave } from "@solidjs/router";
 
 import type { PaymentRequest } from "../api/schemas";
@@ -69,22 +69,18 @@ export function writePlan(billId: string, plan: Plan | null): void {
 }
 
 /**
- * Keeps the pay screen's even split for the bill on screen, puts it back when that bill is shown
- * again, forgets it once the bill is closed, and asks before leaving with a share taken.
+ * The pay screen's even split for the bill on screen: how many shares (`ways`, null for none) and
+ * the payments taken. Kept for the bill, put back when that bill is shown again, forgotten once it
+ * is closed, and leaving the screen with a share taken asks first.
  */
-export function useSplitPlan(split: {
-  billId: Accessor<string | null>;
-  closed: Accessor<boolean>;
-  ways: Accessor<number | null>;
-  setWays: Setter<number | null>;
-  taken: Accessor<PaymentRequest[]>;
-  setTaken: Setter<PaymentRequest[]>;
-}): void {
+export function useSplitPlan(billId: Accessor<string | null>, closed: Accessor<boolean>) {
+  const [ways, setWays] = createSignal<number | null>(null);
+  const [taken, setTaken] = createSignal<PaymentRequest[]>([]);
   let shown: string | null = null;
   createEffect(() => {
-    const id = split.billId();
-    const ways = split.ways();
-    const taken = split.taken();
+    const id = billId();
+    const n = ways();
+    const paid = taken();
     if (id === null) {
       return;
     }
@@ -92,18 +88,19 @@ export function useSplitPlan(split: {
       shown = id;
       const kept = readPlan(id);
       if (kept !== null) {
-        split.setWays(kept.ways);
-        split.setTaken(kept.taken);
+        setWays(kept.ways);
+        setTaken(kept.taken);
       }
       return;
     }
-    writePlan(id, split.closed() || ways === null ? null : { ways, taken });
+    writePlan(id, closed() || n === null ? null : { ways: n, taken: paid });
   });
   useBeforeLeave((leave) => {
-    if (!leave.defaultPrevented && !split.closed() && split.taken().length > 0) {
+    if (!leave.defaultPrevented && !closed() && taken().length > 0) {
       if (!globalThis.confirm(t("pay.split_leave_confirm"))) {
         leave.preventDefault();
       }
     }
   });
+  return { ways, setWays, taken, setTaken };
 }
