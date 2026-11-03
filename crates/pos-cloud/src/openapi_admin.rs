@@ -127,6 +127,10 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::admin_update_reason_code,
         crate::http::admin_delete_reason_code,
         crate::http::admin_publish_reason_codes,
+        crate::http::admin_list_packages,
+        crate::http::admin_create_package,
+        crate::http::admin_list_package_versions,
+        crate::http::admin_publish_package_version,
         crate::http::admin_admitted_devices,
         crate::http::admin_revoke_device,
         crate::http::admin_set_printer_paper,
@@ -387,6 +391,13 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
                            connection forms from: the form is the provider's settings schema, so a \
                            console that hard-coded one vendor's fields would be wrong the day a \
                            second is added."
+        ),
+        (
+            name = "packages",
+            description = "A tenant's customization packages and their published versions \
+                           (ADR-0189). A version is stored once and never changes, so there is no \
+                           update and no delete; a store runs the version its `package` settings \
+                           pin."
         ),
         (
             name = "reason codes",

@@ -33,6 +33,10 @@ use pos_proto::wire_enum::{Open, WireEnum};
 
 use crate::campaign::{LocalTime, Schedule, WeekdaySet};
 
+mod content;
+
+pub use content::{ContentRefusal, LABEL_KEY_CHARS_MAX, check_content};
+
 /// What a variant is chosen against: the device, the person and the moment on screen.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize)]
 pub struct VariantContext {

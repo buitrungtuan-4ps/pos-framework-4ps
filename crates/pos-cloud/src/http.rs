@@ -119,6 +119,7 @@ mod lease_bump;
 mod locale_node;
 pub(crate) mod ota;
 pub(crate) mod ota_rollout;
+mod packages;
 mod reason_codes;
 pub(crate) mod reconcile;
 pub(crate) mod registry;
@@ -213,6 +214,11 @@ pub use ota::{
     ota_artifact_router, ota_release_admin_router, ota_release_fetch_router, ota_report_router,
 };
 pub use ota_rollout::ota_config_router;
+pub use packages::package_router;
+pub(crate) use packages::{
+    __path_admin_create_package, __path_admin_list_package_versions, __path_admin_list_packages,
+    __path_admin_publish_package_version,
+};
 pub use people::{
     capabilities_router, config_capabilities_router, people_publish_router, people_router,
     permissions_readiness_router,

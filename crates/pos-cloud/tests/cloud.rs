@@ -90,6 +90,8 @@ mod ota_releases;
 mod ota_report;
 #[path = "cloud/ota_rollout.rs"]
 mod ota_rollout;
+#[path = "cloud/packages.rs"]
+mod packages;
 #[path = "cloud/people.rs"]
 mod people;
 #[path = "cloud/people_enforced.rs"]

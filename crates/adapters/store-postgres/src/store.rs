@@ -361,6 +361,7 @@ const MIGRATION_0087: &str = include_str!("../migrations/0087_roles_can_void_a_p
 /// the cloud to publish them again
 /// ([ADR-0187](../../../docs/adr/0187-a-shift-is-handed-over-at-the-till-and-read-there.md) decision 4).
 const MIGRATION_0088: &str = include_str!("../migrations/0088_roles_can_read_a_shifts_x.sql");
+const MIGRATION_0089: &str = include_str!("../migrations/0089_packages.sql");
 
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
@@ -760,6 +761,16 @@ impl PostgresStore {
         connection
             .batch_execute(MIGRATION_0088)
             .await
+            .map_err(unavailable)?;
+        Self::migrate_from_0089(&connection).await
+    }
+
+    /// The migrations from 0089 on, in order, after [`Self::migrate`]'s: a function of their own so
+    /// that one stays inside its size baseline.
+    async fn migrate_from_0089(connection: &Object) -> Result<(), PortError> {
+        connection
+            .batch_execute(MIGRATION_0089)
+            .await
             .map_err(unavailable)
     }
 
@@ -1017,6 +1028,13 @@ impl PostgresStore {
     #[must_use]
     pub fn settings(&self) -> crate::settings::PostgresSettings {
         crate::settings::PostgresSettings::new(self.pool.clone())
+    }
+
+    /// The package store over this pool
+    /// ([ADR-0189](../../../../docs/adr/0189-a-store-runs-a-package-version-hq-pins.md)).
+    #[must_use]
+    pub fn packages(&self) -> crate::packages::PostgresPackages {
+        crate::packages::PostgresPackages::new(self.pool.clone())
     }
 
     /// The record of the one-time data changes the cloud has made through its own code, rather

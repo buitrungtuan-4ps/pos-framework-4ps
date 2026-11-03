@@ -658,6 +658,15 @@ fn catalog_routes(deps: &RouteDeps<'_>) -> Router {
             SystemClock,
             Arc::clone(audit),
         ))
+        // Packages (ADR-0189 decision 1): create a package and publish its versions, each stored
+        // once and never changed (behind console.packages.manage; reads console.data.read).
+        // Pinning a store to a version is a settings write.
+        .merge(http::package_router(
+            store.packages(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(audit),
+        ))
         // Vouchers (ADR-0077, Track M3): mint and list the distributable codes a voucher-kind
         // campaign redeems (behind console.campaigns.manage, audited by count only).
         .merge(http::voucher_router(

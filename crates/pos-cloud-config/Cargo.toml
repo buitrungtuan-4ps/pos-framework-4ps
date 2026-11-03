@@ -10,6 +10,11 @@ repository.workspace   = true
 
 # Moved out of pos-cloud (ADR-0170 decision 4, P7), with the same dependencies at the same versions:
 # this crate adds edges to crates already in the lockfile, and nothing new.
+[features]
+# The PostgreSQL run of the package store's contract (`tests/packages_postgres.rs`), which needs a
+# database: `cargo test -p pos-cloud-config --features integration --test packages_postgres`.
+integration = []
+
 [dependencies]
 pos-cloud-api = { path = "../pos-cloud-api" }
 # The config tree validates a version against pos-core's capability rules before publishing

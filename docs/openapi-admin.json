@@ -17948,6 +17948,380 @@
         "x-permission": "console.data.read"
       }
     },
+    "/admin/packages": {
+      "get": {
+        "tags": [
+          "packages"
+        ],
+        "summary": "A console user lists a tenant's packages.",
+        "operationId": "admin_list_packages",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant whose packages to list (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's packages, in id order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PackageRecord"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The package store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
+      },
+      "post": {
+        "tags": [
+          "packages"
+        ],
+        "summary": "A console user creates a package; the server mints its id.",
+        "operationId": "admin_create_package",
+        "requestBody": {
+          "description": "The tenant and the package's name. The id is server-minted",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PackageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created: the package as stored, with the id the server minted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PackageRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "tenant_id is not a ULID, or the name is blank or longer than 64 characters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.packages.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A package already holds that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The package store is unreachable, or the OS would not give the entropy the id needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.packages.manage"
+      }
+    },
+    "/admin/packages/{package_id}/versions": {
+      "get": {
+        "tags": [
+          "packages"
+        ],
+        "summary": "A console user lists a package's published versions.",
+        "operationId": "admin_list_package_versions",
+        "parameters": [
+          {
+            "name": "package_id",
+            "in": "path",
+            "description": "The package's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant that owns it (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The package's published versions, in id order: publish order, but for two published in the same millisecond",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PackageVersionRecord"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "tenant_id or package_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no package with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The package store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
+      },
+      "post": {
+        "tags": [
+          "packages"
+        ],
+        "summary": "A console user publishes a version of a package. It never changes afterwards.",
+        "operationId": "admin_publish_package_version",
+        "parameters": [
+          {
+            "name": "package_id",
+            "in": "path",
+            "description": "The package's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The tenant, the version's label and its time slots. The version id and the minimum edge release are the server's",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PackageVersionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Published: the version as stored, for good. Its content carries the id the server minted and the oldest edge release that runs it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PackageVersionRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "tenant_id or package_id is not a ULID, or the content is refused: a blank or long label, a malformed or repeated time slot, a window that is not whole, or content over 1 MiB. The detail names the field",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.packages.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no package with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A version already holds that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The package store is unreachable, or the OS would not give the entropy the id needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.packages.manage"
+      }
+    },
     "/admin/people/permissions": {
       "get": {
         "tags": [
@@ -30367,6 +30741,133 @@
         "type": "string",
         "description": "A `VendorAvailability` token: VENDOR_AVAILABILITY_UNSPECIFIED, VENDOR_AVAILABILITY_OPEN, VENDOR_AVAILABILITY_BUSY, VENDOR_AVAILABILITY_CLOSED, or one a newer build sent, which is kept as it arrived"
       },
+      "PackageContent": {
+        "type": "object",
+        "description": "One published package version, as it rides the store's document.",
+        "required": [
+          "package_id",
+          "package_version_id",
+          "version_label",
+          "min_edge_version"
+        ],
+        "properties": {
+          "min_edge_version": {
+            "$ref": "#/components/schemas/ReleaseTag",
+            "description": "The oldest edge release that runs this version, which the cloud computes at publish\n(ADR-0189 decision 5). An edge on an older release refuses the version as a whole."
+          },
+          "package_id": {
+            "$ref": "#/components/schemas/PackageId",
+            "description": "The package."
+          },
+          "package_version_id": {
+            "$ref": "#/components/schemas/PackageVersionId",
+            "description": "This version. A published version never changes."
+          },
+          "time_slots": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TimeSlot"
+            },
+            "description": "The package's named time slots, in the order that decides which one is current."
+          },
+          "version_label": {
+            "type": "string",
+            "description": "The version's name as HQ reads it in the console, at most [`LABEL_CHARS_MAX`] characters.\nNever shown on a till."
+          }
+        }
+      },
+      "PackageId": {
+        "type": "string",
+        "description": "A `PackageId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "PackageRecord": {
+        "type": "object",
+        "description": "One package: what its versions are versions of.",
+        "required": [
+          "package_id",
+          "name",
+          "create_time"
+        ],
+        "properties": {
+          "create_time": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "When it was created."
+          },
+          "name": {
+            "$ref": "#/components/schemas/DisplayName",
+            "description": "Its name in the console."
+          },
+          "package_id": {
+            "$ref": "#/components/schemas/PackageId",
+            "description": "The package."
+          }
+        }
+      },
+      "PackageRequest": {
+        "type": "object",
+        "description": "A package create body. The id is server-owned.",
+        "required": [
+          "tenant_id",
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Its name in the console."
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "PackageVersionId": {
+        "type": "string",
+        "description": "A `PackageVersionId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "PackageVersionRecord": {
+        "type": "object",
+        "description": "One published version: its content, as it rides a store's document, and when it was published.",
+        "required": [
+          "content",
+          "create_time"
+        ],
+        "properties": {
+          "content": {
+            "$ref": "#/components/schemas/PackageContent",
+            "description": "The content. Its `package_version_id`, label and minimum edge release identify the version."
+          },
+          "create_time": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "When it was published."
+          }
+        }
+      },
+      "PackageVersionRequest": {
+        "type": "object",
+        "description": "A version publish body: the content a store will run. The ids and the minimum edge release are\nthe server's.",
+        "required": [
+          "tenant_id",
+          "version_label"
+        ],
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "time_slots": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TimeSlot"
+            },
+            "description": "The package's named time slots, in the order that decides which one is current."
+          },
+          "version_label": {
+            "type": "string",
+            "description": "The version's name in the console."
+          }
+        }
+      },
       "PagedBody_AuditEntryView": {
         "type": "object",
         "description": "A page on the wire: the rows, the size of the whole set, and the bounds that produced them.\n\nThe bounds are echoed because a pager needs them to render \"1–25 of 812\" and to build the next\nrequest, and because the alternative — the client tracking what it sent — breaks the moment a\nlink is shared or a page is reloaded.",
@@ -32491,6 +32992,10 @@
           "partial"
         ]
       },
+      "ReleaseTag": {
+        "type": "string",
+        "description": "A release identifier, such as `v1.4.0`.\n\nAdmissible in an event payload: it names a build, not a person. Fleet rollout\nevents carry it so the dashboard can show which store runs which version."
+      },
       "ReleaseTenantRequest": {
         "type": "object",
         "description": "A body carrying nothing but the tenant — what `cancel` needs, since the id is in the path.",
@@ -34423,6 +34928,32 @@
           }
         }
       },
+      "TimeSlot": {
+        "type": "object",
+        "description": "A named part of the week a variant may be chosen for, such as lunch.\n\nA store is in at most one slot at a time: the first slot of [`PackageContent::time_slots`] one of\nwhose windows holds the store's local time, read in its time zone through `ClockSource`. A slot\nlisted later that also holds that moment is not current until the earlier one ends.",
+        "required": [
+          "time_slot_id",
+          "label_key",
+          "schedules"
+        ],
+        "properties": {
+          "label_key": {
+            "$ref": "#/components/schemas/TranslationKey",
+            "description": "The translation key of the slot's name in the console."
+          },
+          "schedules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishedSchedule"
+            },
+            "description": "The weekly windows the slot is made of, at most [`SCHEDULES_PER_TIME_SLOT_MAX`]. Each is\nhalf-open and may wrap past midnight."
+          },
+          "time_slot_id": {
+            "type": "string",
+            "description": "The slot's id within its package, which a [`VariantSelector`] names: at most\n[`LABEL_CHARS_MAX`] characters of `a`–`z`, `0`–`9` and `_`."
+          }
+        }
+      },
       "Timestamp": {
         "type": "string",
         "format": "date-time",
@@ -34443,6 +34974,10 @@
         "propertyNames": {
           "type": "string"
         }
+      },
+      "TranslationKey": {
+        "type": "string",
+        "description": "A key into the translation catalogue, shaped `domain.screen.element`.\n\nKeys are append-only, so one may be referenced from an event without pinning the\ntext it resolves to. This is how a reason code or a status message travels without\ncarrying a language with it — and why kitchen tickets can print in the station's\nlanguage while the receipt prints in the guest's."
       },
       "Ulid": {
         "type": "string",
@@ -36969,6 +37504,10 @@
     {
       "name": "integrations",
       "description": "The vendors this cloud can talk to, and what each needs (ADR-0153). Documented because it is the contract a fork's own console draws its connection forms from: the form is the provider's settings schema, so a console that hard-coded one vendor's fields would be wrong the day a second is added."
+    },
+    {
+      "name": "packages",
+      "description": "A tenant's customization packages and their published versions (ADR-0189). A version is stored once and never changes, so there is no update and no delete; a store runs the version its `package` settings pin."
     },
     {
       "name": "reason codes",

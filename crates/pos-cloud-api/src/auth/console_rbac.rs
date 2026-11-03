@@ -190,6 +190,17 @@ console_permissions! {
         roles: [Owner, Admin],
         description: "Author the managed reason codes a void, discount or refund must cite",
     },
+    /// Create a tenant's packages and publish their versions
+    /// ([ADR-0189](../adr/0189-a-store-runs-a-package-version-hq-pins.md)).
+    ///
+    /// Owner/Admin, the manage norm. A published version never changes and every store pinned to it
+    /// runs it, so publishing one is authoring, not a day-to-day publish. Pinning a store to a
+    /// version is a settings write, which `console.config.publish` already governs.
+    ManagePackages {
+        id: "console.packages.manage",
+        roles: [Owner, Admin],
+        description: "Create packages and publish their versions",
+    },
     /// Configure a tenant's vendor connections — which e-invoice provider, gateway, courier or ERP
     /// serves which scope, its settings, and its credentials
     /// ([ADR-0153](../adr/0153-a-vendor-is-a-provider-the-cloud-chooses.md)).
@@ -328,6 +339,7 @@ mod tests {
             ConsolePermission::ManagePeople,
             ConsolePermission::ReadPeople,
             ConsolePermission::ManageInventory,
+            ConsolePermission::ManagePackages,
             ConsolePermission::ReadRevenue,
             ConsolePermission::InviteAdmins,
             ConsolePermission::ManageAdmins,
