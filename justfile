@@ -42,10 +42,21 @@ clippy-backbone:
 build:
     cargo build --workspace --locked
 
+# The release a development, replay or simulator edge says it is, stamped at compile time
+# (`crates/pos-edge/src/version.rs`), so it runs the package versions this tree publishes
+# (ADR-0189 decision 5). The release this tree will become; raise it with each release. A plain
+# `cargo build` still says `0.0.0`, and a release build says its tag.
+dev_edge_release := "0.14.1"
+
+# The `minimal-edge` the browser replays drive (`ui/tests/edge.mjs`), stamped as above. It embeds
+# ui/dist, so build the UI first.
+build-replay-edge:
+    POS_EDGE_RELEASE_VERSION={{dev_edge_release}} cargo build -p minimal-edge --locked
+
 # Run the store binary on fakes — no database, no hardware, no config file.
 # Opens http://127.0.0.1:8787/ ; Ctrl-C stops it.
 run-edge:
-    cargo run -p minimal-edge
+    POS_EDGE_RELEASE_VERSION={{dev_edge_release}} cargo run -p minimal-edge
 
 # Run pos_cloud locally, for a dev loop on the cloud tier. Unlike the edge it needs real
 # backends — start them with `docker compose -f deploy/compose.yml up -d postgres nats garage`
@@ -57,7 +68,7 @@ run-cloud:
 # Run the capacity model and the fleet scenarios (P12), printing the envelope and the
 # reconciliation report. Deterministic and offline — no hardware, no clock.
 simulate:
-    cargo run -q -p pos-simulator
+    POS_EDGE_RELEASE_VERSION={{dev_edge_release}} cargo run -q -p pos-simulator
 
 # The edge's performance budgets at a large trading history (F2), in a release build. Ignored by
 # `just test`, because a timing assertion in a debug build on a shared runner measures the runner.

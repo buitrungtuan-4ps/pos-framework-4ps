@@ -29478,6 +29478,8 @@
           "outbox_reported_at_ms",
           "print_agents",
           "print_agents_reported_at_ms",
+          "package",
+          "package_reported_at_ms",
           "lease_generation_held",
           "lease_reported_at_ms",
           "lease_generation_authoritative",
@@ -29599,6 +29601,25 @@
             ],
             "format": "int64",
             "description": "Unix ms of the heartbeat that reported `outbox_depth`, or `null`."
+          },
+          "package": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PackageBeat",
+                "description": "What the store's heartbeat last said about its package\n([ADR-0189](../../../docs/adr/0189-a-store-runs-a-package-version-hq-pins.md) decision 6):\nthe version it runs (absent: its release's default package) and the configuration it last\nrefused for its package. `null` until a heartbeat reports one, which an older edge never does."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "package_reported_at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unix ms of the heartbeat that reported the package, or `null`."
           },
           "print_agents": {
             "type": [
@@ -30994,6 +31015,20 @@
       "OpenVendorAvailability_VendorAvailability": {
         "type": "string",
         "description": "A `VendorAvailability` token: VENDOR_AVAILABILITY_UNSPECIFIED, VENDOR_AVAILABILITY_OPEN, VENDOR_AVAILABILITY_BUSY, VENDOR_AVAILABILITY_CLOSED, or one a newer build sent, which is kept as it arrived"
+      },
+      "PackageBeat": {
+        "type": "object",
+        "description": "What one heartbeat said about the store's package.",
+        "properties": {
+          "package_version_id": {
+            "type": "string",
+            "description": "The package version the store runs, or absent for its release's default package."
+          },
+          "refused": {
+            "$ref": "#/components/schemas/RefusedBeat",
+            "description": "The configuration the store last refused for its package, while the latest one was."
+          }
+        }
       },
       "PackageChoiceRequest": {
         "type": "object",
@@ -33036,6 +33071,28 @@
           "password": {
             "type": "string",
             "description": "The current super-admin password."
+          }
+        }
+      },
+      "RefusedBeat": {
+        "type": "object",
+        "description": "A configuration a store refused for its package; it kept the one before.",
+        "required": [
+          "config_version_id",
+          "reason"
+        ],
+        "properties": {
+          "config_version_id": {
+            "type": "string",
+            "description": "The configuration version refused."
+          },
+          "package_version_id": {
+            "type": "string",
+            "description": "The package version it carried, when the store could read it."
+          },
+          "reason": {
+            "type": "string",
+            "description": "`PACKAGE_MALFORMED`, `PACKAGE_INVALID` or `EDGE_TOO_OLD`."
           }
         }
       },

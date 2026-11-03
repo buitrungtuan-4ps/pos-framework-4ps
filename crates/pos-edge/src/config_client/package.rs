@@ -14,7 +14,7 @@
 //! an edge guard's reading only what the edge holds. Until a package carries its screens (ADR-0190),
 //! a step's `screen_id` is not resolved here.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
 use pos_core::flow::check_flows;
 use pos_core::ota::ReleaseVersion;
@@ -22,64 +22,7 @@ use pos_core::package::check_content;
 use pos_edge_app::app::flows::EdgeConditions;
 use pos_proto::package::{PackageContent, PublishedPackage};
 
-/// Why the edge refuses a document's package.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PackageRefusal {
-    /// The node does not read as a `package` node.
-    Malformed,
-    /// The content breaks a rule the cloud checks at publish; the message says which.
-    Invalid(String),
-    /// The version needs a newer edge than this one, or this edge cannot tell its own release.
-    NeedsNewerEdge {
-        /// The release the version needs.
-        min_edge_version: String,
-    },
-}
-
-impl PackageRefusal {
-    /// The reason as a token: `PACKAGE_MALFORMED`, `PACKAGE_INVALID` or `EDGE_TOO_OLD`.
-    #[must_use]
-    pub const fn reason(&self) -> &'static str {
-        match self {
-            Self::Malformed => "PACKAGE_MALFORMED",
-            Self::Invalid(_) => "PACKAGE_INVALID",
-            Self::NeedsNewerEdge { .. } => "EDGE_TOO_OLD",
-        }
-    }
-}
-
-/// A document the edge refused for its package.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RefusedPackage {
-    /// The configuration version refused.
-    pub config_version_id: String,
-    /// The package version it carried, when that could be read.
-    pub package_version_id: Option<String>,
-    /// Why.
-    pub refusal: PackageRefusal,
-}
-
-/// The last package refusal, shared between the config loop that records it and whoever reports it.
-/// Cleared when a document is applied.
-#[derive(Debug, Default)]
-pub struct PackageStanding {
-    refused: Mutex<Option<RefusedPackage>>,
-}
-
-impl PackageStanding {
-    /// The last refusal, if the latest document was refused.
-    #[must_use]
-    pub fn refused(&self) -> Option<RefusedPackage> {
-        self.refused
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
-
-    pub(super) fn record(&self, refused: Option<RefusedPackage>) {
-        *self.refused.lock().unwrap_or_else(PoisonError::into_inner) = refused;
-    }
-}
+pub use pos_edge_app::app::{PackageRefusal, PackageStanding, RefusedPackage};
 
 /// The package a document carries, once it passes: `None` when the document pins nothing, which is
 /// the default package of this release.

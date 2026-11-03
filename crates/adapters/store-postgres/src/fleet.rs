@@ -118,6 +118,18 @@ pub struct FleetStoreRow {
     /// Unix ms of the heartbeat that reported them, or `None`. Carried so a stale list reads as
     /// stale rather than as current, exactly as `outbox_reported_at_ms` is.
     pub print_agents_reported_at_ms: Option<i64>,
+    /// What the store's heartbeat last said about its package (migration 0090, ADR-0189): the
+    /// version it runs, the configuration it refused, the package version that carried and why,
+    /// and when it said so. All `None` until a heartbeat reports one.
+    pub package_version_id: Option<String>,
+    /// The configuration version the store last refused for its package.
+    pub package_refused_config_version_id: Option<String>,
+    /// The package version that configuration carried.
+    pub package_refused_version_id: Option<String>,
+    /// Why it was refused.
+    pub package_refusal_reason: Option<String>,
+    /// Unix ms of the heartbeat that reported the package.
+    pub package_reported_at_ms: Option<i64>,
 }
 
 /// The columns and joins shared by the list and the single-store read. `$1` is always the tenant.
@@ -150,7 +162,12 @@ const FLEET_SELECT: &str = "SELECT \
      lease.region_country, \
      lease.region_label, \
      l.print_agents::text, \
-     l.print_agents_reported_at \
+     l.print_agents_reported_at, \
+     l.package_version_id, \
+     l.package_refused_config_version_id, \
+     l.package_refused_version_id, \
+     l.package_refusal_reason, \
+     l.package_reported_at \
      FROM stores s \
      LEFT JOIN store_liveness l ON l.tenant_id = s.tenant_id AND l.store_id = s.store_id \
      LEFT JOIN store_lease lease \
@@ -241,5 +258,10 @@ fn fleet_row(row: &tokio_postgres::Row) -> FleetStoreRow {
         region_label: row.get(22),
         print_agents: row.get(23),
         print_agents_reported_at_ms: row.get(24),
+        package_version_id: row.get(25),
+        package_refused_config_version_id: row.get(26),
+        package_refused_version_id: row.get(27),
+        package_refusal_reason: row.get(28),
+        package_reported_at_ms: row.get(29),
     }
 }

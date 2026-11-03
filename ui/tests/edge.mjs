@@ -52,7 +52,7 @@ async function freePort() {
 export async function startEdge(profile) {
   if (!existsSync(BINARY)) {
     throw new Error(
-      `${BINARY} is not built — run \`cargo build -p minimal-edge\` first (it embeds ui/dist, so build the UI before it), or set POS_EDGE_BIN`,
+      `${BINARY} is not built — run \`just build-replay-edge\` first (it embeds ui/dist, so build the UI before it), or set POS_EDGE_BIN`,
     );
   }
   const port = await freePort();

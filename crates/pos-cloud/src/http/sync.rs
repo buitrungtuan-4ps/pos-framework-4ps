@@ -153,8 +153,10 @@ where
         ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
     ),
     request_body(
-        content = HeartbeatBody, description = "Optional: `outbox_depth`, `lease_generation` and `print_agents`, each left out when \
-                       the store cannot say. An empty body is a bare ping",
+        content = HeartbeatBody, description = "Optional: `outbox_depth`, `lease_generation`, `print_agents` and `package` (the \
+                       package version the store runs and the configuration it last refused for its \
+                       package, ADR-0189), each left out when the store cannot say. An empty body \
+                       is a bare ping",
         content_type = "application/json",
     ),
     responses(
@@ -222,19 +224,39 @@ where
             );
         }
     };
+    if report
+        .package
+        .as_ref()
+        .is_some_and(|beat| !beat.is_bounded())
+    {
+        return api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "the heartbeat's package report carries text longer than an id or a reason",
+            &[("package", "INVALID_VALUE")],
+        );
+    }
     // The tenant is the grant's, not the path's — a store reaches only its own tenant's liveness row.
-    match app
+    let now = app.clock.now();
+    let recorded = app
         .config_trees
         .record_store_heartbeat(
             grant.tenant(),
             store_id,
-            app.clock.now(),
+            now,
             report.outbox_depth,
             report.lease_generation,
             report.print_agents,
         )
-        .await
-    {
+        .await;
+    let recorded = match (recorded, &report.package) {
+        (Ok(()), Some(beat)) => {
+            app.config_trees
+                .record_package_beat(grant.tenant(), store_id, now, beat)
+                .await
+        }
+        (outcome, _) => outcome,
+    };
+    match recorded {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => config_store_error_response(&error),
     }
@@ -479,6 +501,11 @@ struct HeartbeatBody {
     /// field exists to prevent.
     #[serde(default)]
     print_agents: Option<Vec<PrintAgentStanding>>,
+    /// The package version the store runs and the configuration it last refused for its package
+    /// ([ADR-0189](../../../docs/adr/0189-a-store-runs-a-package-version-hq-pins.md) decision 6), or
+    /// `None` when the store said nothing about it, which leaves what was recorded alone.
+    #[serde(default)]
+    package: Option<pos_cloud_config::config_tree::PackageBeat>,
 }
 
 /// Reads a heartbeat's optional body. An empty body is the older edge and yields the default —

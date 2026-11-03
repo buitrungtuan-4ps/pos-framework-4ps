@@ -123,7 +123,7 @@ fn a_package_the_edge_runs_is_applied_and_one_it_cannot_refuses_the_whole_docume
         ),
     ]);
     let client = ConfigClient::new(&cloud, edge.clone(), None);
-    let standing = client.package_standing();
+    let standing = edge.package_standing();
 
     let applied = run_ready(client.pump_once()).expect("pump");
     assert_eq!(applied, Some(config_version(1)));

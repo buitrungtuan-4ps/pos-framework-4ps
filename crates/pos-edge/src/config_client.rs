@@ -381,8 +381,6 @@ pub struct ConfigClient<T, S> {
     /// published never runs an OTA decision, and a heartbeat is a reporter. Hanging a store's
     /// trading posture off a loop that can legitimately be idle is how a gate becomes decorative.
     lease: Option<Arc<LeaseWatch>>,
-    /// The last document refused for its package (ADR-0189 decision 6).
-    package: Arc<PackageStanding>,
 }
 
 impl<T, S> ConfigClient<T, S>
@@ -405,14 +403,7 @@ where
             origins: None,
             revocations: None,
             lease: None,
-            package: Arc::new(PackageStanding::default()),
         }
-    }
-
-    /// The last document this loop refused for its package, shared with whoever reports it.
-    #[must_use]
-    pub fn package_standing(&self) -> Arc<PackageStanding> {
-        Arc::clone(&self.package)
     }
 
     /// Shares the allow-list this loop keeps current
@@ -473,7 +464,7 @@ where
         };
         // A package this edge cannot run refuses the whole document (ADR-0189 decision 6). The
         // version is held, as for any refusal, so it is not pulled again every interval.
-        if package::refuses(&self.package, &synced) {
+        if package::refuses(self.edge.package_standing(), &synced) {
             *self.held_version.lock().expect("held-version lock") =
                 Some(synced.config_version_id.clone());
             return Ok(None);

@@ -706,6 +706,48 @@ impl PostgresConfigTrees {
         Ok(row.map(|row| row.get(0)))
     }
 
+    /// Records what a heartbeat said about the store's package (migration 0090,
+    /// [ADR-0189](../../../../docs/adr/0189-a-store-runs-a-package-version-hq-pins.md) decision 6):
+    /// the version it runs and the configuration it last refused, all four replaced, so a refusal
+    /// that has cleared is cleared. Keyed like the heartbeat, which has already written the row.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn record_package_beat(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+        seen_at_ms: i64,
+        running: Option<&str>,
+        refused: Option<(&str, Option<&str>, &str)>,
+    ) -> Result<(), PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let (refused_config, refused_version, reason) = refused
+            .map_or((None, None, None), |(config, version, reason)| {
+                (Some(config), version, Some(reason))
+            });
+        connection
+            .execute(
+                "UPDATE store_liveness SET package_version_id = $3, \
+                 package_refused_config_version_id = $4, package_refused_version_id = $5, \
+                 package_refusal_reason = $6, package_reported_at = $7 \
+                 WHERE tenant_id = $1 AND store_id = $2",
+                &[
+                    &tenant.to_string(),
+                    &store_id.to_string(),
+                    &running,
+                    &refused_config,
+                    &refused_version,
+                    &reason,
+                    &seen_at_ms,
+                ],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(())
+    }
+
     /// Advances a store's `last_seen_at` from a heartbeat ([ADR-0068](../../../../docs/adr/0068-fleet-liveness.md)),
     /// leaving `config_version_held` and `last_config_pull_at` untouched on an existing row (a fresh
     /// row gets them `NULL`, since a heartbeat carries no config-pull facts). `seen_at_ms` is Unix

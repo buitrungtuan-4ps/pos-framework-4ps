@@ -1032,6 +1032,8 @@ struct FakeConfigTrees {
     /// replaces the entry rather than leaving it — a manager releasing the last terminal must not
     /// leave a stale agent on the console.
     print_agents: Arc<Mutex<RecordedAgents>>,
+    /// The package a heartbeat last reported (migration 0090, ADR-0189).
+    packages: Arc<Mutex<HashMap<(TenantId, StoreId), pos_cloud::config_tree::PackageBeat>>>,
     /// A store's recorded answer to its region difference, mirroring
     /// `store_region_acknowledgement` ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
     /// One row per store and overwritten, exactly as the table is.
@@ -1425,6 +1427,20 @@ impl ConfigTreeStore for FakeConfigTrees {
             (tenant, store),
             (held_version, seen_at.as_milliseconds_since_epoch()),
         );
+        Ok(())
+    }
+
+    async fn record_package_beat(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        _seen_at: Timestamp,
+        beat: &pos_cloud::config_tree::PackageBeat,
+    ) -> Result<(), ConfigStoreError> {
+        self.packages
+            .lock()
+            .expect("lock")
+            .insert((tenant, store), beat.clone());
         Ok(())
     }
 
@@ -5619,6 +5635,7 @@ fn store_in_handover(
         retired_by: retired_at.map(|_| "01ADMINADMINADMINADMINADMI".to_owned()),
         print_agents: None,
         print_agents_reported_at: None,
+        package: None,
     }
 }
 

@@ -641,3 +641,94 @@ async fn config_sync_is_closed_without_the_read_config_scope() {
         .expect("route");
     assert_eq!(unknown.status(), StatusCode::FORBIDDEN);
 }
+
+/// A heartbeat carries the package version the store runs and the configuration it last refused for
+/// its package (ADR-0189 decision 6); each report replaces the last, a beat that says nothing about
+/// it leaves it, and text no id or reason could be is refused.
+#[tokio::test]
+async fn a_heartbeat_reports_the_stores_package() {
+    let keys = FakeKeys::default();
+    let config_trees = FakeConfigTrees::default();
+    let router = http::router(app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        keys.clone(),
+        provisioned_admin(),
+        config_trees.clone(),
+        FakeWebhooks::default(),
+    ));
+    let uri = format!("/sync/stores/{}/heartbeat", store_id().as_ulid());
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ReadConfig]);
+    let beat = |body: serde_json::Value| {
+        let router = router.clone();
+        let (uri, token) = (uri.clone(), token.clone());
+        async move {
+            router
+                .oneshot(post_json_bearer(&uri, &body, &token))
+                .await
+                .expect("route the heartbeat")
+                .status()
+        }
+    };
+
+    let refused = serde_json::json!({ "package": {
+        "package_version_id": "01J00000000000000000000V01",
+        "refused": {
+            "config_version_id": "01J00000000000000000000C02",
+            "package_version_id": "01J00000000000000000000V02",
+            "reason": "EDGE_TOO_OLD",
+        },
+    }});
+    assert_eq!(beat(refused).await, StatusCode::NO_CONTENT);
+    let recorded = config_trees
+        .packages
+        .lock()
+        .expect("lock")
+        .get(&(tenant(), store_id()))
+        .cloned()
+        .expect("the package is recorded");
+    assert_eq!(
+        recorded.package_version_id.as_deref(),
+        Some("01J00000000000000000000V01")
+    );
+    assert_eq!(
+        recorded.refused.map(|refused| refused.reason).as_deref(),
+        Some("EDGE_TOO_OLD")
+    );
+
+    assert_eq!(
+        beat(serde_json::json!({ "outbox_depth": 0 })).await,
+        StatusCode::NO_CONTENT
+    );
+    assert!(
+        config_trees
+            .packages
+            .lock()
+            .expect("lock")
+            .get(&(tenant(), store_id()))
+            .cloned()
+            .is_some(),
+        "a beat that says nothing about the package leaves it"
+    );
+
+    assert_eq!(
+        beat(serde_json::json!({ "package": {} })).await,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        config_trees
+            .packages
+            .lock()
+            .expect("lock")
+            .get(&(tenant(), store_id()))
+            .cloned(),
+        Some(pos_cloud::config_tree::PackageBeat::default()),
+        "a report of the default package with no refusal replaces the last"
+    );
+
+    let long = "x".repeat(65);
+    assert_eq!(
+        beat(serde_json::json!({ "package": { "package_version_id": long } })).await,
+        StatusCode::BAD_REQUEST
+    );
+}
