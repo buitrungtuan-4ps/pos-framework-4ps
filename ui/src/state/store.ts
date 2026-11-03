@@ -10,6 +10,7 @@ import { adoptStoreLanguage } from "../i18n";
 import { load, reload } from "./engine";
 import { ownOverride } from "./drawer-access";
 import { keptShift, shiftInfo } from "./shift-info";
+import { afterLastVoid, closeBill, forgetLines, settleBill } from "./closing";
 import { noteWalkInOpened, walkInsOpenedSince, type LiveOrdersRead } from "./live-orders-read";
 import type { LinkStatus, ServerEvent } from "../api/live";
 import type {
@@ -518,30 +519,6 @@ export function openBillsFor(tableId: string): readonly string[] {
   return state.openBills[tableId] ?? [];
 }
 
-// Takes a closed bill off its table's list: settled, voided, or split or merged away. Answers with
-// the table and how many bills are still open on it, or null for a bill no table holds — a counter
-// order's, or one this device never saw open.
-function closeBill(draft: StoreShape, billId: string): { table: string; stillOpen: number } | null {
-  const table = Object.keys(draft.openBills).find((key) => draft.openBills[key]?.includes(billId));
-  if (table === undefined) {
-    return null;
-  }
-  const stillOpen = (draft.openBills[table] ?? []).filter((id) => id !== billId);
-  if (stillOpen.length === 0) {
-    delete draft.openBills[table];
-  } else {
-    draft.openBills[table] = stillOpen;
-  }
-  return { table, stillOpen: stillOpen.length };
-}
-
-// Whether any bill on this order is still open on any table.
-function orderStillOwes(draft: StoreShape, orderId: string): boolean {
-  return Object.values(draft.openBills).some((ids) =>
-    ids.some((id) => draft.billOrder[id] === orderId),
-  );
-}
-
 // The guests at one table moved to another and took their order: the order, the time they sat down
 // and the seat a server was ringing for go with them, and the table they left waits to be cleared —
 // the same move the edge folds from `sales.table.transferred`. The states are the caller's: the edge's
@@ -571,21 +548,6 @@ export function moveOrder(
     draft.seatForTable[to] = seat;
   }
   delete draft.seatForTable[from];
-}
-
-// What a table becomes once the last bill open on it is voided. Occupied again — the money was never
-// taken and the order is still there to be charged — unless a part of it was already paid, when that
-// meal is finished: the table wants cleaning and the order leaves the kitchen board, as on the edge.
-function afterLastVoid(draft: StoreShape, table: string, orderId: string | undefined): void {
-  if (draft.paidPart[table]) {
-    draft.tableState[table] = "TABLE_STATE_NEEDS_CLEANING";
-    if (orderId !== undefined) {
-      draft.liveOrders[orderId] = false;
-    }
-  } else {
-    draft.tableState[table] = "TABLE_STATE_OCCUPIED";
-  }
-  delete draft.paidPart[table];
 }
 
 // The bill total the operator collects, computed client-side from the captured line totals and the
@@ -665,6 +627,7 @@ export function fold(event: ServerEvent): void {
         setState(
           produce((draft) => {
             draft.liveOrders[order] = false;
+            forgetLines(draft, order);
             const table = draft.orderTable[order];
             if (table !== undefined && draft.tableOrder[table] === order) {
               delete draft.tableOrder[table];
@@ -957,34 +920,9 @@ export function fold(event: ServerEvent): void {
     }
     case "billing.bill.settled": {
       const bill = str(payload, "bill_id");
-      if (bill === null) {
-        break;
+      if (bill !== null) {
+        setState(produce((draft) => settleBill(draft, bill)));
       }
-      setState(
-        produce((draft) => {
-          const closed = closeBill(draft, bill);
-          if (closed !== null) {
-            if (closed.stillOpen === 0) {
-              draft.tableState[closed.table] = "TABLE_STATE_NEEDS_CLEANING";
-              delete draft.paidPart[closed.table];
-            } else {
-              // One guest of a split table has paid. The table waits for the others.
-              draft.paidPart[closed.table] = true;
-            }
-          }
-          // Paid, so off the kitchen board: its unbumped lines no longer wait on a table that is
-          // being cleaned. Not while another part of it still owes — those guests' food is still
-          // coming. An order with no table is paid before it is cooked, so its food stays on the
-          // board until a station bumps it (ADR-0161).
-          const settledOrder = draft.billOrder[bill];
-          if (settledOrder !== undefined && !orderStillOwes(draft, settledOrder)) {
-            draft.liveOrders[settledOrder] = false;
-            if (draft.orderTable[settledOrder] === undefined) {
-              draft.kitchenOrders[settledOrder] = true;
-            }
-          }
-        }),
-      );
       break;
     }
     default:
@@ -1700,6 +1638,19 @@ export function applyLiveOrders(read: LiveOrdersRead): void {
           if (line.bumped) {
             draft.bumped[line.order_line_id] = true;
           }
+        }
+      }
+      // The read is the whole live set, so an order it does not list, the kitchen is not still
+      // making, and no table or walk-in opened since the read began holds, has ended: its lines go.
+      const kept = new Set([
+        ...live,
+        ...Object.keys(draft.kitchenOrders),
+        ...Object.values(draft.tableOrder),
+        ...opened.map(([orderId]) => orderId),
+      ]);
+      for (const line of Object.values(draft.lines)) {
+        if (!kept.has(line.orderId) && !line.orderId.startsWith(PENDING)) {
+          forgetLines(draft, line.orderId);
         }
       }
     }),
