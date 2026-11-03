@@ -49,6 +49,10 @@ const CONSUMPTION_REDUCED: TaxRate = TaxRate::from_percent(8);
 /// Coins run to ¥500 and are not keys a cashier presses; the note series begins at ¥1,000.
 const NOTES: [i64; 3] = [1_000, 5_000, 10_000];
 
+/// Every coin and note a drawer is counted by, ascending, in yen (ADR-0186): the coins a cashier
+/// counts but never presses as a key, then the notes.
+const COUNT_DENOMINATIONS: [i64; 10] = [1, 5, 10, 50, 100, 500, 1_000, 2_000, 5_000, 10_000];
+
 /// Japan.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Japan;
@@ -85,6 +89,7 @@ impl CountryModule for Japan {
             // change.
             cash_rounding_increment: None,
             cash_denominations: NOTES.to_vec(),
+            cash_count_denominations: COUNT_DENOMINATIONS.to_vec(),
         }
     }
 
@@ -262,6 +267,14 @@ mod tests {
             "the 1-yen coin circulates, so there is nothing to round to"
         );
         assert_eq!(pack.cash_denominations, NOTES.to_vec());
+    }
+
+    #[test]
+    fn a_drawer_is_counted_from_the_one_yen_coin_to_the_ten_thousand_note() {
+        assert_eq!(
+            Japan.locale_pack().cash_count_denominations,
+            [1, 5, 10, 50, 100, 500, 1_000, 2_000, 5_000, 10_000]
+        );
     }
 
     #[test]

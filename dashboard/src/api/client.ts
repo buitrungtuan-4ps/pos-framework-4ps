@@ -1924,19 +1924,14 @@ export const api = {
       prices_include_tax: boolean;
       cash_rounding_increment: number | null;
       cash_denominations: readonly number[];
+      cash_count_denominations: readonly number[];
     },
   ) =>
     requestJson<PublishedConfig>("PUT", "/admin/config/locale", {
       tenant_id: tenantId,
       store_id: storeId,
-      country_code: settings.country_code,
-      currency_code: settings.currency_code,
-      timezone: settings.timezone,
-      cutoff_hour: settings.cutoff_hour,
+      ...settings,
       display_language: settings.display_language ?? null,
-      prices_include_tax: settings.prices_include_tax,
-      cash_rounding_increment: settings.cash_rounding_increment,
-      cash_denominations: settings.cash_denominations,
     }),
 
   // Publish a store's registered identity (ADR-0106) as its `store_profile` config node, behind

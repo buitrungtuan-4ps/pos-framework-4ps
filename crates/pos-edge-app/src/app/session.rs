@@ -147,6 +147,11 @@ pub struct EdgeSession {
     /// Empty means "offer the exact amount only", which is the honest answer for a store whose
     /// country nobody has filled in: an unhelpful key on a till is worse than no key.
     pub cash_denominations: Vec<i64>,
+    /// The notes and coins a drawer is counted by, ascending, in minor units
+    /// ([ADR-0186](../../../../docs/adr/0186-a-drawer-is-counted-by-denomination.md)): the store's
+    /// own list, or its country pack's, as the `locale` node states it. Empty means no counter, and
+    /// the till keeps its single amount field.
+    pub cash_count_denominations: Vec<i64>,
     /// The store's authoritative menu — the price book an inbound `OrderIn` reprices from
     /// ([ADR-0063](../../../../docs/adr/0063-store-menu-catalog.md), [ADR-0064](../../../../docs/adr/0064-edge-order-in.md)).
     /// Empty in the bootstrap: a store accepts no inbound order until the cloud publishes its menu

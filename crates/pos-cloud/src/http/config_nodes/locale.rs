@@ -70,6 +70,10 @@ pub(in crate::http) struct PackedFacts {
     /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
     /// Keyed on the country: it is the language of the place, whatever the store trades in.
     pub(in crate::http) languages: std::collections::BTreeMap<CountryCode, String>,
+    /// The notes and coins each country's pack counts a drawer by
+    /// ([ADR-0186](../../../docs/adr/0186-a-drawer-is-counted-by-denomination.md)), which a store's
+    /// node carries unless its publish states its own list.
+    pub(in crate::http) count_denominations: std::collections::BTreeMap<CountryCode, Vec<i64>>,
 }
 
 /// Builds those from the compiled country modules.
@@ -95,6 +99,9 @@ pub(in crate::http) fn packed_facts(registry: &CountryRegistry) -> PackedFacts {
             module.country_code(),
             pack.default_language.as_str().to_owned(),
         );
+        facts
+            .count_denominations
+            .insert(module.country_code(), pack.cash_count_denominations);
     }
     facts
 }
@@ -151,6 +158,12 @@ pub(in crate::http) struct PublishLocaleRequest {
     /// amount only, which is the honest answer rather than a guess.
     #[serde(default)]
     pub(in crate::http) cash_denominations: Vec<i64>,
+    /// The notes and coins the till counts a drawer by, in minor units
+    /// ([ADR-0186](../../../docs/adr/0186-a-drawer-is-counted-by-denomination.md)): the store's own
+    /// list, which overrides its country pack's. Absent takes the pack's list; empty means no
+    /// counter, and the till keeps its single amount field.
+    #[serde(default)]
+    pub(in crate::http) cash_count_denominations: Option<Vec<i64>>,
 }
 
 /// Builds the locale-publish sub-router ([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), M4).
@@ -251,6 +264,7 @@ pub(in crate::http) fn checked_locale_node(
     facts: &PackedFacts,
 ) -> Result<serde_json::Value, Response> {
     let (country, currency, denominations) = locale_node::checked_locale_fields(request)?;
+    let count_denominations = locale_node::checked_count_denominations(request, facts, country)?;
 
     let mut locale_value = serde_json::json!({
         // Upper-cased by `CountryCode::parse` on the way in, so the fleet console's comparison
@@ -263,6 +277,7 @@ pub(in crate::http) fn checked_locale_node(
         "prices_include_tax": request.prices_include_tax,
         "cash_rounding_increment": request.cash_rounding_increment,
         "cash_denominations": denominations,
+        "cash_count_denominations": count_denominations,
     });
     locale_node::add_country_pack_facts(&mut locale_value, facts, country, currency);
     // The display language is optional: include it only when a non-blank code was given, so a store
@@ -290,9 +305,11 @@ pub(in crate::http) fn checked_locale_node(
     request_body(
         content = PublishLocaleRequest, description = "`tenant_id` and `store_id`, then `country_code` (ISO 3166-1 alpha-2, required), `currency_code`, `timezone` (an IANA name), \
                        `cutoff_hour` (0 to 23, where a business day ends), and optionally \
-                       `display_language`, `prices_include_tax`, `cash_rounding_increment` and \
-                       `cash_denominations`, both in the currency's minor units (ADR-0074, \
-                       ADR-0104, ADR-0105, ADR-0114). The node is rebuilt whole",
+                       `display_language`, `prices_include_tax`, `cash_rounding_increment`, \
+                       `cash_denominations` and `cash_count_denominations` (absent takes the \
+                       country pack's counting list, empty means no counter), in the currency's \
+                       minor units (ADR-0074, ADR-0104, ADR-0105, ADR-0114, ADR-0186). The node \
+                       is rebuilt whole",
         content_type = "application/json",
     ),
     responses(

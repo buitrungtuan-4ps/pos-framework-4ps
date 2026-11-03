@@ -517,6 +517,11 @@ pub(super) fn apply_locale(session: &mut EdgeSession, document: &serde_json::Val
         session
             .cash_denominations
             .clone_from(&locale.cash_denominations);
+        // The same, for the counting list (ADR-0186): absent clears it, and the till counts by the
+        // single amount field again.
+        session
+            .cash_count_denominations
+            .clone_from(&locale.cash_count_denominations);
         // Absent, or zero, leaves what the store already had: a published zero would mean "scrub a
         // buyer's record the instant the invoice is printed", which is never what an operator means
         // and would destroy the document's own evidence (ADR-0107).

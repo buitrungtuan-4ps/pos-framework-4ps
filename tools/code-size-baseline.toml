@@ -29,7 +29,6 @@
 "crates/pos-edge/tests/drawers.rs" = 1543
 "crates/pos-proto/src/events.rs" = 1123
 "crates/pos-proto/src/fees.rs" = 1317
-"crates/pos-proto/src/locale.rs" = 1376
 "crates/pos-proto/src/menu.rs" = 1224
 
 [functions]
