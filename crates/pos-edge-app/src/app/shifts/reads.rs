@@ -4,7 +4,7 @@
 //! The shift a device reads: its view, whether its business day has ended, what the drawer should
 //! hold where the count is not blind, and the till's name.
 
-use pos_core::business_date::derive_business_date;
+use pos_core::business_date::{derive_business_date, local_time};
 use pos_ports::event_store::EventStore;
 use pos_proto::ids::{DeviceId, ShiftId};
 use pos_proto::money::Money;
@@ -13,7 +13,7 @@ use pos_proto::text::DisplayName;
 use pos_proto::{ClockSource, ShiftState};
 
 use crate::app::records::is_till;
-use crate::app::{AppError, Edge, ShiftRecord, ShiftView, TillScope};
+use crate::app::{AppError, Edge, ShiftHeader, ShiftRecord, ShiftView, TillScope};
 
 /// The `tracing` target this module logs under: the path it had in `pos_edge`, kept when it moved
 /// into this crate so log filters and dashboards see the same target.
@@ -127,5 +127,28 @@ impl<S: EventStore> Edge<S> {
             .iter()
             .find(|device| device.device_id == till && is_till(device))
             .map(|device| device.name.clone())
+    }
+
+    /// What `record`'s report says beside its figures, as it closes now: its till's name, when it
+    /// opened and closed in the store's time, its bills, its tender mix in method order, and no
+    /// reason yet, which the close adds where it gave one.
+    pub(in crate::app) fn shift_header(&self, record: &ShiftRecord) -> ShiftHeader {
+        let zone = self.session().timezone.clone();
+        let at = |instant| local_time(instant, &zone).ok().map(|time| time.to_string());
+        let mut tenders: Vec<_> = record
+            .tenders
+            .iter()
+            .filter(|(_, total)| !total.is_zero())
+            .copied()
+            .collect();
+        tenders.sort_by_key(|(method, _)| *method);
+        ShiftHeader {
+            till_name: self.till_name(record.till),
+            opened_at: at(record.opened_time),
+            closed_at: at(self.clock.now()),
+            bills: record.bills,
+            tenders,
+            variance_reason: None,
+        }
     }
 }

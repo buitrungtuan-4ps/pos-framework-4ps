@@ -6,11 +6,11 @@
 use pos_core::billing::TaxComponentLine;
 use pos_core::cash_count::CountBreakdown;
 use pos_core::error::DomainError;
-use pos_proto::ShiftState;
 use pos_proto::devices::DeviceKind;
 use pos_proto::ids::{DeviceId, EmployeeId, ShiftId};
 use pos_proto::money::{CurrencyCode, Money};
 use pos_proto::time::{BusinessDate, Timestamp};
+use pos_proto::{PaymentMethod, ShiftState};
 
 use crate::app::views::{ShiftReport, ShiftView, TillScope};
 
@@ -50,6 +50,10 @@ pub(in crate::app) struct ShiftRecord {
     /// (ADR-0184), for its close card.
     pub(in crate::app) voided_bills: u32,
     pub(in crate::app) counted: Option<Money>,
+    /// How many bills it settled, for its report.
+    pub(in crate::app) bills: u32,
+    /// What each tender applied to those bills, for its report's tender mix.
+    pub(in crate::app) tenders: Vec<(PaymentMethod, Money)>,
     /// The count note by note, where it was counted so (ADR-0186); empty for one typed amount.
     pub(in crate::app) count_breakdown: CountBreakdown,
     /// The tax by component and rate its settled bills recorded on their tax lines (ADR-0168
@@ -84,6 +88,8 @@ impl ShiftRecord {
             voided_cash: zero,
             voided_bills: 0,
             counted: None,
+            bills: 0,
+            tenders: Vec::new(),
             count_breakdown: CountBreakdown::default(),
             tax_components: Vec::new(),
         }

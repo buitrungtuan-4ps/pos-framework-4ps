@@ -10,7 +10,7 @@ use pos_proto::store_profile::StoreProfile;
 use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
 
-use crate::app::{CombinedReport, DrawerFigures, ShiftReport};
+use crate::app::{CombinedReport, DrawerFigures, ShiftHeader, ShiftReport};
 use crate::paper_labels::{ENGLISH, VIETNAMESE};
 use crate::printing::tests::receipts::sold;
 use crate::printing::tests::{lines_of, style, totals_of};
@@ -36,6 +36,7 @@ fn a_shift_report_adds_up_on_paper_and_says_over_or_short_in_words() {
         voided_bills: 0,
         voided_cash: vnd(0),
         tax_components: Vec::new(),
+        header: ShiftHeader::default(),
     };
 
     let short = shift_report_document(
@@ -46,8 +47,9 @@ fn a_shift_report_adds_up_on_paper_and_says_over_or_short_in_words() {
     );
     let lines = lines_of(&short);
     assert_eq!(lines[0], "SHIFT REPORT");
+    assert_eq!(lines[2], "Bills: 0");
     assert_eq!(
-        lines[2..],
+        lines[3..],
         [
             "Opening float  VND 500,000",
             "Cash taken  VND 1,250,000",
@@ -92,6 +94,7 @@ fn a_combined_slip_prints_the_store_totals_then_each_drawer_under_its_tills_name
         voided_bills: 0,
         voided_cash: vnd(0),
         tax_components: Vec::new(),
+        header: ShiftHeader::default(),
     };
     let bar = drawer(0xBA, 500_000, 590_000);
     let counter = drawer(0xC0, 300_000, 400_000);
@@ -133,14 +136,14 @@ fn a_combined_slip_prints_the_store_totals_then_each_drawer_under_its_tills_name
         ]
     );
     assert_eq!(
-        lines[10..14],
+        lines[11..15],
         figures(
             "Opening float  VND 500,000",
             "Expected in drawer  VND 600,000",
             "Counted  VND 590,000"
         )
     );
-    assert_eq!(lines[16], "Counter");
+    assert_eq!(lines[17], "Counter");
     assert_eq!(lines.last(), Some(&"Balanced"));
     assert_eq!(slip.blocks.last(), Some(&PrintBlock::Cut));
 }
@@ -164,10 +167,11 @@ fn a_shift_report_prints_what_was_paid_in_and_out_so_the_expectation_adds_up() {
         voided_bills: 0,
         voided_cash: vnd(0),
         tax_components: Vec::new(),
+        header: ShiftHeader::default(),
     };
     let english = shift_report_document(&StoreProfile::default(), &style(0), &ENGLISH, &report);
     assert_eq!(
-        lines_of(&english)[2..],
+        lines_of(&english)[3..],
         [
             "Opening float  VND 500,000",
             "Cash taken  VND 1,250,000",
@@ -248,6 +252,7 @@ fn a_vietnamese_store_prints_its_bill_and_its_drawer_in_vietnamese() {
         voided_bills: 0,
         voided_cash: vnd(0),
         tax_components: Vec::new(),
+        header: ShiftHeader::default(),
     };
     let drawer = shift_report_document(&StoreProfile::default(), &style(0), &VIETNAMESE, &report);
     let drawn = lines_of(&drawer);
@@ -275,10 +280,11 @@ fn a_shift_report_prints_the_cash_voids_handed_back() {
         voided_bills: 1,
         voided_cash: vnd(115_000),
         tax_components: Vec::new(),
+        header: ShiftHeader::default(),
     };
     let english = shift_report_document(&StoreProfile::default(), &style(0), &ENGLISH, &report);
     assert_eq!(
-        lines_of(&english)[2..6],
+        lines_of(&english)[3..7],
         [
             "Opening float  VND 500,000",
             "Cash taken  VND 1,250,000",
@@ -326,6 +332,7 @@ fn a_count_made_note_by_note_lists_its_notes_under_the_figures() {
         voided_bills: 0,
         voided_cash: vnd(0),
         tax_components: Vec::new(),
+        header: ShiftHeader::default(),
     };
     let document = shift_report_document(&StoreProfile::default(), &style(0), &ENGLISH, &report);
     let lines = lines_of(&document);
@@ -362,10 +369,11 @@ fn a_drop_to_the_safe_prints_apart_from_the_paid_out() {
         voided_bills: 0,
         voided_cash: vnd(0),
         tax_components: Vec::new(),
+        header: ShiftHeader::default(),
     };
     let english = shift_report_document(&StoreProfile::default(), &style(0), &ENGLISH, &report);
     assert_eq!(
-        lines_of(&english)[4..7],
+        lines_of(&english)[5..8],
         [
             "Paid out  VND 150,000",
             "Dropped to safe  VND 1,000,000",
@@ -375,4 +383,61 @@ fn a_drop_to_the_safe_prints_apart_from_the_paid_out() {
     let vietnamese =
         shift_report_document(&StoreProfile::default(), &style(0), &VIETNAMESE, &report);
     assert!(lines_of(&vietnamese).contains(&"Nộp két  VND 1,000,000"));
+}
+
+#[test]
+fn a_shift_report_says_which_till_when_how_many_bills_by_which_tender_and_why() {
+    // UX-4: the paper names the till and its times, the bills and the tender mix, and the
+    // close's reason, and no person.
+    use pos_proto::PaymentMethod;
+    use pos_proto::reason_codes::{PublishedReasonCode, ReasonAction, ReasonCode};
+    let vnd = |minor| Money::new(CurrencyCode::VND, minor);
+    let reason = PublishedReasonCode::new(
+        pos_proto::ids::ReasonCodeId::new(Ulid::from_u128(9)),
+        ReasonCode::new("COUNT_DIFFERENCE"),
+        DisplayName::new("Counting difference"),
+        vec![ReasonAction::CashVariance],
+    );
+    let report = ShiftReport {
+        shift_id: pos_proto::ids::ShiftId::new(Ulid::from_u128(7)),
+        opening_float: vnd(500_000),
+        cash_collected: vnd(300_000),
+        paid_in: vnd(0),
+        paid_out: vnd(0),
+        dropped: vnd(0),
+        expected_amount: vnd(800_000),
+        counted_amount: vnd(770_000),
+        count_breakdown: CountBreakdown::default(),
+        variance: vnd(-30_000),
+        voided_bills: 0,
+        voided_cash: vnd(0),
+        tax_components: Vec::new(),
+        header: ShiftHeader {
+            till_name: Some(DisplayName::new("Bar")),
+            opened_at: Some("2026-11-03 08:00".to_owned()),
+            closed_at: Some("2026-11-03 16:05".to_owned()),
+            bills: 3,
+            tenders: vec![
+                (PaymentMethod::Cash, vnd(300_000)),
+                (PaymentMethod::Card, vnd(450_000)),
+                (PaymentMethod::Qr, vnd(120_000)),
+            ],
+            variance_reason: Some(reason),
+        },
+    };
+    let document = shift_report_document(&StoreProfile::default(), &style(0), &ENGLISH, &report);
+    let lines = lines_of(&document);
+    assert_eq!(lines[..2], ["SHIFT REPORT", "Bar"]);
+    assert_eq!(
+        lines[3..9],
+        [
+            "Opened: 2026-11-03 08:00",
+            "Closed: 2026-11-03 16:05",
+            "Bills: 3",
+            "Cash  VND 300,000",
+            "Card  VND 450,000",
+            "QR  VND 120,000",
+        ]
+    );
+    assert_eq!(lines.last(), Some(&"Reason: Counting difference"));
 }

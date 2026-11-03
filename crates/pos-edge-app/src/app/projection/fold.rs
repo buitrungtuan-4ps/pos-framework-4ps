@@ -178,10 +178,11 @@ impl<S: EventStore> Edge<S> {
                 // Only cash reaches the drawer, and the roll-up is the reason payments are evented. The
                 // payment names its drawer's shift on its envelope (ADR-0167 decision 5); one
                 // written without one went to the store's drawer's.
+                let shift = envelope.shift_id.or(projection.open_shift_of(None));
                 if event.method.known() == PaymentMethod::Cash {
-                    let shift = envelope.shift_id.or(projection.open_shift_of(None));
                     projection.collect_cash(shift, event.applied_to_bill)?;
                 }
+                projection.collect_tender(shift, event.method.known(), event.applied_to_bill)?;
                 projection.record_payment(
                     event.bill_id,
                     event.method.known(),

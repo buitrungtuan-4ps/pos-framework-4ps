@@ -657,6 +657,15 @@ fn a_close_beyond_the_limit_asks_its_reason_and_records_the_one_it_is_given() {
             .decode()
             .expect("decodes");
         assert_eq!(event.reason_code_id, Some(miscounted()));
+        // UX-4: the report it prints names the shift's times, its bill, its tender and the reason.
+        let header = closed.report.expect("the close carries its report").header;
+        assert!(header.opened_at.is_some() && header.closed_at.is_some());
+        assert_eq!(header.bills, 1);
+        assert_eq!(header.tenders, [(PaymentMethod::Cash, vnd(165_000))]);
+        assert_eq!(
+            header.variance_reason.map(|reason| reason.id),
+            Some(miscounted())
+        );
     });
 }
 

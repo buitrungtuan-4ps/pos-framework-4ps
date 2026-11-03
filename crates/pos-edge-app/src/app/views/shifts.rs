@@ -6,13 +6,13 @@
 use pos_core::billing::TaxComponentLine;
 use pos_core::cash_count::CountBreakdown;
 use pos_core::error::DomainError;
-use pos_proto::ShiftState;
 use pos_proto::ids::{DeviceId, EmployeeId, ShiftId};
 use pos_proto::money::{CurrencyCode, Money};
-use pos_proto::reason_codes::ReasonAction;
+use pos_proto::reason_codes::{PublishedReasonCode, ReasonAction};
 use pos_proto::shift::{DrawerAccess, DrawerModel};
 use pos_proto::text::DisplayName;
 use pos_proto::time::Timestamp;
+use pos_proto::{PaymentMethod, ShiftState};
 
 /// A closed shift's drawer, as the shift report prints it.
 ///
@@ -54,6 +54,30 @@ pub struct ShiftReport {
     /// as in every store whose `tax` node names no components; a line that recorded none adds
     /// nothing, so this lists what was recorded and claims no more.
     pub tax_components: Vec<TaxComponentLine>,
+    /// Which till, when, how many bills by which tender, and why it was over or short.
+    pub header: ShiftHeader,
+}
+
+/// What a shift report says about the shift beside its drawer's figures: the till's name, when the
+/// shift opened and closed in the store's time, how many bills it settled and what each tender took,
+/// and the reason its close gave. Names no person
+/// ([ADR-0184](../../../../../docs/adr/0184-a-settled-bill-is-voided-whole-not-refunded.md)
+/// amendment): the shift is the till's, and a person is an id on the record, never on paper.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ShiftHeader {
+    /// The till's name, as its `TERMINAL` entry gives it; `None` for the store's one drawer.
+    pub till_name: Option<DisplayName>,
+    /// When the shift opened, `YYYY-MM-DD HH:MM` in the store's timezone.
+    pub opened_at: Option<String>,
+    /// When it closed, the same way.
+    pub closed_at: Option<String>,
+    /// How many bills it settled.
+    pub bills: u32,
+    /// What each tender applied to those bills, in [`PaymentMethod`] order, change and tips apart;
+    /// a tender that took nothing is left out.
+    pub tenders: Vec<(PaymentMethod, Money)>,
+    /// The reason the close gave for its over or short, where it owed one (ADR-0167 decision 12).
+    pub variance_reason: Option<PublishedReasonCode>,
 }
 
 impl ShiftReport {

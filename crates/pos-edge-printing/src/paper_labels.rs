@@ -104,6 +104,20 @@ pub struct PaperLabels {
     pub uncounted: &'static str,
     /// Cash taken from the drawer to the safe, apart from the paid out (ADR-0186).
     pub dropped_to_safe: &'static str,
+    /// When the shift opened.
+    pub opened_at: &'static str,
+    /// When it closed.
+    pub closed_at: &'static str,
+    /// How many bills it settled.
+    pub bills: &'static str,
+    /// Cash, in the shift's tender mix.
+    pub tender_cash: &'static str,
+    /// Card, in the tender mix.
+    pub tender_card: &'static str,
+    /// A scan-to-pay wallet, in the tender mix.
+    pub tender_qr: &'static str,
+    /// Every other tender, in the tender mix.
+    pub tender_other: &'static str,
 }
 
 /// English, and the fallback for every case the module documentation names.
@@ -147,6 +161,13 @@ pub static ENGLISH: PaperLabels = PaperLabels {
     count_by_denomination: "COUNT BY NOTE",
     uncounted: "Other / uncounted",
     dropped_to_safe: "Dropped to safe",
+    opened_at: "Opened",
+    closed_at: "Closed",
+    bills: "Bills",
+    tender_cash: "Cash",
+    tender_card: "Card",
+    tender_qr: "QR",
+    tender_other: "Other",
 };
 
 /// Vietnamese, in the words a Vietnamese receipt and cash-up sheet use.
@@ -190,6 +211,13 @@ pub static VIETNAMESE: PaperLabels = PaperLabels {
     count_by_denomination: "ĐẾM THEO MỆNH GIÁ",
     uncounted: "Khác / không đếm",
     dropped_to_safe: "Nộp két",
+    opened_at: "Mở ca",
+    closed_at: "Chốt ca",
+    bills: "Số hóa đơn",
+    tender_cash: "Tiền mặt",
+    tender_card: "Thẻ",
+    tender_qr: "QR",
+    tender_other: "Khác",
 };
 
 impl PaperLabels {
@@ -279,6 +307,13 @@ mod tests {
             ENGLISH.count_by_denomination,
             ENGLISH.uncounted,
             ENGLISH.dropped_to_safe,
+            ENGLISH.opened_at,
+            ENGLISH.closed_at,
+            ENGLISH.bills,
+            ENGLISH.tender_cash,
+            ENGLISH.tender_card,
+            ENGLISH.tender_qr,
+            ENGLISH.tender_other,
         ] {
             assert!(label.is_ascii(), "{label}");
         }
