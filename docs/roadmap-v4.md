@@ -59,13 +59,13 @@ Each is an ADR, accepted with this plan. The numbers were reserved together.
 | ADR | Decision | Amends or extends |
 |---|---|---|
 | [0189](adr/0189-a-store-runs-a-package-version-hq-pins.md) | A customization package: a versioned bundle of screens, flows, rules and data; a store locked to a version or choosing among allowed ones; six-dimension resolution; a minimum edge version; last-known-good | ADR-0033, ADR-0066, ADR-0160 |
-| 0190 | Screens from data: a component catalogue, device classes, a fallback for unknown components, labels through translations, the tap budget checked at publish | ADR-0109 |
-| 0191 | An action catalogue: every act typed, with its permission and its effect class (UI only, local edge write, money through a core command, external through the cloud) | — |
-| 0192 | A flow engine: a graph of required, optional and conditional steps with prerequisites; the till runs it and the edge re-checks it; a step in progress keeps the rules it started with | — |
-| 0193 | Rules in CEL: one evaluator on the edge and in the till, no loop macros, length limits; "when … if … then …" reactions | a new dependency |
+| [0190](adr/0190-a-screen-is-drawn-from-the-package.md) | Screens from data: a component catalogue, device classes, a fallback for unknown components, labels through translations, the tap budget checked at publish | ADR-0109 |
+| [0191](adr/0191-every-act-is-in-a-typed-catalogue.md) | An action catalogue: every act typed, with its permission and its effect class (UI only, local edge write, money through a core command, external through the cloud) | — |
+| [0192](adr/0192-a-flow-is-a-graph-of-steps-the-edge-re-checks.md) | A flow engine: a graph of required, optional and conditional steps with prerequisites; the till runs it and the edge re-checks it; a step in progress keeps the rules it started with | — |
+| [0193](adr/0193-conditions-and-reactions-are-written-in-cel.md) | Rules in CEL: one evaluator on the edge and in the till, no loop macros, length limits; "when … if … then …" reactions | a new dependency |
 | 0194 | Custom data: fields, lists and object types; storage and sync; additive events; personal data stored apart with a retention period; additive schema changes only | relates to ADR-0076 |
 | [0195](adr/0195-the-cloud-wakes-a-store-to-pull-its-config.md) | The cloud wakes a store over the NATS connection the store opens, and the store pulls; the 30 s poll stays as the fallback | ADR-0031, ADR-0039 |
-| 0196 | Paint first, write after: every act paints at once, with three money safeguards | ADR-0173 decision 4, ADR-0188 |
+| [0196](adr/0196-every-act-paints-first-and-money-waits-for-the-edge.md) | Paint first, write after: every act paints at once, with three money safeguards | ADR-0173 decision 4, ADR-0188 |
 | [0197](adr/0197-every-tap-paints-within-ten-milliseconds.md) | The 10 ms budget: its definition, its measurement (CI emulation and till telemetry) and its gate | replaces roadmap-v3 PF1's till targets |
 | 0198 | The cloud as gateway: secrets in the cloud; retries, idempotency and timeouts; private address ranges blocked | extends ADR-0153 |
 | 0199 | WebAssembly functions: pure functions returning decisions, fuel and memory limits, signed, rolled out by ring, run by `wasmtime` on the edge | amends ADR-0083 |
