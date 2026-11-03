@@ -31,6 +31,16 @@ export function settleRefusal(payments: readonly PaymentRequest[], due: number):
   return null;
 }
 
+/**
+ * The settled panel's receipt line. A receipt number is a fiscal fact, so a settle the till learned
+ * of by reading the bill again, whose number it could not read, says so rather than showing one.
+ */
+export function receiptLine(bill: BillResponse): string {
+  return bill.receipt_number === undefined || bill.receipt_number === null
+    ? t("pay.receipt_unread")
+    : t("pay.receipt", { number: bill.receipt_number });
+}
+
 /** What the edge says now about a bill whose settle went unanswered. */
 export async function recheckSettle(billId: string): Promise<Recheck<BillResponse>> {
   const bill = await api.billCheck(billId);

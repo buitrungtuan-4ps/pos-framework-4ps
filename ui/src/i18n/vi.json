@@ -377,6 +377,7 @@
   "pay.qr": "Đã nhận chuyển khoản QR",
   "pay.qr_hint": "Chỉ bấm khi tiền đã về tài khoản của quán. Máy không tự kiểm tra với ngân hàng.",
   "pay.receipt": "Hóa đơn #{number}",
+  "pay.receipt_unread": "Đã thanh toán. Không đọc được số hóa đơn trên máy này; xem trong mục Hôm nay.",
   "pay.remaining": "Còn phải thu",
   "pay.settled": "Đã thanh toán",
   "pay.share_of": "Phần {part}/{count}",

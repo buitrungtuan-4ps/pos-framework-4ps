@@ -8,7 +8,7 @@ import { VOID_BILL, VoidBillPanel, useVoidBill } from "../components/VoidBillPan
 import { BillEnded } from "../components/BillEnded";
 import { PendingSettle } from "../components/PendingSettle";
 import { RefusalPanel } from "../components/RefusalPanel";
-import { useSettleAct } from "../state/settle-act";
+import { receiptLine, useSettleAct } from "../state/settle-act";
 import { DrawerOwner } from "../components/DrawerOwner";
 import { CheckRow } from "../components/ui";
 import { Keypad } from "../components/Keypad";
@@ -1269,7 +1269,7 @@ export function Pay() {
           <div class="mt-6 rounded-token border border-line bg-surface p-4" data-outcome="settled">
             <p class="text-lg font-semibold text-ok">{t("pay.settled")}</p>
             <p class="mt-2 tabular-nums">
-              {t("pay.receipt", { number: bill().receipt_number ?? 0 })}
+              {receiptLine(bill())}
             </p>
             {/* The change is what the cashier acts on next, so it is the largest figure here (UX-15). */}
             <Show when={givenChange() > 0}>
