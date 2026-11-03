@@ -129,7 +129,8 @@ impl EventStoreHarness for StoreHarness {
 
         let admin = admin().await?;
         // A clean slate. `pg_terminate_backend` first, because the crash-mid-transaction case
-        // deliberately leaves a backend idle-in-transaction; its row-exclusive lock would make the
+        // deliberately drops a transaction open, and its backend stays idle in it until the
+        // connection's close reaches the server; its row-exclusive lock would make the
         // TRUNCATE (which needs an access-exclusive lock) wait on a transaction that never ends.
         // TRUNCATE on the partitioned parent cascades to every partition.
         admin
@@ -524,6 +525,13 @@ fn rls_isolates_rollup_rows_by_tenant() {
         );
     });
 }
+
+// ---------------------------------------------------------------------------
+// A transaction dropped open, and the pool it must not return to.
+// ---------------------------------------------------------------------------
+
+#[path = "integration/pooled_transactions.rs"]
+mod pooled_transactions;
 
 // ---------------------------------------------------------------------------
 // The super-admin credential and session store (ADR-0034).

@@ -69,7 +69,7 @@ const SETTLE_BEFORE_FIRST_ARCHIVE: Duration = Duration::from_secs(300);
 #[derive(Debug, thiserror::Error)]
 pub enum BackupError {
     /// The cloud would not issue this store's archive key, or would not accept the archive.
-    #[error("the cloud could not be reached for a store archive: {0}")]
+    #[error("the cloud did not issue an archive key or take the archive: {0}")]
     Cloud(pos_ports::PortError),
     /// The cloud answered with something that is not an archive key.
     #[error("the cloud issued an unusable archive key: {0}")]
