@@ -5926,9 +5926,19 @@ test("a double tap on Send or on a tender sends one request, and the button says
     await addItem(page);
     expect(await doubleTap(page, "fireOrder", "**/api/orders/*/fire", "Sending…", "line-fired")).toBe(1);
     await page.locator('[data-step="takePayment"]').click();
-    expect(
-      await doubleTap(page, "payCash", "**/api/bills/*/settle", "Taking payment…", "settled"),
-    ).toBe(1);
+    // A settle paints its pending screen at once (ADR-0196), so the second tap finds no tender.
+    const settle = await holdPost(page, "**/api/bills/*/settle");
+    let settles = 0;
+    page.on("request", (request) => {
+      if (request.method() === "POST" && /\/api\/bills\/[^/]+\/settle$/.test(request.url())) {
+        settles += 1;
+      }
+    });
+    await page.locator('[data-step="payCash"]').dblclick();
+    await expect(page.locator('[data-outcome="settle-pending"]')).toContainText("Taking payment…");
+    settle.release();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+    expect(settles).toBe(1);
   } finally {
     await edge.stop();
   }
@@ -6302,6 +6312,180 @@ test("every route the till declares opens its own screen, and an undeclared one 
     }
     await page.goto(`${edge.baseURL}/no-such-screen`);
     await expect(page.locator("main")).toBeEmpty();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// Paint first for money (ADR-0196, ADR-0204). A settle shows its pending screen at once, with the
+// amount the edge confirmed and no change, no receipt and no way to pay again; the edge decides.
+test("a settle shows its pending screen at once, with no change until the edge commits", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    // One note larger than the sale, so the settle owes change.
+    await page.route("**/api/locale", async (route) => {
+      const response = await fetchWhole(route);
+      const body = await response.json();
+      await route.fulfill({ response, json: { ...body, cash_denominations: [500_000] } });
+    });
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    await sendThenTakePayment(page);
+    const settle = await holdPost(page, "**/api/bills/*/settle", { reachEdge: true });
+    await page.locator('[data-step="setTender"]').nth(1).click();
+    await page.locator('[data-step="payCash"]').click();
+    const pending = page.locator('[data-outcome="settle-pending"]');
+    await expect(pending).toBeVisible();
+    await expect(page.locator('[data-outcome="change-due"]')).toHaveCount(0);
+    await expect(page.locator('[data-step="printAgain"]')).toHaveCount(0);
+    await expect(page.locator('[data-step="payCash"]')).toHaveCount(0);
+    await settle.sent;
+    settle.release();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="change-due"]')).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// Safeguard 3: a settle the edge refuses rolls the screen back to the pad, says why in place, and
+// takes no tap on a tender until the cashier dismisses it. The tender chosen is still chosen.
+test("a refused settle rolls back to the pad with the refusal, which must be dismissed", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    await sendThenTakePayment(page);
+    await refusePost(page, "**/api/bills/*/settle", "PAYMENTS_DO_NOT_SUM_TO_TOTAL");
+    await page.locator('[data-step="setTender"]').last().click();
+    await page.locator('[data-step="payCash"]').click();
+    const refusal = page.locator('[data-outcome="money-refused"]');
+    await expect(refusal).toBeVisible();
+    await expect(page.getByRole("alertdialog")).toBeVisible();
+    await expect(page.locator('[data-step="payCash"]')).toBeDisabled();
+    await expect(page.locator('[data-outcome="settled"]')).toHaveCount(0);
+    await page.locator('[data-step="dismissRefusal"]').click();
+    await expect(refusal).toHaveCount(0);
+    await expect(page.locator('[data-step="payCash"]')).toBeEnabled();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// ADR-0204: a settle the edge committed but whose answer never reached the till is not rolled
+// back. The till checks with the store server and shows the bill settled.
+test("a settle whose answer is lost is checked, not rolled back, and shows settled", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    await sendThenTakePayment(page);
+    await page.route("**/api/bills/*/settle", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.continue();
+        return;
+      }
+      await route.fetch();
+      await route.abort("connectionreset");
+    });
+    await page.locator('[data-step="setTender"]').last().click();
+    await page.locator('[data-step="payCash"]').click();
+    await expect(page.locator('[data-outcome="settle-pending"]')).toContainText("Checking with the store server");
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="money-refused"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// ADR-0204: a settle that never reached the edge is found not taken, and only then rolled back.
+test("a settle that never reached the store server is found not taken, and the pad comes back", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    await sendThenTakePayment(page);
+    await page.route("**/api/bills/*/settle", (route) =>
+      route.request().method() === "POST" ? route.abort("connectionreset") : route.continue(),
+    );
+    await page.locator('[data-step="setTender"]').last().click();
+    await page.locator('[data-step="payCash"]').click();
+    await expect(page.locator('[data-outcome="settle-pending"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="money-refused"]')).toContainText("The payment was not taken");
+    await expect(page.locator('[data-outcome="settled"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// Safeguard 2, replayed both ways (ADR-0196): cash into a drawer already counted is refused by the
+// till before anything is sent, and the edge refuses the same settle with the same token.
+test("cash into a counted drawer is refused before sending, and the edge refuses it the same way", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await openShift(page);
+    await navigateTo(page, "/");
+    await seatTable(page);
+    await addItem(page);
+    await sendOrder(page);
+    await navigateTo(page, "/shift");
+    await page.locator("#count").fill("100000");
+    await page.locator('[data-step="countShift"]').click();
+    await expect(page.locator('[data-outcome="shift-counted"]')).toBeVisible();
+    await page.goBack();
+    let billId = null;
+    page.on("request", (request) => {
+      const read = /\/api\/bills\/([^/]+)\/check$/.exec(new URL(request.url()).pathname);
+      if (read !== null) {
+        billId = read[1];
+      }
+    });
+    await page.locator('[data-step="takePayment"]').click();
+    let settles = 0;
+    page.on("request", (request) => {
+      if (request.method() === "POST" && /\/api\/bills\/[^/]+\/settle$/.test(request.url())) {
+        settles += 1;
+      }
+    });
+    await page.locator('[data-step="setTender"]').last().click();
+    await page.locator('[data-step="payCash"]').click();
+    await expect(page.locator('[data-outcome="money-refused"]')).toContainText("This drawer is being closed");
+    await expect(page.locator('[data-outcome="settle-pending"]')).toHaveCount(0);
+    expect(settles).toBe(0);
+
+    // The same settle, straight at the edge: refused with the token the till predicted.
+    await expect.poll(() => billId).not.toBeNull();
+    const answer = await page.evaluate(async (id) => {
+      const headers = {
+        authorization: `Bearer ${localStorage.getItem("pos-edge.device-token")}`,
+        "content-type": "application/json",
+      };
+      const check = await fetch(`/api/bills/${id}/check`, { headers }).then((response) => response.json());
+      const due = check.total_due;
+      const response = await fetch(`/api/bills/${id}/settle`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          payments: [{ method: "PAYMENT_METHOD_CASH", tendered: due, applied_to_bill: due }],
+        }),
+      });
+      return { status: response.status, reason: response.headers.get("pos-error-reason") };
+    }, billId);
+    expect(answer).toEqual({ status: 409, reason: "DRAWER_COUNTED" });
   } finally {
     await edge.stop();
   }

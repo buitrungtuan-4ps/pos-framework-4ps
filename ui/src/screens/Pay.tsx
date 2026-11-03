@@ -6,6 +6,9 @@ import { ApproverFields, createApprover } from "../components/ApproverFields";
 import { DISCOUNT, DiscountPanel, useDiscount } from "../components/DiscountPanel";
 import { VOID_BILL, VoidBillPanel, useVoidBill } from "../components/VoidBillPanel";
 import { BillEnded } from "../components/BillEnded";
+import { PendingSettle } from "../components/PendingSettle";
+import { RefusalPanel } from "../components/RefusalPanel";
+import { useSettleAct } from "../state/settle-act";
 import { DrawerOwner } from "../components/DrawerOwner";
 import { CheckRow } from "../components/ui";
 import { Keypad } from "../components/Keypad";
@@ -39,7 +42,6 @@ import {
   openBillsFor,
   reasonsFor,
   seatsEnabled,
-  settle,
   splitBill,
   splitWays,
   tenderAccepted,
@@ -109,6 +111,7 @@ function distinctAndSpendable(keys: readonly number[]): boolean {
 // budget would fail the build, correctly. So the tip row sits in the flow already visible: a
 // cashier who takes no tip taps nothing extra, and the tip's own taps are declared as their own
 // task in `ui/scripts/step-tasks.mjs`.
+
 /**
  * What the till says about the receipt (ADR-0100). An edge built before C2 sends no
  * `receipt_print`, so the old "Printing receipt…" wording is the fallback — the one case where the
@@ -379,29 +382,26 @@ export function Pay() {
     };
   };
 
-  // The settle in flight, keyed by the tender tapped, which says so until the edge answers.
-  const paying = useInFlight<string>(setError);
+  // The settle (ADR-0196, ADR-0204, `../state/settle-act`): refused at once where the till can tell,
+  // pending until the edge answers, never re-sent. The void keeps its own in-flight.
+  let paid: PaymentRequest[] = [];
+  const settling = useSettleAct((bill) => {
+    setGivenChange(paid.reduce((sum, p) => sum + p.tendered.amount_minor - p.applied_to_bill.amount_minor - (p.tip?.amount_minor ?? 0), 0));
+    setDone(bill);
+  });
+  const voidFlight = useInFlight<string>(setError);
+  const settleBusy = () => settling.phase() !== "idle" || settling.refusal() !== null;
+  const paying = { busy: () => (settleBusy() ? (paid.at(-1)?.method ?? "") : voidFlight.busy()), run: voidFlight.run };
+  onMount(() => settling.resume(billId() ?? ""));
   // The bill on screen settled or voided on another till; not asked while this till's own act is out.
   const ended = () => (done() === null && !voided() && paying.busy() === null ? endedElsewhere(params.id, billId()) : null);
-  const pay = (payments: PaymentRequest[]) =>
-    paying.run(payments[payments.length - 1]?.method ?? "", async () => {
-      const id = billId();
-      if (id === null) {
-        return;
-      }
-      const settled = await settle(id, payments, buyer());
-      setGivenChange(
-        payments.reduce(
-          (sum, payment) =>
-            sum +
-            payment.tendered.amount_minor -
-            payment.applied_to_bill.amount_minor -
-            (payment.tip?.amount_minor ?? 0),
-          0,
-        ),
-      );
-      setDone(settled);
-    });
+  const pay = (payments: PaymentRequest[]) => {
+    const id = billId();
+    if (id !== null) {
+      paid = payments;
+      void settling.pay(id, payments, total(), buyer());
+    }
+  };
 
   // Records one payment. Outside a split, or on a split's last share, that settles the bill with
   // every payment taken; before the last share it keeps this one and clears the pad for the next
@@ -723,7 +723,7 @@ export function Pay() {
       <Show
         when={done()}
         fallback={
-          <Show when={!voided() && ended() === null} fallback={voided() ? voidedPanel() : <BillEnded how={ended() ?? "settled"} tableId={params.id} />}>
+          <Show when={!voided() && ended() === null && settling.phase() === "idle"} fallback={voided() ? voidedPanel() : settling.phase() !== "idle" ? <PendingSettle phase={settling.phase()} amount={formatAmount(money(currency(), total()))} onLeave={() => navigate("/")} /> : <BillEnded how={ended() ?? "settled"} tableId={params.id} />}>
             <p class="mt-4 text-sm text-ink-muted">{t("pay.amount_due")}</p>
             <Show when={check()} fallback={<p class="h-8 w-40 animate-pulse rounded-token bg-surface-raised" role="status" aria-label={t("pay.amount_loading")} data-outcome="amount-loading" />}>
               {(totals) => (
@@ -884,6 +884,7 @@ export function Pay() {
               )}
             </Show>
 
+            <RefusalPanel message={settling.refusal()} onDismiss={settling.dismiss} />
             <Show when={error()}>
               {(message) => (
                 <p class="mt-3 rounded-token border border-danger px-3 py-2 text-danger" role="alert">

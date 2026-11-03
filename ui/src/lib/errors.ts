@@ -102,6 +102,12 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
 //
 // `own` words a token for the screen asking, where the till's one sentence for it would name the
 // wrong thing: a drawer that changed on another device is not a table or a bill.
+/** The sentence for a refusal token, as the edge's refusal would read, for one the till predicts. */
+export function reasonMessage(reason: string): string {
+  const key = REASONS[reason];
+  return key === undefined ? t("common.store_error") : t(key);
+}
+
 export function errorMessage(
   caught: unknown,
   own: Readonly<Record<string, MessageKey>> = {},
