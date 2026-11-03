@@ -43,6 +43,7 @@ pub mod decision;
 pub mod device_revocation;
 pub mod error;
 pub mod floor;
+pub mod flow;
 pub mod inventory;
 pub mod lease;
 pub mod machines;
