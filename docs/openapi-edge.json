@@ -1274,7 +1274,7 @@
         ],
         "responses": {
           "200": {
-            "description": "The money facts the pay screen needs: the currency, the notes a guest can hand over, and what a total rounds to in cash. Empty until a `locale` node is published. The ETag tags this body",
+            "description": "The money facts the pay screen needs: the currency, the notes a guest can hand over, the notes and coins a drawer is counted by, and what a total rounds to in cash. Empty until a `locale` node is published. The ETag tags this body",
             "content": {
               "application/json": {
                 "schema": {
@@ -5375,11 +5375,20 @@
           "currency_code",
           "currency_exponent",
           "cash_denominations",
+          "cash_count_denominations",
           "cash_rounding_increment",
           "prices_include_tax",
           "number_format"
         ],
         "properties": {
+          "cash_count_denominations": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "description": "The notes and coins a drawer is counted by, ascending, in minor units\n([ADR-0186](../../../../docs/adr/0186-a-drawer-is-counted-by-denomination.md)): the store's\nown list, else its country pack's. Empty means no counter, and the till keeps its single\namount field."
+          },
           "cash_denominations": {
             "type": "array",
             "items": {

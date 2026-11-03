@@ -112,6 +112,9 @@ impl CountryModule for Zz {
             prices_include_tax: false,
             cash_rounding_increment: None,
             cash_denominations: Vec::new(),
+            // No counting list either, a valid answer too (ADR-0186): empty means no counter, and
+            // the till keeps its single amount field. A copied module lists its notes and coins.
+            cash_count_denominations: Vec::new(),
         }
     }
 
@@ -265,6 +268,11 @@ mod tests {
         let pack = Zz.locale_pack();
         let unknown = TaxClassId::new(Ulid::from_u128(u128::MAX));
         assert!(pack.rate_for(unknown, SalesChannel::DineIn).is_none());
+    }
+
+    #[test]
+    fn the_reference_country_counts_no_denominations() {
+        assert!(Zz.locale_pack().cash_count_denominations.is_empty());
     }
 
     #[test]

@@ -51,6 +51,10 @@ struct CountryView {
     #[schema(required = true)]
     cash_rounding_increment: Option<i64>,
     cash_denominations: Vec<i64>,
+    /// Every note and coin the till counts a drawer by, ascending, in minor units
+    /// ([ADR-0186](../../../docs/adr/0186-a-drawer-is-counted-by-denomination.md)), which Store
+    /// settings starts a store's own list from. Empty for a pack that counts by no list.
+    cash_count_denominations: Vec<i64>,
     /// The settings a new store in the country starts with, in its units
     /// ([ADR-0183](../../../docs/adr/0183-a-country-pack-seeds-a-new-stores-settings.md)), which
     /// Store settings writes where no scope sets them when it publishes a locale naming the country.
@@ -109,6 +113,7 @@ where
             prices_include_tax: pack.prices_include_tax,
             cash_rounding_increment: pack.cash_rounding_increment,
             cash_denominations: pack.cash_denominations.clone(),
+            cash_count_denominations: pack.cash_count_denominations.clone(),
             setting_defaults: module
                 .setting_defaults()
                 .into_iter()
@@ -143,7 +148,9 @@ where
                                       `digits_per_group`), `default_retention_days`, and the till \
                                       facts a store's settings start from: `prices_include_tax`, \
                                       `cash_rounding_increment` and `cash_denominations`, in the \
-                                      currency's minor units (ADR-0105), and `setting_defaults`, \
+                                      currency's minor units (ADR-0105), \
+                                      `cash_count_denominations`, the notes and coins a drawer is \
+                                      counted by (ADR-0186), and `setting_defaults`, \
                                       the settings a new store in the country starts with \
                                       (ADR-0183). Fixed when the server \
                                       starts; the same for every tenant"),

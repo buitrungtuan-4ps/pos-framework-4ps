@@ -41,6 +41,7 @@ const VIETNAM = {
   prices_include_tax: false,
   cash_rounding_increment: 1000,
   cash_denominations: [10000, 20000, 50000, 100000, 200000, 500000],
+  cash_count_denominations: [1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000, 500000],
   setting_defaults: [{ setting_key: "shift.variance_reason_minor", value: 20000 }],
 };
 
@@ -196,6 +197,7 @@ describe("fillFromPack", () => {
     pricesIncludeTax: false,
     rounding: "1000",
     notes: "10000, 20000",
+    countNotes: "1000, 2000",
     registrationLabel: "MST",
   };
 
@@ -204,7 +206,7 @@ describe("fillFromPack", () => {
     const fill = fillFromPack(current, pack, false);
     expect(fill.next.rounding).toBe("500");
     expect(fill.kept).toEqual(["rounding"]);
-    expect(fill.filled).toEqual(["displayLanguage", "notes", "registrationLabel"]);
+    expect(fill.filled).toEqual(["displayLanguage", "notes", "countNotes", "registrationLabel"]);
   });
 
   it("treats a published value as the store's answer, even when it is the framework default", () => {

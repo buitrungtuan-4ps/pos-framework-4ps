@@ -350,6 +350,7 @@
   "pay.share_taken": "Share {part} · {method}",
   "pay.share_untake": "Undo",
   "pay.short_by": "Short by {amount}",
+  "pay.split_leave_confirm": "A guest has already paid their share of this split. Leave the bill anyway? The split is kept on this till.",
   "pay.settled_elsewhere": "This bill was paid on another till",
   "pay.settled_elsewhere_hint": "Nothing more to take here. The table is waiting to be cleaned.",
   "pay.split": "Split evenly between guests",

@@ -101,6 +101,7 @@ impl EdgeSession {
             // till that has not synced yet (ADR-0105).
             cash_rounding_increment: None,
             cash_denominations: Vec::new(),
+            cash_count_denominations: Vec::new(),
             // Half-up until the `locale` node says otherwise, as every bill was before the setting.
             tax_rounding: TaxRounding::HalfUp,
             // A year, matching `LocalePack::default` — chosen rather than left unbounded, because

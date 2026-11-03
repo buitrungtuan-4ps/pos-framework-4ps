@@ -15,6 +15,7 @@
 import { createEffect, createMemo, createSignal, Show } from "solid-js";
 
 import { api } from "../api/client";
+import type { Country } from "../api/schemas";
 import type { Json } from "../api/types";
 import { LOCALES, localeName, t } from "../i18n";
 import { formatInstant } from "../lib/format";
@@ -38,6 +39,7 @@ import { toast } from "../components/Toast";
 import { apiMessage } from "../lib/errors";
 import { countryHint } from "../lib/cell-country";
 import { useCountryPack } from "../lib/country-pack";
+import { minorUnitListRejected, parseMinorUnitList, readMinorUnitList } from "../lib/minor-unit-list";
 
 /** A short list of common IANA zones offered as suggestions; any valid zone is accepted server-side. */
 const COMMON_TIMEZONES = [
@@ -167,6 +169,8 @@ export function StoreSettings() {
   const [footerText, setFooterText] = createSignal("");
   const [roundingText, setRoundingText] = createSignal("");
   const [notesText, setNotesText] = createSignal("");
+  // The notes and coins the till counts a drawer by (ADR-0186); blank publishes no counter.
+  const [countNotesText, setCountNotesText] = createSignal("");
   // How many days the store's edge keeps a synced event before it may forget it (ADR-0145).
   const [eventLogDays, setEventLogDays] = createSignal(DEFAULT_EVENT_LOG_DAYS);
   // A write's refusal. The read's own refusal lives in the resource below; the two are kept apart
@@ -225,6 +229,7 @@ export function StoreSettings() {
     setPricesIncludeTax(false);
     setRoundingText("");
     setNotesText("");
+    setCountNotesText("");
     setCountry("");
     setFilledFrom("");
     setLegalName("");
@@ -251,7 +256,7 @@ export function StoreSettings() {
    * console still has to draw. A value of the wrong type leaves the framework default in place
    * rather than throwing.
    */
-  const hydrate = (effective: Json | null) => {
+  const hydrate = (effective: Json | null, countryList: readonly Country[]) => {
     const locale = node(effective, "locale");
     const profile = node(effective, "store_profile");
     const days = readNumber(node(effective, "retention"), "event_log_days");
@@ -285,14 +290,7 @@ export function StoreSettings() {
       const increment = readNumber(locale, "cash_rounding_increment");
       setRoundingText(increment === null ? "" : String(increment));
     }
-    const denominations = locale?.["cash_denominations"];
-    if (Array.isArray(denominations)) {
-      setNotesText(
-        denominations
-          .filter((value): value is number => typeof value === "number" && Number.isFinite(value))
-          .join(", "),
-      );
-    }
+    setNotesText(readMinorUnitList(locale, "cash_denominations") ?? "");
     // The country is on both nodes and they can disagree — `store_profile` carries the country the
     // paper claims, `locale` the one the store trades under (ADR-0114). The picker edits the locale
     // one, so that is the one it shows; the profile's is the fallback for a store that published a
@@ -301,6 +299,9 @@ export function StoreSettings() {
     if (countryCode !== null) {
       setCountry(countryCode.toUpperCase());
     }
+    // A locale published before the counting list existed counts by its country's (ADR-0186).
+    const pack = countryList.find((known) => known.code === countryCode?.toUpperCase());
+    setCountNotesText(readMinorUnitList(locale, "cash_count_denominations") ?? (locale && pack ? pack.cash_count_denominations.join(", ") : ""));
 
     setLegalName(readString(profile, "legal_name") ?? "");
     setTradingName(readString(profile, "trading_name") ?? "");
@@ -327,7 +328,7 @@ export function StoreSettings() {
       return;
     }
     resetToDefaults();
-    hydrate(value.effective);
+    hydrate(value.effective, value.countries);
   });
 
   /**
@@ -369,20 +370,12 @@ export function StoreSettings() {
     return Number.isFinite(value) && value > 0 ? value : null;
   });
 
-  /** The notes as the server wants them: positive minor units, ascending, de-duplicated. */
-  const noteValues = createMemo(() => {
-    const parsed = notesText()
-      .split(",")
-      .map((part) => Number(part.trim()))
-      .filter((value) => Number.isFinite(value) && value > 0);
-    return [...new Set(parsed)].sort((left, right) => left - right);
-  });
-
-  /** Whether what was typed into either field is not what will be published. */
+  /** Whether what was typed into any till-money field is not what will be published. */
   const tillMoneyRejected = createMemo(
     () =>
       (roundingText().trim() !== "" && roundingValue() === null) ||
-      notesText().split(",").filter((part) => part.trim() !== "").length !== noteValues().length,
+      minorUnitListRejected(notesText()) ||
+      minorUnitListRejected(countNotesText()),
   );
 
   // Choosing the store's country fills its pack into the fields nobody has set, and says what it
@@ -394,6 +387,7 @@ export function StoreSettings() {
       pricesIncludeTax: [pricesIncludeTax, setPricesIncludeTax],
       rounding: [roundingText, setRoundingText],
       notes: [notesText, setNotesText],
+      countNotes: [countNotesText, setCountNotesText],
       registrationLabel: [registrationLabel, setRegistrationLabel],
     },
     countries,
@@ -452,7 +446,8 @@ export function StoreSettings() {
         display_language: displayLanguage().trim() || undefined,
         prices_include_tax: pricesIncludeTax(),
         cash_rounding_increment: roundingValue(),
-        cash_denominations: noteValues(),
+        cash_denominations: parseMinorUnitList(notesText()),
+        cash_count_denominations: parseMinorUnitList(countNotesText()),
       });
       toast.ok(t("storeSettings.published", { store: storeName() }));
       await Promise.all([published.refresh(), pack.published(tenantId(), storeId(), country())]);
@@ -576,6 +571,13 @@ export function StoreSettings() {
                 value={notesText()}
                 onInput={setNotesText}
                 hint={t("storeSettings.cashNotesHint")}
+              />
+
+              <TextField
+                label={t("storeSettings.cashCountNotes")}
+                value={countNotesText()}
+                onInput={setCountNotesText}
+                hint={t("storeSettings.cashCountNotesHint")}
               />
 
               <Show when={tillMoneyRejected()}>

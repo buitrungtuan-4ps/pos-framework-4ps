@@ -1908,6 +1908,7 @@ mod tests {
                 "prices_include_tax": true,
                 "cash_rounding_increment": 100,
                 "cash_denominations": [1_000, 2_000],
+                "cash_count_denominations": [100, 200, 500],
                 "default_retention_days": 180,
                 "number_format": {
                     "decimal_separator": ",",
@@ -1926,6 +1927,7 @@ mod tests {
                 session.prices_include_tax,
                 session.cash_rounding_increment,
                 session.cash_denominations.clone(),
+                session.cash_count_denominations.clone(),
                 session.retention_days,
                 session.number_format.clone(),
                 session.country_language.clone(),
@@ -2119,6 +2121,7 @@ mod tests {
                 "prices_include_tax": true,
                 "cash_rounding_increment": 100,
                 "cash_denominations": [1_000, 2_000],
+                "cash_count_denominations": [100, 200, 500],
                 "default_retention_days": 180,
                 "number_format": {
                     "decimal_separator": ",",
@@ -2152,6 +2155,7 @@ mod tests {
             store.cash_denominations, bootstrap.cash_denominations,
             "cash_denominations"
         );
+        assert!(!store.cash_count_denominations.is_empty());
         assert_ne!(
             store.retention_days, bootstrap.retention_days,
             "default_retention_days"

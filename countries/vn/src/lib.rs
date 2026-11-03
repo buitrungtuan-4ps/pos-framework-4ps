@@ -42,6 +42,12 @@ const CASH_ROUNDING: i64 = 1_000;
 /// The notes a guest hands over, ascending, in đồng.
 const NOTES: [i64; 6] = [10_000, 20_000, 50_000, 100_000, 200_000, 500_000];
 
+/// Every note a drawer is counted by, ascending, in đồng (ADR-0186): the small notes a guest never
+/// hands over but change is made from, as well as [`NOTES`].
+const COUNT_NOTES: [i64; 9] = [
+    1_000, 2_000, 5_000, 10_000, 20_000, 50_000, 100_000, 200_000, 500_000,
+];
+
 /// The over/short past which a drawer close asks a reason, in đồng: the value a new Vietnamese
 /// store starts `shift.variance_reason_minor` at.
 ///
@@ -87,6 +93,7 @@ impl CountryModule for Vietnam {
             prices_include_tax: false,
             cash_rounding_increment: Some(CASH_ROUNDING),
             cash_denominations: NOTES.to_vec(),
+            cash_count_denominations: COUNT_NOTES.to_vec(),
         }
     }
 
@@ -247,6 +254,17 @@ mod tests {
                 .windows(2)
                 .all(|pair| matches!(pair, [smaller, larger] if smaller < larger)),
             "the till lays its keys out in the order this list is in"
+        );
+    }
+
+    #[test]
+    fn a_drawer_is_counted_from_the_thousand_note_to_the_five_hundred_thousand() {
+        let pack = Vietnam.locale_pack();
+        assert_eq!(
+            pack.cash_count_denominations,
+            [
+                1_000, 2_000, 5_000, 10_000, 20_000, 50_000, 100_000, 200_000, 500_000
+            ]
         );
     }
 
