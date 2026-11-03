@@ -16,6 +16,11 @@
 //! no longer exists. A second list, [`NOT_ON_A_ROUTE`], names the catalogue's permissions no edge
 //! route checks yet, so every permission is either checked by a route or listed as not yet.
 //!
+//! A third test holds the action catalogue (`pos_proto::actions`,
+//! [ADR-0191](../../../../docs/adr/0191-every-act-is-in-a-typed-catalogue.md)) to this table: an
+//! act needs exactly what the routes it calls need, every route a person acts through is some act's,
+//! and an act is a money act exactly when its route is one of the edge's money commands.
+//!
 //! A read route (`GET`) is here only where a permission decides who may see what it shows: the
 //! day's takings
 //! ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
@@ -340,6 +345,9 @@ pub const NOT_ON_A_ROUTE: &[(Permission, &str)] = &[
     (Permission::ManageTenant, "cloud-only administration"),
     (Permission::ManageStaff, "cloud-only administration"),
 ];
+
+#[cfg(test)]
+mod catalogue;
 
 #[cfg(test)]
 mod tests {
