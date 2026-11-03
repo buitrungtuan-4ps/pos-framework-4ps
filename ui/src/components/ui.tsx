@@ -17,3 +17,19 @@ export function PageHeader(props: { title: string; size?: "lg" | "xl" }): JSX.El
   const sizeClass = () => (props.size === "xl" ? "text-xl" : "text-lg");
   return <h1 class={`mb-4 ${sizeClass()} font-semibold`}>{props.title}</h1>;
 }
+
+/**
+ * One row of a bill's arithmetic: a label on the left and its figure on the right, muted, as the
+ * receipt prints it. `amount` is already formatted; `minus` marks a figure taken off.
+ */
+export function CheckRow(props: { label: string; amount: string; minus?: boolean; outcome?: string }): JSX.Element {
+  return (
+    <p class="flex justify-between text-sm text-ink-muted" data-outcome={props.outcome}>
+      <span>{props.label}</span>
+      <span class="tabular-nums">
+        {props.minus ? "− " : ""}
+        {props.amount}
+      </span>
+    </p>
+  );
+}

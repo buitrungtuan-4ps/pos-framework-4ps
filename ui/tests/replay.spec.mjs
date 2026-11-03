@@ -2594,6 +2594,47 @@ test("an even split survives a reload and leaving the screen, and leaving asks f
   }
 });
 
+// A discounted bill spells out its arithmetic (UX-11): the lines before tax, what came off, and the
+// edge's tax on what is left, so the rows add up to the total. It used to show the discount and a
+// total that was not the old one less the discount, with nothing to say the tax had changed.
+test("a discounted bill shows its subtotal, the discount and the tax, and they add up", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    await addItem(page);
+    await sendThenTakePayment(page);
+    await expect(page.locator('[data-outcome="bill-tax"]')).toHaveCount(0);
+
+    await page.locator('[data-step="askDiscount"]').click();
+    await page.locator("#discount-amount").fill("10000");
+    const code = page.locator("#discount-approver-code");
+    if ((await code.count()) > 0) {
+      await code.fill(edge.staffCode);
+      await page.locator("#discount-approver-pin").fill(edge.staffPin);
+    }
+    await page.locator('[data-step="discountReason"]').first().click();
+    await expect(page.locator('[data-outcome="bill-discounted"]')).toBeVisible();
+
+    const figure = async (selector) =>
+      Number((await page.locator(selector).last().textContent()).replace(/[^0-9]/g, ""));
+    const subtotal = await figure('[data-outcome="bill-subtotal"] span.tabular-nums');
+    const discount = await figure('[data-outcome="bill-discounted"] span.tabular-nums');
+    const tax = await figure('[data-outcome="bill-tax"] span.tabular-nums');
+    const total = Number(
+      (await page.locator("p.text-2xl.tabular-nums").first().textContent()).replace(/[^0-9]/g, ""),
+    );
+    expect(discount).toBe(10000);
+    expect(subtotal - discount + tax).toBe(total);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A table split by item charges each guest their own part, and waits for the last one (ADR-0128).
 //
 // The guest who only had a drink pays for the drink: the iced tea is split off, its part reads what

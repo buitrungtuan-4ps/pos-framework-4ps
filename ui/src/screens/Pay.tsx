@@ -5,6 +5,7 @@ import { ApiError, api } from "../api/client";
 import { ApproverFields } from "../components/ApproverFields";
 import { BillEnded } from "../components/BillEnded";
 import { DrawerOwner } from "../components/DrawerOwner";
+import { CheckRow } from "../components/ui";
 import { Keypad } from "../components/Keypad";
 import type {
   BillResponse,
@@ -74,6 +75,11 @@ const WAIVE_FEE = "REASON_ACTION_WAIVE_FEE";
 // scrolls sideways instead, like the kitchen board's station tabs. A second row for the rarer larger
 // party would push the tenders below the fold on a phone for every bill, split or not.
 const SPLIT_COLUMNS = 5;
+
+// Whether the bill was reduced — a discount or a comp — when the screen spells out its arithmetic.
+function reduced(totals: CheckResponse): boolean {
+  return totals.discount_total.amount_minor > 0 || totals.comp_total.amount_minor > 0;
+}
 
 // The label for a payment method in a split's list of shares.
 function methodKey(method: string): MessageKey {
@@ -846,26 +852,18 @@ export function Pay() {
                       than the food on the table is the kind of figure a guest queries and nobody
                       at the till can explain. Shown only when there is one, because a row of
                       zeroes on every bill is noise the eye learns to skip. */}
+                  {/* And once it is reduced, the bill's own arithmetic around it: the lines before tax,
+                      what came off, each fee, and the tax the edge worked out again on what is left —
+                      so the figures add up to the total rather than leaving a gap nobody can explain
+                      (UX-11). The tax line is the edge's `tax_total`, never the till's. */}
+                  <Show when={reduced(totals())}>
+                    <CheckRow label={t("order.subtotal")} amount={formatAmount(totals().subtotal)} outcome="bill-subtotal" />
+                  </Show>
                   <Show when={totals().discount_total.amount_minor > 0}>
-                    <p
-                      class="flex justify-between text-sm text-ink-muted"
-                      data-outcome="bill-discounted"
-                    >
-                      <span>{t("pay.discount_applied")}</span>
-                      <span class="tabular-nums">
-                        {"− "}
-                        {formatAmount(totals().discount_total)}
-                      </span>
-                    </p>
+                    <div data-outcome="bill-discounted"><CheckRow label={t("pay.discount_applied")} amount={formatAmount(totals().discount_total)} minus /></div>
                   </Show>
                   <Show when={totals().comp_total.amount_minor > 0}>
-                    <p class="flex justify-between text-sm text-ink-muted">
-                      <span>{t("pay.comp_applied")}</span>
-                      <span class="tabular-nums">
-                        {"− "}
-                        {formatAmount(totals().comp_total)}
-                      </span>
-                    </p>
+                    <CheckRow label={t("pay.comp_applied")} amount={formatAmount(totals().comp_total)} minus />
                   </Show>
                   {/* Each fee the bill carries, under its own name (ADR-0159). The figure below
                       already includes them: the till shows the edge's arithmetic, never its own.
@@ -897,6 +895,9 @@ export function Pay() {
                       </p>
                     )}
                   </For>
+                  <Show when={reduced(totals())}>
+                    <CheckRow label={t("order.tax")} amount={formatAmount(totals().tax_total)} outcome="bill-tax" />
+                  </Show>
                   <p class="text-2xl font-semibold tabular-nums">
                     {formatAmount(totals().total_due)}
                   </p>
