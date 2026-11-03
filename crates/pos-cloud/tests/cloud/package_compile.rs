@@ -4,7 +4,8 @@
 //! The pinned package version rides the store's document (ADR-0189 decisions 3, 5 and 7): it is
 //! compiled in for a store whose reported release meets it, a store too old for it or of unknown
 //! release keeps what it runs and shows as waiting, pinning the previous version rolls back, and no
-//! pin leaves the default package.
+//! pin leaves the default package. A store that waited gets its version when it reports the release
+//! the version needs.
 //!
 //! The layout is the settings tests': the brand holds the first and second stores, the third has
 //! no brand.
@@ -23,9 +24,11 @@ use pos_proto::ulid::Ulid;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+use pos_cloud::config_tree::ConfigTreeStore;
+
 use crate::{
-    FakeConfigTrees, admin_cookie, get_with_cookie, json_body, post_with_cookie, put_with_cookie,
-    settings_app_with_packages, settings_stores, tenant, tenant_layer_node,
+    FakeConfigTrees, admin_cookie, get_with_cookie, json_body, post_internal, post_with_cookie,
+    put_with_cookie, settings_app_with_packages, settings_stores, tenant, tenant_layer_node,
 };
 
 const V1: &str = "01J00000000000000000000V01";
@@ -75,6 +78,16 @@ impl App {
         let response = self.router.clone().oneshot(request).await.expect("route");
         let status = response.status();
         (status, json_body(response).await)
+    }
+
+    /// Sends a request whose answer has no body, and returns its status.
+    async fn status_of(&self, request: axum::http::Request<axum::body::Body>) -> StatusCode {
+        self.router
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("route")
+            .status()
     }
 
     /// Writes one tenant-scope `package` setting, which republishes every store.
@@ -226,4 +239,59 @@ async fn a_choosing_store_runs_its_choice_or_its_default() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(app.running(first).await.as_deref(), Some(V2));
     assert_eq!(app.running(second).await.as_deref(), Some(V1));
+}
+
+/// A store that waited for an edge release gets its version once it reports that release, with no
+/// person involved; a report that changes nothing republishes nothing.
+#[tokio::test]
+async fn a_store_that_reports_the_release_it_waited_for_gets_its_version() {
+    let app = app().await;
+    let [_, second, _] = settings_stores();
+    app.releases.report(tenant(), second, "0.13.0");
+    app.pin("mode", json!("PACKAGE_MODE_LOCKED")).await;
+    app.pin("locked_version_id", json!(V1)).await;
+    assert_eq!(app.running(second).await, None);
+
+    // The fleet read model as the report writes it, then the report itself.
+    app.releases.report(tenant(), second, "0.14.1");
+    let report = json!({
+        "tenant_id": tenant().as_ulid().to_string(),
+        "store_id": second.to_string(),
+        "installed": "0.14.1",
+    });
+    let status = app
+        .status_of(post_internal("/internal/ota/report", &report))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let mut caught_up = false;
+    for _ in 0..200 {
+        if app.running(second).await.as_deref() == Some(V1) {
+            caught_up = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(caught_up, "the report brought the store its version");
+
+    let version = |trees: &FakeConfigTrees| {
+        let trees = trees.clone();
+        async move {
+            trees
+                .load(tenant(), second)
+                .await
+                .expect("load")
+                .map(|tree| tree.etag)
+        }
+    };
+    let before = version(&app.config_trees).await;
+    let status = app
+        .status_of(post_internal("/internal/ota/report", &report))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert_eq!(
+        version(&app.config_trees).await,
+        before,
+        "a store already running its version is not republished"
+    );
 }

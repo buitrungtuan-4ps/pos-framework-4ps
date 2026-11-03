@@ -54,6 +54,10 @@ pub(crate) struct RouteDeps<'a> {
     /// Which cell this cloud is, resolved once at boot (ADR-0179 C1), and the directory it answers
     /// from (C2). One holder, so every route answers from the directory the reload last accepted.
     pub(crate) cell: &'a Arc<CellDirectory>,
+    /// Where the OTA report route hands a reporting store to catch its package up (ADR-0189
+    /// decision 5); its worker is spawned beside the server by
+    /// [`package_catch_up`](super::packages::package_catch_up).
+    pub(crate) package_catch_up: &'a http::PackageCatchUp,
 }
 
 /// Every sub-router the cloud serves beside its own, merged onto it in the order the flat chain
@@ -114,6 +118,7 @@ fn store_sync_routes(deps: &RouteDeps<'_>) -> Router {
             // (ADR-0097). The `/internal` route beside it keeps the shared secret.
             store.api_keys(),
             config.internal_shared_secret.clone(),
+            Some(deps.package_catch_up.clone()),
         ))
 }
 
@@ -545,11 +550,7 @@ fn settings_routes(deps: &RouteDeps<'_>) -> Router {
         // same request. Reads are console.data.read; a write publishes, so console.config.publish.
         .merge(http::settings_router(
             &countries::registry(),
-            pos_cloud_config::package_pin::WithPackages::new(
-                store.settings(),
-                store.packages(),
-                pos_cloud::fleet::FleetReleases(store.fleet()),
-            ),
+            super::packages::settings_store(store),
             store.registry(),
             store.store_groups(),
             store.config_trees(),

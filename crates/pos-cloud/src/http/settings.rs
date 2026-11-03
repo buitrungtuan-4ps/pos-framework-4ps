@@ -6,6 +6,7 @@
 //!
 //! The state, the router and the scope, audit and error helpers are here.
 
+use core::future::Future;
 use std::sync::Arc;
 
 use axum::Router;
@@ -34,6 +35,7 @@ use pos_cloud_config::package_pin::SettingsPackages;
 
 // `pub(super)`: the unit tests in `http.rs` and `settings_confirm.rs` reach the catalogue entry.
 pub(super) mod catalogue;
+mod catch_up;
 mod effective;
 mod package_pin;
 mod package_status;
@@ -43,6 +45,7 @@ mod values;
 
 // The handlers the console's OpenAPI document names.
 pub(crate) use catalogue::{__path_admin_list_settings, __path_admin_settings_catalogue};
+pub use catch_up::{CATCH_UP_QUEUE, PackageCatchUp};
 pub(crate) use effective::__path_admin_effective_settings;
 pub(crate) use package_pin::__path_admin_choose_package;
 pub(crate) use package_status::__path_admin_store_package;
@@ -147,6 +150,45 @@ where
             audit,
             country_values: Arc::new(country_setting_values(countries)),
         })
+}
+
+/// The hand-off the OTA report route gives each reporting store, and the worker that catches a
+/// waiting store's package up once its release meets the pinned version
+/// ([ADR-0189](../../../docs/adr/0189-a-store-runs-a-package-version-hq-pins.md) decision 5).
+/// The caller spawns the worker; it ends when every hand-off is dropped.
+pub fn package_catch_up<St, Rg, Grp, Cfg, A, C>(
+    countries: &CountryRegistry,
+    settings: St,
+    registry: Rg,
+    groups: Grp,
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> (
+    PackageCatchUp,
+    impl Future<Output = ()> + Send + 'static + use<St, Rg, Grp, Cfg, A, C>,
+)
+where
+    St: SettingsStore + SettingsPackages + Send + Sync + 'static,
+    Rg: RegistryStore + Send + Sync + 'static,
+    Grp: StoreGroupStore + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Send + Sync + 'static,
+    A: Send + Sync + 'static,
+    C: ClockSource + Send + Sync + 'static,
+{
+    let (hand_off, receiver) = PackageCatchUp::channel();
+    let state = SettingsState {
+        settings,
+        registry,
+        groups,
+        config_trees,
+        admin,
+        clock,
+        audit,
+        country_values: Arc::new(country_setting_values(countries)),
+    };
+    (hand_off, catch_up::run(state, receiver))
 }
 
 /// The `200` a write answers: every store it reached and how its publish went.

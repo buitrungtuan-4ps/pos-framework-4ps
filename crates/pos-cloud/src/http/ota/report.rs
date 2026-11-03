@@ -136,7 +136,12 @@ where
         )
         .await
     {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            if let Some(catch_up) = &state.package_catch_up {
+                catch_up.store_reported(tenant_id, store_id);
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(error) => {
             tracing::error!(%error, "recording an OTA report failed");
             service_unavailable("fleet")
