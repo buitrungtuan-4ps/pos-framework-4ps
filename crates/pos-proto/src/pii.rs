@@ -143,6 +143,9 @@ no_pii!(
     ids::MenuItemId,
     ids::OrderId,
     ids::OrderLineId,
+    // A version of the tenant's package, which `sales.order.opened` records (ADR-0192 decision 5):
+    // configuration, like `ConfigVersionId`, never a person.
+    ids::PackageVersionId,
     ids::PaymentId,
     ids::QrSessionId,
     ids::ShiftId,
