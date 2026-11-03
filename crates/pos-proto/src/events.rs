@@ -32,8 +32,9 @@ use crate::envelope::{DecodeError, EventEnvelope, EventPayload, RawPayload};
 use crate::fees::FrozenFee;
 use crate::ids::{
     BillId, CampaignId, ConfigVersionId, CourseId, DeviceId, EmployeeId, FeeId, IngredientId,
-    MenuItemId, OrderId, OrderLineId, PaymentId, QrSessionId, ReasonCodeId, ShiftId, ShipmentId,
-    StationId, StockLedgerEntryId, SubjectId, SupplierId, TableId, TaxClassId, VoucherId,
+    MenuItemId, OrderId, OrderLineId, PackageVersionId, PaymentId, QrSessionId, ReasonCodeId,
+    ShiftId, ShipmentId, StationId, StockLedgerEntryId, SubjectId, SupplierId, TableId, TaxClassId,
+    VoucherId,
 };
 use crate::money::{Money, Ratio};
 use crate::quantity::Quantity;
@@ -57,6 +58,16 @@ event_catalogue! {
         table_id: Option<TableId>,
         /// Guest count, for reporting. Optional because staff may not record it.
         guest_count: Option<u16>,
+        /// The package version the store ran when the order opened
+        /// ([ADR-0192](../../../docs/adr/0192-a-flow-is-a-graph-of-steps-the-edge-re-checks.md)
+        /// decision 5). The order's flows and guards are evaluated under it until it closes, so
+        /// a version published meanwhile does not change an order's rules half-way.
+        ///
+        /// Absent while the store runs its release's default package, and on every order opened
+        /// before this field. `#[serde(default)]` and left off the wire while absent, so those
+        /// orders replay and their bytes stay the same.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        package_version_id: Option<PackageVersionId>,
     },
     /// An order reached a terminal state.
     ///

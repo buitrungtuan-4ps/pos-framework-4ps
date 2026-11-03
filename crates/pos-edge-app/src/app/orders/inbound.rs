@@ -89,6 +89,7 @@ impl<S: EventStore> Edge<S> {
             channel,
             table_id,
             guest_count: None,
+            package_version_id: None,
         };
         let prepared = self.prepare_inbound(stamp, &opened, lines, joins)?;
         let (envelopes, messages): (Vec<_>, Vec<_>) = prepared.events.into_iter().unzip();
