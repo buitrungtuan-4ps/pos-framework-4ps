@@ -1,5 +1,6 @@
-// The three acts the till paints before the edge answers (ADR-0173 decision 4): adding a line (with
-// its modifiers and note), changing a quantity, and moving a table. An allow-list: payment, voids,
+// The four acts the till paints before the edge answers (ADR-0173 decision 4, and ADR-0188 for the
+// fourth): adding a line (with its modifiers and note), changing a quantity, moving a table, and
+// seating a free one. An allow-list: payment, voids,
 // discounts, refunds, comps, fees, firing, splits and every drawer act wait for the edge, and adding
 // to this list takes a new record.
 //
@@ -18,6 +19,8 @@ import { createSignal } from "solid-js";
 import { ApiError, api } from "../api/client";
 import type { LineRequest, MenuItemResponse, OrderLineRequest } from "../api/schemas";
 import { type Money, addMoney } from "../lib/money";
+import { errorMessage } from "../lib/errors";
+import { load } from "./engine";
 import { PENDING, type OrderLine, loadLiveOrders, moveOrder, state, updateStore, walkInOrder } from "./store";
 
 // How long a write the edge answered waits for its event before the open orders are read again.
@@ -55,6 +58,72 @@ function afterFailure(caught: unknown): never {
     void loadLiveOrders();
   }
   throw caught;
+}
+
+// ---- seating a free table at once (ADR-0188) ----------------------------------------------------
+//
+// The tap marks the table as seating and the Order screen opens at once; lines added there are
+// provisional and wait for the seat before they are sent. The edge's answer confirms it, and payment
+// waits for that answer as for any write in flight. A refusal (another till seated it first:
+// `BILL_ALREADY_OPEN`) takes the server back to the floor with the refusal's sentence, and the lines
+// typed meanwhile are kept in a note there rather than lost. No answer reads the floor and the open
+// orders again, because the edge may have seated it.
+
+const seats = new Map<string, Promise<boolean>>();
+const [seatingTables, setSeatingTables] = createSignal<ReadonlySet<string>>(new Set());
+const [seatRefusal, setSeatRefusal] = createSignal<{ message: string; lines: string[] } | null>(null);
+
+export { seatRefusal, setSeatRefusal };
+
+// Whether the till is waiting for the edge to seat this table.
+export function seating(tableId: string): boolean {
+  return seatingTables().has(tableId);
+}
+
+function settled(tableId: string): void {
+  seats.delete(tableId);
+  setSeatingTables((tables) => new Set([...tables].filter((table) => table !== tableId)));
+}
+
+// Seats a free table at once; `refused` runs, after the rollback, when the edge says no.
+export function seatAtOnce(tableId: string, refused: () => void): void {
+  const was = state.tableState[tableId];
+  updateStore((draft) => {
+    draft.tableState[tableId] = "TABLE_STATE_OCCUPIED";
+    draft.seatedAt[tableId] ??= new Date().toISOString();
+  });
+  setSeatingTables((tables) => new Set([...tables, tableId]));
+  setSeatRefusal(null);
+  const seat = sending(() => api.seatTable(tableId)).then(
+    (response) => {
+      updateStore((draft) => {
+        draft.tableState[tableId] = response.state;
+      });
+      settled(tableId);
+      return true;
+    },
+    (caught: unknown) => {
+      const ghost = `${PENDING}order:${tableId}`;
+      const kept = Object.values(state.lines).filter((line) => line.orderId === ghost);
+      updateStore((draft) => {
+        for (const line of kept) {
+          delete draft.lines[line.orderLineId];
+        }
+        draft.tableState[tableId] = was ?? "TABLE_STATE_FREE";
+        delete draft.seatedAt[tableId];
+      });
+      settled(tableId);
+      setSeatRefusal({ message: errorMessage(caught), lines: kept.map((line) => line.name) });
+      // The edge may have seated it, or another till may have: read the room again either way.
+      void load("floor", true);
+      if (!(caught instanceof ApiError)) {
+        void loadLiveOrders();
+      }
+      refused();
+      return false;
+    },
+  );
+  seats.set(tableId, seat);
 }
 
 // Adds one of the store's menu items to a table, or to a walk-in held under `tableId`. An item the
@@ -95,6 +164,12 @@ export async function addItem(
   updateStore((draft) => {
     draft.lines[ghost] = line;
   });
+  // A table still being seated takes the line once the seat is confirmed; a refused seat has kept the
+  // line in its note already.
+  const seat = seats.get(tableId);
+  if (seat !== undefined && !(await seat)) {
+    return;
+  }
   try {
     const response = await sending(() =>
       walkIn === undefined

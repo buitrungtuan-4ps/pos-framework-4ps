@@ -5816,6 +5816,71 @@ test("an added line shows at once, sending, and payment waits until the edge con
   }
 });
 
+// Seating a free table is painted at once too (ADR-0188): the Order screen opens before the edge
+// answers, lines added meanwhile wait for the seat, and payment waits until it is confirmed.
+test("a free table opens its order at once, and its lines and payment wait for the seat", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    const held = await holdPost(page, "**/api/tables/*/seat");
+    await page.locator('[data-step="onCard"]').first().click();
+    await expect(page.locator('[data-outcome="order-open"]')).toBeVisible();
+    await page.locator('[data-step="onItem"]').first().click();
+    await expect(page.locator('[data-outcome="line-sending"]')).toHaveText("Sending…");
+    await expect(page.locator('[data-step="takePayment"]')).toBeDisabled();
+    held.release();
+
+    await expect(page.locator('[data-outcome="line-added"]')).toHaveCount(1);
+    await expect(page.locator('[data-step="takePayment"]')).toBeEnabled();
+  } finally {
+    await edge.stop();
+  }
+});
+
+test("a seat the edge refuses goes back to the floor, saying why and keeping what was typed", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    let release = () => {};
+    const released = new Promise((resolve) => {
+      release = resolve;
+    });
+    await page.route("**/api/tables/*/seat", async (route) => {
+      await released;
+      await route.fulfill({
+        status: 409,
+        headers: { "pos-error-reason": "BILL_ALREADY_OPEN" },
+        body: "BILL_ALREADY_OPEN",
+      });
+    });
+    const lines = [];
+    page.on("request", (request) => {
+      if (request.method() === "POST" && request.url().endsWith("/lines")) {
+        lines.push(request.url());
+      }
+    });
+    await page.locator('[data-step="onCard"]').first().click();
+    await expect(page.locator('[data-outcome="order-open"]')).toBeVisible();
+    const item = await page.locator('[data-step="onItem"]').first().innerText();
+    await page.locator('[data-step="onItem"]').first().click();
+    release();
+
+    const refused = page.locator('[data-outcome="seat-refused"]');
+    await expect(refused).toContainText("A bill is already open for this order.");
+    await expect(refused).toContainText(item.split("\n")[0]);
+    await expect(page.locator('[data-outcome="floor"]')).toBeVisible();
+    expect(lines).toEqual([]);
+  } finally {
+    await edge.stop();
+  }
+});
+
 /**
  * Double-taps `step` while its POST to `pattern` is held, and checks the button says `pending` and
  * takes no second tap until the answer. Resolves to how many POSTs reached `pattern` once `outcome`
