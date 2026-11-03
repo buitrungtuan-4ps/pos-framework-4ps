@@ -12,11 +12,8 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 - [ADR-0155](../adr/0155-a-qr-payment-is-confirmed-by-its-gateway-through-the-cloud.md) A QR payment is confirmed by its gateway through the cloud, and by hand when it cannot be
 - [ADR-0182](../adr/0182-a-signed-cell-moved-config-node.md) A signed "cell moved" config node
 - [ADR-0192](../adr/0192-a-flow-is-a-graph-of-steps-the-edge-re-checks.md) A flow is a graph of steps the till runs and the edge re-checks
-- [ADR-0193](../adr/0193-conditions-and-reactions-are-written-in-cel.md) Conditions and reactions are written in CEL
 - [ADR-0195](../adr/0195-the-cloud-wakes-a-store-to-pull-its-config.md) The cloud wakes a store to pull its config
-- [ADR-0196](../adr/0196-every-act-paints-first-and-money-waits-for-the-edge.md) Every act paints first, and money waits for the edge
 - [ADR-0197](../adr/0197-every-tap-paints-within-ten-milliseconds.md) Every tap paints within ten milliseconds
-- [ADR-0198](../adr/0198-a-store-reaches-the-internet-only-through-the-cloud.md) A store reaches the internet only through the cloud
 - [ADR-0199](../adr/0199-a-function-is-signed-pure-webassembly-that-returns-a-decision.md) A function is signed, pure WebAssembly that returns a decision
 - [ADR-0200](../adr/0200-six-business-type-templates-ship-with-the-framework.md) Six business-type templates ship with the framework
 
