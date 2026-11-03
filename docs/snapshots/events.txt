@@ -221,6 +221,7 @@ sales.order.confirmed_by_staff	schema_version=1
 sales.order.opened	field=channel
 sales.order.opened	field=guest_count
 sales.order.opened	field=order_id
+sales.order.opened	field=package_version_id
 sales.order.opened	field=table_id
 sales.order.opened	schema_version=1
 sales.order.rejected_by_staff	field=order_id

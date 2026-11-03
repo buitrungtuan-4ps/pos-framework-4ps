@@ -48,6 +48,7 @@ impl<S: EventStore> Edge<S> {
             channel: Open::from_known(channel),
             table_id: None,
             guest_count: None,
+            package_version_id: None,
         };
         self.commit_and_publish(&ctx, &opened).await?;
         self.lock_projection()
