@@ -26,6 +26,8 @@ jiff = { workspace = true, features = ["tzdb-bundle-always"] }
 
 [dev-dependencies]
 proptest = "1"
+# Reads the shared package-variant vectors (ADR-0189 decision 4); already in the closure through pos-proto.
+serde_json.workspace = true
 
 [lints]
 workspace = true

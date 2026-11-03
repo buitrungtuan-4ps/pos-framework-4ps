@@ -11,7 +11,6 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 - [ADR-0152](../adr/0152-a-receipt-number-belongs-to-a-series-and-each-country-sets-its-rules.md) A receipt number belongs to a series, and each country sets the series' rules
 - [ADR-0155](../adr/0155-a-qr-payment-is-confirmed-by-its-gateway-through-the-cloud.md) A QR payment is confirmed by its gateway through the cloud, and by hand when it cannot be
 - [ADR-0182](../adr/0182-a-signed-cell-moved-config-node.md) A signed "cell moved" config node
-- [ADR-0189](../adr/0189-a-store-runs-a-package-version-hq-pins.md) A store runs the package version HQ pins
 - [ADR-0190](../adr/0190-a-screen-is-drawn-from-the-package.md) A screen is drawn from the package
 - [ADR-0191](../adr/0191-every-act-is-in-a-typed-catalogue.md) Every act is in a typed catalogue
 - [ADR-0192](../adr/0192-a-flow-is-a-graph-of-steps-the-edge-re-checks.md) A flow is a graph of steps the till runs and the edge re-checks
@@ -23,7 +22,6 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 - [ADR-0198](../adr/0198-a-store-reaches-the-internet-only-through-the-cloud.md) A store reaches the internet only through the cloud
 - [ADR-0199](../adr/0199-a-function-is-signed-pure-webassembly-that-returns-a-decision.md) A function is signed, pure WebAssembly that returns a decision
 - [ADR-0200](../adr/0200-six-business-type-templates-ship-with-the-framework.md) Six business-type templates ship with the framework
-- [ADR-0201](../adr/0201-the-till-runs-on-every-device-class.md) The till runs on every device class, through one shell
 
 ## Citations of ADRs that do not exist
 
