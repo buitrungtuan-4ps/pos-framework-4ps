@@ -15,14 +15,14 @@ use pos_core::permission::{Permission, PermissionSet};
 use pos_fakes::FakeStore;
 use pos_ports::event_store::{EventQuery, EventStore};
 use pos_proto::billing::{PublishedBilling, SettledVoidWindow};
-use pos_proto::ids::{BillId, EmployeeId, ReasonCodeId, ShiftId, TableId};
+use pos_proto::ids::{BillId, EmployeeId, OrderLineId, ReasonCodeId, ShiftId, StationId, TableId};
 use pos_proto::reason_codes::{PublishedReasonCodes, ReasonAction};
 use pos_proto::time::BusinessDate;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::Open;
 use pos_proto::{BillState, PaymentMethod};
 
-use crate::app::tests::{a_line, actor, cash, identity, vnd};
+use crate::app::tests::{a_counter_order, a_line, actor, cash, identity, vnd};
 use crate::app::{AppError, Approval, Edge, EdgeSession, StaffAuth, StaffRoster, TillScope};
 use crate::receipt::InMemoryReceipts;
 
@@ -411,5 +411,135 @@ fn a_shifts_close_reports_its_voids_after_payment() {
         assert_eq!(report.expected_amount, vnd(265_000));
         assert_eq!(report.variance, vnd(0));
         assert_eq!(report.figures().voided_cash, vnd(165_000));
+    });
+}
+
+/// Whether the live read or the kitchen read shows the line with this id.
+fn on_a_screen(edge: &Edge<FakeStore>, line: OrderLineId) -> (bool, bool) {
+    let shows = |orders: Vec<crate::app::LiveOrderView>| {
+        orders
+            .into_iter()
+            .flat_map(|order| order.lines)
+            .any(|shown| shown.order_line_id == line)
+    };
+    (shows(edge.live_orders()), shows(edge.kitchen_orders()))
+}
+
+fn station() -> StationId {
+    StationId::new(Ulid::from_u128(900))
+}
+
+/// A table's bill voided after payment ends its sale: its fired food does not come back on the
+/// live read or the kitchen board as an order owing again, not when the table is cleaned and
+/// seated for new guests (where it showed as a counter order), and not after a restart.
+#[test]
+fn a_table_voided_after_payment_stays_off_the_live_read_and_the_board() {
+    pos_fakes::executor::run_ready(async {
+        let store = FakeStore::default();
+        let table = TableId::new(Ulid::from_u128(520));
+        let line = {
+            let edge = over(store.clone(), session());
+            edge.seat_table(actor(), table, None).await.expect("seats");
+            let line = edge
+                .add_line(actor(), table, a_line())
+                .await
+                .expect("adds")
+                .order_line_id;
+            edge.fire_line(actor(), line, Some(station()))
+                .await
+                .expect("fires");
+            let bill_id = edge
+                .open_bill(actor(), table)
+                .await
+                .expect("opens a bill")
+                .bill_id;
+            edge.settle_bill(actor(), bill_id, vec![cash(165_000)], None)
+                .await
+                .expect("settles");
+            assert_eq!(on_a_screen(&edge, line), (false, false), "paid, so gone");
+
+            void(&edge, bill_id, Some("MGR-1")).await.expect("voids");
+            assert_eq!(
+                on_a_screen(&edge, line),
+                (false, false),
+                "voided after payment, so still gone"
+            );
+            edge.clean_table(actor(), table).await.expect("cleans");
+            edge.seat_table(actor(), table, None)
+                .await
+                .expect("seats again");
+            assert_eq!(
+                on_a_screen(&edge, line),
+                (false, false),
+                "and not back as a counter order once the table is seated again"
+            );
+            line
+        };
+
+        let edge = over(store, session());
+        edge.rebuild().await.expect("rebuilds");
+        assert_eq!(on_a_screen(&edge, line), (false, false), "a replay agrees");
+    });
+}
+
+/// A counter order paid before the kitchen made it waits on the board (ADR-0161) until its bill is
+/// voided after payment: the sale is cancelled, so its ticket leaves, live and after a restart.
+#[test]
+fn a_counter_order_voided_after_payment_leaves_the_board() {
+    pos_fakes::executor::run_ready(async {
+        let store = FakeStore::default();
+        let line = {
+            let edge = over(store.clone(), session());
+            let order_id = a_counter_order(&edge).await;
+            let line = *edge.order_line_ids(order_id).first().expect("its line");
+            edge.fire_line(actor(), line, Some(station()))
+                .await
+                .expect("fires");
+            let bill_id = edge
+                .open_bill_for_order(actor(), order_id)
+                .await
+                .expect("opens a bill")
+                .bill_id;
+            edge.settle_bill(actor(), bill_id, vec![cash(165_000)], None)
+                .await
+                .expect("settles");
+            assert_eq!(
+                on_a_screen(&edge, line),
+                (false, true),
+                "paid, and waiting for the kitchen"
+            );
+
+            void(&edge, bill_id, Some("MGR-1")).await.expect("voids");
+            assert_eq!(on_a_screen(&edge, line), (false, false), "voided, so gone");
+            line
+        };
+
+        let edge = over(store, session());
+        edge.rebuild().await.expect("rebuilds");
+        assert_eq!(on_a_screen(&edge, line), (false, false), "a replay agrees");
+    });
+}
+
+/// A bill voided before anybody paid it still gives the order back to be billed again.
+#[test]
+fn an_unpaid_void_still_puts_the_order_back() {
+    pos_fakes::executor::run_ready(async {
+        let edge = over(FakeStore::default(), session());
+        let table = TableId::new(Ulid::from_u128(521));
+        edge.seat_table(actor(), table, None).await.expect("seats");
+        let line = edge
+            .add_line(actor(), table, a_line())
+            .await
+            .expect("adds")
+            .order_line_id;
+        let bill_id = edge
+            .open_bill(actor(), table)
+            .await
+            .expect("opens a bill")
+            .bill_id;
+        edge.void_bill(actor(), bill_id, reason(), Some(&approval("SUP-1")))
+            .await
+            .expect("voids the unpaid bill");
+        assert_eq!(on_a_screen(&edge, line), (true, true), "owing again");
     });
 }
