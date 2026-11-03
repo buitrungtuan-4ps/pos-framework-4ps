@@ -73,13 +73,14 @@ impl<S: EventStore> Edge<S> {
         let approver = self.manage_other_till(&mut ctx, another_till(scope, &record), approval)?;
         let overrider = self.override_assignment(&mut ctx, Some(&record), approval)?;
         let decision = decide_shift(record.state, ShiftCommand::Close, &ctx)?;
-        let (mut payload, report) = self.closing(shift_id, &record)?;
+        let (mut payload, mut report) = self.closing(shift_id, &record)?;
         if self.owes_variance_reason(report.variance) {
             let Some(reason) = reason else {
                 let owing = self.owing_view(shift_id, &record, &report);
                 return Err(AppError::VarianceReasonRequired(vec![owing]));
             };
             payload.reason_code_id = Some(self.variance_reason(reason)?);
+            report.header.variance_reason = self.session().reason_codes.find(reason).cloned();
         }
         let step_ups = [
             (Permission::ManageOtherTill, approver),
@@ -139,13 +140,14 @@ impl<S: EventStore> Edge<S> {
         let mut owing = Vec::new();
         for (shift_id, record) in &named {
             let decision = decide_shift(record.state, ShiftCommand::Close, &ctx)?;
-            let (mut payload, report) = self.closing(*shift_id, record)?;
+            let (mut payload, mut report) = self.closing(*shift_id, record)?;
             if self.owes_variance_reason(report.variance) {
                 let Some((_, reason)) = reasons.iter().find(|(shift, _)| shift == shift_id) else {
                     owing.push(self.owing_view(*shift_id, record, &report));
                     continue;
                 };
                 payload.reason_code_id = Some(self.variance_reason(*reason)?);
+                report.header.variance_reason = self.session().reason_codes.find(*reason).cloned();
             }
             prepared.push(self.prepare_on(&ctx, &payload, Some(*shift_id))?);
             let other_till = approver.filter(|_| another_till(scope, record));
@@ -313,6 +315,7 @@ impl<S: EventStore> Edge<S> {
             voided_bills: record.voided_bills,
             voided_cash: record.voided_cash,
             tax_components,
+            header: self.shift_header(record),
         };
         Ok((payload, report))
     }

@@ -442,7 +442,9 @@ struct Before {
     paper: [&'static str; 3],
     /// The report its one drawer prints at a close after two such bills, and the slip two tills'
     /// drawers print closed together after one each, captured from main's code (a34f8a1) before
-    /// the report listed tax by component (ADR-0168 decision 5).
+    /// the report listed tax by component (ADR-0168 decision 5), and captured again when the report
+    /// gained its till, times, bills and tender mix, a deliberate change to the paper. What they
+    /// hold is unchanged: the store's switch for tax components moves none of these bytes.
     shift_report: &'static str,
     combined_slip: &'static str,
 }
@@ -472,8 +474,8 @@ const VIETNAM: Before = Before {
         "d3f0c1b9c786c70c8f520ab300c26af2a01da1ed6626d9ed028a6a380cd50601",
         "d4eb806c5c8f4ec96ecd3db8b804f08169ecef7847ae61206279364f3e08c6c7",
     ],
-    shift_report: "3fa83a3a7e23c528daec0c4524dfc4e875ef2d78531626904152f25babc2d932",
-    combined_slip: "af0c5df4440faf61d8e8b34fcb3c80def4a97f9d748f2b304c79da467dd1c489",
+    shift_report: "2c427d40f2515bd9f8bbfd1d8528c28cfe725292e6e3206b17b73679a477528f",
+    combined_slip: "f347f959adc3facc15d64ca569c84e6762fbcaac3609cf16345f9ebb32eee302",
 };
 
 const JAPAN: Before = Before {
@@ -498,8 +500,8 @@ const JAPAN: Before = Before {
         "38fef9fb4ef655d5b28fbd75ba9976c6abdb457b8544ad5978496ed8316def01",
         "819a408c2132613ca4d2923ad48bacddcaf06b3a9c2b2662c09849b7ed8c22dd",
     ],
-    shift_report: "381d5389690ce6bbebcde9a3c6b7dfe85118b846ec7e398911d52b0c97edb126",
-    combined_slip: "034173a6d1a22ecd77c2ad9473a8793166e7d2acd8f91337957c31605d70823e",
+    shift_report: "fc27ca53cd1c43d2e8c166d71cbdbc24f78651e50ba44ad38ba45252a7bde85b",
+    combined_slip: "367a18e678c5fb0b3c4f9f116bfd59e5fe46383e2e64c5b67528378e9d113fad",
 };
 
 fn check(country: &str, sale: &Sale, before: &Before) {
@@ -979,6 +981,7 @@ async fn shift_report_of(session: EdgeSession, bills: &[Vec<LineDraft>]) -> (Shi
     let closed = edge.close_shift(server(), shift).await.expect("closes");
     let mut report = closed.report.expect("the close's report");
     report.shift_id = printed_shift(1);
+    pin_times(&mut report);
     let printed = printers
         .print_shift_report(
             &edge.session(),
@@ -1046,6 +1049,7 @@ async fn combined_slip_of(
     let mut combined = closed.combined.expect("one slip");
     for ((_, report), n) in combined.drawers.iter_mut().zip(2..) {
         report.shift_id = printed_shift(n);
+        pin_times(report);
     }
     let printed = printers
         .print_combined_report(
@@ -1058,6 +1062,13 @@ async fn combined_slip_of(
         .await;
     assert_eq!(printed, PrintOutcome::Printed, "the combined slip");
     (combined, printed_by(&paper))
+}
+
+/// The report's open and close times, which the edge reads off the wall clock, pinned, as its shift
+/// id is, so the paper's digest is the same on every run.
+fn pin_times(report: &mut ShiftReport) {
+    report.header.opened_at = Some("2026-11-03 08:00".to_owned());
+    report.header.closed_at = Some("2026-11-03 16:00".to_owned());
 }
 
 /// Each summed component's name, rate and tax, for one assertion.
@@ -1106,6 +1117,10 @@ async fn a_shift_report_lists_its_bills_tax_by_component() {
         [
             "SHIFT REPORT",
             "00A7VH",
+            "Opened: 2026-11-03 08:00",
+            "Closed: 2026-11-03 16:00",
+            "Bills: 2",
+            "Cash  INR 356.90",
             "Opening float  INR 1,000.00",
             "Cash taken  INR 356.90",
             "Expected in drawer  INR 1,356.90",

@@ -45,6 +45,31 @@ impl Projection {
         if let Some(paid) = self.paid.get_mut(&bill_id) {
             paid.shift_id = shift;
         }
+        // One more bill on the shift's report.
+        if let Some(record) = shift.and_then(|shift| self.shifts.get_mut(&shift)) {
+            record.bills = record.bills.saturating_add(1);
+        }
+    }
+
+    /// Adds one tender's `applied` to `shift`'s tender mix, for its report.
+    pub(in crate::app) fn collect_tender(
+        &mut self,
+        shift: Option<ShiftId>,
+        method: PaymentMethod,
+        applied: Money,
+    ) -> Result<(), DomainError> {
+        let Some(record) = shift.and_then(|shift| self.shifts.get_mut(&shift)) else {
+            return Ok(());
+        };
+        match record
+            .tenders
+            .iter_mut()
+            .find(|(known, _)| *known == method)
+        {
+            Some((_, total)) => *total = total.checked_add(applied)?,
+            None => record.tenders.push((method, applied)),
+        }
+        Ok(())
     }
 
     /// What `bill_id`'s tenders put on it, or `None` for a bill nobody paid.

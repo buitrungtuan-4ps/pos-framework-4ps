@@ -6,12 +6,15 @@
 
 use pos_core::billing::{BillTotals, TaxComponentLine};
 use pos_ports::printer::{PrintBlock, PrintDocument, TextStyle};
+use pos_proto::PaymentMethod;
 use pos_proto::devices::PublishedDevice;
 use pos_proto::money::Money;
 use pos_proto::reason_codes::PublishedReasonCode;
 use pos_proto::store_profile::StoreProfile;
 
-use crate::app::{BuyerDetails, CombinedReport, DrawerFigures, ReceiptLine, ShiftReport};
+use crate::app::{
+    BuyerDetails, CombinedReport, DrawerFigures, ReceiptLine, ShiftHeader, ShiftReport,
+};
 use crate::paper_labels::PaperLabels;
 use crate::printing::blocks::{
     MoneyStyle, amount_line, format_money, percent, row_blocks, short_reference, totals_blocks,
@@ -306,11 +309,16 @@ pub fn shift_report_document(
         blocks.push(centred(name, true));
     }
     blocks.push(centred(labels.shift_report, true));
+    if let Some(till) = &report.header.till_name {
+        blocks.push(centred(till.as_str(), true));
+    }
     blocks.push(centred(
         short_reference(&report.shift_id.to_string()),
         false,
     ));
+    header_blocks(&mut blocks, money, labels, &report.header);
     figure_blocks(&mut blocks, money, labels, &report.figures());
+    reason_block(&mut blocks, labels, &report.header);
     count_blocks(&mut blocks, money, labels, report);
     component_blocks(&mut blocks, money, labels, &report.tax_components);
     blocks.push(PrintBlock::Cut);
@@ -344,12 +352,59 @@ pub fn combined_shift_report_document(
             short_reference(&report.shift_id.to_string()),
             false,
         ));
+        header_blocks(&mut blocks, money, labels, &report.header);
         figure_blocks(&mut blocks, money, labels, &report.figures());
+        reason_block(&mut blocks, labels, &report.header);
         count_blocks(&mut blocks, money, labels, report);
         component_blocks(&mut blocks, money, labels, &report.tax_components);
     }
     blocks.push(PrintBlock::Cut);
     PrintDocument { blocks }
+}
+
+/// What a shift report says before its drawer's figures: when the shift opened and closed, how many
+/// bills it settled, and what each tender took. No person is named; the till is named above it.
+fn header_blocks(
+    blocks: &mut Vec<PrintBlock>,
+    money: &MoneyStyle,
+    labels: &PaperLabels,
+    header: &ShiftHeader,
+) {
+    let times = [
+        (labels.opened_at, &header.opened_at),
+        (labels.closed_at, &header.closed_at),
+    ];
+    for (label, at) in times {
+        if let Some(at) = at {
+            blocks.push(text_line(&format!("{label}: {at}")));
+        }
+    }
+    blocks.push(text_line(&format!("{}: {}", labels.bills, header.bills)));
+    for (method, total) in &header.tenders {
+        let label = match method {
+            PaymentMethod::Cash => labels.tender_cash,
+            PaymentMethod::Card => labels.tender_card,
+            PaymentMethod::Qr => labels.tender_qr,
+            _ => labels.tender_other,
+        };
+        blocks.push(amount_line(label, *total, money));
+    }
+}
+
+/// The reason a close gave for its over or short, under the verdict, in the paper's language.
+fn reason_block(blocks: &mut Vec<PrintBlock>, labels: &PaperLabels, header: &ShiftHeader) {
+    if let Some(reason) = &header.variance_reason {
+        let name = reason.localized_name(labels.language);
+        blocks.push(text_line(&format!("{}: {}", labels.reason, name.as_str())));
+    }
+}
+
+/// One plain line on the paper.
+fn text_line(line: &str) -> PrintBlock {
+    PrintBlock::Text {
+        line: line.to_owned(),
+        style: TextStyle::default(),
+    }
 }
 
 /// A drawer's count note by note under its heading (ADR-0186): each note, how many, and what they
