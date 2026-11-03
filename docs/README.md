@@ -65,6 +65,7 @@ To find the files a change touches, start from the **[repository map](repository
 | [wcag-contrast-audit.md](wcag-contrast-audit.md) | The measured contrast ratio of every design token |
 | [metrics/baseline-2026-10.md](metrics/baseline-2026-10.md) | The size and shape of the code before the standardisation work |
 | [metrics/ci-2026-10-phase3.md](metrics/ci-2026-10-phase3.md) | What CI costs after phase 3 (CI runs what a change affects), against the baseline |
+| [metrics/till-latency-2026-11-baseline.md](metrics/till-latency-2026-11-baseline.md) | Every till act against 10 ms, at full speed and with the CPU slowed 4× (emulated), and where the slowest three spend their time |
 | [../CHANGELOG.md](../CHANGELOG.md) | What changed, when, and the upgrade notes |
 | [../SECURITY.md](../SECURITY.md) · [../MAINTAINERS.md](../MAINTAINERS.md) | Reporting a vulnerability; who owns which area |
 | [../packages/shared/README.md](../packages/shared/README.md) | The design tokens and the scripts both front ends share, and how they reach them |

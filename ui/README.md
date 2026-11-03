@@ -51,6 +51,11 @@ reads `ui/dist/` from disk instead of embedding it. CI type-checks and builds th
 request (the `ui` job); it does not embed the bundle, so the Rust build still uses the placeholder on
 a fresh checkout.
 
+**`pnpm test` runs the unit tests** in `unit/`, with Vitest, for a module that has no screen in it
+(`api/edgeVersion.ts`, `api/credentials.ts`, `state/cash-count.ts`); `pnpm build` runs them, so the
+`ui` CI job does. They live in `unit/` and not `tests/` because `tests/` is Playwright's, and its
+default match would take a `*.test.ts` there for a browser test.
+
 **`pnpm replay` serves the *embedded* bundle, so rebuild the edge after a UI change.** The browser
 half of the step gate ([ADR-0109](../docs/adr/0109-counting-the-taps-an-operator-makes.md)) starts
 `examples/minimal-edge` and drives a real browser against it — and `rust-embed` is configured with
