@@ -16,13 +16,15 @@
 
 import { For, Show, createSignal, type Accessor } from "solid-js";
 
-import { ApiError } from "../api/client";
 import type { CheckResponse } from "../api/schemas";
 import { t } from "../i18n";
 import { errorMessage } from "../lib/errors";
 import { money } from "../lib/money";
 import { asksApprover, permissionsEnforced } from "../state/permissions";
-import { applyDiscount, reasonsFor } from "../state/store";
+import { useDiscountAct, discountRefusal } from "../state/reduction-acts";
+import { reasonsFor } from "../state/store";
+import { PendingSettle } from "./PendingSettle";
+import { RefusalPanel } from "./RefusalPanel";
 import { ApproverFields, type Approver } from "./ApproverFields";
 import { Keypad } from "./Keypad";
 
@@ -40,6 +42,8 @@ export function useDiscount(options: {
   report: (message: string | null) => void;
   /** The bill as the edge re-priced it. */
   onApplied: (totals: CheckResponse) => void;
+  /** What the bill comes to, where the screen knows it, for the till's own check (ADR-0196). */
+  due?: Accessor<number | null>;
 }) {
   const [open, setOpen] = createSignal(false);
   // What comes off, as typed. A string, not a number, because a half-typed "1" must stay "1" rather
@@ -83,9 +87,23 @@ export function useDiscount(options: {
     setOpen(true);
   };
 
-  // The second tap: apply it, citing this reason and the manager. The edge answers with the whole
-  // re-priced bill and the screen takes that figure — it never subtracts the discount itself,
-  // because the tax follows the reduced base and a second opinion about it is a second price.
+  // The second tap: apply it, citing this reason and the manager, as a money act (ADR-0196,
+  // ADR-0204): pending until the edge answers, refused at once where the till can tell. The edge
+  // answers with the whole re-priced bill and the screen takes that figure — it never subtracts the
+  // discount itself, because the tax follows the reduced base and a second opinion about it is a
+  // second price. Above the ceiling with no manager typed, the edge names the override that was
+  // missing: for a person who holds it with approval, that is a manager to fetch, not a refusal.
+  let sentWithout = false;
+  const act = useDiscountAct(
+    (totals) => {
+      options.onApplied(totals);
+      closeDiscount();
+    },
+    (caught) =>
+      caught.reason === "PERMISSION_DENIED" && optional() && sentWithout
+        ? t("error.approval_required")
+        : errorMessage(caught),
+  );
   const discountReason = (reasonCodeId: string) => {
     const id = options.billId();
     const value = amount();
@@ -94,26 +112,18 @@ export function useDiscount(options: {
     }
     options.report(null);
     const approver = asks() ? options.approver.approval() : undefined;
-    void applyDiscount(id, money(options.currency(), value), reasonCodeId, approver)
-      .then((totals) => {
-        options.onApplied(totals);
-        closeDiscount();
-      })
-      .catch((caught: unknown) =>
-        // Above the ceiling with no manager typed, the edge names the override that was missing:
-        // for a person who holds it with approval, that is a manager to fetch, not a refusal.
-        options.report(
-          caught instanceof ApiError &&
-            caught.reason === "PERMISSION_DENIED" &&
-            optional() &&
-            approver === undefined
-            ? t("error.approval_required")
-            : errorMessage(caught),
-        ),
-      );
+    sentWithout = approver === undefined;
+    act.send(id, money(options.currency(), value), reasonCodeId, approver, () =>
+      discountRefusal({
+        amount: value,
+        due: options.due?.() ?? null,
+        needsApprover: asks() && !optional(),
+        approval: approver,
+      }),
+    );
   };
 
-  return { open, text, setText, asks, optional, ready, closeDiscount, askDiscount, discountReason };
+  return { open, text, setText, asks, optional, ready, closeDiscount, askDiscount, discountReason, act };
 }
 
 /**
@@ -163,7 +173,7 @@ export function DiscountPanel(props: {
             <button
               type="button"
               class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
-              disabled={!props.state.ready()}
+              disabled={!props.state.ready() || props.state.act.phase() !== "idle" || props.state.act.refusal() !== null}
               data-step={props["data-step"]}
               onClick={() => props.onSubmit(reason.reason_code_id)}
             >
@@ -172,6 +182,10 @@ export function DiscountPanel(props: {
           )}
         </For>
       </div>
+      <Show when={props.state.act.phase() !== "idle"}>
+        <PendingSettle act="discount" phase={props.state.act.phase()} amount="" onLeave={() => props.state.closeDiscount()} />
+      </Show>
+      <RefusalPanel message={props.state.act.refusal()} onDismiss={props.state.act.dismiss} />
       <button
         type="button"
         class="mt-3 min-h-touch rounded-token border border-line px-3 text-sm"

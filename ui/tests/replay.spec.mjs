@@ -6607,3 +6607,150 @@ test("a paid bill's void whose answer is lost is found voided, with no made-up f
     await edge.stop();
   }
 });
+
+/** Opens the pay screen's discount panel with `amount` typed and a manager where one is asked. */
+async function openDiscount(page, edge, amount) {
+  await page.locator('[data-step="askDiscount"]').click();
+  await page.locator("#discount-amount").fill(String(amount));
+  const code = page.locator("#discount-approver-code");
+  if ((await code.count()) > 0) {
+    await code.fill(edge.staffCode);
+    await page.locator("#discount-approver-pin").fill(edge.staffPin);
+  }
+}
+
+/** Sends `body` to the edge as this device, and answers with the status and the refusal token. */
+async function postAsTill(page, path, body) {
+  return page.evaluate(
+    async ([to, payload]) => {
+      const response = await fetch(to, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${localStorage.getItem("pos-edge.device-token")}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+      return { status: response.status, reason: response.headers.get("pos-error-reason") };
+    },
+    [path, body],
+  );
+}
+
+/** Records the id of the bill the pay screen reads. */
+function watchBillId(page) {
+  const seen = { id: null };
+  page.on("request", (request) => {
+    const read = /\/api\/bills\/([^/]+)\/check$/.exec(new URL(request.url()).pathname);
+    if (read !== null) seen.id = read[1];
+  });
+  return seen;
+}
+
+// Safeguard 2 both ways (ADR-0196): a discount larger than the bill is refused by the till before
+// anything is sent, and the edge refuses the same discount with the same token.
+test("a discount larger than the bill is refused before sending, and the edge refuses it the same way", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    const bill = watchBillId(page);
+    await sendThenTakePayment(page);
+    let discounts = 0;
+    page.on("request", (request) => {
+      if (request.method() === "POST" && request.url().endsWith("/discount")) discounts += 1;
+    });
+    await openDiscount(page, edge, 99_000_000);
+    await page.locator('[data-step="discountReason"]').first().click();
+    await expect(page.locator('[data-outcome="money-refused"]')).toBeVisible();
+    expect(discounts).toBe(0);
+
+    await expect.poll(() => bill.id).not.toBeNull();
+    const reasons = await page.evaluate(() =>
+      fetch("/api/reason-codes", {
+        headers: { authorization: `Bearer ${localStorage.getItem("pos-edge.device-token")}` },
+      }).then((response) => response.json()),
+    );
+    const reason = reasons.reasons.find((entry) =>
+      entry.applies_to.includes("REASON_ACTION_DISCOUNT"),
+    );
+    const answer = await postAsTill(page, `/api/bills/${bill.id}/discount`, {
+      amount: { currency_code: "VND", amount_minor: 99_000_000 },
+      reason_code_id: reason.reason_code_id,
+      approver_code: edge.staffCode,
+      approver_pin: edge.staffPin,
+    });
+    expect(answer).toEqual({ status: 409, reason: "REDUCTION_EXCEEDS_BILL" });
+  } finally {
+    await edge.stop();
+  }
+});
+
+// ADR-0204 for a discount: committed at the edge with its answer lost, it is found by reading the
+// bill again and shown, never rolled back.
+test("a discount whose answer is lost is checked, and shows on the bill", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    await addItem(page);
+    await sendThenTakePayment(page);
+    await loseAnswer(page, "**/api/bills/*/discount");
+    await openDiscount(page, edge, 10_000);
+    await page.locator('[data-step="discountReason"]').first().click();
+    await expect(page.locator('[data-outcome="discount-pending"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="bill-discounted"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="money-refused"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// APPROVAL_REQUIRED both ways (ADR-0196 safeguard 2, ADR-0158 decision 4), on a store that asks a
+// manager for voids: the till takes no reason until a manager's badge and PIN are typed, the edge
+// refuses the same void without them, and with the manager's it goes through.
+test("a void the store asks a manager for waits for one at the till, and the edge refuses it without", async ({
+  page,
+}) => {
+  const edge = await startEdge("approvals");
+  try {
+    expect(edge.managerCode).toBeTruthy();
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    const bill = watchBillId(page);
+    await sendThenTakePayment(page);
+    await page.locator('[data-step="askVoidBill"]').click();
+    const reason = page.locator('[data-step="voidBillReason"]').first();
+    await expect(page.locator("#void-bill-approver-code")).toBeVisible();
+    await expect(reason).toBeDisabled();
+
+    await expect.poll(() => bill.id).not.toBeNull();
+    const reasons = await page.evaluate(() =>
+      fetch("/api/reason-codes", {
+        headers: { authorization: `Bearer ${localStorage.getItem("pos-edge.device-token")}` },
+      }).then((response) => response.json()),
+    );
+    const voidReason = reasons.reasons.find((entry) =>
+      entry.applies_to.includes("REASON_ACTION_VOID_BILL"),
+    );
+    const answer = await postAsTill(page, `/api/bills/${bill.id}/void`, {
+      reason_code_id: voidReason.reason_code_id,
+    });
+    expect(answer).toEqual({ status: 403, reason: "APPROVAL_REQUIRED" });
+
+    await page.locator("#void-bill-approver-code").fill(edge.managerCode);
+    await page.locator("#void-bill-approver-pin").fill(edge.managerPin);
+    await reason.click();
+    await expect(page.locator('[data-outcome="bill-voided"]')).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});

@@ -63,6 +63,8 @@ export interface MoneyAct<T> {
 interface Options<T> {
   readonly recheck: (subject: string) => Promise<Recheck<T>>;
   readonly committed: (value: T) => void;
+  /** The sentence for an edge refusal, where the act says it better than `errorMessage`. */
+  readonly refusalMessage?: (caught: ApiError) => string;
   readonly timers?: { set: (run: () => void, ms: number) => number; clear: (id: number) => void };
   readonly now?: () => number;
 }
@@ -145,7 +147,7 @@ export function useMoneyAct<T>(options: Options<T>): MoneyAct<T> {
     } catch (caught) {
       if (isRefusal(caught)) {
         setPhase("idle");
-        setRefusal(errorMessage(caught));
+        setRefusal(options.refusalMessage?.(caught) ?? errorMessage(caught));
         return;
       }
       startChecking(subject);

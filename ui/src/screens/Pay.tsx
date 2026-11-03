@@ -10,6 +10,7 @@ import { PendingSettle } from "../components/PendingSettle";
 import { RefusalPanel } from "../components/RefusalPanel";
 import { receiptLine } from "../state/settle-act";
 import { usePayActs } from "../state/pay-acts";
+import { useWaiveAct, waiveRefusal } from "../state/reduction-acts";
 import { DrawerOwner } from "../components/DrawerOwner";
 import { CheckRow } from "../components/ui";
 import { Keypad } from "../components/Keypad";
@@ -48,7 +49,6 @@ import {
   tenderAccepted,
   tipPercents,
   tipsEnabled,
-  waiveFee,
   formatAmount,
 } from "../state/store";
 import { errorMessage } from "../lib/errors";
@@ -643,7 +643,7 @@ export function Pay() {
     report: setError,
     voidWith: acts.voidBill,
   });
-  const discount = useDiscount({ billId, currency, approver, report: setError, onApplied: setCheck });
+  const discount = useDiscount({ billId, currency, approver, report: setError, onApplied: setCheck, due: () => (check() === null ? null : total()) });
 
   // Waiving a fee (ADR-0159 decision 5): offered on a fee whose rule allows it, on a bill nothing
   // has been taken against yet, to a person who may waive and where the store publishes a reason to
@@ -673,22 +673,19 @@ export function Pay() {
     setWaiving(fee);
   };
 
-  // The second tap: waive it, citing this reason. The edge answers with the whole bill as it now
-  // stands and the screen takes that figure, because the fee's tax leaves with it.
+  // The second tap: waive it, citing this reason, as a money act (`../state/reduction-acts`). The
+  // edge answers with the whole bill as it now stands and the screen takes that figure.
+  let waivingName = "";
+  const waiveAct = useWaiveAct((totals) => (setCheck(totals), setWaivedFee(waivingName), closeWaive()));
   const waiveFeeReason = (reasonCodeId: string) => {
     const id = billId();
     const fee = waiving();
-    if (id === null || fee === null) {
-      return;
+    const approval = waiveAsks() ? approver.approval() : undefined;
+    if (id !== null && fee !== null) {
+      setError(null);
+      waivingName = fee.display_name;
+      waiveAct.send(id, fee.fee_id, reasonCodeId, approval, () => waiveRefusal({ waivable: fee.waivable, asks: waiveAsks(), approval }));
     }
-    setError(null);
-    void waiveFee(id, fee.fee_id, reasonCodeId, waiveAsks() ? approver.approval() : undefined)
-      .then((totals) => {
-        setCheck(totals);
-        setWaivedFee(fee.display_name);
-        closeWaive();
-      })
-      .catch((caught: unknown) => setError(errorMessage(caught)));
   };
 
   // What the screen becomes once the bill is voided: no money was taken, and the order is still
@@ -810,7 +807,7 @@ export function Pay() {
                         <button
                           type="button"
                           class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
-                          disabled={!readyToWaive()}
+                          disabled={!readyToWaive() || waiveAct.phase() !== "idle" || waiveAct.refusal() !== null}
                           data-step="waiveFeeReason"
                           onClick={() => waiveFeeReason(reason.reason_code_id)}
                         >
@@ -819,6 +816,8 @@ export function Pay() {
                       )}
                     </For>
                   </div>
+                  <Show when={waiveAct.phase() !== "idle"}><PendingSettle act="waive" phase={waiveAct.phase()} amount="" onLeave={closeWaive} /></Show>
+                  <RefusalPanel message={waiveAct.refusal()} onDismiss={waiveAct.dismiss} />
                   <button
                     type="button"
                     class="mt-3 min-h-touch rounded-token border border-line px-3 text-sm"

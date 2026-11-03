@@ -80,17 +80,7 @@ async fn main() -> Result<(), EdgeError> {
     // (ADR-0084): the pairing code is minted per boot and logged by the pairing module, and this is
     // the badge the demo roster carries. Both are worthless off this loopback socket, which holds no
     // data and forgets everything on exit.
-    if demo::staffed() {
-        tracing::info!(
-            "sign in with code {} and PIN {}",
-            demo::DEMO_STAFF_CODE,
-            demo::DEMO_STAFF_PIN
-        );
-    } else {
-        tracing::info!(
-            "this demo store publishes no staff (POS_DEMO_PROFILE=unstaffed): nobody can sign in"
-        );
-    }
+    print_badges();
     // The queue-number authority the relay's intake would use; the example has no `cloud_url`, so no
     // relay runs and it is never allocated from — a real store passes its SQLite writer (ADR-0064).
     // The OTA self-test authority. In memory, like everything else here — and it is never read:
@@ -119,4 +109,27 @@ async fn main() -> Result<(), EdgeError> {
     )
     .await
     .map(|_outcome| ())
+}
+
+/// The badges the demo roster carries, printed so the browser gate reads them rather than repeating
+/// them: the employee's, and on the `approvals` profile the manager's who approves for them.
+fn print_badges() {
+    if demo::staffed() {
+        tracing::info!(
+            "sign in with code {} and PIN {}",
+            demo::DEMO_STAFF_CODE,
+            demo::DEMO_STAFF_PIN
+        );
+        if demo::approvals() {
+            tracing::info!(
+                "approve with code {} and PIN {}",
+                demo::DEMO_MANAGER_CODE,
+                demo::DEMO_MANAGER_PIN
+            );
+        }
+    } else {
+        tracing::info!(
+            "this demo store publishes no staff (POS_DEMO_PROFILE=unstaffed): nobody can sign in"
+        );
+    }
 }
