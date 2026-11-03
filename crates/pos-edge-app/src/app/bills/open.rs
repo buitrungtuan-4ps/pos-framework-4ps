@@ -77,6 +77,7 @@ impl<S: EventStore> Edge<S> {
         let ctx = self.decision_ctx(actor)?;
         ctx.require(Permission::OpenBill)?;
         let table_id = self.billable_order(order_id)?;
+        self.check_flow_guard("billing.bill.open", order_id)?;
 
         // Requesting the bill is a legal floor move only from Occupied; `decide_table` also gates
         // the tables capability. There is no floor move to prove for a counter order.

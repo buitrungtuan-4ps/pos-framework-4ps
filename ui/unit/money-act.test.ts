@@ -120,3 +120,13 @@ describe("a money act", () => {
     expect(committed).toEqual([]);
   });
 });
+
+describe("a flow's refusal (ADR-0192)", () => {
+  it("names the step the edge says comes first", async () => {
+    const { errorMessage } = await import("../src/lib/errors");
+    const message = errorMessage(
+      new ApiError(409, "step guests of flow dine_in comes first", "FLOW_PREREQUISITE_UNMET"),
+    );
+    expect(message).toContain("guests");
+  });
+});

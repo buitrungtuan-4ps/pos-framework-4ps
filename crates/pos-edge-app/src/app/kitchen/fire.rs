@@ -192,6 +192,14 @@ impl<S: EventStore> Edge<S> {
     ) -> Result<Vec<LineView>, AppError> {
         let ctx = self.decision_ctx(actor)?;
         let session = self.session();
+        self.check_flow_guard(
+            if course.is_some() {
+                "sales.course.fire"
+            } else {
+                "sales.order.fire"
+            },
+            order_id,
+        )?;
 
         // Before the empty-list shortcut, so a store with courses off is told it cannot fire by
         // course rather than told there is nothing to fire. `decide_line` would refuse it too, but

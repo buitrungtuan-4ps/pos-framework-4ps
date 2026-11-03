@@ -19,6 +19,8 @@ demo-fixtures = []
 pos-core  = { path = "../pos-core" }
 pos-ports = { path = "../pos-ports" }
 pos-proto = { path = "../pos-proto" }
+# A package's flow guards, re-checked before a command (ADR-0192 decision 4, ADR-0193).
+pos-rules = { path = "../pos-rules" }
 # The lease, queue-number and receipt-number authorities are implemented for the SQLite event store
 # here, since a trait can be implemented for another crate's type only where the trait is defined.
 store-sqlite = { path = "../adapters/store-sqlite" }

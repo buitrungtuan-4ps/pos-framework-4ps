@@ -56,6 +56,22 @@ impl Projection {
         }
     }
 
+    /// Records the guest count an order opened with, if it was given one (ADR-0192 decision 4).
+    pub(in crate::app) fn record_guest_count(
+        &mut self,
+        order_id: OrderId,
+        guest_count: Option<u16>,
+    ) {
+        if let Some(count) = guest_count {
+            self.guest_counts.insert(order_id, count);
+        }
+    }
+
+    /// The guest count an open order recorded, if any.
+    pub(in crate::app) fn guest_count(&self, order_id: OrderId) -> Option<u16> {
+        self.guest_counts.get(&order_id).copied()
+    }
+
     /// Records where an order came from, from a live open or from the fold on rebuild.
     pub(in crate::app) fn open_order_origin(
         &mut self,
@@ -231,6 +247,7 @@ impl Projection {
     /// ended: on no screen, on no bill, and never charged.
     pub(in crate::app) fn close_order(&mut self, order_id: OrderId) {
         self.closed_orders.insert(order_id);
+        self.guest_counts.remove(&order_id);
         if let Some(table_id) = self.table_for_order(order_id) {
             self.table_orders.remove(&table_id);
         }

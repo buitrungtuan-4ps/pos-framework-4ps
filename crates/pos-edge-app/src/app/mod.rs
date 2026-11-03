@@ -40,6 +40,7 @@ mod bills;
 mod composition;
 mod error;
 mod floor;
+pub mod flows;
 mod kitchen;
 mod orders;
 mod projection;
@@ -103,10 +104,12 @@ struct Projection {
     /// unrecognised token from a newer sender records as `None`, and the caller falls back to the
     /// session channel rather than guessing a variant and taxing a bill at a rate nobody chose.
     ///
-    /// The guest count `sales.order.opened` also carries is deliberately **not** here. It is
-    /// reporting data (average check per cover) whose readers are the event log and the cloud
-    /// rollups; no edge decision consults it, and a cached copy no code reads is a field that rots.
+    /// The guest count `sales.order.opened` also carries is kept apart, in [`Self::guest_counts`].
     orders: HashMap<OrderId, OrderOrigin>,
+    /// The guest count each open order recorded when it opened, where one was given: the fact a
+    /// package's "guest count first" guard reads ([ADR-0192](../../../../docs/adr/0192-a-flow-is-a-graph-of-steps-the-edge-re-checks.md)
+    /// decision 4). Folded from `sales.order.opened`, dropped when the order closes.
+    guest_counts: HashMap<OrderId, u16>,
     /// The orders a member of staff has confirmed or refused
     /// ([ADR-0116](../../../../docs/adr/0116-the-qr-hold-is-derived-and-it-gates-firing.md)), folded
     /// from `sales.order.confirmed_by_staff` and `sales.order.rejected_by_staff`.

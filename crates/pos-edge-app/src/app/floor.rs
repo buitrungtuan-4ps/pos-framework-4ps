@@ -103,6 +103,7 @@ impl<S: EventStore> Edge<S> {
             projection.set_table(table_id, decision.next_state);
             projection.open_order(table_id, order_id);
             projection.open_order_origin(order_id, Some(channel), Some(table_id));
+            projection.record_guest_count(order_id, guest_count);
         }
         Ok(TableView {
             table_id,
