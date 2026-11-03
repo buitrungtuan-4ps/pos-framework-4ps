@@ -10,11 +10,12 @@ use pos_ports::printer::{PrintDocument, PrintJob};
 use pos_proto::ids::{DeviceId, EventId, StoreId};
 
 use crate::app::{
-    BuyerDetails, CombinedReport, EdgeSession, FiredLine, PreBill, ReceiptCopy, ReceiptLine,
-    ShiftReport,
+    BuyerDetails, CombinedReport, EdgeSession, FiredLine, HandoverSlip, PreBill, ReceiptCopy,
+    ReceiptLine, ShiftReport,
 };
 use crate::line_notes::NoteText;
 use crate::printing::blocks::{MoneyStyle, printed_totals};
+use crate::printing::cash_reads::handover_slip_document;
 use crate::printing::devices::{TillPrinting, guest_printer, published_printers, station_printer};
 use crate::printing::documents::{
     VoidSlip, combined_shift_report_document, pre_bill_document, receipt_copy_document,
@@ -254,6 +255,27 @@ impl Printers {
             &MoneyStyle::of(session),
             self.labels_for(session),
             combined,
+        );
+        self.print_cash_up(session, till, store_id, job_id, document)
+            .await
+    }
+
+    /// Prints a handover's slip where it was made, as [`Self::print_shift_report`] prints a close's
+    /// report ([ADR-0187](../../../../docs/adr/0187-a-shift-is-handed-over-at-the-till-and-read-there.md)
+    /// decision 3).
+    pub async fn print_handover_slip(
+        &self,
+        session: &EdgeSession,
+        till: &TillPrinting,
+        store_id: StoreId,
+        job_id: EventId,
+        slip: &HandoverSlip,
+    ) -> PrintOutcome {
+        let document = handover_slip_document(
+            &session.profile,
+            &MoneyStyle::of(session),
+            self.labels_for(session),
+            slip,
         );
         self.print_cash_up(session, till, store_id, job_id, document)
             .await

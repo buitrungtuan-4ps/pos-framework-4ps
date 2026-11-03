@@ -521,6 +521,14 @@ event_catalogue! {
         /// What `denomination_counts` does not name, within `opening_float` (ADR-0186).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         uncounted_amount: Option<Money>,
+        /// The shift just closed on this drawer, where this one took its cash over at a handover
+        /// ([ADR-0187](../../../docs/adr/0187-a-shift-is-handed-over-at-the-till-and-read-there.md)
+        /// decision 2): the float is then that cash carried on, not new cash, and the outgoing count
+        /// less this float is the handover difference. Absent for a float brought to the drawer,
+        /// and left off the wire, so such an opening writes the bytes it wrote before the field
+        /// existed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        handed_over_from_shift_id: Option<ShiftId>,
     },
     /// The cashier entered a counted amount.
     ///

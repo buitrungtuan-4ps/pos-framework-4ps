@@ -215,12 +215,10 @@ fn fold_fees(by_fee: &mut BTreeMap<String, FeeTotal>, lines: &[BillFeeLine]) {
 
 /// Folds one settled bill's tax lines' `components` into its day's tax by component
 /// ([ADR-0168](../../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 5):
-/// each component's tax to the entry of its name and rate, which stay in order of name and then
-/// rate.
+/// each component's tax to the entry of its name and rate, kept in order of name, then rate.
 ///
 /// Its fee lines' `tax_components` are not read ([`DailyRevenue::by_tax_component`] says why). A
-/// line that recorded no components adds nothing here, while its tax still reaches the day's
-/// figure.
+/// line that recorded no components adds nothing here; its tax still reaches the day's figure.
 fn fold_tax_components(totals: &mut Vec<TaxComponentTotal>, lines: &[BillTaxLine]) {
     for component in lines.iter().flat_map(|line| &line.components) {
         let key = (component.name.as_str(), component.rate_basis_points);
@@ -1012,6 +1010,7 @@ mod tests {
             voided_cash: day.voided_cash,
             closed_float: day.closed_float,
             dropped: day.dropped,
+            handover_difference: day.handover_difference,
         }
     }
 
@@ -1088,6 +1087,7 @@ mod tests {
                 voided_cash: sum.voided_cash + drawer.voided_cash,
                 closed_float: sum.closed_float + drawer.closed_float,
                 dropped: sum.dropped + drawer.dropped,
+                handover_difference: sum.handover_difference + drawer.handover_difference,
             });
         assert_eq!(
             summed,

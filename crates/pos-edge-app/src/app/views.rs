@@ -17,5 +17,5 @@ pub use orders::{
 };
 pub use shifts::{
     CashMovement, ClosedDrawers, CombinedReport, DrawerFigures, DrawerView, DrawersView,
-    ShiftHeader, ShiftReport, ShiftView, TillScope,
+    HandoverSlip, ShiftHeader, ShiftReport, ShiftView, TillScope,
 };

@@ -410,3 +410,115 @@ fn a_drawer_past_its_day_is_warned_about_once_a_day() {
         "a shift it does not hold is nothing to warn about"
     );
 }
+
+/// Counts and closes the store drawer's open `shift` at `counted`, as an outgoing cashier does.
+async fn count_and_close(edge: &Edge<FakeStore>, shift: ShiftId, counted: i64) {
+    edge.count_shift(actor(), shift, counted)
+        .await
+        .expect("counts");
+    edge.close_shift(actor(), shift).await.expect("closes");
+}
+
+/// Opens the store's drawer with `float`, taking over `from` at a handover (ADR-0187).
+async fn take_over(
+    edge: &Edge<FakeStore>,
+    float: i64,
+    from: Option<ShiftId>,
+) -> Result<crate::app::ShiftView, crate::app::AppError> {
+    edge.open_shift_counted(
+        actor(),
+        crate::app::TillScope::default(),
+        (vnd(float), pos_core::cash_count::CountBreakdown::default()),
+        None,
+        None,
+        from,
+    )
+    .await
+}
+
+#[test]
+fn a_handover_takes_over_only_the_shift_just_closed_on_the_drawer() {
+    // ADR-0187 decision 2: the link names the shift just closed on that drawer, and no other.
+    pos_fakes::executor::run_ready(async {
+        let edge = edge();
+        let morning = edge
+            .open_shift(actor(), vnd(1_000_000))
+            .await
+            .expect("opens");
+        assert!(
+            matches!(
+                take_over(&edge, 1_000_000, Some(morning.shift_id)).await,
+                Err(crate::app::AppError::ShiftAlreadyOpen)
+            ),
+            "an open drawer is not handed over"
+        );
+        count_and_close(&edge, morning.shift_id, 1_780_000).await;
+        let unknown = ShiftId::new(Ulid::from_u128(0xDEAD));
+        assert!(matches!(
+            take_over(&edge, 1_780_000, Some(unknown)).await,
+            Err(crate::app::AppError::NotTheShiftHandedOver)
+        ));
+
+        let afternoon = take_over(&edge, 1_770_000, Some(morning.shift_id))
+            .await
+            .expect("takes the drawer over");
+        let opened: Vec<pos_proto::events::CashShiftOpened> = events_of(&edge).await;
+        assert_eq!(opened.len(), 2);
+        assert_eq!(opened[0].handed_over_from_shift_id, None);
+        assert_eq!(
+            opened[1].handed_over_from_shift_id,
+            Some(morning.shift_id),
+            "the opening records the shift it took over"
+        );
+
+        let slip = edge
+            .handover_slip(
+                morning.shift_id,
+                afternoon.shift_id,
+                pos_core::cash_count::CountBreakdown::default(),
+            )
+            .expect("a slip for the handover");
+        assert_eq!(slip.outgoing_count, vnd(1_780_000));
+        assert_eq!(slip.incoming_count, vnd(1_770_000));
+        assert_eq!(
+            slip.difference,
+            vnd(-10_000),
+            "found less than was counted out"
+        );
+
+        // A shift closed before the last one is not the one just closed, after a restart too.
+        count_and_close(&edge, afternoon.shift_id, 1_770_000).await;
+        let restarted = Edge::new(
+            edge.store.clone(),
+            identity(),
+            EdgeSession::bootstrap(),
+            Arc::new(InMemoryReceipts::new()),
+        )
+        .expect("seeds");
+        restarted.rebuild().await.expect("rebuilds");
+        assert!(matches!(
+            take_over(&restarted, 1_770_000, Some(morning.shift_id)).await,
+            Err(crate::app::AppError::NotTheShiftHandedOver)
+        ));
+        take_over(&restarted, 1_770_000, Some(afternoon.shift_id))
+            .await
+            .expect("the shift just closed is taken over after a restart");
+    });
+}
+
+/// Every event of type `T` in the store's log, oldest first.
+async fn events_of<T: EventPayload>(edge: &Edge<FakeStore>) -> Vec<T> {
+    let events = edge
+        .store
+        .read(&EventQuery::first(
+            edge.identity.store_id,
+            NonZeroU32::new(500).expect("500 is not zero"),
+        ))
+        .await
+        .expect("reads the log");
+    events
+        .iter()
+        .filter(|envelope| envelope.event_type.as_str() == T::EVENT_TYPE.as_str())
+        .filter_map(|envelope| envelope.data.decode().ok())
+        .collect()
+}

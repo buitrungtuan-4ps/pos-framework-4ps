@@ -102,6 +102,10 @@ pub(crate) struct OpenRequest {
     /// What `denomination_counts` does not name.
     #[serde(default)]
     uncounted_amount: Option<Money>,
+    /// The shift just closed on this drawer, where this opening takes it over at a handover
+    /// (ADR-0187 decision 2): `opening_float` is then the incoming count of that shift's cash.
+    #[serde(default)]
+    handed_over_from_shift_id: Option<ShiftId>,
 }
 
 /// The blind count: the physical cash counted, in minor units. Nothing about what was expected.
@@ -255,6 +259,16 @@ pub(crate) struct ShiftResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(nullable = false))]
     uncounted_amount: Option<Money>,
+    /// On an opening that took a drawer over (ADR-0187), the incoming float less the outgoing
+    /// count: zero where they agree. Absent on every other command.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    handover_difference: Option<Money>,
+    /// What came of printing that opening's handover slip, as `shift_report_print` says of a
+    /// report. Absent on every other command.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    handover_slip_print: Option<String>,
 }
 
 /// Whether a figure is nothing, so a field that is stays off the wire as before it existed.
@@ -287,6 +301,8 @@ impl From<ShiftView> for ShiftResponse {
             dropped_amount: view.dropped,
             print_shift_report: view.print_shift_report,
             shift_report_print: None,
+            handover_difference: None,
+            handover_slip_print: None,
             drawer_open: None,
             day_ended: view.day_ended,
             counted_denominations: view
@@ -318,19 +334,23 @@ impl From<ShiftView> for ShiftResponse {
                        `assigned_employee_id` or `assigned_staff_code` for whom it is for, and \
                        `approver_code` and `approver_pin`. Both are secrets and are never logged. \
                        Optionally `denomination_counts` and `uncounted_amount`, the float note by \
-                       note, which must add up to `opening_float` (ADR-0186)",
+                       note, which must add up to `opening_float` (ADR-0186). At a handover, \
+                       `handed_over_from_shift_id`, the shift just closed on that drawer (ADR-0187)",
         content_type = "application/json",
     ),
     responses(
         (status = 200, body = ShiftResponse, description = "Opened: its id, till, assignee where the store assigns drawers, \
                                       `state`, what was paid in and out, and the expectation only where the \
-                                      count is not blind"),
+                                      count is not blind. At a handover, `handover_difference` and \
+                                      `handover_slip_print`"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
         (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; another \
                                       till's drawer needs an approval that was missing or refused, or the \
                                       approver is locked out; or this box was superseded by a replacement"),
         (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
-                                      state the command applies to. `pos-error-reason` names which"),
+                                      state the command applies to, such as `NOT_THE_SHIFT_HANDED_OVER` for a \
+                                      handover naming a shift other than the one just closed on that \
+                                      drawer. `pos-error-reason` names which"),
         (status = 422, description = "`COUNT_DOES_NOT_ADD_UP`: the notes counted and the uncounted amount do \
                                       not add up to the amount (ADR-0186); nothing was recorded"),
         (status = 503, description = "The store is unavailable, or the till this device is could not be \
@@ -373,16 +393,41 @@ where
         denomination_counts: request.denomination_counts,
         uncounted_amount: request.uncounted_amount,
     };
-    respond(
-        edge.open_shift_counted(
+    let handed_over_from = request.handed_over_from_shift_id;
+    let view = match edge
+        .open_shift_counted(
             actor,
             scope,
-            (request.opening_float, breakdown),
+            (request.opening_float, breakdown.clone()),
             approval.as_ref(),
             assignee,
+            handed_over_from,
         )
-        .await,
-    )
+        .await
+    {
+        Ok(view) => view,
+        Err(error) => return error_response(&error),
+    };
+    let slip = handed_over_from
+        .and_then(|outgoing| edge.handover_slip(outgoing, view.shift_id, breakdown));
+    let mut response = ShiftResponse::from(view);
+    if let Some(slip) = slip {
+        // After the commit, as a close's report: a printer that is down never undoes the opening.
+        let at = printed_at(&edge.session(), scope);
+        let outcome = match printers.as_deref() {
+            // The incoming shift's id as the idempotency key: a retried opening prints one slip.
+            Some(printers) => {
+                let job_id = EventId::new(slip.incoming_shift_id.as_ulid());
+                printers
+                    .print_handover_slip(&edge.session(), &at, edge.store_id(), job_id, &slip)
+                    .await
+            }
+            None => PrintOutcome::NoPrinter,
+        };
+        response.handover_difference = Some(slip.difference);
+        response.handover_slip_print = Some(outcome.as_wire().to_owned());
+    }
+    Json(response).into_response()
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(

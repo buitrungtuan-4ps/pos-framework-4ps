@@ -2863,7 +2863,7 @@
         "summary": "`POST /api/shifts` — open a shift with a starting float, on the device's own till's drawer or\nthe one the request names.",
         "operationId": "open_shift",
         "requestBody": {
-          "description": "`opening_float`, with optional `terminal_device_id` for another till's drawer, `assigned_employee_id` or `assigned_staff_code` for whom it is for, and `approver_code` and `approver_pin`. Both are secrets and are never logged. Optionally `denomination_counts` and `uncounted_amount`, the float note by note, which must add up to `opening_float` (ADR-0186)",
+          "description": "`opening_float`, with optional `terminal_device_id` for another till's drawer, `assigned_employee_id` or `assigned_staff_code` for whom it is for, and `approver_code` and `approver_pin`. Both are secrets and are never logged. Optionally `denomination_counts` and `uncounted_amount`, the float note by note, which must add up to `opening_float` (ADR-0186). At a handover, `handed_over_from_shift_id`, the shift just closed on that drawer (ADR-0187)",
           "content": {
             "application/json": {
               "schema": {
@@ -2875,7 +2875,7 @@
         },
         "responses": {
           "200": {
-            "description": "Opened: its id, till, assignee where the store assigns drawers, `state`, what was paid in and out, and the expectation only where the count is not blind",
+            "description": "Opened: its id, till, assignee where the store assigns drawers, `state`, what was paid in and out, and the expectation only where the count is not blind. At a handover, `handover_difference` and `handover_slip_print`",
             "content": {
               "application/json": {
                 "schema": {
@@ -2891,7 +2891,7 @@
             "description": "Nobody is signed in on this device, or the sign-in lapsed; another till's drawer needs an approval that was missing or refused, or the approver is locked out; or this box was superseded by a replacement"
           },
           "409": {
-            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to, such as `NOT_THE_SHIFT_HANDED_OVER` for a handover naming a shift other than the one just closed on that drawer. `pos-error-reason` names which"
           },
           "422": {
             "description": "`COUNT_DOES_NOT_ADD_UP`: the notes counted and the uncounted amount do not add up to the amount (ADR-0186); nothing was recorded"
@@ -5977,6 +5977,17 @@
             },
             "description": "The float note by note (ADR-0186), adding up to `opening_float` with `uncounted_amount`."
           },
+          "handed_over_from_shift_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ShiftId",
+                "description": "The shift just closed on this drawer, where this opening takes it over at a handover\n(ADR-0187 decision 2): `opening_float` is then the incoming count of that shift's cash."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "opening_float": {
             "$ref": "#/components/schemas/Money"
           },
@@ -6892,6 +6903,14 @@
           "expected_amount": {
             "$ref": "#/components/schemas/Money",
             "description": "Revealed at close (§11.1), and before it only where the store's count is not blind."
+          },
+          "handover_difference": {
+            "$ref": "#/components/schemas/Money",
+            "description": "On an opening that took a drawer over (ADR-0187), the incoming float less the outgoing\ncount: zero where they agree. Absent on every other command."
+          },
+          "handover_slip_print": {
+            "type": "string",
+            "description": "What came of printing that opening's handover slip, as `shift_report_print` says of a\nreport. Absent on every other command."
           },
           "paid_in_amount": {
             "$ref": "#/components/schemas/Money",

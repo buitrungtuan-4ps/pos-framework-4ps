@@ -218,6 +218,46 @@ pub struct DailyCash {
     #[serde(default)]
     #[schema(required = true)]
     pub by_drawer: BTreeMap<String, CashTotals>,
+    /// Sum of the handover differences on the day
+    /// ([ADR-0187](../../../docs/adr/0187-a-shift-is-handed-over-at-the-till-and-read-there.md)
+    /// decision 2): each incoming float less the outgoing count it took over. Left out while there
+    /// was none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub handover_difference: i64,
+    /// Each shift's own figures, keyed by shift id, so a drawer whose shifts are not linked by a
+    /// handover reads one row per shift rather than a sum that may count carried cash twice. Left
+    /// out while there was none.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub by_shift: BTreeMap<String, ShiftCash>,
+}
+
+/// One shift's cash on a day (part of [`DailyCash`]): its drawer, its float, its movements, and its
+/// close's figures once it closed. T2, money only: no person.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, ToSchema)]
+pub struct ShiftCash {
+    /// The drawer, as [`DailyCash::by_drawer`] keys it.
+    pub drawer: String,
+    /// Whether it opened by taking the drawer over from the shift just closed on it (ADR-0187).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub handed_over: bool,
+    /// Its opening float, where it opened on the day.
+    pub opening_float: i64,
+    /// Its paid-in movements.
+    pub paid_in: i64,
+    /// Its paid-out movements.
+    pub paid_out: i64,
+    /// Its drops to the safe.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub dropped: i64,
+    /// Whether it closed on the day, which gives the three figures below.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub closed: bool,
+    /// Its close's expected amount.
+    pub expected: i64,
+    /// Its close's count.
+    pub counted: i64,
+    /// Its close's variance; negative is short.
+    pub variance: i64,
 }
 
 /// The key [`DailyCash::by_drawer`] files the store's one drawer under: the drawer of every cash
@@ -267,6 +307,10 @@ pub struct CashTotals {
     /// there was none.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub dropped: i64,
+    /// Sum of this drawer's handover differences (ADR-0187): each incoming float less the outgoing
+    /// count it took over. Left out while there was none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub handover_difference: i64,
 }
 
 /// Whether a figure is zero, so a field that is is left off the wire as it was before it existed.

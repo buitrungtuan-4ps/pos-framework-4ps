@@ -710,6 +710,7 @@ fn a_shift_event_that_names_no_till_writes_the_bytes_it_always_did() {
         assigned_employee_id: None,
         denomination_counts: Vec::new(),
         uncounted_amount: None,
+        handed_over_from_shift_id: None,
     };
     names_its_till_only_when_it_has_one(
         &opened,
@@ -870,6 +871,7 @@ fn a_shift_opened_names_its_person_only_where_its_drawer_is_assigned() {
         assigned_employee_id: Some(person),
         denomination_counts: Vec::new(),
         uncounted_amount: None,
+        handed_over_from_shift_id: None,
     };
     let written = RawPayload::encode(&assigned).expect("encodes");
     assert_eq!(
@@ -927,4 +929,44 @@ fn a_count_names_its_notes_only_where_it_was_counted_note_by_note() {
         written.decode::<CashShiftCounted>().expect("decodes"),
         counted
     );
+}
+
+#[test]
+fn an_opening_names_the_shift_it_took_over_only_at_a_handover() {
+    // ADR-0187 decision 2: an optional link, so a float brought to the drawer writes the bytes it
+    // always did, and a handover reads back the shift it names.
+    use super::CashShiftOpened;
+    use crate::ids::ShiftId;
+    use crate::money::{CurrencyCode, Money};
+
+    let brought = CashShiftOpened {
+        opened_shift_id: ShiftId::new(Ulid::from_u128(8)),
+        opening_float: Money::new(CurrencyCode::VND, 1_780_000),
+        terminal_device_id: None,
+        assigned_employee_id: None,
+        denomination_counts: Vec::new(),
+        uncounted_amount: None,
+        handed_over_from_shift_id: None,
+    };
+    let written = RawPayload::encode(&brought).expect("encodes");
+    assert_eq!(
+        written.as_json(),
+        r#"{"opened_shift_id":"00000000000000000000000008","opening_float":{"currency_code":"VND","amount_minor":1780000}}"#
+    );
+
+    let handed_over = CashShiftOpened {
+        handed_over_from_shift_id: Some(ShiftId::new(Ulid::from_u128(7))),
+        ..brought
+    };
+    let written = RawPayload::encode(&handed_over).expect("encodes");
+    assert!(
+        written
+            .as_json()
+            .ends_with(r#","handed_over_from_shift_id":"00000000000000000000000007"}"#)
+    );
+    assert_eq!(
+        written.decode::<CashShiftOpened>().expect("decodes"),
+        handed_over
+    );
+    assert_eq!(check_field_name("handed_over_from_shift_id"), Ok(()));
 }

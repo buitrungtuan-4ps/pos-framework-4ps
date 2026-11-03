@@ -81,6 +81,13 @@ impl Projection {
         if self.open_shift_of(till) == Some(shift_id) {
             self.open_shifts.remove(&till);
         }
+        self.last_closed.insert(till, shift_id);
+    }
+
+    /// The shift `till`'s drawer closed last, `None` for the store's drawer, which an opening there
+    /// may take over (ADR-0187 decision 2).
+    pub(in crate::app) fn last_closed_of(&self, till: Option<DeviceId>) -> Option<ShiftId> {
+        self.last_closed.get(&till).copied()
     }
 
     /// Adds a paid in or a paid out to `shift_id`'s record (ADR-0165 decision 2).

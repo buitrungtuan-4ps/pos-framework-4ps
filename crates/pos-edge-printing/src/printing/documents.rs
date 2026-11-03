@@ -5,6 +5,7 @@
 //! test page.
 
 use pos_core::billing::{BillTotals, TaxComponentLine};
+use pos_core::cash_count::CountBreakdown;
 use pos_ports::printer::{PrintBlock, PrintDocument, TextStyle};
 use pos_proto::PaymentMethod;
 use pos_proto::devices::PublishedDevice;
@@ -319,7 +320,7 @@ pub fn shift_report_document(
     header_blocks(&mut blocks, money, labels, &report.header);
     figure_blocks(&mut blocks, money, labels, &report.figures());
     reason_block(&mut blocks, labels, &report.header);
-    count_blocks(&mut blocks, money, labels, report);
+    count_blocks(&mut blocks, money, labels, &report.count_breakdown);
     component_blocks(&mut blocks, money, labels, &report.tax_components);
     blocks.push(PrintBlock::Cut);
     PrintDocument { blocks }
@@ -355,7 +356,7 @@ pub fn combined_shift_report_document(
         header_blocks(&mut blocks, money, labels, &report.header);
         figure_blocks(&mut blocks, money, labels, &report.figures());
         reason_block(&mut blocks, labels, &report.header);
-        count_blocks(&mut blocks, money, labels, report);
+        count_blocks(&mut blocks, money, labels, &report.count_breakdown);
         component_blocks(&mut blocks, money, labels, &report.tax_components);
     }
     blocks.push(PrintBlock::Cut);
@@ -411,13 +412,12 @@ fn text_line(line: &str) -> PrintBlock {
 /// come to, then what the rows do not name. Nothing where the count was typed as one amount, so such
 /// a shift prints the report it always did. The rows add up to the count printed above them, which
 /// the edge checked before it recorded it.
-fn count_blocks(
+pub(super) fn count_blocks(
     blocks: &mut Vec<PrintBlock>,
     money: &MoneyStyle,
     labels: &PaperLabels,
-    report: &ShiftReport,
+    breakdown: &CountBreakdown,
 ) {
-    let breakdown = &report.count_breakdown;
     if breakdown.is_empty() {
         return;
     }
@@ -515,12 +515,16 @@ fn figure_blocks(
     ));
     blocks.push(amount_line(labels.counted, figures.counted_amount, money));
     blocks.push(amount_line(labels.variance, figures.variance, money));
-    let verdict = match figures.variance.amount_minor.cmp(&0) {
+    blocks.push(centred(verdict(labels, figures.variance), true));
+}
+
+/// "Over", "short" or "balanced" for a difference, in words beside its sign.
+pub(super) fn verdict(labels: &PaperLabels, difference: Money) -> &'static str {
+    match difference.amount_minor.cmp(&0) {
         core::cmp::Ordering::Less => labels.short,
         core::cmp::Ordering::Equal => labels.balanced,
         core::cmp::Ordering::Greater => labels.over,
-    };
-    blocks.push(centred(verdict, true));
+    }
 }
 
 /// Which document a bill's rows and totals are printed as.

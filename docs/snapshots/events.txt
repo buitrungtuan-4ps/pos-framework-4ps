@@ -134,6 +134,7 @@ cash.shift.opened	field=assigned_employee_id
 cash.shift.opened	field=denomination_counts
 cash.shift.opened	field=denomination_counts[].denomination
 cash.shift.opened	field=denomination_counts[].quantity
+cash.shift.opened	field=handed_over_from_shift_id
 cash.shift.opened	field=opened_shift_id
 cash.shift.opened	field=opening_float
 cash.shift.opened	field=terminal_device_id

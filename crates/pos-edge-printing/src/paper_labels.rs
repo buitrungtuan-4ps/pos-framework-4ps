@@ -118,6 +118,14 @@ pub struct PaperLabels {
     pub tender_qr: &'static str,
     /// Every other tender, in the tender mix.
     pub tender_other: &'static str,
+    /// The heading of a handover slip (ADR-0187 decision 3).
+    pub handover: &'static str,
+    /// What the outgoing shift counted out of the drawer.
+    pub counted_out: &'static str,
+    /// What the incoming shift counted in, its float.
+    pub counted_in: &'static str,
+    /// The incoming count less the outgoing one.
+    pub handover_difference: &'static str,
 }
 
 /// English, and the fallback for every case the module documentation names.
@@ -168,6 +176,10 @@ pub static ENGLISH: PaperLabels = PaperLabels {
     tender_card: "Card",
     tender_qr: "QR",
     tender_other: "Other",
+    handover: "SHIFT HANDOVER",
+    counted_out: "Counted out",
+    counted_in: "Counted in",
+    handover_difference: "Difference",
 };
 
 /// Vietnamese, in the words a Vietnamese receipt and cash-up sheet use.
@@ -218,6 +230,10 @@ pub static VIETNAMESE: PaperLabels = PaperLabels {
     tender_card: "Thẻ",
     tender_qr: "QR",
     tender_other: "Khác",
+    handover: "GIAO CA",
+    counted_out: "Ca trước đếm giao",
+    counted_in: "Ca sau đếm nhận",
+    handover_difference: "Chênh lệch giao ca",
 };
 
 impl PaperLabels {
@@ -314,6 +330,10 @@ mod tests {
             ENGLISH.tender_card,
             ENGLISH.tender_qr,
             ENGLISH.tender_other,
+            ENGLISH.handover,
+            ENGLISH.counted_out,
+            ENGLISH.counted_in,
+            ENGLISH.handover_difference,
         ] {
             assert!(label.is_ascii(), "{label}");
         }

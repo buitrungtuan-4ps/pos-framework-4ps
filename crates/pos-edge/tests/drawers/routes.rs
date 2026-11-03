@@ -963,3 +963,36 @@ async fn a_counted_drawer_takes_no_more_cash_but_still_takes_a_card() {
     );
     assert_eq!(closed["variance"], json!(vnd(0)));
 }
+
+#[tokio::test]
+async fn a_handover_names_the_shift_just_closed_and_prints_its_slip() {
+    // ADR-0187 decisions 2 and 3: the incoming float carries on the outgoing shift's cash, which
+    // only the shift just closed on that drawer can hand over, and the till prints the slip.
+    let tills = drawers_app(false).await;
+    let morning = open_over(&tills, &tills.bar).await;
+    count_at(&tills, &tills.bar, &morning, 1_780_000).await;
+    let close = format!("/api/shifts/{morning}/close");
+    let (status, _, closed) = post(&tills, &tills.bar, &close, json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{closed}");
+
+    let other = open_over(&tills, &tills.counter).await;
+    let wrong = json!({ "opening_float": vnd(1_780_000), "handed_over_from_shift_id": other });
+    let (status, reason, _) = post(&tills, &tills.bar, "/api/shifts", wrong).await;
+    assert_eq!(
+        (status, reason.as_deref()),
+        (StatusCode::CONFLICT, Some("NOT_THE_SHIFT_HANDED_OVER"))
+    );
+
+    let taken = json!({ "opening_float": vnd(1_770_000), "handed_over_from_shift_id": morning });
+    let (status, _, opened) = post(&tills, &tills.bar, "/api/shifts", taken).await;
+    assert_eq!(status, StatusCode::OK, "{opened}");
+    assert_eq!(opened["handover_difference"], json!(vnd(-10_000)));
+    assert_eq!(opened["handover_slip_print"], "PRINTED");
+    assert!(tills.written.last_says(BAR_DRAWER, "SHIFT HANDOVER"));
+
+    // Every other answer, and an opening with no handover, leaves both fields off the wire.
+    let current = get(&tills, &tills.bar, "/api/shifts/current").await;
+    assert!(current.get("handover_difference").is_none(), "{current}");
+    let plain = get(&tills, &tills.counter, "/api/shifts/current").await;
+    assert!(plain.get("handover_slip_print").is_none(), "{plain}");
+}
