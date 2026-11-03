@@ -11,6 +11,7 @@ use pos_cloud_api::console::{audit_action, require_permission};
 use pos_cloud_api::response::parse_ulid_fields;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::TenantId;
+use pos_proto::settings::SettingScope;
 use pos_proto::wire_enum::Open;
 use serde::Deserialize;
 
@@ -30,6 +31,7 @@ use crate::settings::SettingValueSchema;
 use crate::settings::SettingsStore;
 use crate::store_groups::StoreGroupStore;
 use pos_cloud_api::response::StoresPublished;
+use pos_cloud_config::package_pin::SettingsPackages;
 
 /// The tenant a settings read is for.
 #[derive(Debug, Clone, Deserialize)]
@@ -99,7 +101,7 @@ pub(super) async fn admin_put_setting<St, Rg, Grp, Cfg, A, C>(
     Json(request): Json<PutSettingRequest>,
 ) -> Response
 where
-    St: SettingsStore + Clone + Send + Sync + 'static,
+    St: SettingsStore + SettingsPackages + Clone + Send + Sync + 'static,
     Rg: RegistryStore + Clone + Send + Sync + 'static,
     Grp: StoreGroupStore + Clone + Send + Sync + 'static,
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
@@ -140,16 +142,10 @@ where
         Ok(scope_id) => scope_id,
         Err(refusal) => return refusal,
     };
-    let before = match state.settings.list(tenant_id).await {
-        Ok(values) => values
-            .into_iter()
-            .find(|held| {
-                held.setting_key == request.setting_key
-                    && held.scope.known() == scope
-                    && held.scope_id == scope_id
-            })
-            .map(|held| held.value),
-        Err(error) => return settings_store_error_response(&error),
+    let slot = (request.setting_key.as_str(), scope, scope_id.as_str());
+    let before = match before_write(&state, tenant_id, &layout, slot, &request.value).await {
+        Ok(before) => before,
+        Err(refusal) => return refusal,
     };
     let value = crate::settings::SettingValue {
         setting_key: request.setting_key.clone(),
@@ -187,6 +183,46 @@ where
     )
     .await;
     publish_results_response(&results)
+}
+
+/// The value held where a write lands, before it lands, once the `package` settings' own rules let
+/// the write through (ADR-0189 decision 2).
+async fn before_write<St, Rg, Grp, Cfg, A, C>(
+    state: &SettingsState<St, Rg, Grp, Cfg, A, C>,
+    tenant_id: TenantId,
+    layout: &TenantLayout,
+    (setting_key, scope, scope_id): (&str, SettingScope, &str),
+    value: &serde_json::Value,
+) -> Result<Option<serde_json::Value>, Response>
+where
+    St: SettingsStore + SettingsPackages,
+{
+    let held = state
+        .settings
+        .list(tenant_id)
+        .await
+        .map_err(|error| settings_store_error_response(&error))?;
+    let slot = (setting_key, scope, scope_id);
+    if let Some(refusal) = super::package_pin::package_write_refusal(
+        state.settings.packages(),
+        tenant_id,
+        layout,
+        &held,
+        slot,
+        value,
+    )
+    .await
+    {
+        return Err(refusal);
+    }
+    Ok(held
+        .into_iter()
+        .find(|held| {
+            held.setting_key == setting_key
+                && held.scope.known() == scope
+                && held.scope_id == scope_id
+        })
+        .map(|held| held.value))
 }
 
 /// The value a `DELETE /admin/settings` clears.

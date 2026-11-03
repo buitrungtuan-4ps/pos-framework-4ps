@@ -55,6 +55,10 @@ wire_enum! {
     Int = "INT",
     /// On or off: `true` or `false`.
     Bool = "BOOL",
+    /// One identifier, a ULID string, or `null` for none.
+    Ulid = "ULID",
+    /// A list of distinct identifiers, each a ULID string, up to a maximum.
+    UlidList = "ULID_LIST",
 }
 
 wire_enum! {
@@ -111,6 +115,16 @@ pub enum SettingShape {
         /// The value a new store is given, when the owner chose one other than the default.
         preset: Option<bool>,
     },
+    /// One identifier, such as a package version, or none: a ULID string or `null`. Whether it names
+    /// something that exists is the cloud's check, not the register's. Its default is none, and a new
+    /// store is given none.
+    Ulid,
+    /// Distinct identifiers, each a ULID string, at most `max` of them. Its default is the empty
+    /// list, and a new store is given that.
+    UlidList {
+        /// The most the list holds.
+        max: usize,
+    },
 }
 
 /// Why a value is not one a setting takes.
@@ -122,9 +136,13 @@ pub enum ValueRefusal {
     /// A whole-number setting's value is not a whole number.
     #[error("it is not a whole number")]
     NotAWholeNumber,
-    /// A whole-number setting's value is outside its bounds.
+    /// A whole-number setting's value is outside its bounds, or a list is longer than its maximum.
     #[error("it is outside the setting's bounds")]
     OutOfRange,
+    /// An identifier setting's value is not a ULID string (or `null`), or a list's is not a list of
+    /// distinct ULID strings.
+    #[error("it is not an identifier")]
+    NotAnIdentifier,
     /// An on-or-off setting's value is not `true` or `false`.
     #[error("it is not true or false")]
     NotTrueOrFalse,
@@ -185,6 +203,8 @@ impl Setting {
             SettingShape::Choice { .. } => SettingKind::Choice,
             SettingShape::Int { .. } => SettingKind::Int,
             SettingShape::Bool { .. } => SettingKind::Bool,
+            SettingShape::Ulid => SettingKind::Ulid,
+            SettingShape::UlidList { .. } => SettingKind::UlidList,
         }
     }
 
@@ -195,6 +215,8 @@ impl Setting {
             SettingShape::Choice { default, .. } => serde_json::Value::from(*default),
             SettingShape::Int { default, .. } => serde_json::Value::from(*default),
             SettingShape::Bool { default, .. } => serde_json::Value::from(*default),
+            SettingShape::Ulid => serde_json::Value::Null,
+            SettingShape::UlidList { .. } => serde_json::Value::Array(Vec::new()),
         }
     }
 
@@ -206,6 +228,7 @@ impl Setting {
             SettingShape::Choice { preset, .. } => preset.map(serde_json::Value::from),
             SettingShape::Int { preset, .. } => preset.map(serde_json::Value::from),
             SettingShape::Bool { preset, .. } => preset.map(serde_json::Value::from),
+            SettingShape::Ulid | SettingShape::UlidList { .. } => None,
         }
     }
 
@@ -237,6 +260,21 @@ impl Setting {
                 .is_boolean()
                 .then_some(())
                 .ok_or(ValueRefusal::NotTrueOrFalse),
+            SettingShape::Ulid => (value.is_null() || is_ulid(value))
+                .then_some(())
+                .ok_or(ValueRefusal::NotAnIdentifier),
+            SettingShape::UlidList { max } => {
+                let items = value.as_array().ok_or(ValueRefusal::NotAnIdentifier)?;
+                let distinct = items.iter().enumerate().all(|(index, item)| {
+                    is_ulid(item) && !items.iter().take(index).any(|earlier| earlier == item)
+                });
+                if !distinct {
+                    return Err(ValueRefusal::NotAnIdentifier);
+                }
+                (items.len() <= *max)
+                    .then_some(())
+                    .ok_or(ValueRefusal::OutOfRange)
+            }
         }
     }
 
@@ -256,8 +294,17 @@ impl Setting {
             SettingShape::Choice { values, .. } => values.join(", "),
             SettingShape::Int { min, max, .. } => format!("a whole number from {min} to {max}"),
             SettingShape::Bool { .. } => "true or false".to_owned(),
+            SettingShape::Ulid => "an identifier or null".to_owned(),
+            SettingShape::UlidList { max } => format!("at most {max} distinct identifiers"),
         }
     }
+}
+
+/// Whether `value` is a string holding a ULID.
+fn is_ulid(value: &serde_json::Value) -> bool {
+    value
+        .as_str()
+        .is_some_and(|text| text.parse::<crate::ulid::Ulid>().is_ok())
 }
 
 /// The scopes of a setting that applies to a whole store: every scope ADR-0160 decision 3 names.
@@ -272,6 +319,9 @@ const STORE_WIDE: &[SettingScope] = &[
 /// person may work at every store of the tenant, so a value for one store could not be applied to
 /// what is theirs.
 const TENANT_ONLY: &[SettingScope] = &[SettingScope::Tenant];
+
+/// The scope of a setting a store's own people decide: that store alone.
+const STORE_ONLY: &[SettingScope] = &[SettingScope::Store];
 
 /// The first release after 0.14.0. Tags are cut from `main`, so the next release carries everything
 /// merged before it, whatever number it is given.
@@ -297,6 +347,7 @@ pub fn register() -> Vec<Setting> {
         nodes::counter_settings(),
         nodes::backup_settings(),
         nodes::billing_settings(),
+        nodes::package_settings(),
     ]
     .into_iter()
     .flatten()
@@ -324,8 +375,8 @@ fn scalar(value: &serde_json::Value) -> String {
 ///
 /// Sorted, so the output depends on what the register holds and not on its order. A bare key, a
 /// `kind=`, a `value=` and a `scope=` line are contracts: a value stored in the cloud and an edge on
-/// an older release both rely on them. A `default=`, a `preset=`, a `since=`, and a whole number's
-/// `min=`, `max=` and `unit=` lines may change. A `confirm=` line is a contract too: dropping a
+/// an older release both rely on them. A `default=`, a `preset=`, a `since=`, a whole number's
+/// `min=`, `max=` and `unit=` lines, and an identifier list's `max=` line may change. A `confirm=` line is a contract too: dropping a
 /// confirmation takes an ADR (ADR-0169).
 #[must_use]
 pub fn render_snapshot() -> String {
@@ -355,6 +406,8 @@ fn render_snapshot_of(settings: &[Setting]) -> String {
                 lines.push(format!("{key}\tvalue=false"));
                 lines.push(format!("{key}\tvalue=true"));
             }
+            SettingShape::Ulid => {}
+            SettingShape::UlidList { max } => lines.push(format!("{key}\tmax={max}")),
         }
         lines.push(format!(
             "{key}\tdefault={}",
@@ -379,7 +432,8 @@ fn render_snapshot_of(settings: &[Setting]) -> String {
          #\n\
          # A REMOVED key, kind, value or scope line fails CI: a stored value and an older edge both\n\
          # rely on it, so it may be added to but never renamed or removed. A default, a preset, a\n\
-         # since, and a whole number's min, max and unit lines may change. ADR-0160 decision 9.\n\
+         # since, a whole number's min, max and unit lines, and an identifier list's max line may\n\
+         # change. ADR-0160 decision 9.\n\
          # A REMOVED confirm line fails CI too: it is a value written only with a recorded\n\
          # confirmation, and dropping that takes an ADR. ADR-0169.\n",
     );
@@ -410,7 +464,8 @@ fn render_markdown_of(settings: &[Setting]) -> String {
          edge did before the setting existed, so an upgrade changes nothing until someone sets \
          one. A value the edge does not recognise also reads as the default.\n\n\
          - **Values** is what a setting takes: one of a list of tokens, a whole number between \
-         two bounds (both included), or `true` and `false`. The cloud refuses any other value \
+         two bounds (both included), `true` and `false`, or identifiers of what the console \
+         authors, such as package versions. The cloud refuses any other value \
          when it is written, and does not send a store one it would refuse.\n\
          - **Where it is set** lists the scopes a value may be written at, in the console's \
          settings or with `PUT /admin/settings`. A store runs the value of the most specific \
@@ -445,6 +500,8 @@ fn render_markdown_of(settings: &[Setting]) -> String {
                 format!("{}, `{min}` to `{max}`", unit_phrase(*unit))
             }
             SettingShape::Bool { .. } => "`true`, `false`".to_owned(),
+            SettingShape::Ulid => "an identifier, or `null` for none".to_owned(),
+            SettingShape::UlidList { max } => format!("up to {max} distinct identifiers"),
         };
         let values = match setting.confirm {
             Some(confirm) => format!("{values}; `{}` is confirmed", confirm.value),

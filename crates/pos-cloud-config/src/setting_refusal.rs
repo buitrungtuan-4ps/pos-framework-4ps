@@ -21,7 +21,8 @@ use crate::route::config_store_error_response;
 use crate::settings::SettingRefusal;
 use crate::version::{UpdateOutcome, Version};
 
-/// The `400` a value the register refuses becomes, naming the field at fault.
+/// The `400` a value the register refuses becomes, naming the field at fault, or the `409` a value
+/// under a broader package lock becomes.
 #[must_use]
 pub fn setting_refusal_response(refusal: &SettingRefusal) -> Response {
     let (field, reason) = match refusal {
@@ -35,9 +36,20 @@ pub fn setting_refusal_response(refusal: &SettingRefusal) -> Response {
             match refusal {
                 ValueRefusal::NotOneOfItsValues => "INVALID_ENUM_VALUE",
                 ValueRefusal::OutOfRange => "OUT_OF_RANGE",
-                ValueRefusal::NotAWholeNumber | ValueRefusal::NotTrueOrFalse => "INVALID_VALUE",
+                ValueRefusal::NotAWholeNumber
+                | ValueRefusal::NotTrueOrFalse
+                | ValueRefusal::NotAnIdentifier => "INVALID_VALUE",
             },
         ),
+        SettingRefusal::WrittenThroughItsRoute(_) => ("setting_key", "WRITTEN_THROUGH_ITS_ROUTE"),
+        SettingRefusal::UnknownVersion { .. } => ("value", "UNKNOWN_PACKAGE_VERSION"),
+        SettingRefusal::LockedAbove { .. } => {
+            return api_error_with_details(
+                ErrorStatus::FailedPrecondition,
+                refusal.to_string(),
+                &[("scope", "PACKAGE_LOCKED_ABOVE")],
+            );
+        }
     };
     api_error_with_details(
         ErrorStatus::InvalidArgument,

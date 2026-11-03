@@ -8,6 +8,7 @@ use crate::backup::{self, PublishedBackup};
 use crate::billing::{PublishedBilling, SettledVoidWindow};
 use crate::counter::{PublishedCounter, WalkInChannel};
 use crate::locale::{LocaleSettings, TaxRounding};
+use crate::package::{ALLOWED_VERSIONS_MAX, PackageMode, PublishedPackage};
 use crate::people::PublishedPermissions;
 use crate::printing::{self, PublishedPrinting, ReceiptLanguage, ReceiptSecondLanguage};
 use crate::qr::{PublishedQr, TableOrder};
@@ -19,8 +20,8 @@ use crate::tender_keys::{self, PublishedTenderKeys};
 use crate::wire_enum::WireEnum;
 
 use super::{
-    Confirm, EVERY_RELEASE, NEXT_RELEASE, STORE_WIDE, Setting, SettingShape, SettingUnit,
-    TENANT_ONLY, choices,
+    Confirm, EVERY_RELEASE, NEXT_RELEASE, STORE_ONLY, STORE_WIDE, Setting, SettingShape,
+    SettingUnit, TENANT_ONLY, choices,
 };
 
 /// The settings on the `shift` node: whether a till sells while no shift is open, the opening float, and
@@ -643,4 +644,75 @@ pub(super) fn billing_settings() -> Vec<Setting> {
                   shift that took the money is open. Outside the window the till refuses and says \
                   why, and the correction belongs in the cloud.",
     }]
+}
+
+/// The settings on the `package` node: how a store is pinned to a package version
+/// ([ADR-0189](../../../../docs/adr/0189-a-store-runs-a-package-version-hq-pins.md) decision 2), in
+/// the register's order.
+///
+/// `mode` offers `PACKAGE_MODE_UNSPECIFIED` as a value, unlike other choices: here it is a decision,
+/// "no pin, run the release's default package", which a brand or a store may state under a broader
+/// `PACKAGE_MODE_CHOOSE`. Under a broader `PACKAGE_MODE_LOCKED` the cloud refuses any narrower
+/// `package` value.
+pub(super) fn package_settings() -> Vec<Setting> {
+    let version = |field: &'static str, summary: &'static str| Setting {
+        node: PublishedPackage::NODE,
+        field,
+        shape: SettingShape::Ulid,
+        scopes: STORE_WIDE,
+        since: NEXT_RELEASE,
+        confirm: None,
+        summary,
+    };
+    vec![
+        Setting {
+            node: PublishedPackage::NODE,
+            field: "mode",
+            shape: SettingShape::Choice {
+                values: PackageMode::ALL.iter().map(|mode| mode.as_wire()).collect(),
+                default: PackageMode::Unspecified.as_wire(),
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            confirm: None,
+            summary: "How the store is pinned to a package version. `PACKAGE_MODE_LOCKED` runs \
+                      `package.locked_version_id`; `PACKAGE_MODE_CHOOSE` runs the version the \
+                      store chose from `package.allowed_version_ids`, or \
+                      `package.default_version_id` until it chooses; `PACKAGE_MODE_UNSPECIFIED` \
+                      runs the default package of the store's release. A lock cannot be loosened \
+                      at a narrower scope. Set on the package page, not in Settings.",
+        },
+        version(
+            "locked_version_id",
+            "The package version a `PACKAGE_MODE_LOCKED` store runs.",
+        ),
+        Setting {
+            node: PublishedPackage::NODE,
+            field: "allowed_version_ids",
+            shape: SettingShape::UlidList {
+                max: ALLOWED_VERSIONS_MAX,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            confirm: None,
+            summary: "The package versions a `PACKAGE_MODE_CHOOSE` store may choose from.",
+        },
+        version(
+            "default_version_id",
+            "The package version a `PACKAGE_MODE_CHOOSE` store runs until it chooses; one of \
+             `package.allowed_version_ids`.",
+        ),
+        Setting {
+            node: PublishedPackage::NODE,
+            field: "chosen_version_id",
+            shape: SettingShape::Ulid,
+            scopes: STORE_ONLY,
+            since: NEXT_RELEASE,
+            confirm: None,
+            summary: "The package version the store chose, from its allowed versions. Written \
+                      only through `PUT /admin/stores/{store_id}/package/choice`, never with \
+                      `PUT /admin/settings`.",
+        },
+    ]
 }
