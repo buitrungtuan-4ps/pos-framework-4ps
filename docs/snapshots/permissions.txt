@@ -182,6 +182,12 @@ menu.item.edit	default_role=OWNER
 menu.item.edit	group=MENU_AND_INVENTORY
 menu.item.edit	pin_required=false
 menu.item.edit	risk=MEDIUM
+reports.shift.read_x
+reports.shift.read_x	default_role=MANAGER
+reports.shift.read_x	default_role=OWNER
+reports.shift.read_x	group=REPORTS
+reports.shift.read_x	pin_required=false
+reports.shift.read_x	risk=MEDIUM
 reports.takings.view
 reports.takings.view	default_role=MANAGER
 reports.takings.view	default_role=OWNER

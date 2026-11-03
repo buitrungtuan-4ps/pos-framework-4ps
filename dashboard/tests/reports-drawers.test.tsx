@@ -224,4 +224,21 @@ describe("the X/Z report's drawers", () => {
     ]);
     expect(screen.getByText("Handover difference")).toBeTruthy();
   });
+
+  // UX-6: no shift has closed, so the store's expected, counted and variance are a dash, not a
+  // zero nobody counted; and the day reads by tender.
+  it("shows a dash for the drawer while nothing has closed, and the day by tender", async () => {
+    const day = report(drawer(500_000, [0, 0]), { [BAR]: drawer(500_000, [0, 0]) }, { [BAR]: "Bar till" });
+    day.revenue.by_tender = { PAYMENT_METHOD_CASH: 165_000, PAYMENT_METHOD_CARD: 250_000, PAYMENT_METHOD_VOUCHER: 50_000 };
+    xzReport.mockResolvedValue(day);
+    render(() => <Reports />);
+
+    const expected = await screen.findByText("Expected drawer");
+    expect(expected.nextElementSibling?.textContent).toBe("—");
+    expect(screen.getByText("Variance").nextElementSibling?.textContent).toBe("—");
+    expect(screen.getByText("Card").nextElementSibling?.textContent).toBe(vnd(250_000));
+    expect(screen.getByText("QR").nextElementSibling?.textContent).toBe(vnd(0));
+    expect(screen.getByText("Other tenders").nextElementSibling?.textContent).toBe(vnd(50_000));
+  });
 });
+

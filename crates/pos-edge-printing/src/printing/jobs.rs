@@ -23,6 +23,7 @@ use crate::printing::documents::{
 };
 use crate::printing::language::receipt_lines_in;
 use crate::printing::tickets::ticket_at;
+use crate::printing::x_read::{XPaper, x_document};
 use crate::printing::{PrintOutcome, Printers};
 
 /// The `tracing` target this module logs under: the path it had in `pos_edge`, kept when it moved
@@ -276,6 +277,28 @@ impl Printers {
             &MoneyStyle::of(session),
             self.labels_for(session),
             slip,
+        );
+        self.print_cash_up(session, till, store_id, job_id, document)
+            .await
+    }
+
+    /// Prints an X where it was asked for, as [`Self::print_shift_report`] prints a close's report
+    /// ([ADR-0187](../../../../docs/adr/0187-a-shift-is-handed-over-at-the-till-and-read-there.md)
+    /// decision 4). Every X is its own job, `job_id`, since reading one changes nothing.
+    pub async fn print_x(
+        &self,
+        session: &EdgeSession,
+        till: &TillPrinting,
+        store_id: StoreId,
+        job_id: EventId,
+        paper: XPaper<'_>,
+    ) -> PrintOutcome {
+        let document = x_document(
+            &session.profile,
+            &MoneyStyle::of(session),
+            self.labels_for(session),
+            &session.timezone,
+            paper,
         );
         self.print_cash_up(session, till, store_id, job_id, document)
             .await

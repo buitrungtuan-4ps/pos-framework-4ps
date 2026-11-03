@@ -261,6 +261,7 @@ mod tests {
                 .collect(),
             by_tax_component: Vec::new(),
             voided_after_payment: crate::types::VoidedAfterPayment::default(),
+            by_tender: BTreeMap::new(),
         }
     }
 

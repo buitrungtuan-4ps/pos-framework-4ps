@@ -3103,6 +3103,59 @@
         ]
       }
     },
+    "/api/shifts/{id}/handover-slip/print": {
+      "post": {
+        "tags": [
+          "shifts"
+        ],
+        "summary": "`POST /api/shifts/{id}/handover-slip/print` — print a handover's slip again, from the drawer list\n(ADR-0187 decision 3). It records nothing; the slip names no person.",
+        "operationId": "reprint_handover_slip",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The shift that took the drawer over, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The handover slip printed again where this device's till prints its cash-up, and the difference it shows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HandoverSlipPrintResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in, or the person's own role lacks reports.shift.read_x (`PERMISSION_DENIED`)"
+          },
+          "409": {
+            "description": "`UNKNOWN_SHIFT`, or `NOTHING_TO_PRINT` for a shift that took no drawer over"
+          },
+          "503": {
+            "description": "The till this device is could not be read"
+          }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "reports.shift.read_x"
+      }
+    },
     "/api/shifts/{id}/paid-in": {
       "post": {
         "tags": [
@@ -3316,6 +3369,59 @@
         ]
       }
     },
+    "/api/shifts/{id}/x": {
+      "get": {
+        "tags": [
+          "shifts"
+        ],
+        "summary": "`GET /api/shifts/{id}/x` — a shift's X, which resets nothing.",
+        "operationId": "shift_x",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The shift's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The shift's X: sales, bills, tenders, discounts, voids after payment, paid in and out, dropped to safe, and the expected cash except in a blind-close store for a reader without reports.shift.read_x. Resets nothing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShiftXResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in, or the person's own role grants neither reports.takings.view nor reports.shift.read_x (`PERMISSION_DENIED`)"
+          },
+          "409": {
+            "description": "`UNKNOWN_SHIFT`: the edge knows no such shift"
+          }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": [
+          "reports.takings.view",
+          "reports.shift.read_x"
+        ]
+      }
+    },
     "/api/shifts:batch_close": {
       "post": {
         "tags": [
@@ -3373,6 +3479,101 @@
           "cash.shift.close",
           "cash.shift.manage_other_till",
           "cash.drawer.override_assignment"
+        ]
+      }
+    },
+    "/api/shifts:print_x": {
+      "post": {
+        "tags": [
+          "shifts"
+        ],
+        "summary": "`POST /api/shifts:print_x` — print a shift's X or the store's, recording nothing.",
+        "operationId": "print_x",
+        "requestBody": {
+          "description": "Optional `shift_id`: that shift's X; absent, the store's. The body may be empty",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrintXRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Printed as \"X - not a close\" in the paper's language where this device's till prints its cash-up, and what came of it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrintXResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body is not a shift id"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in, or the person's own role grants neither reports.takings.view nor reports.shift.read_x (`PERMISSION_DENIED`)"
+          },
+          "409": {
+            "description": "`UNKNOWN_SHIFT`: the edge knows no such shift"
+          },
+          "503": {
+            "description": "The till this device is could not be read"
+          }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": [
+          "reports.takings.view",
+          "reports.shift.read_x"
+        ]
+      }
+    },
+    "/api/shifts:x": {
+      "get": {
+        "tags": [
+          "shifts"
+        ],
+        "summary": "`GET /api/shifts:x` — the store's X across its drawers, which resets nothing.",
+        "operationId": "store_x",
+        "responses": {
+          "200": {
+            "description": "Every open drawer's X with their totals; once none is open, the business date's closed shifts with `all_closed`. Resets nothing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoreXResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in, or the person's own role grants neither reports.takings.view nor reports.shift.read_x (`PERMISSION_DENIED`)"
+          },
+          "500": {
+            "description": "The edge could not read its clock"
+          }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": [
+          "reports.takings.view",
+          "reports.shift.read_x"
         ]
       }
     },
@@ -5111,6 +5312,24 @@
           }
         }
       },
+      "HandoverSlipPrintResponse": {
+        "type": "object",
+        "description": "What printing a handover slip again answers.",
+        "required": [
+          "handover_difference",
+          "handover_slip_print"
+        ],
+        "properties": {
+          "handover_difference": {
+            "$ref": "#/components/schemas/Money",
+            "description": "The incoming float less the outgoing count."
+          },
+          "handover_slip_print": {
+            "type": "string",
+            "description": "What came of printing it."
+          }
+        }
+      },
       "Health": {
         "type": "object",
         "description": "The health payload. Every field is either compile-time constant or a store identifier — no PII.",
@@ -6420,6 +6639,35 @@
           }
         }
       },
+      "PrintXRequest": {
+        "type": "object",
+        "description": "Which X to print: one shift's, or the store's where it names none.",
+        "properties": {
+          "shift_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ShiftId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "PrintXResponse": {
+        "type": "object",
+        "description": "What printing an X answers.",
+        "required": [
+          "x_print"
+        ],
+        "properties": {
+          "x_print": {
+            "type": "string",
+            "description": "What came of printing it, the tokens a settle reports its receipt with."
+          }
+        }
+      },
       "PrinterCapabilities": {
         "type": "object",
         "description": "What a printer can do.",
@@ -6952,6 +7200,43 @@
           }
         }
       },
+      "ShiftXResponse": {
+        "type": "object",
+        "description": "One shift's X.",
+        "required": [
+          "shift_id",
+          "state",
+          "business_date",
+          "opened_time",
+          "figures"
+        ],
+        "properties": {
+          "business_date": {
+            "$ref": "#/components/schemas/BusinessDate"
+          },
+          "figures": {
+            "$ref": "#/components/schemas/XFiguresResponse"
+          },
+          "name": {
+            "$ref": "#/components/schemas/DisplayName",
+            "description": "That till's name, as the store's devices give it."
+          },
+          "opened_time": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "shift_id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "description": "`SHIFT_STATE_OPEN`, `SHIFT_STATE_COUNTED` or `SHIFT_STATE_CLOSED`."
+          },
+          "terminal_device_id": {
+            "type": "string",
+            "description": "The till whose drawer it is, absent for the store's one drawer."
+          }
+        }
+      },
       "SignInRequest": {
         "type": "object",
         "description": "A sign-in: the badge `code` a person types and their `pin`. Both are secrets and never logged.",
@@ -7086,6 +7371,35 @@
         "type": "string",
         "description": "A `StoreId`: a ULID, 26 Crockford base-32 characters",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "StoreXResponse": {
+        "type": "object",
+        "description": "The store's X across its drawers.",
+        "required": [
+          "business_date",
+          "all_closed",
+          "shifts"
+        ],
+        "properties": {
+          "all_closed": {
+            "type": "boolean",
+            "description": "`true` once no drawer is open and every shift of the day has closed: \"All tills closed for\nthe day\" (ADR-0187 decision 5)."
+          },
+          "business_date": {
+            "$ref": "#/components/schemas/BusinessDate"
+          },
+          "shifts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShiftXResponse"
+            },
+            "description": "Every open drawer's shift, or the day's closed shifts once none is open, oldest first."
+          },
+          "totals": {
+            "$ref": "#/components/schemas/XFiguresResponse",
+            "description": "Their figures together, absent where there is no shift."
+          }
+        }
       },
       "SubcategoryResponse": {
         "type": "object",
@@ -7223,6 +7537,30 @@
       "TaxComponentName": {
         "type": "string",
         "description": "A tax component's name as a bill records it: two to eight upper-case ASCII letters and digits,\nstarting with a letter, such as `CGST`, `SGST`, `UTGST`, `IGST` or `CESS`\n([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 1).\n\nBuilt only through [`Self::new`], and refused on deserialise when it fails the check. A settled\nbill's line reads such a name as *not split* rather than refusing the bill\n([`crate::events::BillTaxLine::components`]). A country that prints other words maps the token\nto them in its pack.\n\nThe personal-data barrier admits it to an event payload ([`crate::pii`]): it names a tax, and\neight characters with no space, `@` or lower case cannot carry a person's name, an e-mail or a\nphone number. It comes from the `tax` node an operator authors, never from a till's input."
+      },
+      "TendersResponse": {
+        "type": "object",
+        "description": "What each tender took.",
+        "required": [
+          "cash",
+          "card",
+          "qr",
+          "other"
+        ],
+        "properties": {
+          "card": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "cash": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "other": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "qr": {
+            "$ref": "#/components/schemas/Money"
+          }
+        }
       },
       "TerminalResponse": {
         "type": "object",
@@ -7603,6 +7941,65 @@
           },
           "reason_code_id": {
             "$ref": "#/components/schemas/ReasonCodeId"
+          }
+        }
+      },
+      "XFiguresResponse": {
+        "type": "object",
+        "description": "One shift's figures, or several shifts' together.",
+        "required": [
+          "sales_amount",
+          "bill_count",
+          "tenders",
+          "discount_amount",
+          "voided_bill_count",
+          "voided_cash_amount",
+          "paid_in_amount",
+          "paid_out_amount",
+          "dropped_amount"
+        ],
+        "properties": {
+          "bill_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many bills settled.",
+            "minimum": 0
+          },
+          "discount_amount": {
+            "$ref": "#/components/schemas/Money",
+            "description": "Their discounts and comps."
+          },
+          "dropped_amount": {
+            "$ref": "#/components/schemas/Money",
+            "description": "Cash dropped to the safe (ADR-0186)."
+          },
+          "expected_amount": {
+            "$ref": "#/components/schemas/Money",
+            "description": "The cash the drawer should hold. Absent in a blind-close store for a reader without\n`reports.shift.read_x`."
+          },
+          "paid_in_amount": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "paid_out_amount": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "sales_amount": {
+            "$ref": "#/components/schemas/Money",
+            "description": "What the settled bills came to: what their guests paid."
+          },
+          "tenders": {
+            "$ref": "#/components/schemas/TendersResponse",
+            "description": "What each tender applied to them, change and tips apart."
+          },
+          "voided_bill_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many paid bills were voided at the drawer's till (ADR-0184).",
+            "minimum": 0
+          },
+          "voided_cash_amount": {
+            "$ref": "#/components/schemas/Money",
+            "description": "The cash those voids handed back."
           }
         }
       }

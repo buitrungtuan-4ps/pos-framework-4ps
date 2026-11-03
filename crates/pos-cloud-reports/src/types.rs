@@ -107,6 +107,14 @@ pub struct DailyRevenue {
     /// `#[serde(default)]`, so a day stored before it loads with none.
     #[serde(default, skip_serializing_if = "VoidedAfterPayment::is_none")]
     pub voided_after_payment: VoidedAfterPayment,
+    /// What each tender captured on the day, keyed by its `PAYMENT_METHOD_*` token, minor units:
+    /// each captured payment's amount applied to its bill, change and tips apart, on the day it was
+    /// captured, a bill later voided after payment included
+    /// ([ADR-0187](../../../docs/adr/0187-a-shift-is-handed-over-at-the-till-and-read-there.md),
+    /// the X's tender split). Left out while there was none, and `#[serde(default)]`, so a day
+    /// stored before it loads with none and gains it from the rollup's cursor forward.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub by_tender: BTreeMap<String, i64>,
 }
 
 /// The bills voided after payment on one trading day (part of [`DailyRevenue`]).

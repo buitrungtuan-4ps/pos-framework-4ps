@@ -6,6 +6,7 @@
 mod bills;
 mod orders;
 mod shifts;
+mod x_read;
 
 pub use bills::{
     BillCheckView, BillView, BuyerDetails, MAX_SETTLED_LISTED, PreBill, ReceiptCopy, ReceiptLine,
@@ -19,3 +20,4 @@ pub use shifts::{
     CashMovement, ClosedDrawers, CombinedReport, DrawerFigures, DrawerView, DrawersView,
     HandoverSlip, ShiftHeader, ShiftReport, ShiftView, TillScope,
 };
+pub use x_read::{ShiftX, StoreX, TenderTotals, XFigures};

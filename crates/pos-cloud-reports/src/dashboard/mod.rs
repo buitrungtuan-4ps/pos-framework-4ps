@@ -14,6 +14,7 @@ pub mod handovers;
 pub mod mix;
 pub mod projection;
 pub mod rollup;
+pub mod tenders;
 pub mod voids;
 
 pub use projection::{

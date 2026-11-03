@@ -996,3 +996,75 @@ async fn a_handover_names_the_shift_just_closed_and_prints_its_slip() {
     let plain = get(&tills, &tills.counter, "/api/shifts/current").await;
     assert!(plain.get("handover_slip_print").is_none(), "{plain}");
 }
+
+#[tokio::test]
+async fn an_x_reads_the_drawers_without_closing_them_and_prints_as_no_close() {
+    // ADR-0187 decision 4: the store's X across its open drawers, a shift's, its print, and a
+    // handover slip printed again (decision 3); reading changes nothing.
+    let tills = drawers_app(false).await;
+    let bar = open_over(&tills, &tills.bar).await;
+    let (status, _, settled) = settle_over(&tills, &tills.bar, 61, "PAYMENT_METHOD_CASH").await;
+    assert_eq!(status, StatusCode::OK, "{settled}");
+
+    let store = get(&tills, &tills.bar, "/api/shifts:x").await;
+    assert_eq!(store["all_closed"], false, "{store}");
+    assert_eq!(store["shifts"][0]["shift_id"], bar.as_str());
+    let figures = &store["shifts"][0]["figures"];
+    assert_eq!(figures["bill_count"], 1, "{store}");
+    assert_eq!(figures["tenders"]["cash"], figures["sales_amount"]);
+    let sales = figures["sales_amount"]["amount_minor"]
+        .as_i64()
+        .unwrap_or_default();
+    assert_eq!(
+        figures["expected_amount"],
+        json!(vnd(500_000 + sales)),
+        "a holder of reports.shift.read_x sees what the drawer should hold"
+    );
+    let x = get(&tills, &tills.bar, &format!("/api/shifts/{bar}/x")).await;
+    assert_eq!(
+        x["figures"], *figures,
+        "a shift's X is the store's row, read again unchanged"
+    );
+
+    let (status, _, printed) = post(&tills, &tills.bar, "/api/shifts:print_x", json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{printed}");
+    assert_eq!(printed["x_print"], "PRINTED");
+    assert!(tills.written.last_says(BAR_DRAWER, "X - NOT A CLOSE"));
+
+    // The X closed nothing: the count and the close go on, and then the day reads all closed.
+    count_at(&tills, &tills.bar, &bar, 500_000 + sales).await;
+    let close = format!("/api/shifts/{bar}/close");
+    let (status, _, closed) = post(&tills, &tills.bar, &close, json!({})).await;
+    assert_eq!(
+        (status, &closed["variance"]),
+        (StatusCode::OK, &json!(vnd(0)))
+    );
+    let day = get(&tills, &tills.bar, "/api/shifts:x").await;
+    assert_eq!(day["all_closed"], true, "{day}");
+
+    // The slip of a handover, printed again from the drawer list; none for a plain opening.
+    let taken = json!({ "opening_float": vnd(500_000 + sales), "handed_over_from_shift_id": bar });
+    let (status, _, opened) = post(&tills, &tills.bar, "/api/shifts", taken).await;
+    assert_eq!(status, StatusCode::OK, "{opened}");
+    let next = opened["shift_id"].as_str().unwrap_or_default().to_owned();
+    let reprint = format!("/api/shifts/{next}/handover-slip/print");
+    let (status, _, again) = post(&tills, &tills.bar, &reprint, json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["handover_slip_print"], "PRINTED");
+    assert!(tills.written.last_says(BAR_DRAWER, "SHIFT HANDOVER"));
+    let plain = format!("/api/shifts/{bar}/handover-slip/print");
+    let (status, reason, _) = post(&tills, &tills.bar, &plain, json!({})).await;
+    assert_eq!(
+        (status, reason.as_deref()),
+        (StatusCode::CONFLICT, Some("NOTHING_TO_PRINT"))
+    );
+}
+
+#[test]
+fn a_person_who_sees_no_takings_reads_no_x() {
+    // The cashier holds neither reports.takings.view nor reports.shift.read_x; the manager holds
+    // the second. The route answers the first `403 PERMISSION_DENIED`, as the takings read does.
+    let edge = edge_over(FakeStore::new(), session(DrawerModel::PerTerminal, false));
+    assert!(!edge.reads_x(person(CASHIER, 0)));
+    assert!(edge.reads_x(person(MANAGER, 0)));
+}

@@ -206,7 +206,9 @@ fn staff() -> StaffRoster {
     let managing = shifts
         .with(Permission::ManageOtherTill)
         .with(Permission::OpenDrawerNoSale);
-    let overriding = managing.with(Permission::OverrideDrawerAssignment);
+    let overriding = managing
+        .with(Permission::OverrideDrawerAssignment)
+        .with(Permission::ReadShiftX);
     let mut staff = StaffRoster::new();
     for (code, seed, direct, approved, pin) in [
         ("CSH-1", CASHIER, shifts, PermissionSet::EMPTY, None),

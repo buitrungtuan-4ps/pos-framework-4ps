@@ -19,7 +19,6 @@
 "crates/pos-cloud/tests/cloud.rs" = 11654
 "crates/pos-core/src/billing.rs" = 3478
 "crates/pos-core/src/decision.rs" = 1774
-"crates/pos-core/src/permission.rs" = 1023
 "crates/pos-edge-app/src/auth.rs" = 1112
 "crates/pos-edge/src/config_client.rs" = 2904
 "crates/pos-edge/src/pairing.rs" = 1445

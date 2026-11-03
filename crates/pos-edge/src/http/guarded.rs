@@ -18,7 +18,7 @@ use pos_ports::subject_store::SubjectStore;
 use super::revalidated;
 use super::{
     bills, cash_movements, check, floor, integrations, kds, layout, lines, live, locale, menu,
-    printers, qr, reason_codes, reports, shifts, sync, tables,
+    printers, qr, reason_codes, reports, shift_x, shifts, sync, tables,
 };
 use crate::app::Edge;
 
@@ -222,6 +222,14 @@ where
             post(cash_movements::record_safe_drop::<S>),
         )
         .route("/api/drawer/open", post(cash_movements::open_drawer::<S>))
+        // The X, a shift's and the store's, which resets nothing (ADR-0187 decision 4).
+        .route("/api/shifts/{id}/x", get(shift_x::shift_x::<S>))
+        .route("/api/shifts:x", get(shift_x::store_x::<S>))
+        .route("/api/shifts:print_x", post(shift_x::print_x::<S>))
+        .route(
+            "/api/shifts/{id}/handover-slip/print",
+            post(shift_x::reprint_handover_slip::<S>),
+        )
 }
 
 /// The store's link, takings, integrations and printers.

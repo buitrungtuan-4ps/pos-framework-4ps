@@ -122,7 +122,7 @@ impl<S: EventStore> Edge<S> {
             terminal_device_id: till,
             // Absent where drawers are shared, which writes today's bytes too (decision 9).
             assigned_employee_id: owner,
-            denomination_counts: breakdown.denomination_counts,
+            denomination_counts: breakdown.denomination_counts.clone(),
             uncounted_amount: breakdown.uncounted_amount,
             // Absent for a float brought to the drawer, which writes today's bytes (ADR-0187).
             handed_over_from_shift_id: handed_over_from,
@@ -132,13 +132,15 @@ impl<S: EventStore> Edge<S> {
             .await?;
 
         let currency = self.session().currency;
-        let record = ShiftRecord::opened(
+        let mut record = ShiftRecord::opened(
             opening_float,
             currency,
             (till, owner),
             ctx.now,
             ctx.business_date,
         );
+        record.float_breakdown = breakdown;
+        record.handed_over_from = handed_over_from;
         let view = self.shift_view(shift_id, &record);
         self.lock_projection().open_shift_record(shift_id, record);
         Ok(view)

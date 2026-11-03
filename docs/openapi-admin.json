@@ -27935,6 +27935,17 @@
             },
             "description": "The tax the day's settled bills recorded by tax component, one entry per component name and\nrate, in order of name and then rate\n([ADR-0168](../../../docs/adr/0168-a-settled-bill-records-its-tax-components.md) decision 5).\n\nFolded from each `billing.bill.settled`'s tax lines' `components` alone, never from its fee\nlines' `tax_components`, because a fee's tax is already inside the tax lines as its share of\nits class's tax, and folding both would count it twice.\n\nSo on a day whose every bill recorded its components, these sum to [`tax`](Self::tax). A\nbill that recorded none adds to `tax` alone: one settled before its edge recorded them, one\ntaxed at rates with no components, as every Vietnamese and Japanese bill is, and one whose\nnames are not tokens, which reads as not split. There is no entry for that difference: a\nbucket for it would read as a component no bill named, so the gap is left as the gap between\nthe two figures, as it is for [`by_fee`](Self::by_fee).\n\nBounded by the tenant's tax table, not by the store's trade: one entry per component name and\nrate a row of the table in force named that day.\n\nLeft out when empty, so a day with none serialises byte for byte as before this field, and\n`#[serde(default)]`, so a day stored before it loads with none and gains them from the\nrollup's cursor forward. Resetting the rollup re-folds every settled bill on the log into it."
           },
+          "by_tender": {
+            "type": "object",
+            "description": "What each tender captured on the day, keyed by its `PAYMENT_METHOD_*` token, minor units:\neach captured payment's amount applied to its bill, change and tips apart, on the day it was\ncaptured, a bill later voided after payment included\n([ADR-0187](../../../docs/adr/0187-a-shift-is-handed-over-at-the-till-and-read-there.md),\nthe X's tender split). Left out while there was none, and `#[serde(default)]`, so a day\nstored before it loads with none and gains it from the rollup's cursor forward.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "currency_code": {
             "type": "string",
             "description": "ISO 4217 code of the store's currency, or empty until the first settled bill sets it."
