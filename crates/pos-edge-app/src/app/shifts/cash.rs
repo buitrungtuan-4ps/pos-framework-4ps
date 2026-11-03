@@ -83,26 +83,29 @@ impl<S: EventStore> Edge<S> {
     /// [ADR-0186](../../../../../docs/adr/0186-a-drawer-is-counted-by-denomination.md) decision 5).
     ///
     /// Permitted and refused as a paid out is, a counted shift included, and it lowers what the
-    /// close expects as a paid out does; reports keep it apart from expenses. It asks no reason yet:
-    /// the drop's own reasons follow with their action. The breakdown, where given, adds up to the
-    /// amount with nothing left uncounted.
+    /// close expects as a paid out does; reports keep it apart from expenses. The reason is
+    /// optional and, where given, one the store holds for a drop (`REASON_ACTION_CASH_DROPPED`,
+    /// ADR-0186 amendment). The breakdown, where given, adds up to the amount with nothing left
+    /// uncounted.
     ///
     /// # Errors
     ///
-    /// [`AppError::CountDoesNotAddUp`] for a breakdown that does not, and otherwise as
-    /// [`Self::record_cash_movement_at`].
+    /// [`AppError::CountDoesNotAddUp`] for a breakdown that does not,
+    /// [`AppError::CashReasonNotValid`] for a reason the store does not hold for a drop, and
+    /// otherwise as [`Self::record_cash_movement_at`].
     pub async fn record_safe_drop_at(
         &self,
         actor: Actor,
         scope: TillScope,
         shift_id: ShiftId,
         (amount, breakdown): (Money, CountBreakdown),
+        reason_code_id: Option<ReasonCodeId>,
         approval: Option<&Approval>,
     ) -> Result<ShiftView, AppError> {
         if breakdown.uncounted_amount.is_some() || !breakdown.adds_up_to(amount) {
             return Err(AppError::CountDoesNotAddUp);
         }
-        let act = (CashMovement::Dropped, amount, None, breakdown);
+        let act = (CashMovement::Dropped, amount, reason_code_id, breakdown);
         self.move_cash(actor, scope, shift_id, act, approval).await
     }
 
@@ -165,10 +168,11 @@ impl<S: EventStore> Edge<S> {
                 };
                 self.commit_approved(&ctx, &paid, shift, &step_ups).await?;
             }
-            (CashMovement::Dropped, _) => {
+            (CashMovement::Dropped, reason_code_id) => {
                 let dropped = CashDrawerDropped {
                     amount,
                     terminal_device_id: till,
+                    reason_code_id,
                     denomination_counts: breakdown.denomination_counts,
                 };
                 self.commit_approved(&ctx, &dropped, shift, &step_ups)

@@ -6,12 +6,12 @@
 //! a refund, an out-of-sale drawer opening, and the seven more the event catalogue names below.
 //!
 //! `docs/pos-spec.md` §11 **Fraud controls**, item 2, requires *"mandatory reasons from a
-//! cloud-managed list"* for six actions. Thirteen event fields in [`crate::events`] carry a
-//! [`ReasonCodeId`] — the spec's six plus seven the event catalogue adds
+//! cloud-managed list"* for six actions. Fourteen event fields in [`crate::events`] carry a
+//! [`ReasonCodeId`] — the spec's six plus eight the event catalogue adds
 //! (`sales.order.rejected_by_staff`, `cash.drawer.paid_in`, `cash.drawer.paid_out`,
 //! `inventory.stock.adjusted`, `inventory.stock.wasted`, `billing.fee.waived`,
-//! `cash.shift.closed`) — and until this node existed, every one of them named a list nothing
-//! produced. [`ReasonAction`] therefore has a variant for each of the thirteen, not only the spec's
+//! `cash.shift.closed`, `cash.drawer.dropped`) — and until this node existed, every one of them
+//! named a list nothing produced. [`ReasonAction`] therefore has a variant for each of the fourteen, not only the spec's
 //! six: an operator who cannot author a reason for a cash paid-in cannot record one, and the field
 //! on that event would stay unfillable.
 //!
@@ -102,20 +102,29 @@ wire_enum! {
     /// `cash.shift.closed` ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)
     /// decision 12).
     CashVariance = "CASH_VARIANCE",
+    /// Surplus cash taken from the drawer to the safe — `cash.drawer.dropped`
+    /// ([ADR-0186](../../../docs/adr/0186-a-drawer-is-counted-by-denomination.md) amendment). The
+    /// reason is optional, and comes from this list, never the paid-out one.
+    CashDropped = "CASH_DROPPED",
 }
 
 impl ReasonAction {
     /// Whether a list that offers no reason for this action stops it being done, as an empty
-    /// picker stops every action but one.
+    /// picker stops every action but two.
     ///
     /// A drawer closed over or short ([`Self::CashVariance`]) closes all the same where the store's
     /// list offers no reason for it, and records none
     /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 12), so an
-    /// uncovered variance blocks nothing and nothing should say it does. `Unspecified` is no act
+    /// uncovered variance blocks nothing and nothing should say it does. A drop to the safe
+    /// ([`Self::CashDropped`]) asks its reason only where one is given (ADR-0186 amendment), so an
+    /// uncovered drop blocks nothing either. `Unspecified` is no act
     /// at all.
     #[must_use]
     pub const fn blocks_when_uncovered(self) -> bool {
-        !matches!(self, Self::Unspecified | Self::CashVariance)
+        !matches!(
+            self,
+            Self::Unspecified | Self::CashVariance | Self::CashDropped
+        )
     }
 }
 
@@ -281,6 +290,37 @@ const fn framework_id(index: u128) -> ReasonCodeId {
     ReasonCodeId::new(Ulid::from_u128(index))
 }
 
+/// The framework's reasons for a drop to the safe and for spending from the drawer
+/// ([ADR-0186](../../../docs/adr/0186-a-drawer-is-counted-by-denomination.md) amendment), part of
+/// [`PublishedReasonCodes::framework_default`]. A staff advance names no person; who received it is
+/// not recorded.
+fn cash_drawer_defaults() -> [PublishedReasonCode; 3] {
+    let vi = |text: &str| BTreeMap::from([("vi".to_owned(), DisplayName::new(text))]);
+    [
+        PublishedReasonCode::new(
+            framework_id(10),
+            ReasonCode::new("SAFE_DROP"),
+            DisplayName::new("Dropped to safe"),
+            vec![ReasonAction::CashDropped],
+        )
+        .with_name_translations(vi("Nộp két")),
+        PublishedReasonCode::new(
+            framework_id(11),
+            ReasonCode::new("PURCHASE"),
+            DisplayName::new("Small purchase"),
+            vec![ReasonAction::CashPaidOut],
+        )
+        .with_name_translations(vi("Mua hàng")),
+        PublishedReasonCode::new(
+            framework_id(12),
+            ReasonCode::new("STAFF_ADVANCE"),
+            DisplayName::new("Advance to staff"),
+            vec![ReasonAction::CashPaidOut],
+        )
+        .with_name_translations(vi("Tạm ứng")),
+    ]
+}
+
 impl PublishedReasonCodes {
     /// An empty node.
     ///
@@ -318,79 +358,84 @@ impl PublishedReasonCodes {
 
         let vi = |text: &str| BTreeMap::from([("vi".to_owned(), DisplayName::new(text))]);
 
-        Self::from_parts(vec![
-            PublishedReasonCode::new(
-                framework_id(1),
-                ReasonCode::new("WASTE"),
-                DisplayName::new("Waste or spoilage"),
-                vec![VoidLine, StockWaste],
-            )
-            .with_name_translations(vi("Hàng hỏng hoặc bỏ đi")),
-            PublishedReasonCode::new(
-                framework_id(2),
-                ReasonCode::new("WRONG_ITEM"),
-                DisplayName::new("Wrong item"),
-                vec![VoidLine, VoidBill, RejectOrder, StockAdjustment],
-            )
-            .with_name_translations(vi("Sai món")),
-            PublishedReasonCode::new(
-                framework_id(3),
-                ReasonCode::new("CUSTOMER_CHANGED_MIND"),
-                DisplayName::new("Customer changed their mind"),
-                vec![VoidLine, VoidBill, Refund, RejectOrder],
-            )
-            .with_name_translations(vi("Khách đổi ý")),
-            PublishedReasonCode::new(
-                framework_id(4),
-                ReasonCode::new("STAFF_ERROR"),
-                DisplayName::new("Staff error"),
-                vec![
-                    VoidLine,
-                    VoidBill,
-                    Refund,
-                    Discount,
-                    StockAdjustment,
-                    WaiveFee,
-                    CashVariance,
-                ],
-            )
-            .with_name_translations(vi("Nhân viên nhập sai")),
-            PublishedReasonCode::new(
-                framework_id(5),
-                ReasonCode::new("SERVICE_RECOVERY"),
-                DisplayName::new("Putting it right for a guest"),
-                vec![Discount, Comp, Refund, WaiveFee],
-            )
-            .with_name_translations(vi("Bù cho khách")),
-            PublishedReasonCode::new(
-                framework_id(6),
-                ReasonCode::new("OUT_OF_STOCK"),
-                DisplayName::new("Out of stock"),
-                vec![VoidLine, RejectOrder, StockWaste],
-            )
-            .with_name_translations(vi("Hết nguyên liệu")),
-            PublishedReasonCode::new(
-                framework_id(7),
-                ReasonCode::new("MAKING_CHANGE"),
-                DisplayName::new("Making change"),
-                vec![DrawerOpen, CashPaidIn, CashPaidOut],
-            )
-            .with_name_translations(vi("Đổi tiền lẻ")),
-            PublishedReasonCode::new(
-                framework_id(8),
-                ReasonCode::new("TEST_TRANSACTION"),
-                DisplayName::new("Test transaction"),
-                vec![VoidLine, VoidBill],
-            )
-            .with_name_translations(vi("Giao dịch thử")),
-            PublishedReasonCode::new(
-                framework_id(9),
-                ReasonCode::new("COUNT_DIFFERENCE"),
-                DisplayName::new("Counting difference"),
-                vec![CashVariance],
-            )
-            .with_name_translations(vi("Chênh lệch khi đếm")),
-        ])
+        Self::from_parts(
+            vec![
+                PublishedReasonCode::new(
+                    framework_id(1),
+                    ReasonCode::new("WASTE"),
+                    DisplayName::new("Waste or spoilage"),
+                    vec![VoidLine, StockWaste],
+                )
+                .with_name_translations(vi("Hàng hỏng hoặc bỏ đi")),
+                PublishedReasonCode::new(
+                    framework_id(2),
+                    ReasonCode::new("WRONG_ITEM"),
+                    DisplayName::new("Wrong item"),
+                    vec![VoidLine, VoidBill, RejectOrder, StockAdjustment],
+                )
+                .with_name_translations(vi("Sai món")),
+                PublishedReasonCode::new(
+                    framework_id(3),
+                    ReasonCode::new("CUSTOMER_CHANGED_MIND"),
+                    DisplayName::new("Customer changed their mind"),
+                    vec![VoidLine, VoidBill, Refund, RejectOrder],
+                )
+                .with_name_translations(vi("Khách đổi ý")),
+                PublishedReasonCode::new(
+                    framework_id(4),
+                    ReasonCode::new("STAFF_ERROR"),
+                    DisplayName::new("Staff error"),
+                    vec![
+                        VoidLine,
+                        VoidBill,
+                        Refund,
+                        Discount,
+                        StockAdjustment,
+                        WaiveFee,
+                        CashVariance,
+                    ],
+                )
+                .with_name_translations(vi("Nhân viên nhập sai")),
+                PublishedReasonCode::new(
+                    framework_id(5),
+                    ReasonCode::new("SERVICE_RECOVERY"),
+                    DisplayName::new("Putting it right for a guest"),
+                    vec![Discount, Comp, Refund, WaiveFee],
+                )
+                .with_name_translations(vi("Bù cho khách")),
+                PublishedReasonCode::new(
+                    framework_id(6),
+                    ReasonCode::new("OUT_OF_STOCK"),
+                    DisplayName::new("Out of stock"),
+                    vec![VoidLine, RejectOrder, StockWaste],
+                )
+                .with_name_translations(vi("Hết nguyên liệu")),
+                PublishedReasonCode::new(
+                    framework_id(7),
+                    ReasonCode::new("MAKING_CHANGE"),
+                    DisplayName::new("Making change"),
+                    vec![DrawerOpen, CashPaidIn, CashPaidOut],
+                )
+                .with_name_translations(vi("Đổi tiền lẻ")),
+                PublishedReasonCode::new(
+                    framework_id(8),
+                    ReasonCode::new("TEST_TRANSACTION"),
+                    DisplayName::new("Test transaction"),
+                    vec![VoidLine, VoidBill],
+                )
+                .with_name_translations(vi("Giao dịch thử")),
+                PublishedReasonCode::new(
+                    framework_id(9),
+                    ReasonCode::new("COUNT_DIFFERENCE"),
+                    DisplayName::new("Counting difference"),
+                    vec![CashVariance],
+                )
+                .with_name_translations(vi("Chênh lệch khi đếm")),
+            ]
+            .into_iter()
+            .chain(cash_drawer_defaults())
+            .collect(),
+        )
     }
 
     /// Every entry, in the order the node lists them — including retired ones, so a historic event
@@ -452,9 +497,9 @@ mod tests {
 
     #[test]
     fn there_is_one_action_per_event_field_that_demands_a_reason() {
-        // The reason this enum has thirteen variants and not the specification's six. The
+        // The reason this enum has fourteen variants and not the specification's six. The
         // catalogue is the authority on which actions need a reason, and it currently names
-        // thirteen; a fourteenth event that declares a `reason_code_id` fails here until
+        // fourteen; a fifteenth event that declares a `reason_code_id` fails here until
         // `ReasonAction` and the framework default set grow to cover it, rather than shipping a
         // field the console cannot author a value for.
         let demanded = crate::snapshot::render()
@@ -506,9 +551,10 @@ mod tests {
     }
 
     #[test]
-    fn only_a_variance_goes_on_without_a_reason_to_cite() {
+    fn only_a_variance_and_a_drop_go_on_without_a_reason_to_cite() {
         // ADR-0167 decision 12: a store whose list offers no reason for a variance still closes,
-        // so an uncovered variance is no gap. Every other action stops with an empty picker.
+        // so an uncovered variance is no gap; a drop's reason is optional (ADR-0186 amendment).
+        // Every other action stops with an empty picker.
         let blocking_nothing: Vec<ReasonAction> = ReasonAction::ALL
             .iter()
             .copied()
@@ -516,7 +562,11 @@ mod tests {
             .collect();
         assert_eq!(
             blocking_nothing,
-            [ReasonAction::Unspecified, ReasonAction::CashVariance]
+            [
+                ReasonAction::Unspecified,
+                ReasonAction::CashVariance,
+                ReasonAction::CashDropped
+            ]
         );
     }
 

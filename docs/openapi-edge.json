@@ -3262,7 +3262,7 @@
           }
         ],
         "requestBody": {
-          "description": "`amount_minor`, greater than zero, with optional `denomination_counts`, which must add up to the amount, and `approver_code` and `approver_pin` for a drawer assigned to somebody else. Both are secrets and are never logged (ADR-0186)",
+          "description": "`amount_minor`, greater than zero, with optional `reason_code_id` from the store's reasons for a drop and `denomination_counts`, which must add up to the amount, and `approver_code` and `approver_pin` for a drawer assigned to somebody else. Both are secrets and are never logged (ADR-0186)",
           "content": {
             "application/json": {
               "schema": {
@@ -4908,7 +4908,7 @@
       },
       "DropRequest": {
         "type": "object",
-        "description": "Surplus cash taken from the drawer to the safe (ADR-0186 decision 5): how much, in minor units,\noptionally note by note, and the approver for a drawer assigned to somebody else.",
+        "description": "Surplus cash taken from the drawer to the safe (ADR-0186 decision 5): how much, in minor units,\noptionally why and note by note, and the approver for a drawer assigned to somebody else.",
         "required": [
           "amount_minor"
         ],
@@ -4935,6 +4935,17 @@
               "$ref": "#/components/schemas/DenominationCount"
             },
             "description": "The drop note by note, adding up to `amount_minor`."
+          },
+          "reason_code_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ReasonCodeId",
+                "description": "Why, from the store's reasons for a drop (`REASON_ACTION_CASH_DROPPED`)."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },

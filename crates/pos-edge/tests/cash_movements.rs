@@ -781,13 +781,13 @@ fn a_drop_to_the_safe_lowers_the_expectation_apart_from_the_paid_out() {
         let here = TillScope::default();
         let short = (vnd(600_000), notes(&[(500_000, 1)]));
         assert!(matches!(
-            edge.record_safe_drop_at(cashier(), here, shift, short, None)
+            edge.record_safe_drop_at(cashier(), here, shift, short, None, None)
                 .await,
             Err(AppError::CountDoesNotAddUp)
         ));
         let drop = (vnd(600_000), notes(&[(500_000, 1), (100_000, 1)]));
         let dropped = edge
-            .record_safe_drop_at(cashier(), here, shift, drop, None)
+            .record_safe_drop_at(cashier(), here, shift, drop, None, None)
             .await
             .expect("drops to the safe");
         assert_eq!((dropped.dropped, dropped.paid_out), (vnd(600_000), vnd(0)));
@@ -813,7 +813,7 @@ fn a_drop_to_the_safe_lowers_the_expectation_apart_from_the_paid_out() {
         let again = (vnd(10_000), CountBreakdown::default());
         assert!(matches!(
             restarted
-                .record_safe_drop_at(cashier(), here, shift, again, None)
+                .record_safe_drop_at(cashier(), here, shift, again, None, None)
                 .await,
             Err(AppError::ShiftNotOpen)
         ));
@@ -824,5 +824,54 @@ fn a_drop_to_the_safe_lowers_the_expectation_apart_from_the_paid_out() {
         assert_eq!(closed.expected_amount, Some(vnd(65_000)));
         let report = closed.report.expect("the close carries its report");
         assert_eq!((report.dropped, report.paid_out), (vnd(600_000), vnd(0)));
+    });
+}
+
+#[test]
+fn a_drop_cites_a_reason_from_its_own_list_and_never_a_paid_out_s() {
+    // ADR-0186 amendment: `SAFE_DROP` is the framework's reason for a drop; `PURCHASE` and
+    // `STAFF_ADVANCE` are for a paid out, and a drop citing one is refused.
+    use pos_core::cash_count::CountBreakdown;
+    use pos_proto::events::CashDrawerDropped;
+    run_ready(async {
+        let store = FakeStore::new();
+        let mut defaults = session();
+        defaults.reason_codes = PublishedReasonCodes::framework_default();
+        let id = |code: &str| {
+            defaults
+                .reason_codes
+                .codes()
+                .iter()
+                .find(|reason| reason.code.as_str() == code)
+                .map(|reason| reason.id)
+                .expect("a framework reason")
+        };
+        let (safe_drop, purchase) = (id("SAFE_DROP"), id("PURCHASE"));
+        assert!(
+            defaults
+                .reason_codes
+                .accepts(id("STAFF_ADVANCE"), ReasonAction::CashPaidOut)
+        );
+        let edge = edge_over(store.clone(), defaults);
+        let shift = open_with_float(&edge, 500_000).await;
+        let here = TillScope::default();
+        let drop = || (vnd(200_000), CountBreakdown::default());
+        assert!(matches!(
+            edge.record_safe_drop_at(cashier(), here, shift, drop(), Some(purchase), None)
+                .await,
+            Err(AppError::CashReasonNotValid)
+        ));
+        edge.record_safe_drop_at(cashier(), here, shift, drop(), Some(safe_drop), None)
+            .await
+            .expect("drops with its reason");
+        let event: CashDrawerDropped = logged(&store)
+            .await
+            .iter()
+            .find(|envelope| envelope.event_type.as_str() == "cash.drawer.dropped")
+            .expect("the drop is in the log")
+            .data
+            .decode()
+            .expect("decodes");
+        assert_eq!(event.reason_code_id, Some(safe_drop));
     });
 }

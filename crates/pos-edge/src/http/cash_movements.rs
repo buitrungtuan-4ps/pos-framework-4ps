@@ -42,11 +42,14 @@ pub(crate) struct MovementRequest {
 }
 
 /// Surplus cash taken from the drawer to the safe (ADR-0186 decision 5): how much, in minor units,
-/// optionally note by note, and the approver for a drawer assigned to somebody else.
+/// optionally why and note by note, and the approver for a drawer assigned to somebody else.
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct DropRequest {
     amount_minor: i64,
+    /// Why, from the store's reasons for a drop (`REASON_ACTION_CASH_DROPPED`).
+    #[serde(default)]
+    reason_code_id: Option<ReasonCodeId>,
     /// The drop note by note, adding up to `amount_minor`.
     #[serde(default)]
     denomination_counts: Vec<DenominationCount>,
@@ -204,8 +207,9 @@ where
         ("id" = String, Path, description = "The shift's id, a ULID"),
     ),
     request_body(
-        content = DropRequest, description = "`amount_minor`, greater than zero, with optional `denomination_counts`, \
-                       which must add up to the amount, and `approver_code` and `approver_pin` for a drawer assigned to \
+        content = DropRequest, description = "`amount_minor`, greater than zero, with optional `reason_code_id` from the \
+                       store's reasons for a drop and `denomination_counts`, which must add up to the \
+                       amount, and `approver_code` and `approver_pin` for a drawer assigned to \
                        somebody else. Both are secrets and are never logged (ADR-0186)",
         content_type = "application/json",
     ),
@@ -266,6 +270,7 @@ where
             scope,
             shift_id,
             (amount, breakdown),
+            request.reason_code_id,
             approval.as_ref(),
         )
         .await

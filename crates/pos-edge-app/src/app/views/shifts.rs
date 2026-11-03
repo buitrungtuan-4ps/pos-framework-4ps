@@ -294,8 +294,9 @@ impl CashMovement {
     pub(in crate::app) const fn reason_action(self) -> ReasonAction {
         match self {
             Self::PaidIn => ReasonAction::CashPaidIn,
-            // A drop asks no reason yet; its own action follows (ADR-0186 amendment).
-            Self::PaidOut | Self::Dropped => ReasonAction::CashPaidOut,
+            Self::PaidOut => ReasonAction::CashPaidOut,
+            // A drop's own list, never the paid-out one (ADR-0186 amendment).
+            Self::Dropped => ReasonAction::CashDropped,
         }
     }
 }
