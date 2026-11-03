@@ -26,6 +26,9 @@
 //! **A failed round is a warning, never a stop.** Nothing here can keep the shop from trading. The
 //! cloud may be unreachable, the disk may be too full for a snapshot, the archive may exceed the
 //! cap: each is logged and retried on the next tick, and the till never learns any of it happened.
+//! The one failure that is not a warning is a cloud configured without archive storage, which is
+//! said once per start at INFO
+//! ([ADR-0185](../../../docs/adr/0185-the-cloud-says-when-it-keeps-no-archives.md)).
 //!
 //! # How often
 //!
@@ -42,6 +45,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use pos_ports::cloud_sync::CloudSync;
+use pos_proto::ErrorStatus;
 use pos_proto::backup::PublishedBackup;
 use pos_proto::ids::StoreId;
 use tokio::time::Instant;
@@ -198,22 +202,12 @@ where
         self.say_interval(in_force);
         let mut due = Instant::now() + SETTLE_BEFORE_FIRST_ARCHIVE;
         let mut shutdown = core::pin::pin!(shutdown);
+        let mut said_no_archives = false;
         loop {
             tokio::select! {
                 () = &mut shutdown => break,
                 () = tokio::time::sleep_until(due) => {
-                    match self.archive_once().await {
-                        Ok(bytes) => tracing::info!(
-                            store = %self.store,
-                            bytes,
-                            "shipped a sealed store archive"
-                        ),
-                        Err(error) => tracing::warn!(
-                            %error,
-                            store = %self.store,
-                            "this store was not archived this round; trying again next interval"
-                        ),
-                    }
+                    report_round(self.store, self.archive_once().await, &mut said_no_archives);
                     // Read as the next archive is scheduled, so a published change applies from it.
                     let now_in_force = self.interval_in_force();
                     if now_in_force != in_force {
@@ -260,6 +254,37 @@ where
             .await
             .map_err(BackupError::Cloud)?;
         Ok(size)
+    }
+}
+
+/// Logs how a round ended.
+///
+/// A cloud configured without archive storage refuses the key as `FailedPrecondition`
+/// ([ADR-0185](../../../docs/adr/0185-the-cloud-says-when-it-keeps-no-archives.md)). That is a
+/// configuration the operator chose, not a fault, so it is said once per start at INFO and then
+/// only at DEBUG; the loop keeps asking, so a cloud that gains archive storage starts receiving
+/// archives without a restart. Every other failed round is a WARN, every round.
+fn report_round(store: StoreId, outcome: Result<usize, BackupError>, said_no_archives: &mut bool) {
+    match outcome {
+        Ok(bytes) => tracing::info!(store = %store, bytes, "shipped a sealed store archive"),
+        Err(BackupError::Cloud(error)) if error.status() == ErrorStatus::FailedPrecondition => {
+            if *said_no_archives {
+                tracing::debug!(%error, store = %store, "this store was not archived this round");
+            } else {
+                *said_no_archives = true;
+                tracing::info!(
+                    %error,
+                    store = %store,
+                    "this store is not archived: the cloud keeps no store archives; asking again \
+                     each interval"
+                );
+            }
+        }
+        Err(error) => tracing::warn!(
+            %error,
+            store = %store,
+            "this store was not archived this round; trying again next interval"
+        ),
     }
 }
 
@@ -323,10 +348,13 @@ fn seal_snapshot(
 
 #[cfg(test)]
 mod tests {
-    use super::{BackupClient, BackupSettingsSource, next_due, snapshot_path};
+    use super::{
+        BackupClient, BackupError, BackupSettingsSource, next_due, report_round, snapshot_path,
+    };
     use crate::config::ValueSource;
     use core::time::Duration;
     use pos_fakes::FakeCloudSync;
+    use pos_ports::{PortError, PortName};
     use pos_proto::backup::PublishedBackup;
     use pos_proto::ids::StoreId;
     use pos_proto::ulid::Ulid;
@@ -493,5 +521,77 @@ mod tests {
             PathBuf::from("store.sqlite.snapshot"),
             "a relative store path stays relative to the service unit's working directory"
         );
+    }
+
+    /// A cloud configured without archive storage is said once per start, at INFO, and never
+    /// warned about (ADR-0185); a cloud that could not be reached is still a WARN every round.
+    #[test]
+    fn a_cloud_that_keeps_no_archives_is_said_once_and_an_unreachable_one_warned_each_round() {
+        #[derive(Clone, Default)]
+        struct Said(Arc<Mutex<Vec<u8>>>);
+
+        impl std::io::Write for Said {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let said = Said::default();
+        let writer = said.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(move || writer.clone())
+            .finish();
+        let store = StoreId::new(Ulid::from_u128(0xB00));
+        let no_archives = || {
+            Err(BackupError::Cloud(PortError::failed_precondition(
+                PortName::CloudSync,
+                "the cloud keeps no store archives",
+            )))
+        };
+        let mut said_no_archives = false;
+        tracing::subscriber::with_default(subscriber, || {
+            report_round(store, no_archives(), &mut said_no_archives);
+            report_round(store, no_archives(), &mut said_no_archives);
+            report_round(store, no_archives(), &mut said_no_archives);
+        });
+        let text = String::from_utf8_lossy(&said.0.lock().expect("the log")).into_owned();
+        assert_eq!(
+            text.lines().count(),
+            1,
+            "said once, not every round: {text}"
+        );
+        assert!(text.contains(" INFO "), "{text}");
+        assert!(!text.contains(" WARN "), "{text}");
+
+        let said = Said::default();
+        let writer = said.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            for _ in 0..2 {
+                report_round(
+                    store,
+                    Err(BackupError::Cloud(PortError::unavailable(
+                        PortName::CloudSync,
+                        "the cloud could not be reached",
+                    ))),
+                    &mut said_no_archives,
+                );
+            }
+        });
+        let text = String::from_utf8_lossy(&said.0.lock().expect("the log")).into_owned();
+        assert_eq!(text.matches(" WARN ").count(), 2, "{text}");
     }
 }

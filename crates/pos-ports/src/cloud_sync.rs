@@ -169,10 +169,13 @@ pub trait CloudSync: Send + Sync {
     ///
     /// # Errors
     ///
-    /// [`PortError::unavailable`] if the cloud could not be reached, or if it is configured without
-    /// archive storage — in which case there is no key because there is nowhere to put an archive,
-    /// and the caller's right response is to skip this round rather than to seal with something it
-    /// invented. [`PortError::permission_denied`] if this store's key does not authorise the ask.
+    /// [`PortError::unavailable`] if the cloud could not be reached or would not answer now.
+    /// [`PortError::failed_precondition`] if the cloud answered and is configured without archive
+    /// storage ([ADR-0185](../../../docs/adr/0185-the-cloud-says-when-it-keeps-no-archives.md)):
+    /// there is no key because there is nowhere to put an archive. Either way the caller's right
+    /// response is to skip this round rather than to seal with something it invented; only the
+    /// first is a fault. [`PortError::permission_denied`] if this store's key does not authorise
+    /// the ask.
     fn archive_key(&self, store: StoreId)
     -> impl Future<Output = Result<String, PortError>> + Send;
 

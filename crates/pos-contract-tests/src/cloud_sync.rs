@@ -35,6 +35,7 @@ macro_rules! cloud_sync_suite {
                 a_well_formed_report_is_accepted,
                 a_report_with_no_self_test_is_accepted,
                 an_archive_key_is_the_same_one_every_time,
+                a_cloud_without_archives_refuses_the_key_as_a_failed_precondition,
                 a_sealed_archive_is_accepted,
                 bytes_that_are_not_an_archive_are_refused_as_invalid,
             ]
@@ -228,6 +229,32 @@ pub async fn an_archive_key_is_the_same_one_every_time<H: CloudSyncHarness>(
         &first,
         "asking twice returns the same key: a second key would orphan every archive sealed under \
          the first",
+    )
+}
+
+/// A cloud that keeps no store archives refuses the key as
+/// [`FailedPrecondition`](pos_proto::ErrorStatus::FailedPrecondition), not as `Unavailable`
+/// ([ADR-0185](../../../docs/adr/0185-the-cloud-says-when-it-keeps-no-archives.md)).
+///
+/// The status is the contract. The edge skips the round either way, but it warns each round about a
+/// cloud it could not reach and says once that a cloud keeps no archives: a configuration the
+/// operator chose is not a fault, and a warning that never clears hides the one that matters.
+///
+/// # Errors
+///
+/// [`CaseFailure`] if the obligation does not hold.
+pub async fn a_cloud_without_archives_refuses_the_key_as_a_failed_precondition<
+    H: CloudSyncHarness,
+>(
+    harness: &H,
+) -> Result<(), CaseFailure> {
+    let channel = harness.without_archives().await?;
+    let store = harness.sample_report().store;
+    obligation().require_error(
+        channel.archive_key(store).await,
+        ErrorStatus::FailedPrecondition,
+        "a cloud with no archive storage is reachable and keeps no archives, which is not a cloud \
+         that could not be reached",
     )
 }
 

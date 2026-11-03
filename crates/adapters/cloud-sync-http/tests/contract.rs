@@ -108,7 +108,11 @@ const fn nibble(value: u8) -> char {
 
 /// A stub cloud: it speaks the exact wire the real cloud does (ADR-0050, ADR-0054), so the adapter's
 /// request-shaping and status mapping are what the suite exercises.
-struct StubCloud;
+struct StubCloud {
+    /// Whether the archive-key route is mounted. The real cloud mounts it only with archive storage
+    /// configured, and answers `404` otherwise (ADR-0124, ADR-0185).
+    keeps_archives: bool,
+}
 
 impl HttpTransport for StubCloud {
     async fn post_json(&self, path: &str, body: Vec<u8>) -> Result<HttpResponse, TransportError> {
@@ -212,7 +216,10 @@ impl HttpTransport for StubCloud {
             // ADR-0124: a `POST` for a value that reads like a read, because the first call
             // *mints* the key. The stub answers the same shape the cloud does — a JSON object with
             // one 64-character `key` — so the adapter's length check is exercised for real.
-            path if path.starts_with("/sync/stores/") && path.ends_with("/archive-key") => {
+            path if self.keeps_archives
+                && path.starts_with("/sync/stores/")
+                && path.ends_with("/archive-key") =>
+            {
                 let payload = serde_json::json!({ "key": ARCHIVE_KEY });
                 HttpResponse {
                     status: 200,
@@ -280,7 +287,21 @@ impl CloudSyncHarness for HttpHarness {
 
     async fn fresh(&self) -> Setup<Self::Channel> {
         Ok(HttpCloudSync::new(
-            StubCloud,
+            StubCloud {
+                keeps_archives: true,
+            },
+            reporting_store(),
+            "x86_64-unknown-linux-gnu",
+        ))
+    }
+
+    async fn without_archives(&self) -> Setup<Self::Channel> {
+        // The route is not mounted, so the request falls through to the stub's `404`, as on the
+        // real cloud.
+        Ok(HttpCloudSync::new(
+            StubCloud {
+                keeps_archives: false,
+            },
             reporting_store(),
             "x86_64-unknown-linux-gnu",
         ))

@@ -239,6 +239,10 @@ impl CloudSyncHarness for CloudHarness {
         Ok(FakeCloudSync::new())
     }
 
+    async fn without_archives(&self) -> Setup<Self::Channel> {
+        Ok(FakeCloudSync::without_archives())
+    }
+
     fn valid_code(&self) -> String {
         FakeCloudSync::VALID_CODE.to_owned()
     }
