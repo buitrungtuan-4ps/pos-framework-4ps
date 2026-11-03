@@ -33,7 +33,22 @@ function chosen(): Locale | null {
   }
 }
 
-const [locale, setLocaleSignal] = createSignal<Locale>(chosen() ?? "en");
+// The store's own language, as this device last heard it (pilot run 2, N8). The till learns it from
+// `GET /api/locale`, which answers only a signed-in person, so without this every setup, pairing
+// and sign-in screen of a reload or a restart was English on a Vietnamese store. Its own key, so it
+// never passes for a choice the operator made; wrapped for the same reason as the choice is.
+const STORE = "pos.store_locale";
+
+function remembered(): Locale | null {
+  try {
+    const value = globalThis.localStorage?.getItem(STORE);
+    return LOCALES.find((candidate) => candidate === value) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+const [locale, setLocaleSignal] = createSignal<Locale>(chosen() ?? remembered() ?? "en");
 export { locale };
 
 function apply(next: Locale): void {
@@ -57,13 +72,22 @@ export function setLocale(next: Locale): void {
 // The store's own display language, as the default for a device whose operator has chosen none.
 // `tag` is the BCP 47 tag the store publishes (`vi`, `vi-VN`); a language the till has no catalogue
 // for leaves the current one. Never overrides a choice the operator made on this device.
+// The language is remembered for the screens before the next sign-in, whatever the operator chose.
 export function adoptStoreLanguage(tag: string | undefined): void {
-  if (tag === undefined || chosen() !== null) {
+  if (tag === undefined) {
     return;
   }
   const primary = tag.toLowerCase().split("-")[0];
   const match = LOCALES.find((candidate) => candidate === primary);
-  if (match !== undefined) {
+  if (match === undefined) {
+    return;
+  }
+  try {
+    globalThis.localStorage?.setItem(STORE, match);
+  } catch {
+    // Applied for this session; the screens before the next sign-in start in English.
+  }
+  if (chosen() === null) {
     apply(match);
   }
 }

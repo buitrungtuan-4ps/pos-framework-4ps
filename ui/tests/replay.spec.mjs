@@ -2382,6 +2382,36 @@ test("a bill larger than the largest note takes any amount handed over", async (
   }
 });
 
+// The store's language is read only after sign-in, so the screens before it used to be English on a
+// Vietnamese store after every reload (pilot run 2, N8). The till now remembers what the store said,
+// and a language the operator chose on the device still wins over it.
+test("a till remembers the store's language for the screens before sign-in", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await page.route("**/api/locale", async (route) => {
+      const response = await fetchWhole(route);
+      const body = await response.json();
+      await route.fulfill({ response, json: { ...body, display_language: "vi-VN" } });
+    });
+    await pair(page, edge);
+    await signIn(page, edge);
+    await expect(page.locator("html")).toHaveAttribute("lang", "vi");
+
+    await page.getByRole("button", { name: "Đăng xuất" }).click();
+    await expect(page).toHaveURL(/\/signin$/);
+    await page.reload();
+    await expect(page.locator("html")).toHaveAttribute("lang", "vi");
+    await expect(page.getByText("Nhập mã nhân viên và mã PIN để bắt đầu ca làm.")).toBeVisible();
+
+    await page.evaluate(() => localStorage.setItem("pos.locale", "en"));
+    await page.reload();
+    await expect(page.locator("html")).toHaveAttribute("lang", "en");
+    await expect(page.getByText("Enter your staff code and PIN to start your shift.")).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A bill split three ways settles with each guest's own tender, and the cash guest's change.
 //
 // The edge settles a bill in one step, with payments that add up to the total exactly, so the pay
