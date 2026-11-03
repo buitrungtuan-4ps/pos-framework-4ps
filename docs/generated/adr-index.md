@@ -15,6 +15,7 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 - [ADR-0197](../adr/0197-every-tap-paints-within-ten-milliseconds.md) Every tap paints within ten milliseconds
 - [ADR-0199](../adr/0199-a-function-is-signed-pure-webassembly-that-returns-a-decision.md) A function is signed, pure WebAssembly that returns a decision
 - [ADR-0200](../adr/0200-six-business-type-templates-ship-with-the-framework.md) Six business-type templates ship with the framework
+- [ADR-0203](../adr/0203-a-component-reads-its-own-data.md) A component reads its own data, and a package gives it only literals
 
 ## Citations of ADRs that do not exist
 
