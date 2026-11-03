@@ -16,6 +16,9 @@ export const PRECHECKED: Readonly<Partial<Record<ActionId, readonly string[]>>> 
   "billing.bill.settle": [WRITES_PENDING, "DRAWER_COUNTED", "PAYMENTS_DO_NOT_SUM_TO_TOTAL"],
   "billing.bill.void": [WRITES_PENDING, "APPROVAL_REQUIRED"],
   "billing.bill.void_settled": ["APPROVAL_REQUIRED"],
+<<<<<<< HEAD
   "billing.bill.discount": [WRITES_PENDING, "APPROVAL_REQUIRED", "REDUCTION_EXCEEDS_BILL"],
   "billing.fee.waive": [WRITES_PENDING, "APPROVAL_REQUIRED", "FEE_NOT_WAIVABLE"],
+=======
+>>>>>>> origin/main
 };

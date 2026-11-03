@@ -10,7 +10,10 @@ import { PendingSettle } from "../components/PendingSettle";
 import { RefusalPanel } from "../components/RefusalPanel";
 import { receiptLine } from "../state/settle-act";
 import { usePayActs } from "../state/pay-acts";
+<<<<<<< HEAD
 import { useWaiveAct, waiveRefusal } from "../state/reduction-acts";
+=======
+>>>>>>> origin/main
 import { DrawerOwner } from "../components/DrawerOwner";
 import { CheckRow } from "../components/ui";
 import { Keypad } from "../components/Keypad";
