@@ -242,7 +242,7 @@ use sync::{edge_config_sync, edge_events_hello, edge_heartbeat, edge_publish_eve
 use pos_cloud_config::route::registry_error_response;
 pub use settings::settings_router;
 pub(crate) use settings::{
-    __path_admin_apply_setting_presets, __path_admin_clear_setting,
+    __path_admin_apply_setting_presets, __path_admin_choose_package, __path_admin_clear_setting,
     __path_admin_effective_settings, __path_admin_list_settings, __path_admin_publish_settings,
     __path_admin_put_setting, __path_admin_settings_catalogue,
 };

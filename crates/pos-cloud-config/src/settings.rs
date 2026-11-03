@@ -44,7 +44,8 @@ use pos_proto::time::Timestamp;
 use pos_proto::wire_enum::Open;
 
 /// The schema of a setting's value: one of the shapes a [`SettingKind`] allows — a `CHOICE`'s
-/// token, an `INT`'s whole number or a `BOOL`'s `true` or `false` (ADR-0180 D-T3). A schema only;
+/// token, an `INT`'s whole number, a `BOOL`'s `true` or `false`, a `ULID`'s identifier or `null`, or
+/// a `ULID_LIST`'s identifiers (ADR-0180 D-T3, ADR-0189). A schema only;
 /// the values themselves stay `serde_json::Value`, and `setting_value_schema_tests` holds every
 /// register default to it.
 ///
@@ -54,7 +55,7 @@ pub struct SettingValueSchema;
 
 impl utoipa::PartialSchema for SettingValueSchema {
     fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
-        use utoipa::openapi::schema::{ObjectBuilder, OneOfBuilder, Type};
+        use utoipa::openapi::schema::{ArrayBuilder, ObjectBuilder, OneOfBuilder, Type};
         OneOfBuilder::new()
             .item(
                 ObjectBuilder::new()
@@ -70,6 +71,16 @@ impl utoipa::PartialSchema for SettingValueSchema {
                 ObjectBuilder::new()
                     .schema_type(Type::Boolean)
                     .description(Some("A `BOOL`")),
+            )
+            .item(
+                ObjectBuilder::new()
+                    .schema_type(Type::Null)
+                    .description(Some("A `ULID` setting's none")),
+            )
+            .item(
+                ArrayBuilder::new()
+                    .items(ObjectBuilder::new().schema_type(Type::String))
+                    .description(Some("A `ULID_LIST`'s identifiers")),
             )
             .description(Some("A setting's value, in the shape its kind gives it"))
             .into()
@@ -126,6 +137,29 @@ pub enum SettingRefusal {
         allowed: String,
         /// What is wrong with the value, which decides the reason the refusal names.
         refusal: ValueRefusal,
+    },
+    /// `package.chosen_version_id` is the store's own choice, written through its route, never as
+    /// a plain setting (ADR-0189 decision 2).
+    #[error("`{0}` is written with PUT /admin/stores/{{store_id}}/package/choice")]
+    WrittenThroughItsRoute(String),
+    /// A broader scope that reaches a store this value would reach locks the store's package, so
+    /// no narrower `package` value may loosen it (ADR-0189 decision 2).
+    #[error(
+        "`{setting_key}` cannot be set here: a broader scope locks the package of store {store_id}"
+    )]
+    LockedAbove {
+        /// The setting.
+        setting_key: String,
+        /// One store the lock holds.
+        store_id: String,
+    },
+    /// An identifier names no published version of the tenant's packages.
+    #[error("`{setting_key}` names {package_version_id}, which is not a published package version")]
+    UnknownVersion {
+        /// The setting.
+        setting_key: String,
+        /// The identifier.
+        package_version_id: String,
     },
     /// The value is written only with a recorded confirmation, and the write did not confirm its
     /// notice ([ADR-0169](../../../docs/adr/0169-a-setting-value-can-require-a-recorded-confirmation.md)
@@ -242,20 +276,10 @@ pub fn resolve_for_store(
     values: &[SettingValue],
     placement: &StorePlacement,
 ) -> Vec<ResolvedSetting> {
-    // How specific a value is to this store; `None` if it does not reach it.
-    let rank = |scope: SettingScope, scope_id: &str| -> Option<u8> {
-        match scope {
-            SettingScope::Store => (scope_id == placement.store_id).then_some(0),
-            SettingScope::StoreGroup => placement
-                .store_group_ids
-                .iter()
-                .any(|group| group == scope_id)
-                .then_some(1),
-            SettingScope::Brand => (placement.brand_id.as_deref() == Some(scope_id)).then_some(2),
-            SettingScope::Tenant => (scope_id == placement.tenant_id).then_some(3),
-            SettingScope::Unspecified => None,
-        }
-    };
+    let rank = |scope: SettingScope, scope_id: &str| rank_at(placement, scope, scope_id);
+    // A package lock at a broad scope holds every narrower `package` value back (ADR-0189
+    // decision 2).
+    let lock = crate::package_pin::broadest_lock(values, placement);
 
     let mut chosen: BTreeMap<String, (u8, &SettingValue, Setting)> = BTreeMap::new();
     for value in values {
@@ -263,6 +287,11 @@ pub fn resolve_for_store(
         let Some(rank) = rank(scope, &value.scope_id) else {
             continue;
         };
+        if crate::package_pin::is_package_key(&value.setting_key)
+            && lock.is_some_and(|locked_at| rank < locked_at)
+        {
+            continue;
+        }
         let Ok(setting) = validate(&value.setting_key, scope, &value.value) else {
             continue;
         };
@@ -293,6 +322,24 @@ pub fn resolve_for_store(
             scope_id: value.scope_id.clone(),
         })
         .collect()
+}
+
+/// How specific a value written at `scope` for `scope_id` is to the store at `placement`: 0 for the
+/// store, 1 for one of its store groups, 2 for its brand, 3 for its tenant, and `None` when the value
+/// does not reach it.
+#[must_use]
+pub fn rank_at(placement: &StorePlacement, scope: SettingScope, scope_id: &str) -> Option<u8> {
+    match scope {
+        SettingScope::Store => (scope_id == placement.store_id).then_some(0),
+        SettingScope::StoreGroup => placement
+            .store_group_ids
+            .iter()
+            .any(|group| group == scope_id)
+            .then_some(1),
+        SettingScope::Brand => (placement.brand_id.as_deref() == Some(scope_id)).then_some(2),
+        SettingScope::Tenant => (scope_id == placement.tenant_id).then_some(3),
+        SettingScope::Unspecified => None,
+    }
 }
 
 /// The settings nodes to write onto one store's Tenant layer, given what that layer holds now.
@@ -765,7 +812,7 @@ mod setting_value_schema_tests {
             .iter()
             .filter_map(|shape| shape["type"].as_str())
             .collect();
-        assert_eq!(shapes, ["string", "integer", "boolean"]);
+        assert_eq!(shapes, ["string", "integer", "boolean", "null", "array"]);
         for setting in pos_proto::settings::register() {
             let values = std::iter::once(setting.default_value()).chain(setting.preset_value());
             for value in values {
@@ -773,6 +820,8 @@ mod setting_value_schema_tests {
                     serde_json::Value::String(_) => "string",
                     serde_json::Value::Number(ref n) if n.is_i64() => "integer",
                     serde_json::Value::Bool(_) => "boolean",
+                    serde_json::Value::Null => "null",
+                    serde_json::Value::Array(_) => "array",
                     _ => "none",
                 };
                 assert!(

@@ -342,6 +342,10 @@ pub const NOT_ON_A_ROUTE: &[(Permission, &str)] = &[
         Permission::EditStoreConfig,
         "a store's configuration is authored in the console and published",
     ),
+    (
+        Permission::ChoosePackage,
+        "a store's package version is chosen in the console (ADR-0189)",
+    ),
     (Permission::ManageTenant, "cloud-only administration"),
     (Permission::ManageStaff, "cloud-only administration"),
 ];

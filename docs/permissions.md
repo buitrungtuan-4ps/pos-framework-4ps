@@ -39,5 +39,6 @@ Generated from `crates/pos-core/src/permission.rs`. Do not edit by hand — run 
 | `menu.item.edit` | MENU_AND_INVENTORY | MEDIUM | · | ✓ | ✓ | · | · | · | · |
 | `admin.device.manage` | STORE_ADMINISTRATION | HIGH | · | ✓ | ✓ | · | · | · | · |
 | `admin.config.edit` | STORE_ADMINISTRATION | MEDIUM | · | ✓ | ✓ | · | · | · | · |
+| `admin.package.choose` | STORE_ADMINISTRATION | MEDIUM | · | ✓ | ✓ | · | · | · | · |
 | `cloud.tenant.manage` | CLOUD_ADMINISTRATION | HIGH | · | ✓ | · | · | · | · | · |
 | `cloud.staff.manage` | CLOUD_ADMINISTRATION | HIGH | · | ✓ | · | · | · | · | · |

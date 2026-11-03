@@ -545,7 +545,7 @@ fn settings_routes(deps: &RouteDeps<'_>) -> Router {
         // same request. Reads are console.data.read; a write publishes, so console.config.publish.
         .merge(http::settings_router(
             &countries::registry(),
-            store.settings(),
+            pos_cloud_config::package_pin::WithPackages::new(store.settings(), store.packages()),
             store.registry(),
             store.store_groups(),
             store.config_trees(),

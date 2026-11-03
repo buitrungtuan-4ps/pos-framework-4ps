@@ -177,7 +177,10 @@ fn fees_and_settings_app() -> (axum::Router, FakeConfigTrees) {
         ))
         .merge(http::settings_router(
             &pos_cloud::countries::registry(),
-            FakeSettings::default(),
+            pos_cloud_config::package_pin::WithPackages::new(
+                FakeSettings::default(),
+                pos_cloud_config::packages::InMemoryPackages::new(),
+            ),
             registry,
             FakeStoreGroups::default(),
             config_trees.clone(),

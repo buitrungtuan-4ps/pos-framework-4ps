@@ -20000,7 +20000,7 @@
         "operationId": "admin_settings_catalogue",
         "responses": {
           "200": {
-            "description": "Every setting in the register: its key, node and field, its kind (SETTING_KIND_CHOICE, _INT or _BOOL) and what it takes — a choice's values, or a whole number's min, max and unit — its default and the value a new store is given (each as the node carries it), the scopes it may be written at, the first release that honours it, and any value it writes only with a recorded confirmation (confirm)",
+            "description": "Every setting in the register: its key, node and field, its kind (SETTING_KIND_CHOICE, _INT, _BOOL, _ULID or _ULID_LIST) and what it takes — a choice's values, or a whole number's min, max and unit — its default and the value a new store is given (each as the node carries it), the scopes it may be written at, the first release that honours it, and any value it writes only with a recorded confirmation (confirm)",
             "content": {
               "application/json": {
                 "schema": {
@@ -22820,6 +22820,115 @@
           }
         ],
         "x-permission": "console.devices.manage"
+      }
+    },
+    "/admin/stores/{store_id}/package/choice": {
+      "put": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "`PUT /admin/stores/{store_id}/package/choice`: the store's choice among the package versions it\nis allowed (ADR-0189 decision 2), written at the store and republished.",
+        "operationId": "admin_choose_package",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The tenant, and the version the store chooses, or null to clear its choice",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PackageChoiceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Written, and the store republished",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoresPublished_SettingPublishResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An id is not a ULID, or the version is not one the store is allowed (NOT_ALLOWED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no such store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The store's package is not in PACKAGE_MODE_CHOOSE (PACKAGE_NOT_CHOOSING)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The settings store, the registry, the store groups or the config tree is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/stores/{store_id}/permissions/readiness": {
@@ -30789,6 +30898,25 @@
         "type": "string",
         "description": "A `VendorAvailability` token: VENDOR_AVAILABILITY_UNSPECIFIED, VENDOR_AVAILABILITY_OPEN, VENDOR_AVAILABILITY_BUSY, VENDOR_AVAILABILITY_CLOSED, or one a newer build sent, which is kept as it arrived"
       },
+      "PackageChoiceRequest": {
+        "type": "object",
+        "description": "A `PUT /admin/stores/{store_id}/package/choice` body.",
+        "required": [
+          "tenant_id"
+        ],
+        "properties": {
+          "package_version_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The version the store runs from now, one of its allowed versions; `null` clears the choice,\nso the store runs its default version."
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
       "PackageContent": {
         "type": "object",
         "description": "One published package version, as it rides the store's document.",
@@ -33975,7 +34103,9 @@
           "SETTING_KIND_UNSPECIFIED",
           "SETTING_KIND_CHOICE",
           "SETTING_KIND_INT",
-          "SETTING_KIND_BOOL"
+          "SETTING_KIND_BOOL",
+          "SETTING_KIND_ULID",
+          "SETTING_KIND_ULID_LIST"
         ]
       },
       "SettingPublishOutcome": {
@@ -34020,6 +34150,17 @@
           {
             "type": "boolean",
             "description": "A `BOOL`"
+          },
+          {
+            "type": "null",
+            "description": "A `ULID` setting's none"
+          },
+          {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "A `ULID_LIST`'s identifiers"
           }
         ],
         "description": "A setting's value, in the shape its kind gives it"

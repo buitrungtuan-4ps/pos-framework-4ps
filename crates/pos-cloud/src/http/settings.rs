@@ -30,10 +30,12 @@ use crate::registry::RegistryStore;
 use crate::settings::SettingsStore;
 use crate::store_groups::StoreGroupStore;
 use pos_cloud_api::response::StoresPublished;
+use pos_cloud_config::package_pin::SettingsPackages;
 
 // `pub(super)`: the unit tests in `http.rs` and `settings_confirm.rs` reach the catalogue entry.
 pub(super) mod catalogue;
 mod effective;
+mod package_pin;
 mod presets;
 mod publish;
 mod values;
@@ -41,6 +43,7 @@ mod values;
 // The handlers the console's OpenAPI document names.
 pub(crate) use catalogue::{__path_admin_list_settings, __path_admin_settings_catalogue};
 pub(crate) use effective::__path_admin_effective_settings;
+pub(crate) use package_pin::__path_admin_choose_package;
 pub(crate) use presets::__path_admin_apply_setting_presets;
 pub(crate) use presets::as_node_value;
 pub(crate) use publish::__path_admin_publish_settings;
@@ -92,7 +95,7 @@ pub fn settings_router<St, Rg, Grp, Cfg, A, C>(
     audit: Arc<dyn AuditRecorder>,
 ) -> Router
 where
-    St: SettingsStore + Clone + Send + Sync + 'static,
+    St: SettingsStore + SettingsPackages + Clone + Send + Sync + 'static,
     Rg: RegistryStore + Clone + Send + Sync + 'static,
     Grp: StoreGroupStore + Clone + Send + Sync + 'static,
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
@@ -109,6 +112,12 @@ where
             get(admin_list_settings::<St, Rg, Grp, Cfg, A, C>)
                 .put(admin_put_setting::<St, Rg, Grp, Cfg, A, C>)
                 .delete(admin_clear_setting::<St, Rg, Grp, Cfg, A, C>),
+        )
+        // The store's choice among the package versions it is allowed (ADR-0189 decision 2): the
+        // one way `package.chosen_version_id` is written.
+        .route(
+            "/admin/stores/{store_id}/package/choice",
+            axum::routing::put(package_pin::admin_choose_package::<St, Rg, Grp, Cfg, A, C>),
         )
         .route(
             "/admin/settings/effective",
