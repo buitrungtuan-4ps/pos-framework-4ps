@@ -20,6 +20,9 @@
 /// Every fixed word a bill document or a shift report prints.
 #[derive(Debug, PartialEq, Eq)]
 pub struct PaperLabels {
+    /// The language tag the table is written in, as a translation map keys it: what a name the
+    /// store wrote in several languages, such as a void reason's, is printed in beside these labels.
+    pub language: &'static str,
     /// The heading of a check printed before payment.
     pub pre_bill: &'static str,
     /// The line under a pre-bill's total, so it is not taken for a receipt.
@@ -99,6 +102,7 @@ pub struct PaperLabels {
 
 /// English, and the fallback for every case the module documentation names.
 pub static ENGLISH: PaperLabels = PaperLabels {
+    language: "en",
     pre_bill: "PRE-BILL",
     not_a_receipt: "Not a receipt",
     copy: "COPY",
@@ -138,6 +142,7 @@ pub static ENGLISH: PaperLabels = PaperLabels {
 
 /// Vietnamese, in the words a Vietnamese receipt and cash-up sheet use.
 pub static VIETNAMESE: PaperLabels = PaperLabels {
+    language: "vi",
     pre_bill: "PHIẾU TẠM TÍNH",
     not_a_receipt: "Không phải hóa đơn thanh toán",
     copy: "BẢN SAO",

@@ -140,10 +140,7 @@ impl<S: EventStore> Edge<S> {
             print_void_slip: decision.effects.contains(&Effect::PrintVoidBillSlip),
             job_id,
             voided_time: ctx.now,
-            reason: session
-                .reason_codes
-                .find(reason_code_id)
-                .map(|reason| reason.display_name.clone()),
+            reason: session.reason_codes.find(reason_code_id).cloned(),
             till_name: self.till_name(scope.own),
         })
     }
