@@ -275,11 +275,13 @@ pub(crate) struct ModifierGroupResponse {
 }
 
 impl MenuItemResponse {
-    /// Prices one catalogue entry for `channel` against the store's rate table.
+    /// Prices one catalogue entry for `channel` against the store's rate table, with its name in
+    /// `language`, as a course's and a group's are resolved
+    /// ([ADR-0074](../../../../docs/adr/0074-localization-and-tax.md)).
     fn from_entry(
         entry: &MenuEntry,
         rates: &TaxRateTable,
-        channel: SalesChannel,
+        (channel, language): (SalesChannel, &str),
         sold_out: bool,
     ) -> Self {
         let tax_rate = rates
@@ -287,7 +289,7 @@ impl MenuItemResponse {
             .map(pos_proto::locale::TaxRate::as_ratio);
         Self {
             menu_item_id: entry.menu_item_id,
-            display_name: entry.display_name.clone(),
+            display_name: entry.localized_name(language).clone(),
             unit_price: entry.unit_price,
             tax_class_id: entry.tax_class_id,
             // An item whose class carries no rate cannot be quoted to a guest, so it is not
@@ -381,7 +383,7 @@ where
             MenuItemResponse::from_entry(
                 entry,
                 &session.tax_rates,
-                channel,
+                (channel, &language),
                 edge.item_sold_out(entry.menu_item_id),
             )
         })
@@ -559,7 +561,7 @@ mod tests {
         let rates =
             TaxRateTable::new().with(class(), SalesChannel::DineIn, TaxRate::from_percent(10));
         let priced =
-            MenuItemResponse::from_entry(&entry(true), &rates, SalesChannel::DineIn, false);
+            MenuItemResponse::from_entry(&entry(true), &rates, (SalesChannel::DineIn, ""), false);
         assert!(priced.available);
         assert!(
             priced.tax_rate.is_some(),
@@ -574,7 +576,7 @@ mod tests {
         let priced = MenuItemResponse::from_entry(
             &entry(true),
             &TaxRateTable::new(),
-            SalesChannel::DineIn,
+            (SalesChannel::DineIn, ""),
             false,
         );
         assert!(priced.tax_rate.is_none());
@@ -585,7 +587,7 @@ mod tests {
     fn a_rate_published_for_another_channel_does_not_price_this_one() {
         let rates = TaxRateTable::new().with(class(), SalesChannel::Qr, TaxRate::from_percent(10));
         let priced =
-            MenuItemResponse::from_entry(&entry(true), &rates, SalesChannel::DineIn, false);
+            MenuItemResponse::from_entry(&entry(true), &rates, (SalesChannel::DineIn, ""), false);
         assert!(priced.tax_rate.is_none());
         assert!(!priced.available);
     }
@@ -595,7 +597,7 @@ mod tests {
         let rates =
             TaxRateTable::new().with(class(), SalesChannel::DineIn, TaxRate::from_percent(10));
         let priced =
-            MenuItemResponse::from_entry(&entry(false), &rates, SalesChannel::DineIn, false);
+            MenuItemResponse::from_entry(&entry(false), &rates, (SalesChannel::DineIn, ""), false);
         assert!(priced.tax_rate.is_some(), "the rate is still reported");
         assert!(!priced.available, "an 86'd item is not sellable");
         assert!(
@@ -608,8 +610,33 @@ mod tests {
     fn an_item_staff_marked_sold_out_is_unavailable_and_says_why() {
         let rates =
             TaxRateTable::new().with(class(), SalesChannel::DineIn, TaxRate::from_percent(10));
-        let priced = MenuItemResponse::from_entry(&entry(true), &rates, SalesChannel::DineIn, true);
+        let priced =
+            MenuItemResponse::from_entry(&entry(true), &rates, (SalesChannel::DineIn, ""), true);
         assert!(!priced.available, "a sold-out item is not sellable");
         assert!(priced.sold_out, "and the till can offer to restore it");
+    }
+
+    #[test]
+    fn an_item_is_named_in_the_stores_language_as_its_course_and_group_are() {
+        // The till shows, and a line captures, the name this route sends: the store's language
+        // where the item has it, and its default name where it does not or none is set.
+        let rates =
+            TaxRateTable::new().with(class(), SalesChannel::DineIn, TaxRate::from_percent(10));
+        let mut translated = entry(true);
+        translated
+            .display_name_translations
+            .insert("vi".to_owned(), DisplayName::new("Pizza Margherita kiểu Ý"));
+        let name = |language: &str| {
+            MenuItemResponse::from_entry(
+                &translated,
+                &rates,
+                (SalesChannel::DineIn, language),
+                false,
+            )
+            .display_name
+        };
+        assert_eq!(name("vi"), DisplayName::new("Pizza Margherita kiểu Ý"));
+        assert_eq!(name("ja"), DisplayName::new("Margherita"));
+        assert_eq!(name(""), DisplayName::new("Margherita"));
     }
 }
