@@ -2,10 +2,12 @@
 
 **Status** Accepted · **Owner** @maintainers-architecture · **Measured** 2026-11-03
 
-The baseline for a 10 ms tap-to-paint target: every act the till's harness measures, at full speed
-and with the CPU slowed four times, and where the time goes in the three slowest. The enforced
-budgets are still [ADR-0173](../adr/0173-the-till-declares-each-piece-of-store-data-once.md)'s
-(50, 150 and 300 ms) and this file changes none of them. Like
+The phase 0 baseline that
+[ADR-0197](../adr/0197-every-tap-paints-within-ten-milliseconds.md) asks for: every act the till's
+harness measures, at full speed and with the CPU slowed four times, and where the time goes in the
+three slowest. The enforced budgets are still
+[ADR-0173](../adr/0173-the-till-declares-each-piece-of-store-data-once.md)'s (50, 150 and 300 ms),
+and this file changes none of them. Like
 [till-latency-2026-10-after.md](till-latency-2026-10-after.md), it records one moment and is not
 regenerated.
 
@@ -33,7 +35,7 @@ add measurements and change no code the measurements run through.
 The difference between the two is the wait for the display's next frame plus that frame's style,
 layout and paint. It is recorded and never enforced.
 
-## The finding that decides how 10 ms is defined
+## The finding ADR-0197's gate has to answer
 
 **At 60 Hz, tap-to-paint as this harness measures it cannot reach 10 ms for any act, however fast
 the till's code is.** At full speed every act the till answers alone has a tap-to-change p95 between
@@ -46,9 +48,18 @@ the change and its layout are done 3 ms after the tap, and the main thread is th
 
 A real touchscreen taps at a random point in the frame, so it would wait 8.3 ms on average and up to
 16.7 ms. Either way, a p95 of 10 ms from the tap to the painted frame is not reachable at 60 Hz.
-Whatever defines the 10 ms budget has to measure the part the till controls: the time to the change,
-or to a frame that is ready to paint, with a separate check that the change makes the first frame
-after it.
+
+ADR-0197 accepts that "the frame is part of the figure" and expects work that finishes early in a
+frame to meet 10 ms. That does not happen here. Under this harness the tap always lands about 4 ms
+after a frame, so even an act with no work at all would read about 12.5 ms. Launching the headless
+shell with `--disable-frame-rate-limit --disable-gpu-vsync` changed nothing: tap-to-paint p50 was
+13.2 to 13.7 ms at 1×, because the headless shell keeps its own 60 Hz clock. So the nightly gate
+ADR-0197 decision 4 describes would fail every act, whatever the till does. It needs one of these:
+
+- a tap at a random phase of the frame;
+- frames issued on demand (`HeadlessExperimental.beginFrame` under `--enable-begin-frame-control`);
+- a figure that ends at a frame ready to paint (tap-to-change plus that frame's style, layout and
+  paint), with a separate check that the change makes the first frame after it.
 
 ## Per act, at full speed and at 4×
 
