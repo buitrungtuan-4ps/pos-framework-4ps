@@ -181,6 +181,8 @@ windows-service = "0.8"
 windows-protect = { path = "../adapters/windows-protect" }
 
 [dev-dependencies]
+# SPIKE only (spike/push-to-the-store, never merged).
+async-nats = "0.50"
 # This crate, with its `openapi` feature: what turns the till's document on for `cargo test` and for
 # nothing else (ADR-0177 decision 2).
 pos-edge = { path = ".", features = ["openapi"] }
