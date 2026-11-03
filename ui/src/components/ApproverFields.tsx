@@ -1,4 +1,6 @@
-import { Show, createSignal } from "solid-js";
+import { Show, createSignal, type Accessor } from "solid-js";
+
+import type { ApproverRequest } from "../api/schemas";
 
 import { t } from "../i18n";
 import { CodePad } from "./CodePad";
@@ -84,4 +86,37 @@ export function ApproverFields(props: {
       </Show>
     </>
   );
+}
+
+/** A manager's badge and PIN as a screen holds them, shared by the panels that ask for one. */
+export interface Approver {
+  code: Accessor<string>;
+  pin: Accessor<string>;
+  setCode: (next: string) => void;
+  setPin: (next: string) => void;
+  /** Both typed. */
+  typed: () => boolean;
+  /** The two, once both are typed, as a request carries them. */
+  approval: () => ApproverRequest | undefined;
+  clear: () => void;
+}
+
+// One pair per screen, not per panel: only one panel is ever open, and a cashier who typed a badge
+// for one and then changed their mind should not type it again for the other.
+export function createApprover(): Approver {
+  const [code, setCode] = createSignal("");
+  const [pin, setPin] = createSignal("");
+  const typed = () => code().trim() !== "" && pin() !== "";
+  return {
+    code,
+    pin,
+    setCode,
+    setPin,
+    typed,
+    approval: () => (typed() ? { approver_code: code().trim(), approver_pin: pin() } : undefined),
+    clear: () => {
+      setCode("");
+      setPin("");
+    },
+  };
 }
