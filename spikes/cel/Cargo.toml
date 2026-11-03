@@ -1,0 +1,21 @@
+# Throwaway spike (overhaul GĐ0): CEL on the edge and in the browser. Never merged.
+[package]
+name = "cel-spike"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+cel = { version = "=0.15.0", default-features = false }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
