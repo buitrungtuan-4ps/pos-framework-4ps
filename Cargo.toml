@@ -4,6 +4,7 @@ members = [
     "crates/pos-proto",
     "crates/pos-core",
     "crates/pos-ports",
+    "crates/pos-rules",
     "crates/pos-render",
     "crates/pos-country",
     "crates/pos-providers",

@@ -44,6 +44,7 @@
 /crates/pos-proto/                     @maintainers-architecture
 /crates/pos-providers/                 @maintainers-architecture
 /crates/pos-render/                    @maintainers-architecture
+/crates/pos-rules/                     @maintainers-architecture
 /crates/pos-simulator/                 @maintainers-architecture
 /examples/minimal-edge/                @maintainers-architecture
 /xtask/                                @maintainers-architecture
