@@ -63,12 +63,12 @@ Each is an ADR, accepted with this plan. The numbers were reserved together.
 | [0191](adr/0191-every-act-is-in-a-typed-catalogue.md) | An action catalogue: every act typed, with its permission and its effect class (UI only, local edge write, money through a core command, external through the cloud) | — |
 | [0192](adr/0192-a-flow-is-a-graph-of-steps-the-edge-re-checks.md) | A flow engine: a graph of required, optional and conditional steps with prerequisites; the till runs it and the edge re-checks it; a step in progress keeps the rules it started with | — |
 | [0193](adr/0193-conditions-and-reactions-are-written-in-cel.md) | Rules in CEL: one evaluator on the edge and in the till, no loop macros, length limits; "when … if … then …" reactions | a new dependency |
-| 0194 | Custom data: fields, lists and object types; storage and sync; additive events; personal data stored apart with a retention period; additive schema changes only | relates to ADR-0076 |
+| [0194](adr/0194-custom-data-is-declared-and-personal-fields-are-kept-apart.md) | Custom data: fields, lists and object types; storage and sync; additive events; personal data stored apart with a retention period; additive schema changes only | relates to ADR-0076 |
 | [0195](adr/0195-the-cloud-wakes-a-store-to-pull-its-config.md) | The cloud wakes a store over the NATS connection the store opens, and the store pulls; the 30 s poll stays as the fallback | ADR-0031, ADR-0039 |
 | [0196](adr/0196-every-act-paints-first-and-money-waits-for-the-edge.md) | Paint first, write after: every act paints at once, with three money safeguards | ADR-0173 decision 4, ADR-0188 |
 | [0197](adr/0197-every-tap-paints-within-ten-milliseconds.md) | The 10 ms budget: its definition, its measurement (CI emulation and till telemetry) and its gate | replaces roadmap-v3 PF1's till targets |
-| 0198 | The cloud as gateway: secrets in the cloud; retries, idempotency and timeouts; private address ranges blocked | extends ADR-0153 |
-| 0199 | WebAssembly functions: pure functions returning decisions, fuel and memory limits, signed, rolled out by ring, run by `wasmtime` on the edge | amends ADR-0083 |
+| [0198](adr/0198-a-store-reaches-the-internet-only-through-the-cloud.md) | The cloud as gateway: secrets in the cloud; retries, idempotency and timeouts; private address ranges blocked | extends ADR-0153 |
+| [0199](adr/0199-a-function-is-signed-pure-webassembly-that-returns-a-decision.md) | WebAssembly functions: pure functions returning decisions, fuel and memory limits, signed, rolled out by ring, run by `wasmtime` on the edge | amends ADR-0083 |
 | 0200 | Six business-type templates, shipped with the framework like country packs, tested as a template-by-country matrix | — |
 | 0201 | Devices: Tauri v2 mobile for Android and iOS, kiosk behaviour that does not depend on the Windows edition, the device class as a screen dimension | extends ADR-0147 |
 
