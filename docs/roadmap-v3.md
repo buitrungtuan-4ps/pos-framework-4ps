@@ -1,5 +1,7 @@
 # Roadmap v3 — Production-ready, international, plug-and-play
 
+> **Superseded in its ordering by [roadmap-v4.md](roadmap-v4.md)** (2026-11-03), which says where each open item below went. This file stays as the record of what v3 delivered.
+
 **Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-09-06
 **Supersedes the planning horizon of** `docs/cloud-admin-ux-plan.md` (roadmap v2, delivered through PR #70)
 **Companion** [ADR-0083](adr/0083-integration-doctrine.md) (the integration doctrine this roadmap's plug-and-play principle rests on)

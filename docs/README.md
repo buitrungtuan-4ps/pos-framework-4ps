@@ -80,7 +80,8 @@ To find the files a change touches, start from the **[repository map](repository
 | [engineering-guide.md](engineering-guide.md) | The machinery behind the rules: branching, CI, releases, testing, governance |
 | [plans/README.md](plans/README.md) | What a plan is, and its template; [plans/standardisation.md](plans/standardisation.md) is the active one |
 | [adr/README.md](adr/README.md) | Every architecture decision with its reasoning, numbered in the order taken, and the status rules |
-| [roadmap-v3.md](roadmap-v3.md) | The current roadmap: what is left, in what order |
+| [roadmap-v4.md](roadmap-v4.md) | The current roadmap: the customization overhaul, its phases, decisions and gates |
+| [roadmap-v3.md](roadmap-v3.md) | The previous roadmap: what it delivered; its open items moved to v4 |
 | [roadmap.md](roadmap.md) | The original phase plan (P1–P13) and each phase's exit criterion |
 | [cloud-admin-ux-plan.md](cloud-admin-ux-plan.md) | The console overhaul plan (roadmap v2) and what it found |
 | [dependency-review-2026-09.md](dependency-review-2026-09.md) | The September 2026 assessment of every open dependency update |
