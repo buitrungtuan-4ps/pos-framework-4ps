@@ -84,12 +84,13 @@ impl<S: EventStore> Edge<S> {
             self.order_joined_on_arrival(&session, order_channel, table_id, holds_for_staff);
 
         let order_id = self.next_order_id();
+        let package_version_id = self.opening_package_version();
         let opened = SalesOrderOpened {
             order_id,
             channel,
             table_id,
             guest_count: None,
-            package_version_id: None,
+            package_version_id,
         };
         let prepared = self.prepare_inbound(stamp, &opened, lines, joins)?;
         let (envelopes, messages): (Vec<_>, Vec<_>) = prepared.events.into_iter().unzip();
@@ -99,12 +100,16 @@ impl<S: EventStore> Edge<S> {
             .await?;
         self.announce_inbound(order_id, prepared.notes, &messages);
 
-        self.lock_projection().fold_inbound_order(
-            order_id,
-            (order_channel, table_id),
-            prepared.records,
-            joins,
-        );
+        {
+            let mut projection = self.lock_projection();
+            projection.fold_inbound_order(
+                order_id,
+                (order_channel, table_id),
+                prepared.records,
+                joins,
+            );
+            projection.record_opened(order_id, None, package_version_id);
+        }
         Ok(InboundOrderOpened {
             order_id,
             business_date,

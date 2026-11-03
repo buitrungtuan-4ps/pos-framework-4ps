@@ -21,7 +21,9 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use pos_core::inventory::StockProjection;
 use pos_proto::TableState;
-use pos_proto::ids::{BillId, DeviceId, MenuItemId, OrderId, OrderLineId, ShiftId, TableId};
+use pos_proto::ids::{
+    BillId, DeviceId, MenuItemId, OrderId, OrderLineId, PackageVersionId, ShiftId, TableId,
+};
 use pos_proto::money::Money;
 use pos_proto::time::{BusinessDate, Timestamp};
 
@@ -110,6 +112,9 @@ struct Projection {
     /// package's "guest count first" guard reads ([ADR-0192](../../../../docs/adr/0192-a-flow-is-a-graph-of-steps-the-edge-re-checks.md)
     /// decision 4). Folded from `sales.order.opened`, dropped when the order closes.
     guest_counts: HashMap<OrderId, u16>,
+    /// The package version each open order opened under, where it opened under one: its flows and
+    /// guards are that version's until it closes (ADR-0192 decision 5). Dropped when it closes.
+    package_versions: HashMap<OrderId, PackageVersionId>,
     /// The orders a member of staff has confirmed or refused
     /// ([ADR-0116](../../../../docs/adr/0116-the-qr-hold-is-derived-and-it-gates-firing.md)), folded
     /// from `sales.order.confirmed_by_staff` and `sales.order.rejected_by_staff`.
@@ -228,6 +233,11 @@ pub struct Edge<S> {
     ids: Mutex<EdgeIdGenerator<SystemClock>>,
     fanout: Fanout,
     projection: Mutex<Projection>,
+    /// The package versions open orders still reference, at most four, with their guards compiled
+    /// ([ADR-0192](../../../../docs/adr/0192-a-flow-is-a-graph-of-steps-the-edge-re-checks.md)
+    /// decision 5). Not folded from events: a version's content comes with the session, so after a
+    /// restart an order on an older version is checked under the current one.
+    packages: Mutex<flows::Retained>,
     /// The gapless receipt-number authority a settle allocates from (ADR-0025). Injected rather than
     /// derived from `S`, so the one loop runs over the real SQLite store and over the fakes alike.
     receipts: Arc<dyn ReceiptAuthority>,

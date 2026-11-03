@@ -13,18 +13,29 @@
 //! `order` view is the order's `guest_count` (absent when none was recorded), its `line_count` and
 //! its `channel`; `channel` is the order's sales channel token. `device` and `role` are the till's:
 //! a guard reading them is refused when the package is applied.
+//!
+//! # Which version's rules
+//!
+//! An order keeps the rules of the package version it opened under (decision 5): its
+//! `sales.order.opened` names that version, and a publish while it is open does not change what
+//! the edge checks it against. The edge holds at most [`RETAINED_MAX`] versions, each with its
+//! conditions compiled once, preferring to drop one no open order references. An order whose
+//! version is no longer held, after an eviction or a restart, is checked under the version the store
+//! runs now, and the edge logs that it did so. An order opened under the default package has no
+//! guards.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
 
 use pos_core::flow::{FlowConditions, unmet_guard};
 use pos_core::package::{VariantContext, resolve};
 use pos_ports::event_store::EventStore;
 use pos_proto::enums::SalesChannel;
 use pos_proto::flow::Flow;
-use pos_proto::ids::OrderId;
-use pos_proto::package::Variant;
+use pos_proto::ids::{OrderId, PackageVersionId};
+use pos_proto::package::{PackageContent, Variant};
 use pos_proto::wire_enum::{Open, WireEnum};
-use pos_rules::{Fact, Facts, Rules, Variable};
+use pos_rules::{Condition, Fact, Facts, Rules, Variable};
 
 use super::{AppError, Edge};
 
@@ -43,6 +54,8 @@ const EDGE_VIEWS: [Variable; 5] = [
 pub struct EdgeConditions {
     rules: Option<Rules>,
     facts: Facts,
+    /// The version's conditions compiled once, consulted before compiling again.
+    compiled: Option<Arc<Compiled>>,
 }
 
 impl EdgeConditions {
@@ -56,6 +69,7 @@ impl EdgeConditions {
         Self {
             rules: Rules::new().ok(),
             facts,
+            compiled: None,
         }
     }
 }
@@ -82,6 +96,15 @@ impl FlowConditions for EdgeConditions {
     }
 
     fn holds(&self, condition: &str) -> Result<bool, String> {
+        let cached = self
+            .compiled
+            .as_ref()
+            .and_then(|compiled| compiled.conditions.get(condition));
+        if let Some(cached) = cached {
+            return cached
+                .evaluate(&self.facts)
+                .map_err(|refused| refused.to_string());
+        }
         let rules = self
             .rules
             .as_ref()
@@ -90,6 +113,85 @@ impl FlowConditions for EdgeConditions {
             .compile(condition)
             .and_then(|compiled| compiled.evaluate(&self.facts))
             .map_err(|refused| refused.to_string())
+    }
+}
+
+/// The most package versions the edge holds for open orders (ADR-0192 decision 5).
+pub const RETAINED_MAX: usize = 4;
+
+/// A package version's conditions, each compiled once: every `applies_when` and `done_when` of
+/// every variant of every flow.
+#[derive(Debug, Default)]
+pub struct Compiled {
+    conditions: HashMap<String, Condition>,
+}
+
+impl Compiled {
+    fn of(content: &PackageContent) -> Self {
+        let Ok(rules) = Rules::new() else {
+            return Self::default();
+        };
+        let conditions = content
+            .flows
+            .iter()
+            .flat_map(|variant| &variant.body.steps)
+            .flat_map(|step| [&step.applies_when, &step.done_when])
+            .flatten()
+            .filter_map(|source| {
+                let compiled = rules.compile(source).ok()?;
+                Some((source.clone(), compiled))
+            })
+            .collect();
+        Self { conditions }
+    }
+}
+
+/// A held version: its content and its compiled conditions.
+type Held = (Arc<PackageContent>, Arc<Compiled>);
+
+/// The package versions open orders still reference, at most [`RETAINED_MAX`], oldest use first.
+#[derive(Debug, Default)]
+pub struct Retained {
+    versions: Vec<Held>,
+}
+
+impl Retained {
+    fn get(&self, version: PackageVersionId) -> Option<Held> {
+        self.versions
+            .iter()
+            .find(|(content, _)| content.package_version_id == version)
+            .map(|(content, compiled)| (Arc::clone(content), Arc::clone(compiled)))
+    }
+
+    /// Holds `content`, compiling it if it is new. At the limit it first drops the oldest version
+    /// no open order references, or the oldest of all when every one is referenced.
+    fn hold(&mut self, content: &Arc<PackageContent>, referenced: &HashSet<PackageVersionId>) {
+        let version = content.package_version_id;
+        if let Some(at) = self
+            .versions
+            .iter()
+            .position(|(held, _)| held.package_version_id == version)
+        {
+            let held = self.versions.remove(at);
+            self.versions.push(held);
+            return;
+        }
+        if self.versions.len() >= RETAINED_MAX {
+            let at = self
+                .versions
+                .iter()
+                .position(|(held, _)| !referenced.contains(&held.package_version_id))
+                .unwrap_or(0);
+            let (dropped, _) = self.versions.remove(at);
+            let still_referenced = referenced.contains(&dropped.package_version_id);
+            tracing::info!(
+                package_version_id = %dropped.package_version_id,
+                still_referenced,
+                "the edge no longer holds a package version; its open orders are checked under the current one"
+            );
+        }
+        self.versions
+            .push((Arc::clone(content), Arc::new(Compiled::of(content))));
     }
 }
 
@@ -116,9 +218,48 @@ fn order_facts(
 }
 
 impl<S: EventStore> Edge<S> {
-    /// Re-checks a command for `action_id` on `order_id` against the package's flows: the variant of
-    /// each flow for the order's channel, and its guards answered from the order's facts. Passes
-    /// when the store runs no package, or the package has no guard for the act.
+    /// The package version an order opening now runs under, held with its conditions compiled so
+    /// a later publish does not change the order's rules. `None` under the default package.
+    pub(in crate::app) fn opening_package_version(&self) -> Option<PackageVersionId> {
+        let package = Arc::clone(self.session().package.as_ref()?);
+        let referenced = self.lock_projection().referenced_versions();
+        self.lock_packages().hold(&package, &referenced);
+        Some(package.package_version_id)
+    }
+
+    fn lock_packages(&self) -> std::sync::MutexGuard<'_, Retained> {
+        self.packages
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The version whose rules check `order_id`: the one it opened under while the edge holds it,
+    /// else the current one, logged. `None` for an order opened under the default package, or when
+    /// the store now runs the default package.
+    fn package_for(&self, order_id: OrderId, version: Option<PackageVersionId>) -> Option<Held> {
+        let version = version?;
+        if let Some(held) = self.lock_packages().get(version) {
+            return Some(held);
+        }
+        let current = Arc::clone(self.session().package.as_ref()?);
+        let referenced = self.lock_projection().referenced_versions();
+        let mut packages = self.lock_packages();
+        if current.package_version_id != version {
+            tracing::info!(
+                order_id = %order_id,
+                opened_under = %version,
+                checked_under = %current.package_version_id,
+                "an order's package version is no longer held; checking it under the current one"
+            );
+        }
+        packages.hold(&current, &referenced);
+        packages.get(current.package_version_id)
+    }
+
+    /// Re-checks a command for `action_id` on `order_id` against the flows of the version the order
+    /// opened under (see [`Self::package_for`]): the variant of each flow for the order's channel,
+    /// and its guards answered from the order's facts. Passes when the order runs under the default
+    /// package, or its version has no guard for the act.
     ///
     /// # Errors
     ///
@@ -128,14 +269,7 @@ impl<S: EventStore> Edge<S> {
         action_id: &str,
         order_id: OrderId,
     ) -> Result<(), AppError> {
-        let session = self.session();
-        let Some(package) = session.package.as_ref() else {
-            return Ok(());
-        };
-        if package.flows.is_empty() {
-            return Ok(());
-        }
-        let (channel, guest_count, line_count) = {
+        let (channel, guest_count, line_count, version) = {
             let projection = self.lock_projection();
             (
                 projection
@@ -143,8 +277,15 @@ impl<S: EventStore> Edge<S> {
                     .and_then(|origin| origin.channel),
                 projection.guest_count(order_id),
                 projection.lines_for_order(order_id).len(),
+                projection.package_version(order_id),
             )
         };
+        let Some((package, compiled)) = self.package_for(order_id, version) else {
+            return Ok(());
+        };
+        if package.flows.is_empty() {
+            return Ok(());
+        }
         let context = VariantContext {
             sales_channel: channel.map_or_else(Open::default, Open::from_known),
             ..VariantContext::default()
@@ -171,7 +312,10 @@ impl<S: EventStore> Edge<S> {
             })
             .collect();
         let flows: Vec<&Flow> = resolved.iter().collect();
-        let conditions = EdgeConditions::with(order_facts(channel, guest_count, line_count));
+        let conditions = EdgeConditions {
+            compiled: Some(compiled),
+            ..EdgeConditions::with(order_facts(channel, guest_count, line_count))
+        };
         match unmet_guard(&flows, action_id, &conditions) {
             Some(unmet) => Err(AppError::FlowPrerequisiteUnmet {
                 flow_id: unmet.flow_id,

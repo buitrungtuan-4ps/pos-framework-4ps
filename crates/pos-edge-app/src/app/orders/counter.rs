@@ -43,16 +43,20 @@ impl<S: EventStore> Edge<S> {
             return Err(AppError::ChannelNotAccepted);
         }
         let order_id = self.next_order_id();
+        let package_version_id = self.opening_package_version();
         let opened = SalesOrderOpened {
             order_id,
             channel: Open::from_known(channel),
             table_id: None,
             guest_count: None,
-            package_version_id: None,
+            package_version_id,
         };
         self.commit_and_publish(&ctx, &opened).await?;
-        self.lock_projection()
-            .open_order_origin(order_id, Some(channel), None);
+        {
+            let mut projection = self.lock_projection();
+            projection.open_order_origin(order_id, Some(channel), None);
+            projection.record_opened(order_id, None, package_version_id);
+        }
         Ok(CounterOrderOpened {
             order_id,
             business_date: ctx.business_date,

@@ -79,6 +79,7 @@ impl<S: EventStore> Edge<S> {
 
         let order_id = self.next_order_id();
         let channel = SalesChannel::DineIn;
+        let package_version_id = self.opening_package_version();
         // Both events in one transaction: a table occupied with no order behind it, or an order
         // with no channel, are each a state a screen would have to guess at.
         let table_opened = SalesTableOpened { table_id, order_id };
@@ -87,7 +88,7 @@ impl<S: EventStore> Edge<S> {
             channel: Open::from_known(channel),
             table_id: Some(table_id),
             guest_count,
-            package_version_id: None,
+            package_version_id,
         };
         let (table_envelope, table_message) = self.prepare(&ctx, &table_opened)?;
         let (order_envelope, order_message) = self.prepare(&ctx, &order_opened)?;
@@ -103,7 +104,7 @@ impl<S: EventStore> Edge<S> {
             projection.set_table(table_id, decision.next_state);
             projection.open_order(table_id, order_id);
             projection.open_order_origin(order_id, Some(channel), Some(table_id));
-            projection.record_guest_count(order_id, guest_count);
+            projection.record_opened(order_id, guest_count, package_version_id);
         }
         Ok(TableView {
             table_id,
