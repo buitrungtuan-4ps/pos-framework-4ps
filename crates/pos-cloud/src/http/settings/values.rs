@@ -265,7 +265,7 @@ pub(super) async fn admin_clear_setting<St, Rg, Grp, Cfg, A, C>(
     Query(query): Query<ClearSettingQuery>,
 ) -> Response
 where
-    St: SettingsStore + Clone + Send + Sync + 'static,
+    St: SettingsStore + SettingsPackages + Clone + Send + Sync + 'static,
     Rg: RegistryStore + Clone + Send + Sync + 'static,
     Grp: StoreGroupStore + Clone + Send + Sync + 'static,
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,

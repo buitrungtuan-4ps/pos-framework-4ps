@@ -193,6 +193,26 @@ pub trait OtaReportStore {
     ) -> impl Future<Output = Result<(), FleetStoreError>> + Send;
 }
 
+/// The release each store last reported, read from the fleet read model: what the settings publish
+/// asks before it compiles a package version into a store's document
+/// ([ADR-0189](../../../docs/adr/0189-a-store-runs-a-package-version-hq-pins.md) decision 5).
+#[derive(Clone, Debug)]
+pub struct FleetReleases<F>(pub F);
+
+impl<F: FleetStore + Sync> pos_cloud_config::package_pin::StoreReleases for FleetReleases<F> {
+    async fn installed_release(
+        &self,
+        tenant_id: TenantId,
+        store_id: StoreId,
+    ) -> Result<Option<String>, String> {
+        self.0
+            .store_detail(tenant_id, store_id)
+            .await
+            .map(|row| row.and_then(|row| row.installed_version))
+            .map_err(|error| error.to_string())
+    }
+}
+
 /// A failure of the fleet read model itself — one of the joined tables could not be read, a stored
 /// value could not be decoded, or a report could not be written.
 #[derive(Debug, thiserror::Error)]

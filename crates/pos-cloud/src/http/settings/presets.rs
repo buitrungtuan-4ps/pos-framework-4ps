@@ -30,6 +30,7 @@ use crate::http::{Json, not_found};
 use crate::registry::RegistryStore;
 use crate::settings::SettingsStore;
 use crate::store_groups::StoreGroupStore;
+use pos_cloud_config::package_pin::SettingsPackages;
 
 /// What each compiled-in country pack gives a new store: per country, each setting key and its value
 /// as the setting's node carries it (ADR-0183).
@@ -133,7 +134,7 @@ pub(super) async fn admin_apply_setting_presets<St, Rg, Grp, Cfg, A, C>(
     Json(request): Json<SettingsStoreRequest>,
 ) -> Response
 where
-    St: SettingsStore + Clone + Send + Sync + 'static,
+    St: SettingsStore + SettingsPackages + Clone + Send + Sync + 'static,
     Rg: RegistryStore + Clone + Send + Sync + 'static,
     Grp: StoreGroupStore + Clone + Send + Sync + 'static,
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,

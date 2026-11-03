@@ -36,6 +36,7 @@ use pos_cloud_config::package_pin::SettingsPackages;
 pub(super) mod catalogue;
 mod effective;
 mod package_pin;
+mod package_status;
 mod presets;
 mod publish;
 mod values;
@@ -44,6 +45,7 @@ mod values;
 pub(crate) use catalogue::{__path_admin_list_settings, __path_admin_settings_catalogue};
 pub(crate) use effective::__path_admin_effective_settings;
 pub(crate) use package_pin::__path_admin_choose_package;
+pub(crate) use package_status::__path_admin_store_package;
 pub(crate) use presets::__path_admin_apply_setting_presets;
 pub(crate) use presets::as_node_value;
 pub(crate) use publish::__path_admin_publish_settings;
@@ -115,6 +117,10 @@ where
         )
         // The store's choice among the package versions it is allowed (ADR-0189 decision 2): the
         // one way `package.chosen_version_id` is written.
+        .route(
+            "/admin/stores/{store_id}/package",
+            get(package_status::admin_store_package::<St, Rg, Grp, Cfg, A, C>),
+        )
         .route(
             "/admin/stores/{store_id}/package/choice",
             axum::routing::put(package_pin::admin_choose_package::<St, Rg, Grp, Cfg, A, C>),

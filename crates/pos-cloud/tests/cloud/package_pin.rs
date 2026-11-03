@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use axum::http::StatusCode;
 use pos_cloud::audit::NoopAuditRecorder;
+use pos_cloud_config::package_pin::InMemoryReleases;
 use pos_cloud_config::packages::{InMemoryPackages, PackageStore, PackageVersionRecord};
 use pos_proto::ids::{PackageId, PackageVersionId, StoreId};
 use pos_proto::package::PackageContent;
@@ -53,8 +54,11 @@ async fn packages() -> InMemoryPackages {
 }
 
 async fn app() -> (axum::Router, FakeConfigTrees, String) {
-    let (router, config_trees, _) =
-        settings_app_with_packages(Arc::new(NoopAuditRecorder), packages().await);
+    let (router, config_trees, _) = settings_app_with_packages(
+        Arc::new(NoopAuditRecorder),
+        packages().await,
+        InMemoryReleases::new(),
+    );
     let cookie = admin_cookie(&router).await;
     (router, config_trees, cookie)
 }

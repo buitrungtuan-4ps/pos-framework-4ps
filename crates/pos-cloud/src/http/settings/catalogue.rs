@@ -20,6 +20,7 @@ use crate::http::{Json, settings_confirm};
 use crate::settings::SettingValue;
 use crate::settings::SettingValueSchema;
 use crate::settings::SettingsStore;
+use pos_cloud_config::package_pin::SettingsPackages;
 
 /// One setting as the console's settings screen draws it: the register entry, without its
 /// summary. The screen labels a setting and each of its values from its own translations, keyed by
@@ -187,7 +188,7 @@ pub(super) async fn admin_list_settings<St, Rg, Grp, Cfg, A, C>(
     Query(query): Query<SettingsTenantQuery>,
 ) -> Response
 where
-    St: SettingsStore + Clone + Send + Sync + 'static,
+    St: SettingsStore + SettingsPackages + Clone + Send + Sync + 'static,
     Rg: Clone + Send + Sync + 'static,
     Grp: Clone + Send + Sync + 'static,
     Cfg: Clone + Send + Sync + 'static,

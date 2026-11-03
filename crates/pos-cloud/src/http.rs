@@ -244,7 +244,7 @@ pub use settings::settings_router;
 pub(crate) use settings::{
     __path_admin_apply_setting_presets, __path_admin_choose_package, __path_admin_clear_setting,
     __path_admin_effective_settings, __path_admin_list_settings, __path_admin_publish_settings,
-    __path_admin_put_setting, __path_admin_settings_catalogue,
+    __path_admin_put_setting, __path_admin_settings_catalogue, __path_admin_store_package,
 };
 use store_groups::unknown_batch_node;
 pub(crate) use store_groups::{
