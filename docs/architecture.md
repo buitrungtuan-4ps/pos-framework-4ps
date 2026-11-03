@@ -68,6 +68,8 @@ A **package** is a tenant's versioned bundle of screens, flows, rules and data d
 
 The store's current time slot is the first slot in the package's `time_slots`, in the order they are listed, that has a weekly window holding the store's local time. A store is therefore in at most one slot. Every part has one base variant, which states nothing. A version is refused at publish, and again on apply, if two of its variants share a selector, if a variant names its device twice or if a variant names an undeclared slot (`pos_core::package::check_variants`).
 
+A package's **conditions** are written in a restricted dialect of CEL ([ADR-0193](adr/0193-conditions-and-reactions-are-written-in-cel.md)) and evaluated by one crate, `pos-rules`, which the cloud, the edge and (compiled to `wasm32`) the till share. `Rules::compile` refuses a condition outside the dialect before it can run: a loop macro (`all`, `exists`, `exists_one`, `map`, `filter`) or any function off the allow-list (comparison, boolean logic, integer arithmetic, `in`, indexing, `size`, `contains`, `startsWith`, `endsWith`, and `has()`); more than 1,024 characters, 256 nodes or a depth of 32, where brackets nested deeper than 32 are refused from the text before the parser recurses; a `double` literal or `double()`; a struct literal; and any name but the views `order`, `line`, `bill`, `channel`, `device`, `role` and `now`. The facts a condition reads hold no fraction, so an amount is an integer in minor units. A field the facts lack, an overflow or a division by zero is an evaluation error, never a guess.
+
 ### 3.2 Synchronisation
 
 ```
