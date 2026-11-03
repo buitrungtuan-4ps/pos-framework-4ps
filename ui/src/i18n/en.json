@@ -182,6 +182,7 @@
   "kds.all_stations": "All stations",
   "kds.bring_back": "Bring back",
   "kds.bump": "Tap to bump",
+  "kds.bump_not_allowed": "You can see these tickets but not bump them: that needs the permission to mark a kitchen ticket done. Ask a manager.",
   "kds.count": "{count, plural, one {# item firing} other {# items firing}}",
   "kds.counter_order": "Counter order …{ref}",
   "kds.empty": "Nothing firing.",

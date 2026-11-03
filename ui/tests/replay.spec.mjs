@@ -3774,6 +3774,27 @@ test("a store that enforces each person's own permissions hides what they may no
   }
 });
 
+// A person who may not bump still sees the board, and is told why its tickets answer no tap
+// (pilot run 2, N7: a cashier saw every card disabled and nothing saying why).
+test("the kitchen board says why a person who may not bump cannot", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await aSessionThatSays(page, true, () => ["sales.line.add", "sales.line.fire", "sales.table.manage"]);
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    await sendOrder(page);
+    await page.goto(`${edge.baseURL}/kds`);
+    await expect(page.locator('[data-outcome="ticket-waiting"]').first()).toBeDisabled();
+    await expect(page.locator('[data-outcome="kds-bump-not-allowed"]')).toHaveText(
+      "You can see these tickets but not bump them: that needs the permission to mark a kitchen ticket done. Ask a manager.",
+    );
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A store that does not enforce hides nothing, whatever the two lists say: every store today.
 test("a store that does not enforce each person's own permissions hides nothing", async ({ page }) => {
   const edge = await startEdge();

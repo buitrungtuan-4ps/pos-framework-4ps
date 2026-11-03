@@ -182,6 +182,7 @@
   "kds.all_stations": "Tất cả bếp",
   "kds.bring_back": "Bán lại",
   "kds.bump": "Chạm để hoàn tất",
+  "kds.bump_not_allowed": "Bạn xem được các phiếu này nhưng không thể hoàn tất chúng: việc đó cần quyền đánh dấu phiếu bếp đã xong. Hãy nhờ quản lý.",
   "kds.count": "{count, plural, other {# món đang làm}}",
   "kds.counter_order": "Đơn quầy …{ref}",
   "kds.empty": "Không có món đang chờ.",

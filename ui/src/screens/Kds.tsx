@@ -104,6 +104,28 @@ function rememberSound(on: boolean): void {
   }
 }
 
+// A counter ticket's heading: the guest's queue number, or the order's last four characters until
+// the counter list has numbered it.
+function counterLabel(orderId: string): string {
+  const number = queueNumberFor(orderId);
+  return number === undefined
+    ? t("kds.counter_order", { ref: orderId.slice(-4) })
+    : t("counter.queue_number", { number });
+}
+
+// A ticket a person may not bump answers no tap (ADR-0158); without this line a cashier who opened
+// the board saw every card disabled and nothing said why (pilot run 2, N7). Once above the board
+// rather than on each card, where it would crowd out the food.
+function BumpNotAllowed(props: { tickets: number }) {
+  return (
+    <Show when={!can("sales.ticket.bump") && props.tickets > 0}>
+      <p class="mb-3 text-sm text-ink-muted" data-outcome="kds-bump-not-allowed">
+        {t("kds.bump_not_allowed")}
+      </p>
+    </Show>
+  );
+}
+
 export function Kds() {
   useDarkTakeover();
   const now = useNow();
@@ -132,12 +154,6 @@ export function Kds() {
       void refreshQueueNumbers(counter);
     }
   });
-  const counterLabel = (orderId: string) => {
-    const number = queueNumberFor(orderId);
-    return number === undefined
-      ? t("kds.counter_order", { ref: orderId.slice(-4) })
-      : t("counter.queue_number", { number });
-  };
   const byKey = createMemo(() => new Map(tickets().map((ticket) => [ticket.key, ticket])));
   const shownKeys = createMemo(
     () =>
@@ -387,6 +403,7 @@ export function Kds() {
           </For>
         </div>
       </Show>
+      <BumpNotAllowed tickets={shownKeys().length} />
       <div class="grid grid-cols-1 gap-3 tablet:grid-cols-2 terminal:grid-cols-4">
         <For
           each={shownKeys()}
