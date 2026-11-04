@@ -33,6 +33,13 @@ use crate::ulid::Ulid;
 use crate::wire_enum;
 use crate::wire_enum::{Open, WireEnum, is_absent};
 
+mod data;
+
+pub use data::{
+    CustomField, CustomFieldType, CustomList, DataObject, FIELDS_PER_OBJECT_MAX, LIST_ENTRIES_MAX,
+    ListEntry, OBJECT_TYPES_MAX, ObjectType, PackageData, TEXT_BYTES_MAX,
+};
+
 /// The most versions a choice may allow.
 pub const ALLOWED_VERSIONS_MAX: usize = 32;
 
@@ -115,6 +122,11 @@ pub struct PackageContent {
     /// each with its variants; the variants of one flow share its `flow_id`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub flows: Vec<Variant<Flow>>,
+    /// The package's data part: custom fields, object types and lists
+    /// ([ADR-0194](../../../docs/adr/0194-custom-data-is-declared-and-personal-fields-are-kept-apart.md)).
+    /// Empty, and left off the wire, in a version that declares none.
+    #[serde(default, skip_serializing_if = "PackageData::is_empty")]
+    pub data: PackageData,
 }
 
 /// A named part of the week a variant may be chosen for, such as lunch.

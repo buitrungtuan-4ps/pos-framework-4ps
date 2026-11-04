@@ -285,6 +285,7 @@ where
         time_slots: request.time_slots,
         // A version is authored with no flows until the console designs them (ADR-0192, phase 4).
         flows: Vec::new(),
+        data: pos_proto::package::PackageData::default(),
     };
     content.min_edge_version = min_edge_version(&content);
     if let Err(refusal) = check_content(&content) {
