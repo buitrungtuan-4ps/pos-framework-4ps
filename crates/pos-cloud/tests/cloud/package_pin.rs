@@ -42,6 +42,7 @@ async fn packages() -> InMemoryPackages {
                 min_edge_version: ReleaseTag::new("0.14.1"),
                 time_slots: Vec::new(),
                 flows: Vec::new(),
+                data: pos_proto::package::PackageData::default(),
             },
             create_time: Timestamp::EPOCH,
         };

@@ -28385,6 +28385,99 @@
         "description": "An ISO 4217 currency code: three upper-case letters",
         "pattern": "^[A-Z]{3}$"
       },
+      "CustomField": {
+        "type": "object",
+        "description": "One custom field, on an existing object or in an object type.",
+        "required": [
+          "custom_field_id",
+          "label_key",
+          "field_type"
+        ],
+        "properties": {
+          "consent_purpose_key": {
+            "$ref": "#/components/schemas/TranslationKey",
+            "description": "The translation key of the purpose a person consents to before a personal value is saved.\nRequired for a personal field; absent for any other."
+          },
+          "custom_field_id": {
+            "$ref": "#/components/schemas/CustomFieldId",
+            "description": "The field's id, stable for good: a field is never renamed or retyped (ADR-0194 decision 6)."
+          },
+          "custom_list_id": {
+            "$ref": "#/components/schemas/CustomListId",
+            "description": "The list a `choice` field draws from."
+          },
+          "deprecated": {
+            "type": "boolean",
+            "description": "Hidden from new entries and kept for reading (ADR-0194 decision 6)."
+          },
+          "field_type": {
+            "$ref": "#/components/schemas/OpenCustomFieldType_CustomFieldType",
+            "description": "The kind of value it holds."
+          },
+          "label_key": {
+            "$ref": "#/components/schemas/TranslationKey",
+            "description": "The translation key of the field's label."
+          },
+          "object": {
+            "$ref": "#/components/schemas/OpenDataObject_DataObject",
+            "description": "The existing object the field is on. Stated for a field of [`PackageData::custom_fields`],\nabsent for a field of an object type."
+          },
+          "personal": {
+            "type": "boolean",
+            "description": "Whether the value is personal data. Required, with no default: absent, the field is refused\nat publish."
+          },
+          "required": {
+            "type": "boolean",
+            "description": "Whether an entry must give it a value."
+          },
+          "retention_days": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many days a personal value is kept. Required for a personal field, with no default\n(ADR-0194 decision 5); absent for any other.",
+            "minimum": 0
+          },
+          "unit_key": {
+            "$ref": "#/components/schemas/TranslationKey",
+            "description": "The translation key of a `quantity` field's unit."
+          }
+        }
+      },
+      "CustomFieldId": {
+        "type": "string",
+        "description": "A `CustomFieldId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "CustomList": {
+        "type": "object",
+        "description": "A managed option list, like the reason codes (ADR-0115).",
+        "required": [
+          "custom_list_id",
+          "label_key",
+          "entries"
+        ],
+        "properties": {
+          "custom_list_id": {
+            "$ref": "#/components/schemas/CustomListId",
+            "description": "The list's id."
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ListEntry"
+            },
+            "description": "Its entries, at most [`LIST_ENTRIES_MAX`], in the order a till offers them."
+          },
+          "label_key": {
+            "$ref": "#/components/schemas/TranslationKey",
+            "description": "The translation key of the list's name in the console."
+          }
+        }
+      },
+      "CustomListId": {
+        "type": "string",
+        "description": "A `CustomListId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
       "DailyCash": {
         "type": "object",
         "description": "A day's **cash-drawer** summary for one store, folded from the shift and drawer events\n([ADR-0081](../../../docs/adr/0081-reports-and-analytics.md), Track O4). Amounts are the store's\nsingle currency's minor units. Part of an X/Z report; T2 (it exposes money).",
@@ -30371,6 +30464,33 @@
           }
         }
       },
+      "ListEntry": {
+        "type": "object",
+        "description": "One option of a list.",
+        "required": [
+          "list_entry_id",
+          "label_key"
+        ],
+        "properties": {
+          "deprecated": {
+            "type": "boolean",
+            "description": "No longer offered, and kept for reading."
+          },
+          "label_key": {
+            "$ref": "#/components/schemas/TranslationKey",
+            "description": "The translation key of the entry's label."
+          },
+          "list_entry_id": {
+            "$ref": "#/components/schemas/ListEntryId",
+            "description": "The entry's id, which a `choice` value carries."
+          }
+        }
+      },
+      "ListEntryId": {
+        "type": "string",
+        "description": "A `ListEntryId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
       "ListOrPage_AuditEntryView": {
         "oneOf": [
           {
@@ -31021,6 +31141,49 @@
           }
         }
       },
+      "ObjectType": {
+        "type": "object",
+        "description": "A new kind of object, such as a reservation or a locker.",
+        "required": [
+          "object_type_id",
+          "label_key",
+          "fields"
+        ],
+        "properties": {
+          "deprecated": {
+            "type": "boolean",
+            "description": "Hidden from new entries and kept for reading."
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomField"
+            },
+            "description": "Its fields, at most [`FIELDS_PER_OBJECT_MAX`], none naming an [`CustomField::object`]."
+          },
+          "label_key": {
+            "$ref": "#/components/schemas/TranslationKey",
+            "description": "The translation key of the type's name."
+          },
+          "object_type_id": {
+            "$ref": "#/components/schemas/ObjectTypeId",
+            "description": "The type's id, stable for good."
+          }
+        }
+      },
+      "ObjectTypeId": {
+        "type": "string",
+        "description": "A `ObjectTypeId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "OpenCustomFieldType_CustomFieldType": {
+        "type": "string",
+        "description": "A `CustomFieldType` token: CUSTOM_FIELD_TYPE_UNSPECIFIED, CUSTOM_FIELD_TYPE_INT, CUSTOM_FIELD_TYPE_BOOL, CUSTOM_FIELD_TYPE_CHOICE, CUSTOM_FIELD_TYPE_DATE, CUSTOM_FIELD_TYPE_QUANTITY, CUSTOM_FIELD_TYPE_TEXT, or one a newer build sent, which is kept as it arrived"
+      },
+      "OpenDataObject_DataObject": {
+        "type": "string",
+        "description": "A `DataObject` token: DATA_OBJECT_UNSPECIFIED, DATA_OBJECT_ORDER, DATA_OBJECT_LINE, DATA_OBJECT_BILL, DATA_OBJECT_TABLE, DATA_OBJECT_SHIFT, or one a newer build sent, which is kept as it arrived"
+      },
       "OpenDeviceClass_DeviceClass": {
         "type": "string",
         "description": "A `DeviceClass` token: DEVICE_CLASS_UNSPECIFIED, DEVICE_CLASS_TERMINAL, DEVICE_CLASS_TABLET, DEVICE_CLASS_PHONE, DEVICE_CLASS_KITCHEN_DISPLAY, DEVICE_CLASS_KIOSK, or one a newer build sent, which is kept as it arrived"
@@ -31112,6 +31275,10 @@
           "min_edge_version"
         ],
         "properties": {
+          "data": {
+            "$ref": "#/components/schemas/PackageData",
+            "description": "The package's data part: custom fields, object types and lists\n([ADR-0194](../../../docs/adr/0194-custom-data-is-declared-and-personal-fields-are-kept-apart.md)).\nEmpty, and left off the wire, in a version that declares none."
+          },
           "flows": {
             "type": "array",
             "items": {
@@ -31141,6 +31308,33 @@
           "version_label": {
             "type": "string",
             "description": "The version's name as HQ reads it in the console, at most [`LABEL_CHARS_MAX`] characters.\nNever shown on a till."
+          }
+        }
+      },
+      "PackageData": {
+        "type": "object",
+        "description": "A package's data part. Empty, and left off the wire, in a version that declares no data.",
+        "properties": {
+          "custom_fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomField"
+            },
+            "description": "Custom fields on existing objects, each naming its [`CustomField::object`]: at most\n[`FIELDS_PER_OBJECT_MAX`] per object."
+          },
+          "lists": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomList"
+            },
+            "description": "Managed option lists a `choice` field draws from."
+          },
+          "object_types": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObjectType"
+            },
+            "description": "New object types, at most [`OBJECT_TYPES_MAX`]."
           }
         }
       },
