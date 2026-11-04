@@ -56,6 +56,7 @@ import { useSplitPlan } from "../state/split-plan";
 import { useSplitActs } from "../state/split-acts";
 import { printOutcomeKey } from "../lib/print";
 import { asksApprover, can } from "../state/permissions";
+import { createPrint } from "../state/print-writes";
 
 // The action waiving a fee cites (ADR-0159 decision 5), its own again: a reason for forgiving a
 // service charge is not necessarily one for taking money off the food.
@@ -184,27 +185,18 @@ export function Pay() {
   // (ADR-0164): what came of the last press, or null before the first. The same act as the Today
   // screen's reprint, marked COPY and counted the same way.
   const [copy, setCopy] = createSignal<ReprintResponse | null>(null);
-  const printAgain = async (id: string) => {
-    setError(null);
-    try {
-      setCopy(await api.reprintReceipt(id));
-    } catch (caught) {
-      setError(errorMessage(caught));
-    }
-  };
+  const print = createPrint(setError);
+  const printAgain = (id: string) =>
+    print.run("billing.receipt.reprint", () => api.reprintReceipt(id), setCopy);
   const printPreBill = async () => {
     const id = billId();
     if (id === null) {
       return;
     }
-    setError(null);
     setPreBill(null);
-    try {
-      const printed = await api.printBillCheck(id);
-      setPreBill(printed.prints[0] ?? null);
-    } catch (caught) {
-      setError(errorMessage(caught));
-    }
+    await print.run("billing.check.print", () => api.printBillCheck(id), (printed) =>
+      setPreBill(printed.prints[0] ?? null),
+    );
   };
 
   // What the bill on screen owes, read by its own id. Once a table is split, the table's check is
@@ -857,10 +849,10 @@ export function Pay() {
               <button
                 type="button"
                 class="mt-2 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted disabled:opacity-50"
-                disabled={billId() === null || check() === null}
+                disabled={billId() === null || check() === null || print.printing()}
                 onClick={() => void printPreBill()}
               >
-                {t("order.pre_bill")}
+                {t(print.printing() ? "common.sending" : "order.pre_bill")}
               </button>
             </Show>
             <Show when={preBill()}>
@@ -1293,9 +1285,10 @@ export function Pay() {
               type="button"
               class="mt-3 min-h-touch w-full rounded-token border border-line text-sm"
               data-step="printAgain"
+              disabled={print.printing()}
               onClick={() => void printAgain(bill().bill_id)}
             >
-              {t("pay.print_again")}
+              {t(print.printing() ? "common.sending" : "pay.print_again")}
             </button>
             </Show>
             <Show when={copy()}>

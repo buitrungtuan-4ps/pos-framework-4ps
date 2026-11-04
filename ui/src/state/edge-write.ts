@@ -10,7 +10,8 @@
 // - **No answer rolls back and reads again,** because the edge may have made it: `reread` reads the
 //   act's subject. The act is never sent again by the till.
 //
-// Payment waits while any write is on its way (`writesPending`).
+// Payment waits while any write is on its way (`writesPending`), but a print: it changes no money,
+// and a slow printer must never hold a guest at the till (`holdsPayment: false`).
 
 import { createSignal } from "solid-js";
 
@@ -38,6 +39,8 @@ export interface EdgeWrite<T> {
   readonly confirmed?: (answer: T) => void;
   /** Reads the act's subject again, when the edge did not answer. */
   readonly reread: () => void;
+  /** Whether payment waits for it; every write but a print. */
+  readonly holdsPayment?: boolean;
 }
 
 /**
@@ -47,7 +50,8 @@ export interface EdgeWrite<T> {
 export async function editWrite<T>(action: EdgeWriteId, write: EdgeWrite<T>): Promise<T> {
   void action;
   const undo = write.paint?.() ?? write.undo ?? (() => undefined);
-  setInFlight((count) => count + 1);
+  const counted = write.holdsPayment !== false ? 1 : 0;
+  setInFlight((count) => count + counted);
   try {
     const answer = await write.send();
     write.confirmed?.(answer);
@@ -59,6 +63,6 @@ export async function editWrite<T>(action: EdgeWriteId, write: EdgeWrite<T>): Pr
     }
     throw caught;
   } finally {
-    setInFlight((count) => count - 1);
+    setInFlight((count) => count - counted);
   }
 }

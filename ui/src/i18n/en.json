@@ -426,6 +426,7 @@
   "pay.waive_title": "Waive {fee}",
   "pay.waiving": "Waiving the fee…",
   "print.unanswered": "The printer did not answer — try again",
+  "print.unconfirmed": "The store server did not answer. The print is not confirmed: check the printer before printing again.",
   "setup.activated": "Activated",
   "setup.activated_hint": "This store is connected to the cloud. Pair a device to start.",
   "setup.checking": "Checking whether this store is activated…",

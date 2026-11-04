@@ -2107,6 +2107,78 @@ test("every copy of a receipt is counted, and the count is the edge's", async ({
   }
 });
 
+// A print says it is on its way from the tap and takes no second one (ADR-0196 decision 1). A print
+// the edge refuses says why; a print whose answer is lost cannot be read back, so it is said not
+// confirmed, and never sent again by the till (ADR-0204 decision 5). The refusal is substituted:
+// the demo store prints a pre-bill for any order with a line on it.
+test("a pre-bill says it is printing at once, holds no payment, a refusal says why, and a lost answer is not confirmed", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    const button = page.locator('[data-step="printPreBill"]');
+
+    await refusePost(page, "**/check/print", "NOTHING_TO_PRINT");
+    await button.click();
+    await expect(page.getByRole("alert").first()).toContainText("There is nothing on this order to print yet.");
+    await page.unroute("**/check/print");
+
+    const held = await holdPost(page, "**/check/print");
+    await button.click();
+    await held.sent;
+    await expect(button).toHaveText("Sending…");
+    await expect(button).toBeDisabled();
+    // A print changes no money: Take payment does not wait for the printer.
+    await expect(page.locator('[data-step="takePayment"]')).toBeEnabled();
+    held.release();
+    await expect(button).toHaveText("Print pre-bill");
+
+    let prints = 0;
+    await page.route("**/check/print", async (route) => {
+      prints += 1;
+      await route.fetch();
+      await route.abort("connectionreset");
+    });
+    await button.click();
+    await expect(page.getByRole("alert").first()).toContainText("The print is not confirmed");
+    expect(prints).toBe(1);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A copy of a receipt whose answer is lost is said not confirmed and not sent again; the edge, which
+// made it, counts it, and Today shows the edge's count.
+test("a receipt copy whose answer is lost is said not confirmed, and the edge's count shows it made once", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await aSettledTable(page);
+    let reprints = 0;
+    await page.route("**/receipt/reprint", async (route) => {
+      reprints += 1;
+      await route.fetch();
+      await route.abort("connectionreset");
+    });
+    await page.locator('[data-step="printAgain"]').click();
+    await expect(page.getByRole("alert").first()).toContainText("The print is not confirmed");
+    expect(reprints).toBe(1);
+    await page.unroute("**/receipt/reprint");
+
+    await navigateTo(page, "/today");
+    await expect(page.locator('[data-outcome="receipt-copies"]')).toHaveText("1 copy");
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A paid bill voided whole from Today (ADR-0184), which the declared flow cannot replay because the
 // approver is typed mid-flow. The demo employee holds every permission, so they approve their own
 // void, as they do the bill void before payment. The panel says what to hand back, the row says
