@@ -121,4 +121,15 @@ export const TASKS = [
     ],
     outcome: { screen: "fees", mark: "fee-published" },
   },
+  {
+    task: "Run one package version on every store",
+    budget: 3,
+    note: "Three: open Packages, choose the version, confirm. The confirm is not ceremony: every store is republished by it, and a store whose edge is too old keeps what it runs, which the dialog says before anything changes (ADR-0189). Rolling back is the same three clicks on an earlier version, which is why there is no separate rollback flow to learn.",
+    steps: [
+      { nav: "packages" },
+      { screen: "packages", action: "lockVersion" },
+      { screen: "packages", action: "confirmLock" },
+    ],
+    outcome: { screen: "packages", mark: "package-pinned" },
+  },
 ];
