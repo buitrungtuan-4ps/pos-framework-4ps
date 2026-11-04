@@ -24,6 +24,7 @@ import { errorMessage } from "../lib/errors";
 import { printOutcomeKey } from "../lib/print";
 import { can } from "../state/permissions";
 import { createScreenRead } from "../state/screen-read";
+import { openCounterBill } from "../state/floor-writes";
 import { SendFirst } from "../components/SendFirst";
 import { counterKey, createSendFirst } from "../state/unsent";
 import { draftWalkIn } from "../state/draft-walk-in";
@@ -190,7 +191,7 @@ export function Takeaway() {
       return;
     }
     try {
-      const bill = await api.openBillForOrder(order.order_id);
+      const bill = await openCounterBill(order.order_id, refresh);
       setChosen({ ...order, bill_id: bill.bill_id });
     } catch (caught) {
       explain(caught);

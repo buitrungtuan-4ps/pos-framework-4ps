@@ -237,6 +237,14 @@ export function load(key: string, fresh = false): Promise<void> {
   return next;
 }
 
+// Reads `key` again whatever this device holds, with no tag to answer `304` to: what a write with
+// no answer reads after putting back its paint, which a read the edge's event already brought would
+// otherwise leave in place.
+export function rereadWhole(key: string): Promise<void> {
+  etags.delete(key);
+  return load(key, true);
+}
+
 // Reads every entry but those in `except`: the store's load at the boot gate and at sign-in, and a
 // `resync`, where each read that names a tag costs a `304` when nothing changed.
 export async function loadAll(except: readonly string[] = [], fresh = false): Promise<void> {

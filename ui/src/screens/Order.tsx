@@ -28,10 +28,8 @@ import {
   openBillFor,
   openBillsFor,
   reasonsFor,
-  releaseTable,
   seatFor,
   seatsEnabled,
-  setItemSoldOut,
   state,
   tableLabel,
   tableState,
@@ -47,6 +45,7 @@ import {
 } from "../state/store";
 import { addItem, moveTable, setQuantity, writesPending } from "../state/optimistic";
 import { fireCourse, fireOrder, voidLine } from "../state/order-writes";
+import { releaseTable, setItemSoldOut } from "../state/floor-writes";
 import { errorMessage } from "../lib/errors";
 import { useInFlight } from "../lib/in-flight";
 import { printOutcomeKey } from "../lib/print";
