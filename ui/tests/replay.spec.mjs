@@ -6059,7 +6059,8 @@ test("a seat the edge refuses goes back to the floor, saying why and keeping wha
 
 /**
  * Double-taps `step` while its POST to `pattern` is held, and checks the button says `pending` and
- * takes no second tap until the answer. Resolves to how many POSTs reached `pattern` once `outcome`
+ * takes no second tap until the answer. A money act paints its pending state instead of wording the
+ * button (ADR-0196): `{ painted }` names that state's outcome. Resolves to how many POSTs reached `pattern` once `outcome`
  * shows; the route is taken off again, so the next act is not held.
  */
 async function doubleTap(page, step, pattern, pending, outcome) {
@@ -6080,7 +6081,11 @@ async function doubleTap(page, step, pattern, pending, outcome) {
   await page.route(pattern, hold);
   const button = page.locator(`[data-step="${step}"]`).first();
   await button.dblclick();
-  await expect(button).toHaveText(pending);
+  if (typeof pending === "string") {
+    await expect(button).toHaveText(pending);
+  } else {
+    await expect(page.locator(`[data-outcome="${pending.painted}"]`)).toBeVisible();
+  }
   await expect(button).toBeDisabled();
   release();
   await expect(page.locator(`[data-outcome="${outcome}"]`)).toBeVisible();
@@ -6127,7 +6132,7 @@ test("a double tap on any act on the till's own drawer sends one request", async
     await signIn(page, edge);
     await navigateTo(page, "/shift");
     await page.locator("#float").fill("100000");
-    expect(await doubleTap(page, "openShift", "**/api/shifts", "Sending…", "shift-open")).toBe(1);
+    expect(await doubleTap(page, "openShift", "**/api/shifts", { painted: "open-pending" }, "shift-open")).toBe(1);
 
     await page.locator("#movement-amount").fill("20000");
     await page.locator('[data-step="askPaidIn"]').click();
@@ -6142,9 +6147,9 @@ test("a double tap on any act on the till's own drawer sends one request", async
 
     await page.locator("#count").fill("120000");
     const count = "**/api/shifts/*/count";
-    expect(await doubleTap(page, "countShift", count, "Sending…", "shift-counted")).toBe(1);
+    expect(await doubleTap(page, "countShift", count, { painted: "count-pending" }, "shift-counted")).toBe(1);
     const close = "**/api/shifts/*/close";
-    expect(await doubleTap(page, "closeShift", close, "Sending…", "shift-closed")).toBe(1);
+    expect(await doubleTap(page, "closeShift", close, { painted: "close-pending" }, "shift-closed")).toBe(1);
   } finally {
     await edge.stop();
   }
@@ -6575,6 +6580,153 @@ test("a settle whose answer is lost is checked, not rolled back, and shows settl
     await expect(page.locator('[data-outcome="settle-pending"]')).toContainText("Checking with the store server");
     await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
     await expect(page.locator('[data-outcome="money-refused"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// ADR-0204 for the drawer's own shift: a count whose answer is lost is read again, and the till
+// shows the count the edge recorded, never the one it typed. The edge here records 90,000₫ for a
+// count typed as 100,000₫, as when another device's count reached it first. The close's answer is
+// lost too, and the closed card shows the figures the close's event brought: the edge's.
+test("a count and a close whose answers are lost show the edge's count, not the till's", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await openShift(page);
+    await page.route("**/api/shifts/*/count", async (route) => {
+      const body = { ...route.request().postDataJSON(), counted_minor: 90000 };
+      await route.fetch({ postData: JSON.stringify(body) });
+      await route.abort("connectionreset");
+    });
+    await page.locator("#count").fill("100000");
+    await page.locator('[data-step="countShift"]').click();
+    await expect(page.locator('[data-outcome="count-pending"]')).toContainText("Checking with the store server");
+    await expect(page.locator('[data-outcome="shift-counted"]')).toBeVisible();
+
+    await page.route("**/api/shifts/*/close", async (route) => {
+      await route.fetch();
+      await route.abort("connectionreset");
+    });
+    await page.locator('[data-step="closeShift"]').click();
+    const closed = page.locator('[data-outcome="shift-closed"]');
+    await expect(closed).toContainText("Counted 90,000₫");
+    await expect(closed).toContainText("-10,000₫");
+    await expect(closed).not.toContainText("Counted 100,000₫");
+    await expect(page.locator('[data-outcome="money-refused"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// ADR-0204: a close that never reached the edge is found not made, and the shift stays counted.
+test("a close that never reached the store server is found not made, and the shift stays counted", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await openShift(page);
+    await page.locator("#count").fill("100000");
+    await page.locator('[data-step="countShift"]').click();
+    await expect(page.locator('[data-outcome="shift-counted"]')).toBeVisible();
+    await page.route("**/api/shifts/*/close", (route) => route.abort("connectionreset"));
+    await page.locator('[data-step="closeShift"]').click();
+    await expect(page.locator('[data-outcome="close-pending"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="money-refused"]')).toContainText("The shift was not closed");
+    await page.locator('[data-step="dismissRefusal"]').click();
+    await expect(page.locator('[data-outcome="shift-counted"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="shift-closed"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// ADR-0204 for an opening: committed with its answer lost, the till finds the shift open.
+test("an opening whose answer is lost is checked, and the shift shows open", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await navigateTo(page, "/shift");
+    await page.route("**/api/shifts", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.continue();
+        return;
+      }
+      await route.fetch();
+      await route.abort("connectionreset");
+    });
+    await page.locator("#float").fill("100000");
+    await page.locator('[data-step="openShift"]').click();
+    await expect(page.locator('[data-outcome="open-pending"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="shift-open"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="money-refused"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// SHIFT_ALREADY_OPEN at the edge (ADR-0196 safeguard 3), from the real edge: another screen opens
+// the drawer's shift while this till's link is held, so this till still offers **Open shift**, and
+// the edge refuses it with its own sentence. The till's own check, which refuses an open while it
+// holds a shift, is `unit/shift-acts.test.ts`'s: the screen hides **Open shift** once it does.
+test("a shift opened elsewhere first is refused by the store server, saying why", async ({ context }) => {
+  const edge = await startEdge();
+  try {
+    const till = await context.newPage();
+    let release = () => {};
+    const held = new Promise((resolve) => {
+      release = resolve;
+    });
+    await pair(till, edge);
+    await signIn(till, edge);
+    await navigateTo(till, "/shift");
+    await expect(till.locator('[data-step="openShift"]')).toBeVisible();
+    await till.routeWebSocket(
+      (url) => url.pathname === "/ws",
+      async (socket) => {
+        await held;
+        socket.connectToServer();
+      },
+    );
+    await till.reload();
+    await expect(till.locator('[data-step="openShift"]')).toBeVisible();
+
+    const other = await context.newPage();
+    await other.goto(`${edge.baseURL}/`);
+    await openShift(other);
+
+    await till.locator("#float").fill("100000");
+    await till.locator('[data-step="openShift"]').click();
+    await expect(till.locator('[data-outcome="money-refused"]')).toContainText(
+      "A shift is already open. Count and close it first.",
+    );
+    release();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// COUNT_DOES_NOT_ADD_UP at the edge. The real edge cannot be made to refuse it from this screen:
+// the count field always sends notes that come to the total. So the edge's refusal is substituted
+// here, to replay how the till shows it; the till's own check is `unit/shift-acts.test.ts`'s.
+test("a count the store server refuses as not adding up says why and stays open", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await openShift(page);
+    await refusePost(page, "**/api/shifts/*/count", "COUNT_DOES_NOT_ADD_UP");
+    await page.locator("#count").fill("100000");
+    await page.locator('[data-step="countShift"]').click();
+    await expect(page.locator('[data-outcome="money-refused"]')).toContainText(
+      "The notes counted do not add up to the amount.",
+    );
+    await page.locator('[data-step="dismissRefusal"]').click();
+    await expect(page.locator('[data-outcome="shift-open"]')).toBeVisible();
   } finally {
     await edge.stop();
   }

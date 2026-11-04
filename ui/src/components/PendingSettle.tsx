@@ -11,7 +11,7 @@ import { holdsOwn } from "../state/permissions";
 import type { MoneyPhase } from "../state/money-act";
 
 /** What each act says while it is out, and once the store server cannot be reached. */
-export type PendingActKind = "settle" | "void" | "discount" | "waive" | "split" | "merge";
+export type PendingActKind = "settle" | "void" | "discount" | "waive" | "split" | "merge" | "open" | "count" | "close";
 
 const ACTS: Readonly<Record<PendingActKind, { doing: MessageKey; unreachable: MessageKey; outcome: string }>> = {
   settle: { doing: "pay.paying", unreachable: "pay.unreachable", outcome: "settle-pending" },
@@ -20,6 +20,9 @@ const ACTS: Readonly<Record<PendingActKind, { doing: MessageKey; unreachable: Me
   waive: { doing: "pay.waiving", unreachable: "pay.reduction_unreachable", outcome: "waive-pending" },
   split: { doing: "pay.splitting", unreachable: "pay.reduction_unreachable", outcome: "split-pending" },
   merge: { doing: "pay.merging", unreachable: "pay.reduction_unreachable", outcome: "merge-pending" },
+  open: { doing: "shift.opening", unreachable: "shift.unreachable", outcome: "open-pending" },
+  count: { doing: "shift.counting", unreachable: "shift.unreachable", outcome: "count-pending" },
+  close: { doing: "shift.closing", unreachable: "shift.unreachable", outcome: "close-pending" },
 };
 
 export function PendingSettle(props: {

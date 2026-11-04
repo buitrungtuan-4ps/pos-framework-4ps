@@ -1,4 +1,5 @@
 import { For, Show, createSignal, onMount } from "solid-js";
+import { useNavigate } from "@solidjs/router";
 
 import { ApproverFields } from "../components/ApproverFields";
 import { ClosedCard } from "../components/ClosedCard";
@@ -9,6 +10,9 @@ import { AssigneeField, DrawerOwner } from "../components/DrawerOwner";
 import { Keypad } from "../components/Keypad";
 import { PageHeader } from "../components/ui";
 import { SafeDrop } from "../components/SafeDrop";
+import { PendingSettle } from "../components/PendingSettle";
+import { RefusalPanel } from "../components/RefusalPanel";
+import { useOwnShiftActs } from "../state/shift-acts";
 import { CashTotals } from "../components/ShiftCashLines";
 import type { ApproverRequest, DrawerEntry, DrawerOutcome, ShiftResponse } from "../api/schemas";
 import { t, type MessageKey } from "../i18n";
@@ -16,9 +20,7 @@ import { WhyUnavailable } from "../components/StoreData";
 import { money, type Money } from "../lib/money";
 import {
   closeDrawerShifts,
-  closeShift,
   countDrawerShift,
-  countShift,
   currencyExponent,
   drawerPerTill,
   formatAmount,
@@ -26,7 +28,6 @@ import {
   loadShift,
   openDrawerNoSale,
   openDrawerShift,
-  openShift,
   ownTill,
   parseAmount,
   reasonsFor,
@@ -133,8 +134,6 @@ export function Shift() {
   const [approverCode, setApproverCode] = createSignal("");
   const [approverPin, setApproverPin] = createSignal("");
   const [drawer, setDrawer] = createSignal<DrawerOutcome | null>(null);
-  // This till's own close, refused until it gives a reason for its over or short: its figures.
-  const [owedClose, setOwedClose] = createSignal<ShiftResponse | null>(null);
 
   const shift = () => state.shift;
   const phase = () => shift()?.state ?? "NONE";
@@ -168,14 +167,17 @@ export function Shift() {
 
   // The act on this till's own drawer in flight, keyed by the button tapped, which says so until
   // the edge answers; every other act on it waits for that answer.
+  const navigate = useNavigate();
   const own = useInFlight<string>(setError);
-  const run = (key: string, action: () => Promise<unknown>) =>
-    own.run(key, async () => {
-      await action();
-      setAmount("");
-      setFloatTyped(false);
-      setCounted(EMPTY_COUNT);
-    });
+  // Opening, counting and closing it are money acts (`../state/shift-acts`): pending until the edge
+  // answers, re-read rather than re-sent when it does not, and the fields cleared once it commits.
+  const acts = useOwnShiftActs(() => {
+    setAmount("");
+    setFloatTyped(false);
+    setCounted(EMPTY_COUNT);
+  });
+  onMount(() => acts.resume());
+  const ownBusy = () => own.busy() !== null || acts.pending() !== null;
 
   // A float as the cashier would type it: whole units of the currency, which is all the keypad
   // types. Nothing fills in for no float, as before the setting, nor for one that is not a whole
@@ -260,29 +262,30 @@ export function Shift() {
   };
   const drawerReason = (reasonCodeId: string) => void openDrawer(reasonCodeId);
 
-  // Closes this till's own drawer; where the store asks a reason first, says so with the figures.
-  const closeOwn = (key: string, close: () => Promise<unknown>) =>
-    run(key, async () => {
-      try {
-        await close();
-        setOwedClose(null);
-      } catch (caught) {
-        const [owed] = owedVariances(caught) ?? [];
-        if (owed === undefined) {
-          throw caught;
-        }
-        setOwedClose(owed);
-      }
-    });
+  // The taps the step budget counts on this till's own drawer.
+  const openShift = () => {
+    const value = floatParsed();
+    if (value !== null) acts.open(value.minor, value.breakdown);
+  };
+  const countShift = () => {
+    const value = parsed();
+    const current = shift();
+    if (value !== null && current) acts.count(current.shiftId, value.minor, value.breakdown);
+  };
+  const closeShift = () => {
+    const current = shift();
+    if (current) acts.close(current.shiftId);
+  };
+  // Where the store asks a reason first, the close's refusal brings the figures to ask it with.
   const varianceReason = (reasonCodeId: string) => {
     const current = shift();
     if (current) {
-      void closeOwn(reasonCodeId, () => closeShift(current.shiftId, reasonCodeId));
+      acts.close(current.shiftId, reasonCodeId);
     }
   };
   // Only for the shift it was asked of: one closed meanwhile from the list asks nothing more.
   const owedHere = () => {
-    const owed = owedClose();
+    const owed = acts.owed();
     return owed !== null && owed.shift_id === shift()?.shiftId ? owed : null;
   };
 
@@ -577,6 +580,15 @@ export function Shift() {
         </p>
       </Show>
 
+      <Show when={acts.pending()}>
+        {(out) => <PendingSettle act={out().act} phase={out().phase} amount="" onLeave={() => navigate("/")} />}
+      </Show>
+      <RefusalPanel message={acts.refusal()} onDismiss={acts.dismiss} />
+      <Show when={acts.unread()}>
+        <p class="mb-3 text-sm text-ink-muted" role="status" data-outcome="shift-closed-unread">
+          {t("shift.closed_unread")}
+        </p>
+      </Show>
       {/* After a close, its card comes first, above the next opening (UX-14). */}
       <Show when={phase() === "SHIFT_STATE_CLOSED" && !handingOver() && shift()?.variance}>
         {(variance) => (
@@ -607,16 +619,11 @@ export function Shift() {
         <button
           type="button"
           class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
-          disabled={floatParsed() === null || own.busy() !== null}
+          disabled={floatParsed() === null || ownBusy()}
           data-step="openShift"
-          onClick={() => {
-            const value = floatParsed();
-            if (value !== null) {
-              void run("open", () => openShift(value.minor, value.breakdown));
-            }
-          }}
+          onClick={() => openShift()}
         >
-          {t(own.busy() === "open" ? "common.sending" : "shift.open")}
+          {t("shift.open")}
         </button>
       </Show>
 
@@ -757,17 +764,11 @@ export function Shift() {
         <button
           type="button"
           class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
-          disabled={parsed() === null || own.busy() !== null}
+          disabled={parsed() === null || ownBusy()}
           data-step="countShift"
-          onClick={() => {
-            const value = parsed();
-            const current = shift();
-            if (value !== null && current) {
-              void run("count", () => countShift(current.shiftId, value.minor, value.breakdown));
-            }
-          }}
+          onClick={() => countShift()}
         >
-          {t(own.busy() === "count" ? "common.sending" : "shift.enter_count")}
+          {t("shift.enter_count")}
         </button>
         </Show>
       </Show>
@@ -780,16 +781,11 @@ export function Shift() {
         <button
           type="button"
           class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
-          disabled={own.busy() !== null}
+          disabled={ownBusy()}
           data-step="closeShift"
-          onClick={() => {
-            const current = shift();
-            if (current) {
-              void closeOwn("close", () => closeShift(current.shiftId));
-            }
-          }}
+          onClick={() => closeShift()}
         >
-          {t(own.busy() === "close" ? "common.sending" : "shift.close")}
+          {t("shift.close")}
         </button>
         </Show>
         <Show when={owedHere()}>
@@ -811,11 +807,11 @@ export function Shift() {
                     <button
                       type="button"
                       class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
-                      disabled={own.busy() !== null}
+                      disabled={ownBusy()}
                       data-step="varianceReason"
                       onClick={() => varianceReason(reason.reason_code_id)}
                     >
-                      {own.busy() === reason.reason_code_id ? t("common.sending") : reason.display_name}
+                      {reason.display_name}
                     </button>
                   )}
                 </For>
@@ -823,7 +819,7 @@ export function Shift() {
               <button
                 type="button"
                 class="mt-3 min-h-touch rounded-token border border-line px-3 text-sm"
-                onClick={() => setOwedClose(null)}
+                onClick={() => acts.clearOwed()}
               >
                 {t("common.cancel")}
               </button>

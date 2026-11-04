@@ -20,4 +20,6 @@ export const PRECHECKED: Readonly<Partial<Record<ActionId, readonly string[]>>> 
   "billing.fee.waive": [WRITES_PENDING, "APPROVAL_REQUIRED", "FEE_NOT_WAIVABLE"],
   "billing.bill.split": [WRITES_PENDING, "SPLIT_NOT_A_PARTITION"],
   "billing.bill.merge": [WRITES_PENDING, "BILLS_ON_DIFFERENT_ORDERS"],
+  "cash.shift.open": ["SHIFT_ALREADY_OPEN", "COUNT_DOES_NOT_ADD_UP"],
+  "cash.shift.count": ["COUNT_DOES_NOT_ADD_UP"],
 };
