@@ -268,6 +268,7 @@
   "order.choose_required": "{group} — chọn một",
   "order.choose_title": "Chọn cho {item}",
   "order.courses": "Theo món",
+  "order.draft_unconfirmed": "Máy chủ cửa hàng không trả lời. Đơn này chưa được xác nhận: hãy quay lại và bắt đầu lại đơn.",
   "order.empty": "Chưa có món. Chọn từ thực đơn.",
   "order.fee_waived": "Đã miễn {fee}",
   "order.fewer": "Bớt một {item}",

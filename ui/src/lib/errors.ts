@@ -108,10 +108,19 @@ export function reasonMessage(reason: string): string {
   return key === undefined ? t("common.store_error") : t(key);
 }
 
+/**
+ * An act the edge did not answer, whose outcome the till cannot read back, already in the operator's
+ * words (ADR-0204 decision 5). `errorMessage` shows its sentence as it is.
+ */
+export class Unconfirmed extends Error {}
+
 export function errorMessage(
   caught: unknown,
   own: Readonly<Record<string, MessageKey>> = {},
 ): string {
+  if (caught instanceof Unconfirmed) {
+    return caught.message;
+  }
   if (!(caught instanceof ApiError)) {
     return t("common.store_error");
   }

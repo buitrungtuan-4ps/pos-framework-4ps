@@ -4204,6 +4204,82 @@ test("a new counter order is opened by its first item, and leaving before then l
   }
 });
 
+const ORDER_SENTENCES = JSON.parse(readFileSync(new URL("../src/i18n/en.json", import.meta.url), "utf8"));
+
+/** Counts the opens of a counter order that reach `/api/orders`, answering each with `answer`. */
+async function routeOpens(page, answer) {
+  const opens = { count: 0 };
+  await page.route("**/api/orders", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    opens.count += 1;
+    await answer(route, opens.count);
+  });
+  return opens;
+}
+
+// A draft's first open that the edge refuses opened nothing, so the next tap opens it (ADR-0204).
+// The refusal is substituted: the demo store sells without a shift, so the real edge would not.
+test("a draft walk-in whose first open is refused opens on the next tap", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    const opens = await routeOpens(page, async (route, count) => {
+      if (count === 1) {
+        const reason = "OPEN_SHIFT_REQUIRED";
+        await route.fulfill({ status: 409, headers: { "pos-error-reason": reason }, body: reason });
+        return;
+      }
+      await route.continue();
+    });
+    await startWalkIn(page);
+    await page.locator('[data-step="onItem"]').first().click();
+    await expect(page.getByRole("alert").first()).toContainText(ORDER_SENTENCES["error.open_shift_required"]);
+    await expect(page).toHaveURL(/\/order\/new$/);
+    await addItem(page);
+    await expect(page).toHaveURL(/\/order\/[0-9A-Z]{26}$/);
+    expect(opens.count).toBe(2);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A draft's first open with no answer may have opened an order the till cannot tell from another
+// till's, so the draft opens nothing more: every tap says the order is not confirmed, and the
+// operator starts again from the counter (ADR-0204 decision 5). Never two orders from one draft.
+test("a draft walk-in whose first open goes unanswered is not confirmed and opens no second order", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    const opens = await routeOpens(page, async (route) => {
+      await route.fetch();
+      await route.abort("connectionreset");
+    });
+    await startWalkIn(page);
+    const unconfirmed = ORDER_SENTENCES["order.draft_unconfirmed"];
+    await page.locator('[data-step="onItem"]').first().click();
+    await expect(page.getByRole("alert").first()).toContainText(unconfirmed);
+    await page.locator('[data-step="onItem"]').first().click();
+    await expect(page.getByRole("alert").first()).toContainText(unconfirmed);
+    await expect(page).toHaveURL(/\/order\/new$/);
+    expect(opens.count).toBe(1);
+
+    await page.unroute("**/api/orders");
+    await page.locator('a[href="/counter"]').first().click();
+    await startWalkIn(page);
+    await addItem(page);
+    await expect(page).toHaveURL(/\/order\/[0-9A-Z]{26}$/);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A counter bill takes money off and is voided as a table's is (UX-10), with the same panels: the
 // counter's pay pad offered neither, so a walk-in that needed either went to a manager elsewhere.
 test("a counter bill takes a discount and is voided like a table's", async ({ page }) => {
