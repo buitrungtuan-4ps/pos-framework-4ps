@@ -78,8 +78,8 @@ async fn a_committed_save_tells_its_hook_once_visible_and_a_lost_race_tells_noth
     let base = (random & u128::from(u64::MAX)) << 64;
     let tenant = TenantId::new(Ulid::from_u128(base | 1));
     let store = StoreId::new(Ulid::from_u128(base | 2));
-    let v1 = ConfigVersionId::new(Ulid::from_u128(base | 11));
-    let v2 = ConfigVersionId::new(Ulid::from_u128(base | 12));
+    let v1 = ConfigVersionId::new(Ulid::from_u128(base | 0x0B));
+    let v2 = ConfigVersionId::new(Ulid::from_u128(base | 0x0C));
 
     let created = trees
         .save(tenant, store, &state(&[v1]), None)
