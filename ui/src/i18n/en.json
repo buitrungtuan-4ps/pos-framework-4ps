@@ -268,6 +268,7 @@
   "order.choose_required": "{group} — choose one",
   "order.choose_title": "Choose for {item}",
   "order.courses": "By course",
+  "order.draft_unconfirmed": "The store server did not answer. This order is not confirmed: go back and start the order again.",
   "order.empty": "No items yet. Add from the menu.",
   "order.fee_waived": "{fee} waived",
   "order.fewer": "One fewer {item}",
