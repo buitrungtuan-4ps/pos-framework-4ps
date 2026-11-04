@@ -15,7 +15,6 @@ import { ReadFailed } from "../components/StoreData";
 import { PageHeader } from "../components/ui";
 import { type MessageKey, t } from "../i18n";
 import { tableStateKey } from "../i18n/labels";
-import { errorMessage } from "../lib/errors";
 import { printOutcomeKey } from "../lib/print";
 import { asksApprover, can, holdsOwn } from "../state/permissions";
 import { retryable } from "../state/engine";
@@ -28,6 +27,7 @@ import {
   tableCounts,
   tableLabel,
 } from "../state/store";
+import { createPrint } from "../state/print-writes";
 
 const ORDER = [
   "TABLE_STATE_FREE",
@@ -307,19 +307,16 @@ export function Today() {
     setError(null);
   };
 
+  const print = createPrint(setError);
   const reprintReceipt = async () => {
     const billId = chosen();
     if (billId === null) {
       return;
     }
-    setError(null);
-    try {
-      const printed = await api.reprintReceipt(billId);
+    await print.run("billing.receipt.reprint", () => api.reprintReceipt(billId), (printed) => {
       setCopy(printed);
       setCopied((counts) => ({ ...counts, [billId]: printed.copy_number }));
-    } catch (caught) {
-      setError(errorMessage(caught));
-    }
+    });
   };
 
   return (
@@ -378,9 +375,10 @@ export function Today() {
                         type="button"
                         class="mt-2 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink"
                         data-step="reprintReceipt"
+                        disabled={print.printing()}
                         onClick={() => void reprintReceipt()}
                       >
-                        {t("today.reprint")}
+                        {t(print.printing() ? "common.sending" : "today.reprint")}
                       </button>
                       <Show when={copy()}>
                         {(printed) => (

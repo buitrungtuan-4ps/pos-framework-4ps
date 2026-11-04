@@ -41,14 +41,19 @@ the drawer, and invites the cashier to take the payment again.
    its subject again. The edge stays the only writer (ADR-0196 decision 5), and nothing is queued or
    re-sent.
 5. **An act with no readable subject is said unconfirmed.** Where nothing the till can read shows
-   whether the act committed, such as the drawer opened without a sale, a missing answer neither
-   rolls back nor is re-sent: the till says the act is unconfirmed, and the operator, who can check
-   the drawer, dismisses it.
+   whether an act committed, a missing answer neither rolls back nor is re-sent: the till says the
+   act is unconfirmed, and the operator, who can check the drawer or the printer, decides what to
+   do next. This holds for any act on the edge, a money act or an edge write: the drawer opened
+   without a sale, and every print (a pre-bill, a copy of a receipt, an X, a handover slip again),
+   whose paper no read can show. An edge write with a readable subject still rolls back and reads
+   it again (ADR-0173 decision 4).
 
 ## Consequences accepted
 
 - A cashier can wait on a pending payment screen for as long as the edge is unreachable, rather than
   being told a payment failed that may have succeeded.
 - Only a manager can walk away from an unconfirmed payment, and does so without a PIN.
+- A print with no answer is not sent again by the till. A second copy is the operator's call, made
+  after looking at the printer, and may print the paper twice.
 - The till keeps a small per-subject "unconfirmed" mark until the edge answers. It is lost on reload,
   and the reload reads the edge's state anyway.
