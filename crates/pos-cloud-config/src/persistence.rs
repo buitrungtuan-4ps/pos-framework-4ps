@@ -128,6 +128,26 @@ impl ConfigTreeStore for PostgresConfigTrees {
         .map_err(|error| ConfigStoreError::new(error.to_string()))
     }
 
+    async fn record_config_wake_beat(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        seen_at: Timestamp,
+        beat: &crate::config_tree::ConfigWakeBeat,
+    ) -> Result<(), ConfigStoreError> {
+        let ms = |ms: Option<u64>| ms.map(|ms| i64::try_from(ms).unwrap_or(i64::MAX));
+        let row = store_postgres::ConfigWakeRow {
+            delivery: &beat.delivery,
+            samples: i32::try_from(beat.samples).unwrap_or(i32::MAX),
+            p95_ms: ms(beat.p95_ms),
+            max_ms: ms(beat.max_ms),
+        };
+        let seen_at_ms = seen_at.as_milliseconds_since_epoch();
+        PostgresConfigTrees::record_config_wake_beat(self, tenant, store, seen_at_ms, row)
+            .await
+            .map_err(|error| ConfigStoreError::new(error.to_string()))
+    }
+
     async fn record_store_heartbeat(
         &self,
         tenant: TenantId,

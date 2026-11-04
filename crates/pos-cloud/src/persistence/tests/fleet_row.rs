@@ -57,6 +57,11 @@ fn full_row() -> FleetStoreRow {
         package_refused_version_id: Some("V2".to_owned()),
         package_refusal_reason: Some("EDGE_TOO_OLD".to_owned()),
         package_reported_at_ms: Some(9_000),
+        config_delivery: Some("CONFIG_DELIVERY_WAKE".to_owned()),
+        config_wake_samples: Some(12),
+        config_wake_p95_ms: Some(240),
+        config_wake_max_ms: Some(900),
+        config_wake_reported_at_ms: Some(10_000),
     }
 }
 
@@ -104,6 +109,19 @@ fn every_readable_column_reaches_the_fleet_row() {
             refused.reason.as_str()
         ),
         ("C2", Some("V2"), "EDGE_TOO_OLD")
+    );
+    let wake = row
+        .config_wake
+        .expect("the config delivery report reaches the row");
+    assert_eq!(wake.reported_at, at(10_000).expect("an instant"));
+    assert_eq!(
+        (
+            wake.beat.delivery.as_str(),
+            wake.beat.samples,
+            wake.beat.p95_ms,
+            wake.beat.max_ms
+        ),
+        ("CONFIG_DELIVERY_WAKE", 12, Some(240), Some(900))
     );
 }
 

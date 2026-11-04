@@ -1034,6 +1034,7 @@ struct FakeConfigTrees {
     print_agents: Arc<Mutex<RecordedAgents>>,
     /// The package a heartbeat last reported (migration 0090, ADR-0189).
     packages: Arc<Mutex<HashMap<(TenantId, StoreId), pos_cloud::config_tree::PackageBeat>>>,
+    config_wakes: Arc<Mutex<HashMap<(TenantId, StoreId), pos_cloud::config_tree::ConfigWakeBeat>>>,
     /// A store's recorded answer to its region difference, mirroring
     /// `store_region_acknowledgement` ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
     /// One row per store and overwritten, exactly as the table is.
@@ -1437,11 +1438,17 @@ impl ConfigTreeStore for FakeConfigTrees {
         _seen_at: Timestamp,
         beat: &pos_cloud::config_tree::PackageBeat,
     ) -> Result<(), ConfigStoreError> {
-        self.packages
-            .lock()
-            .expect("lock")
-            .insert((tenant, store), beat.clone());
-        Ok(())
+        sync::record_beat(&self.packages, (tenant, store), beat)
+    }
+
+    async fn record_config_wake_beat(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        _seen_at: Timestamp,
+        beat: &pos_cloud::config_tree::ConfigWakeBeat,
+    ) -> Result<(), ConfigStoreError> {
+        sync::record_beat(&self.config_wakes, (tenant, store), beat)
     }
 
     async fn record_store_heartbeat(
@@ -5636,6 +5643,7 @@ fn store_in_handover(
         print_agents: None,
         print_agents_reported_at: None,
         package: None,
+        config_wake: None,
     }
 }
 

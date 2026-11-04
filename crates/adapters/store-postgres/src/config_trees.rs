@@ -22,7 +22,7 @@ use crate::store::{RowUpdate, pool_unavailable, unavailable};
 /// The config-tree store over a shared pool. Built by [`PostgresStore::config_trees`](crate::PostgresStore::config_trees).
 #[derive(Clone, Debug)]
 pub struct PostgresConfigTrees {
-    pool: Pool,
+    pub(crate) pool: Pool,
     saved: Option<crate::config_saved::ConfigSaved>,
 }
 

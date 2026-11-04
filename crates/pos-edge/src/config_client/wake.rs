@@ -17,8 +17,12 @@
 //!   poll's own schedule, said once when the bus goes and once when it comes back.
 //!
 //! A wake-driven apply logs `wake_to_apply_ms`, the time from hearing the wake to applying its
-//! version (decision 6): a version id and a duration, nothing personal.
+//! version (decision 6): a version id and a duration, nothing personal. The time is also kept in
+//! [`Edge::config_wake_standing`](crate::app::Edge::config_wake_standing), with whether the store
+//! hears wakes at all (`Connected` says it does, a failing bus that it is on the poll), for the
+//! heartbeat.
 
+use pos_edge_app::app::ConfigDelivery;
 use pos_ports::config_store::ConfigStore;
 use pos_ports::event_store::EventStore;
 use pos_ports::store_wake::{StoreWake, WakeSignal};
@@ -73,9 +77,14 @@ where
             let wait = match pulled {
                 Ok(applied) => {
                     if let (Some(heard), Some(version)) = (heard_at, applied) {
+                        let wake_to_apply_ms =
+                            u64::try_from(heard.elapsed().as_millis()).unwrap_or(u64::MAX);
+                        self.edge
+                            .config_wake_standing()
+                            .record_apply_ms(wake_to_apply_ms);
                         tracing::info!(
                             config_version_id = %version,
-                            wake_to_apply_ms = u64::try_from(heard.elapsed().as_millis()).unwrap_or(u64::MAX),
+                            wake_to_apply_ms,
                             "applied the configuration a wake announced"
                         );
                     }
@@ -122,6 +131,9 @@ where
             }
             match wake.next_signal(left).await {
                 Ok(Some(WakeSignal::Connected)) => {
+                    self.edge
+                        .config_wake_standing()
+                        .set_delivery(ConfigDelivery::Wake);
                     if std::mem::take(&mut bus.down) {
                         tracing::info!("the config wake bus is back; pulling to catch up");
                     }
@@ -137,6 +149,9 @@ where
                     return Reason::Poll;
                 }
                 Err(error) => {
+                    self.edge
+                        .config_wake_standing()
+                        .set_delivery(ConfigDelivery::Poll);
                     if !std::mem::replace(&mut bus.down, true) {
                         tracing::warn!(%error, "the config wake bus is unavailable; the poll carries on");
                     }

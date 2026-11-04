@@ -40,6 +40,7 @@ use crate::sync_status::SyncStatus;
 mod authority;
 mod bills;
 mod composition;
+mod config_wake;
 mod error;
 mod floor;
 pub mod flows;
@@ -54,6 +55,7 @@ mod session;
 mod shifts;
 mod views;
 
+pub use config_wake::{ConfigDelivery, ConfigWakeReport, ConfigWakeStanding, WAKE_SAMPLES_MAX};
 pub use error::{AppError, Approval};
 pub use package::{PackageRefusal, PackageStanding, RefusedPackage};
 pub(crate) use records::fee_records;
@@ -273,6 +275,8 @@ pub struct Edge<S> {
     /// The last configuration document refused for its package, written by the config-pull loop
     /// and read by the heartbeat and `GET /api/package` (ADR-0189 decision 6).
     package: PackageStanding,
+    /// How configuration reaches the store and how fast (ADR-0195).
+    config_wake: ConfigWakeStanding,
 }
 
 /// What [`Edge::open_inbound_order`] opened, and the one acceptance fact the caller must not work

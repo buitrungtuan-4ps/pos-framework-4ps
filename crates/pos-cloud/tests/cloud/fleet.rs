@@ -55,6 +55,7 @@ fn drifted_fleet(online_store: StoreId, offline_store: StoreId) -> FakeFleet {
                 print_agents: None,
                 print_agents_reported_at: None,
                 package: None,
+                config_wake: None,
             },
         )
         .with_row(
@@ -87,6 +88,7 @@ fn drifted_fleet(online_store: StoreId, offline_store: StoreId) -> FakeFleet {
                 print_agents: None,
                 print_agents_reported_at: None,
                 package: None,
+                config_wake: None,
             },
         )
 }
@@ -774,6 +776,7 @@ async fn fleet_never_seen_store_is_offline_and_not_current() {
             print_agents: None,
             print_agents_reported_at: None,
             package: None,
+            config_wake: None,
         },
     );
     let router = fleet_app(provisioned_admin(), fleet);
@@ -834,6 +837,7 @@ async fn fleet_reads_one_store_and_404s_an_unknown_one() {
             print_agents: None,
             print_agents_reported_at: None,
             package: None,
+            config_wake: None,
         },
     );
     let router = fleet_app(provisioned_admin(), fleet);

@@ -642,6 +642,79 @@ async fn config_sync_is_closed_without_the_read_config_scope() {
     assert_eq!(unknown.status(), StatusCode::FORBIDDEN);
 }
 
+/// A heartbeat carries how configuration reaches the store, wake or poll, and the wake-to-apply times
+/// (ADR-0195); each report replaces the last, a beat that says nothing about it leaves it, and one no
+/// edge could send is refused.
+#[tokio::test]
+async fn a_heartbeat_reports_how_config_reaches_the_store() {
+    let keys = FakeKeys::default();
+    let config_trees = FakeConfigTrees::default();
+    let router = http::router(app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        keys.clone(),
+        provisioned_admin(),
+        config_trees.clone(),
+        FakeWebhooks::default(),
+    ));
+    let uri = format!("/sync/stores/{}/heartbeat", store_id().as_ulid());
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ReadConfig]);
+    let beat = |body: serde_json::Value| {
+        let router = router.clone();
+        let (uri, token) = (uri.clone(), token.clone());
+        async move {
+            router
+                .oneshot(post_json_bearer(&uri, &body, &token))
+                .await
+                .expect("route the heartbeat")
+                .status()
+        }
+    };
+    let recorded = || {
+        let wakes = config_trees.config_wakes.lock().expect("lock");
+        wakes.get(&(tenant(), store_id())).cloned()
+    };
+
+    let wake = serde_json::json!({ "config_wake": {
+        "delivery": "CONFIG_DELIVERY_WAKE", "samples": 12, "p95_ms": 240, "max_ms": 900,
+    }});
+    assert_eq!(beat(wake).await, StatusCode::NO_CONTENT);
+    let wake = recorded().expect("the delivery is recorded");
+    assert_eq!(
+        (
+            wake.delivery.as_str(),
+            wake.samples,
+            wake.p95_ms,
+            wake.max_ms
+        ),
+        ("CONFIG_DELIVERY_WAKE", 12, Some(240), Some(900))
+    );
+
+    let poll = serde_json::json!({ "config_wake": {
+        "delivery": "CONFIG_DELIVERY_POLL", "samples": 0, "p95_ms": null, "max_ms": null,
+    }});
+    assert_eq!(beat(poll).await, StatusCode::NO_CONTENT);
+    assert_eq!(
+        recorded().map(|wake| (wake.delivery, wake.p95_ms)),
+        Some(("CONFIG_DELIVERY_POLL".to_owned(), None)),
+        "a store on the poll alone replaces what was recorded"
+    );
+
+    assert_eq!(
+        beat(serde_json::json!({ "outbox_depth": 0 })).await,
+        StatusCode::NO_CONTENT
+    );
+    assert!(
+        recorded().is_some(),
+        "a beat that says nothing about it leaves it"
+    );
+
+    let unbounded = serde_json::json!({ "config_wake": {
+        "delivery": "CONFIG_DELIVERY_WAKE", "samples": 100_000,
+    }});
+    assert_eq!(beat(unbounded).await, StatusCode::BAD_REQUEST);
+}
+
 /// A heartbeat carries the package version the store runs and the configuration it last refused for
 /// its package (ADR-0189 decision 6); each report replaces the last, a beat that says nothing about
 /// it leaves it, and text no id or reason could be is refused.
@@ -731,4 +804,18 @@ async fn a_heartbeat_reports_the_stores_package() {
         beat(serde_json::json!({ "package": { "package_version_id": long } })).await,
         StatusCode::BAD_REQUEST
     );
+}
+
+/// Records a heartbeat's report in a fake's map, replacing the store's last, as the liveness row does.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "it answers for the fake's `ConfigTreeStore` methods, whose signature is the seam's"
+)]
+pub(crate) fn record_beat<V: Clone>(
+    map: &std::sync::Mutex<std::collections::HashMap<(pos_proto::ids::TenantId, StoreId), V>>,
+    key: (pos_proto::ids::TenantId, StoreId),
+    beat: &V,
+) -> Result<(), pos_cloud::config_tree::ConfigStoreError> {
+    map.lock().expect("lock").insert(key, beat.clone());
+    Ok(())
 }

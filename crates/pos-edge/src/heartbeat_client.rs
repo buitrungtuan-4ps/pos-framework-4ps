@@ -55,7 +55,7 @@ use pos_ports::event_store::EventStore;
 use pos_proto::ClockSource as _;
 use pos_proto::ids::DeviceId;
 
-use crate::app::{Edge, RefusedPackage};
+use crate::app::{ConfigWakeReport, Edge, RefusedPackage};
 use crate::clock::SystemClock;
 use crate::lease_state::LeaseAuthority;
 use crate::print_agent::{AgentBacklog, PrintAgents};
@@ -106,6 +106,22 @@ pub struct HeartbeatReport {
     /// ([ADR-0189](../../../docs/adr/0189-a-store-runs-a-package-version-hq-pins.md) decision 6), or
     /// `None` if this source did not look.
     pub package: Option<PackageReport>,
+    /// How configuration reaches the store and how fast
+    /// ([ADR-0195](../../../docs/adr/0195-the-cloud-wakes-a-store-to-pull-its-config.md)), or `None`
+    /// if this source did not look.
+    pub config_wake: Option<ConfigWakeReport>,
+}
+
+/// The heartbeat body's `config_wake` field: `delivery`, `samples`, and `p95_ms` and `max_ms` once
+/// there is a sample.
+#[must_use]
+pub fn config_wake_json(report: &ConfigWakeReport) -> serde_json::Value {
+    serde_json::json!({
+        "delivery": report.delivery.as_wire(),
+        "samples": report.samples,
+        "p95_ms": report.p95_ms,
+        "max_ms": report.max_ms,
+    })
 }
 
 /// What a heartbeat says about the store's package.
@@ -228,6 +244,7 @@ where
             // no agents — it says it did not look. `StoreReport` is the one that asks.
             print_agents: None,
             package: Some(PackageReport::of(self)),
+            config_wake: Some(self.config_wake_standing().report()),
         }
     }
 }
@@ -294,6 +311,7 @@ where
             lease_generation,
             print_agents,
             package: Some(PackageReport::of(&self.edge)),
+            config_wake: Some(self.edge.config_wake_standing().report()),
         }
     }
 }
@@ -481,6 +499,29 @@ mod tests {
     /// The heartbeat's `package` field: the running version, `null` for the default package, and
     /// the refusal only while a document stands refused (ADR-0189 decision 6).
     #[test]
+    fn a_config_wake_report_is_the_delivery_and_the_wake_to_apply_times() {
+        use crate::app::{ConfigDelivery, ConfigWakeReport};
+        assert_eq!(
+            super::config_wake_json(&ConfigWakeReport::default()),
+            serde_json::json!({
+                "delivery": "CONFIG_DELIVERY_POLL", "samples": 0, "p95_ms": null, "max_ms": null,
+            })
+        );
+        let report = ConfigWakeReport {
+            delivery: ConfigDelivery::Wake,
+            samples: 12,
+            p95_ms: Some(240),
+            max_ms: Some(900),
+        };
+        assert_eq!(
+            super::config_wake_json(&report),
+            serde_json::json!({
+                "delivery": "CONFIG_DELIVERY_WAKE", "samples": 12, "p95_ms": 240, "max_ms": 900,
+            })
+        );
+    }
+
+    #[test]
     fn a_package_report_is_the_running_version_and_any_refusal() {
         use super::PackageReport;
         use crate::app::{PackageRefusal, RefusedPackage};
@@ -553,6 +594,7 @@ mod tests {
                 lease_generation: Some(4),
                 print_agents: None,
                 package: None,
+                config_wake: None,
             }
         }
     }
@@ -567,6 +609,7 @@ mod tests {
                 lease_generation: None,
                 print_agents: None,
                 package: None,
+                config_wake: None,
             }
         }
     }
@@ -677,6 +720,7 @@ mod tests {
                 lease_generation: Some(4),
                 print_agents: None,
                 package: None,
+                config_wake: None,
             }),
             "the last beat carries the drained zero and the generation this box held — the two \
              facts the cloud's clear is keyed on"
@@ -702,6 +746,7 @@ mod tests {
                 lease_generation: None,
                 print_agents: None,
                 package: None,
+                config_wake: None,
             }),
             "the depth the source read is the depth the transport sent"
         );

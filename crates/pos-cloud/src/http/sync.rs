@@ -153,10 +153,11 @@ where
         ("store_id" = String, Path, description = "The store, a ULID. It must be the credential's own"),
     ),
     request_body(
-        content = HeartbeatBody, description = "Optional: `outbox_depth`, `lease_generation`, `print_agents` and `package` (the \
+        content = HeartbeatBody, description = "Optional: `outbox_depth`, `lease_generation`, `print_agents`, `package` (the \
                        package version the store runs and the configuration it last refused for its \
-                       package, ADR-0189), each left out when the store cannot say. An empty body \
-                       is a bare ping",
+                       package, ADR-0189) and `config_wake` (wake or poll, and the wake-to-apply \
+                       times, ADR-0195), each left out when the store cannot say. An empty body is a \
+                       bare ping",
         content_type = "application/json",
     ),
     responses(
@@ -224,16 +225,8 @@ where
             );
         }
     };
-    if report
-        .package
-        .as_ref()
-        .is_some_and(|beat| !beat.is_bounded())
-    {
-        return api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "the heartbeat's package report carries text longer than an id or a reason",
-            &[("package", "INVALID_VALUE")],
-        );
+    if let Some(refused) = unbounded_report(&report) {
+        return refused;
     }
     // The tenant is the grant's, not the path's — a store reaches only its own tenant's liveness row.
     let now = app.clock.now();
@@ -256,10 +249,45 @@ where
         }
         (outcome, _) => outcome,
     };
+    let recorded = match (recorded, &report.config_wake) {
+        (Ok(()), Some(beat)) => {
+            app.config_trees
+                .record_config_wake_beat(grant.tenant(), store_id, now, beat)
+                .await
+        }
+        (outcome, _) => outcome,
+    };
     match recorded {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => config_store_error_response(&error),
     }
+}
+
+/// The refusal for a report no edge sends: a package report with text longer than an id or a
+/// reason, or a config delivery report past its bounds; `None` for one that fits.
+fn unbounded_report(report: &HeartbeatBody) -> Option<Response> {
+    if report
+        .config_wake
+        .as_ref()
+        .is_some_and(|beat| !beat.is_bounded())
+    {
+        return Some(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "the heartbeat's config delivery report is not one an edge sends",
+            &[("config_wake", "INVALID_VALUE")],
+        ));
+    }
+    report
+        .package
+        .as_ref()
+        .is_some_and(|beat| !beat.is_bounded())
+        .then(|| {
+            api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "the heartbeat's package report carries text longer than an id or a reason",
+                &[("package", "INVALID_VALUE")],
+            )
+        })
 }
 
 /// The most envelopes one `POST /sync/stores/{store_id}/events` may carry
@@ -506,6 +534,11 @@ struct HeartbeatBody {
     /// `None` when the store said nothing about it, which leaves what was recorded alone.
     #[serde(default)]
     package: Option<pos_cloud_config::config_tree::PackageBeat>,
+    /// How configuration reaches the store and how fast
+    /// ([ADR-0195](../../../docs/adr/0195-the-cloud-wakes-a-store-to-pull-its-config.md)), or `None`
+    /// when the store said nothing about it, which leaves what was recorded alone.
+    #[serde(default)]
+    config_wake: Option<pos_cloud_config::config_tree::ConfigWakeBeat>,
 }
 
 /// Reads a heartbeat's optional body. An empty body is the older edge and yields the default —

@@ -10,6 +10,7 @@
 
 use std::sync::Mutex;
 
+use pos_edge::app::ConfigDelivery;
 use pos_edge::config_client::{
     ConfigClient, ConfigTransport, ConfigTransportError, SyncedConfig, WAKE_PULL_SPACING,
 };
@@ -105,13 +106,16 @@ fn edge() -> Arc<Edge<FakeStore>> {
 }
 
 /// Runs the loop over `cloud` while `script` drives it with the wake sender, then stops it.
-async fn with_loop<F>(cloud: &Cloud, script: impl FnOnce(mpsc::Sender<WakeSignal>) -> F)
-where
+async fn with_loop<F>(
+    cloud: &Cloud,
+    script: impl FnOnce(mpsc::Sender<WakeSignal>, Arc<Edge<FakeStore>>) -> F,
+) where
     F: Future<Output = ()>,
 {
     let (sender, receiver) = mpsc::channel(256);
     let (stop, stopped) = oneshot::channel::<()>();
-    let client = ConfigClient::new(cloud, edge(), None);
+    let edge = edge();
+    let client = ConfigClient::new(cloud, Arc::clone(&edge), None);
     let run = client.run_waking(
         TestWake(tokio::sync::Mutex::new(receiver)),
         POLL,
@@ -120,7 +124,7 @@ where
         },
     );
     let drive = async move {
-        script(sender).await;
+        script(sender, edge).await;
         let _ = stop.send(());
     };
     tokio::join!(run, drive);
@@ -129,7 +133,7 @@ where
 #[tokio::test]
 async fn a_wake_pulls_at_once_and_a_wake_for_the_held_version_does_nothing() {
     let cloud = &Cloud::at(1);
-    with_loop(cloud, |wake| async move {
+    with_loop(cloud, |wake, edge| async move {
         sleep(Duration::from_millis(100)).await;
         assert_eq!(cloud.pulls(), 1, "the first pull, on starting");
 
@@ -137,6 +141,9 @@ async fn a_wake_pulls_at_once_and_a_wake_for_the_held_version_does_nothing() {
         wake.send(wake_for(2)).await.expect("send");
         sleep(Duration::from_millis(100)).await;
         assert_eq!(cloud.pulls(), 2, "a wake for a new version pulls at once");
+        let report = edge.config_wake_standing().report();
+        assert_eq!(report.samples, 1, "its wake-to-apply time is kept");
+        assert!(report.max_ms.is_some_and(|ms| ms < 100));
 
         wake.send(wake_for(2)).await.expect("send");
         sleep(Duration::from_millis(500)).await;
@@ -155,11 +162,20 @@ async fn a_wake_pulls_at_once_and_a_wake_for_the_held_version_does_nothing() {
 #[tokio::test]
 async fn the_bus_connecting_pulls_and_a_flood_of_wakes_pulls_at_most_once_a_second() {
     let cloud = &Cloud::at(1);
-    with_loop(cloud, |wake| async move {
+    with_loop(cloud, |wake, edge| async move {
         sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            edge.config_wake_standing().report().delivery,
+            ConfigDelivery::Poll,
+            "on the poll until the bus says it is connected"
+        );
         wake.send(WakeSignal::Connected).await.expect("send");
         sleep(Duration::from_millis(100)).await;
         assert_eq!(cloud.pulls(), 2, "a (re)connect pulls once, to catch up");
+        assert_eq!(
+            edge.config_wake_standing().report().delivery,
+            ConfigDelivery::Wake
+        );
 
         let flood_start = Instant::now();
         for n in 10..110 {
@@ -188,13 +204,20 @@ async fn the_bus_connecting_pulls_and_a_flood_of_wakes_pulls_at_most_once_a_seco
 #[tokio::test]
 async fn a_dead_bus_leaves_the_poll() {
     let cloud = &Cloud::at(1);
-    with_loop(cloud, |wake| async move {
+    with_loop(cloud, |wake, edge| async move {
+        wake.send(WakeSignal::Connected).await.expect("send");
+        sleep(Duration::from_millis(100)).await;
         drop(wake);
         sleep(Duration::from_millis(100)).await;
-        assert_eq!(cloud.pulls(), 1);
+        assert_eq!(cloud.pulls(), 2, "the start and the connect");
+        assert_eq!(
+            edge.config_wake_standing().report().delivery,
+            ConfigDelivery::Poll,
+            "a bus that fails puts the store back on the poll"
+        );
         cloud.publish(2);
         sleep(POLL + Duration::from_millis(300)).await;
-        assert_eq!(cloud.pulls(), 2, "the poll still delivers");
+        assert_eq!(cloud.pulls(), 3, "the poll still delivers");
     })
     .await;
 }

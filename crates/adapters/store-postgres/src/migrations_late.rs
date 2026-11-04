@@ -1,0 +1,31 @@
+// Copyright (c) 2026 Pizza 4P's. All rights reserved.
+// Proprietary and confidential. Internal use only. See LICENSE.
+
+//! The migrations from 0089 on, in order, after [`PostgresStore::migrate`](crate::PostgresStore::migrate)'s
+//! own: a module of their own so that one stays inside its size baseline. Each is forward-only and
+//! idempotent, applied on every boot (ADR-0017).
+
+use deadpool_postgres::Object;
+use pos_ports::PortError;
+
+use crate::store::unavailable;
+
+const MIGRATION_0089: &str = include_str!("../migrations/0089_packages.sql");
+const MIGRATION_0090: &str = include_str!("../migrations/0090_store_liveness_package.sql");
+const MIGRATION_0091: &str = include_str!("../migrations/0091_store_liveness_config_wake.sql");
+
+/// Applies 0089 onwards on `connection`, one `batch_execute` each, as `store.rs`'s wiring tests read.
+pub(crate) async fn migrate_from_0089(connection: &Object) -> Result<(), PortError> {
+    connection
+        .batch_execute(MIGRATION_0089)
+        .await
+        .map_err(unavailable)?;
+    connection
+        .batch_execute(MIGRATION_0090)
+        .await
+        .map_err(unavailable)?;
+    connection
+        .batch_execute(MIGRATION_0091)
+        .await
+        .map_err(unavailable)
+}

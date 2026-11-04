@@ -27250,6 +27250,38 @@
           }
         }
       },
+      "ConfigWakeBeat": {
+        "type": "object",
+        "description": "What one heartbeat said about config delivery (ADR-0195): whether the store hears the cloud's\nwake or runs on the poll alone, and the time from wake to apply over its latest wakes.",
+        "required": [
+          "delivery",
+          "samples"
+        ],
+        "properties": {
+          "delivery": {
+            "type": "string",
+            "description": "`CONFIG_DELIVERY_WAKE`, or `CONFIG_DELIVERY_POLL` for a store on the poll alone."
+          },
+          "max_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The longest of them, in milliseconds.",
+            "minimum": 0
+          },
+          "p95_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Their 95th percentile, in milliseconds; absent with no samples.",
+            "minimum": 0
+          },
+          "samples": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many wake-to-apply times the figures are drawn from; the edge keeps its latest 128.",
+            "minimum": 0
+          }
+        }
+      },
       "ConnectionRequest": {
         "type": "object",
         "description": "A create/update body for a connection. The id is server-owned: minted on create, the path id on\nupdate.\n\n`secrets` holds only the values this write sets. A secret field left out keeps the value the\nconnection already holds, because the console cannot show it to be sent back. `clear_secrets`\nremoves a stored value on purpose. Switching `provider_id` drops every stored secret: one\nvendor's key is never another's, even when both call the field `api_key`.",
@@ -29480,6 +29512,8 @@
           "print_agents_reported_at_ms",
           "package",
           "package_reported_at_ms",
+          "config_wake",
+          "config_wake_reported_at_ms",
           "lease_generation_held",
           "lease_reported_at_ms",
           "lease_generation_authoritative",
@@ -29507,6 +29541,25 @@
               "string",
               "null"
             ]
+          },
+          "config_wake": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ConfigWakeBeat",
+                "description": "How configuration reaches the store and how fast\n([ADR-0195](../../../docs/adr/0195-the-cloud-wakes-a-store-to-pull-its-config.md)):\n`CONFIG_DELIVERY_WAKE`, or `CONFIG_DELIVERY_POLL` for a store on the 30-second poll alone, and\nthe 95th-percentile and longest time from a wake to applying its version over the store's\nlatest wakes. `null` until a heartbeat reports it, which an older edge never does."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "config_wake_reported_at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unix ms of the heartbeat that reported config delivery, or `null`."
           },
           "edge_placement": {
             "$ref": "#/components/schemas/EdgePlacement",
