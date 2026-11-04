@@ -34,16 +34,33 @@ export type PinRequest =
 /** One setting write, in the order it must be sent. */
 export type PinWrite = { readonly settingKey: string; readonly value: Json };
 
-/** A written setting, as far as this module reads it. */
-type Written = { readonly setting_key: string; readonly scope: string; readonly value: Json };
+/** A setting value, as far as this module reads it. */
+type Valued = { readonly setting_key: string; readonly value: Json };
+
+/** A written setting: a value at a scope. */
+type Written = Valued & { readonly scope: string };
 
 const TENANT = "SETTING_SCOPE_TENANT";
 
 /** The tenant-scope pin among `values`. A setting never written reads as its absent value. */
 export function tenantPin(values: readonly Written[]): PackagePin {
+  return pinOf(values.filter((value) => value.scope === TENANT));
+}
+
+/** One store's pin, from its effective settings, and the version its people chose, if any. */
+export function storePin(effective: readonly Valued[]): PackagePin & {
+  readonly chosenVersionId: string | null;
+} {
+  const chosen = effective.find((value) => value.setting_key === "package.chosen_version_id");
+  return {
+    ...pinOf(effective),
+    chosenVersionId: typeof chosen?.value === "string" && chosen.value !== "" ? chosen.value : null,
+  };
+}
+
+function pinOf(values: readonly Valued[]): PackagePin {
   const at = (field: string): Json | undefined =>
-    values.find((value) => value.scope === TENANT && value.setting_key === `package.${field}`)
-      ?.value;
+    values.find((value) => value.setting_key === `package.${field}`)?.value;
   const text = (value: Json | undefined): string | null =>
     typeof value === "string" && value !== "" ? value : null;
   const mode = text(at("mode"));

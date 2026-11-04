@@ -445,9 +445,15 @@ export async function seedFixtures(cloud) {
     tenant_id: tenant.tenant_id,
     name: "Dine-in",
   });
-  await cloud.call("POST", `/admin/packages/${pkg.package_id}/versions`, {
-    tenant_id: tenant.tenant_id,
-    version_label: "March",
-  });
-  return { tenant, store, item, menu, group, pkg };
+  // Two versions, so a rollback has an earlier one to go back to and a choice has two to offer.
+  const versions = [];
+  for (const version_label of ["March", "April"]) {
+    versions.push(
+      await cloud.call("POST", `/admin/packages/${pkg.package_id}/versions`, {
+        tenant_id: tenant.tenant_id,
+        version_label,
+      }),
+    );
+  }
+  return { tenant, store, item, menu, group, pkg, versions };
 }

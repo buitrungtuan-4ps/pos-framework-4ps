@@ -22,3 +22,18 @@ export const listPackageVersions = (
     "GET",
     `/admin/packages/${encodeURIComponent(packageId)}/versions?tenant_id=${encodeURIComponent(tenantId)}`,
   );
+
+/**
+ * `PUT /admin/stores/{store_id}/package/choice`: the version a choosing store runs, one of those it
+ * is allowed, or `null` to clear its choice so it runs its default. Written at the store and the
+ * store republished; an HQ act behind `console.config.publish` (ADR-0189 decision 2).
+ */
+export const chooseStorePackage = (
+  tenantId: string,
+  storeId: string,
+  packageVersionId: string | null,
+): Promise<unknown> =>
+  requestJson<unknown>("PUT", `/admin/stores/${encodeURIComponent(storeId)}/package/choice`, {
+    tenant_id: tenantId,
+    package_version_id: packageVersionId,
+  });

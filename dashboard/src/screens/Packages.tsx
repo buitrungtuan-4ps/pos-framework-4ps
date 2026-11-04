@@ -13,13 +13,15 @@ import { listPackages, listPackageVersions } from "../api/packages";
 import type { PackageRecord, PackageVersionRecord } from "../api/schemas";
 import { t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
-import { tenantId } from "../state/session";
+import { storeId, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, Skeleton, StatusBadge } from "../components/ui";
 import { type Column, ConfirmDialog, DataTable, EmptyState } from "../components/kit";
 import { toast } from "../components/Toast";
 import { apiMessage } from "../lib/errors";
 import { formatInstant } from "../lib/format";
 import { type PackagePin, type PinRequest, pinWrites, tenantPin } from "../lib/package-pin";
+import { ChoiceCard } from "./packages/ChoiceCard";
+import { StoreChoiceCard } from "./packages/StoreChoiceCard";
 
 type Loaded = { readonly record: PackageRecord; readonly versions: PackageVersionRecord[] };
 
@@ -32,6 +34,11 @@ function labelOf(loaded: readonly Loaded[], versionId: string | null): string {
     }
   }
   return versionId ?? "";
+}
+
+/** Every loaded version, package by package. */
+function allVersions(loaded: readonly Loaded[]): PackageVersionRecord[] {
+  return loaded.flatMap((entry) => entry.versions);
 }
 
 /** What the tenant's pin means for its stores, in words. */
@@ -91,6 +98,17 @@ function VersionsCard(props: {
     props.current.mode === "PACKAGE_MODE_LOCKED" &&
     props.current.lockedVersionId === row.content.package_version_id;
   const lockVersion = (row: PackageVersionRecord) => props.onLock(row);
+  const rollBack = (row: PackageVersionRecord) => props.onLock(row);
+  const position = (row: PackageVersionRecord) =>
+    props.entry.versions.findIndex((v) => v.content.package_version_id === row.content.package_version_id);
+  const lockedAt = () =>
+    props.entry.versions.findIndex(
+      (v) => props.current.mode === "PACKAGE_MODE_LOCKED" && v.content.package_version_id === props.current.lockedVersionId,
+    );
+  /** An earlier version than the one every store runs: running it is a rollback. */
+  const isEarlier = (row: PackageVersionRecord) => position(row) < lockedAt();
+  /** The locked version is not this package's newest: the stores were rolled back to it. */
+  const rolledBack = () => lockedAt() >= 0 && lockedAt() < props.entry.versions.length - 1;
   const columns = (): Column<PackageVersionRecord>[] => [
     {
       key: "label",
@@ -110,7 +128,14 @@ function VersionsCard(props: {
       header: t("packages.pinColumn"),
       cell: (row) => (
         <Show when={isLocked(row)}>
-          <StatusBadge tone="active" label={t("packages.lockedBadge")} />
+          <Show
+            when={rolledBack()}
+            fallback={<StatusBadge tone="active" label={t("packages.lockedBadge")} />}
+          >
+            <span data-outcome="package-rolled-back">
+              <StatusBadge tone="active" label={t("packages.rolledBackBadge")} />
+            </span>
+          </Show>
         </Show>
       ),
     },
@@ -126,14 +151,28 @@ function VersionsCard(props: {
         actionsHeader={t("common.actions")}
         actions={(row) => (
           <Show when={!isLocked(row)}>
-            <Button
-              variant="secondary"
-              disabled={props.busy}
-              onClick={() => lockVersion(row)}
-              data-step="lockVersion"
+            <Show
+              when={isEarlier(row)}
+              fallback={
+                <Button
+                  variant="secondary"
+                  disabled={props.busy}
+                  onClick={() => lockVersion(row)}
+                  data-step="lockVersion"
+                >
+                  {t("packages.lock")}
+                </Button>
+              }
             >
-              {t("packages.lock")}
-            </Button>
+              <Button
+                variant="secondary"
+                disabled={props.busy}
+                onClick={() => rollBack(row)}
+                data-step="rollBack"
+              >
+                {t("packages.rollBack")}
+              </Button>
+            </Show>
           </Show>
         )}
       />
@@ -147,6 +186,7 @@ function usePackages() {
   const [pin, setPin] = createSignal<PackagePin | null>(null);
   const [error, setError] = createSignal("");
   const [busy, setBusy] = createSignal(false);
+  const [revision, setRevision] = createSignal(0);
   const load = async () => {
     setError("");
     try {
@@ -173,6 +213,7 @@ function usePackages() {
       }
       toast.ok(done);
       await load();
+      setRevision((n) => n + 1);
       return true;
     } catch (caught) {
       setError(apiMessage(caught));
@@ -187,7 +228,7 @@ function usePackages() {
     const current = pin();
     return loaded && current ? { loaded, current } : null;
   };
-  return { load, apply, view, error, busy };
+  return { load, apply, view, error, busy, revision };
 }
 
 export function Packages() {
@@ -219,6 +260,9 @@ export function Packages() {
           {(shown) => (
             <div class="flex flex-col gap-4">
               <PinCard {...shown()} busy={state.busy()} onClear={() => setClearing(true)} />
+              <Show when={storeId()}>
+                <StoreChoiceCard versions={allVersions(shown().loaded)} revision={state.revision()} />
+              </Show>
               <Show
                 when={shown().loaded.length > 0}
                 fallback={
@@ -227,6 +271,12 @@ export function Packages() {
                   </Card>
                 }
               >
+                <ChoiceCard
+                  versions={allVersions(shown().loaded)}
+                  current={shown().current}
+                  busy={state.busy()}
+                  onSave={(request) => void state.apply(request, t("packages.choiceDone"))}
+                />
                 <For each={shown().loaded}>
                   {(entry) => (
                     <VersionsCard

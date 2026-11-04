@@ -7,7 +7,13 @@
 
 import { describe, expect, it } from "vitest";
 
-import { ALLOWED_VERSIONS_MAX, choiceGap, pinWrites, tenantPin } from "../src/lib/package-pin";
+import {
+  ALLOWED_VERSIONS_MAX,
+  choiceGap,
+  pinWrites,
+  storePin,
+  tenantPin,
+} from "../src/lib/package-pin";
 
 const V1 = "01J00000000000000000000V01";
 const V2 = "01J00000000000000000000V02";
@@ -44,6 +50,21 @@ describe("tenantPin", () => {
     expect(tenantPin([written("package.mode", "PACKAGE_MODE_LATER")]).mode).toBe(
       "PACKAGE_MODE_UNSPECIFIED",
     );
+  });
+});
+
+describe("storePin", () => {
+  it("reads a store's effective choice and what its people chose", () => {
+    const pin = storePin([
+      { setting_key: "package.mode", value: "PACKAGE_MODE_CHOOSE" },
+      { setting_key: "package.allowed_version_ids", value: [V1, V2] },
+      { setting_key: "package.default_version_id", value: V1 },
+      { setting_key: "package.chosen_version_id", value: V2 },
+    ]);
+    expect(pin.mode).toBe("PACKAGE_MODE_CHOOSE");
+    expect(pin.allowedVersionIds).toEqual([V1, V2]);
+    expect(pin.chosenVersionId).toBe(V2);
+    expect(storePin([]).chosenVersionId).toBeNull();
   });
 });
 
