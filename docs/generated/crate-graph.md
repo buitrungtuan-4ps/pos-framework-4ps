@@ -221,7 +221,7 @@ flowchart LR
 | `cloud-sync-http` | adapter | `crates/adapters/cloud-sync-http` | The edge's CloudSync and MessageLink over HTTPS to the cloud: activation, OTA fetch, and event delivery. | `pos-edge` | — |
 | `erp-sap` | adapter | `crates/adapters/erp-sap` | The SAP ErpSink adapter: nightly whole-day revenue and consumption posting over HTTPS. | `pos-cloud` | — |
 | `key-vault-keyring` | adapter | `crates/adapters/key-vault-keyring` | The edge's KeyVault: device credentials in the OS credential store, sealed under a systemd-creds key on Linux and a DPAPI key on Windows. | `pos-edge` | — |
-| `link-nats` | adapter | `crates/adapters/link-nats` | The store-to-cloud MessageLink over NATS JetStream, and the cloud's consumer of it. | `pos-cloud`, `pos-edge` | — |
+| `link-nats` | adapter | `crates/adapters/link-nats` | The store-to-cloud MessageLink over NATS JetStream, the cloud's consumer of it, and the cloud-to-store config wake. | `pos-cloud`, `pos-edge` | — |
 | `metrics-vm` | adapter | `crates/adapters/metrics-vm` | The cloud MetricsSink over VictoriaMetrics: bounded queue, background flush, hand-rolled HTTP import. | `pos-cloud` | — |
 | `minimal-edge` | app | `examples/minimal-edge` | The smallest runnable store: pos_edge on the in-memory fakes, with no database, hardware or network. | — | — |
 | `pos-cloud` | app | `crates/pos-cloud` | The cloud binary, pos_cloud: event ingest, rollups, configuration, the /v1 API and the /admin console API. | — | — |

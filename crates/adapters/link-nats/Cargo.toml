@@ -1,7 +1,7 @@
 [package]
 name        = "link-nats"
 version     = "0.1.0"
-description = "The store to cloud MessageLink over NATS JetStream (async-nats)."
+description = "The store to cloud MessageLink over NATS JetStream, and the cloud to store config wake (async-nats)."
 edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
@@ -32,6 +32,12 @@ futures-util = "0.3"
 # dependency *edge*, not a dependency.
 url = "2"
 percent-encoding = "2"
+# ADR-0195: the store's wake waits at most `within` and notices a reconnect while it waits (the
+# `StoreWake` contract, obligations 1 and 4, which belong to the adapter), and async-nats offers no
+# timer of its own. Not a new crate: async-nats is built on tokio, tokio is already this crate's
+# dev-dependency, and five adapters depend on it directly, so this adds a dependency *edge*, with
+# only the `time` feature.
+tokio = { version = "1", features = ["time"] }
 
 [dev-dependencies]
 pos-contract-tests = { path = "../../pos-contract-tests" }
@@ -43,6 +49,6 @@ workspace = true
 
 [package.metadata.pos]
 layer = "adapter"
-purpose = "The store-to-cloud MessageLink over NATS JetStream, and the cloud's consumer of it."
-adrs = [24, 26, 31, 87]
+purpose = "The store-to-cloud MessageLink over NATS JetStream, the cloud's consumer of it, and the cloud-to-store config wake."
+adrs = [24, 26, 31, 87, 195]
 owners = ["@maintainers-cloud"]
