@@ -9,9 +9,8 @@ use std::sync::Arc;
 
 use tokio::net::TcpListener;
 
-use cloud_sync_http::{HttpCloudSync, HttpLink, TlsHttpTransport};
+use cloud_sync_http::{HttpCloudSync, TlsHttpTransport};
 use key_vault_keyring::OsVault;
-use link_nats::{NatsConfig as StreamConfig, NatsLink};
 use pos_core::activation::ActivationStanding;
 use pos_ports::config_store::ConfigStore;
 use pos_ports::device_registry::DeviceRegistry;
@@ -38,7 +37,6 @@ use crate::device_revocations::DeviceRevocations;
 use crate::discovery::{Advertiser, NoopAdvertiser};
 use crate::durable_auth::{DurableAuth, EdgeRegistry};
 use crate::error::EdgeError;
-use crate::event_publish::EventPublisher;
 use crate::installer::SystemdInstaller;
 use crate::lease_state::LeaseAuthority;
 use crate::lease_state::{LeaseWatch, StoreLease};
@@ -1241,7 +1239,11 @@ where
     let (drained_tx, drained_rx) = tokio::sync::oneshot::channel();
     let mut keyed_client = None;
     let mut farewell = None;
-    if let Some(loops) = spawn_cloud_loops(wiring, sync_key, shutdown_rx, drained_rx) {
+    // One broker connection, opened before the loops: the config loop listens for its wake on it and
+    // the event rail publishes on it (ADR-0195).
+    let rail = event_rail::connect_nats(nats).await;
+    let wake = event_rail::config_wake(rail.as_ref(), wiring.store_id).await;
+    if let Some(loops) = spawn_cloud_loops(wiring, sync_key, shutdown_rx, drained_rx, wake) {
         keyed_client = Some(loops.client);
         farewell = Some(FarewellBeat {
             drained: drained_tx,
@@ -1251,7 +1253,7 @@ where
     // The event rail is spawned beside the `/sync` loops rather than inside them: it has its
     // own endpoint and presents the device credential whatever key the loops use
     // (ADR-0087, ADR-0143).
-    let publisher = spawn_event_publish(edge, nats, cloud, vault, shutdown_rx).await;
+    let publisher = event_rail::spawn_event_publish(edge, rail, cloud, vault, shutdown_rx).await;
     CloudSurface {
         app,
         cloud: keyed_client,
@@ -1758,147 +1760,6 @@ where
     tracing::info!("over-the-air updates enabled");
 }
 
-/// Spawns the event-publish loop for an activated store
-/// ([ADR-0087](../../../docs/adr/0087-edge-relay-and-event-publish.md),
-/// [ADR-0143](../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)).
-///
-/// Two rails, chosen by configuration:
-///
-/// - **NATS**, when `config.toml` names a `[nats]` stream and subject *and* [`NATS_URL_ENV`] carries
-///   the server URL (the one field that would carry a credential, so it stays out of `config.toml`
-///   exactly as the sync key does, ADR-0086). This is how a deployment that runs a broker has always
-///   published.
-/// - **HTTPS**, otherwise: the cloud's own `/sync/stores/{store_id}/events`, presenting the box's
-///   device credential. Nothing to configure and no broker port open to the internet, and the cloud
-///   refuses a batch that names any store but this one.
-///
-/// The HTTPS rail presents the device credential even when a store key is set for the `/sync`
-/// loops, because only the device credential is certain to carry `publish_events`: a store key
-/// issued before that scope existed holds `read_config` and `relay_orders` alone.
-///
-/// Either way the store trades, and its outbox holds until the rail is up.
-async fn spawn_event_publish<S, V>(
-    edge: &Arc<Edge<S>>,
-    nats: Option<&NatsConfig>,
-    cloud: (&url::Url, &[CertificateDer<'static>]),
-    vault: &V,
-    shutdown_rx: &tokio::sync::watch::Receiver<bool>,
-) -> Option<tokio::task::JoinHandle<()>>
-where
-    S: EventStore + Send + Sync + 'static,
-    V: KeyVault,
-{
-    let nats_url = std::env::var(NATS_URL_ENV)
-        .ok()
-        .filter(|url| !url.trim().is_empty());
-    match (nats, nats_url) {
-        (Some(nats), Some(url)) => {
-            if let Some(handle) = spawn_nats_publish(edge, nats, url.trim(), shutdown_rx).await {
-                return Some(handle);
-            }
-            tracing::warn!("falling back to publishing events over HTTPS to the cloud");
-        }
-        (Some(_), None) => tracing::info!(
-            "a [nats] stream is configured but {NATS_URL_ENV} is unset; publishing events over HTTPS \
-             to the cloud instead"
-        ),
-        (None, _) => {}
-    }
-    spawn_https_publish(edge, cloud, vault, shutdown_rx).await
-}
-
-/// The NATS rail: `None` only when the address in [`NATS_URL_ENV`] cannot be used at all.
-async fn spawn_nats_publish<S>(
-    edge: &Arc<Edge<S>>,
-    nats: &NatsConfig,
-    url: &str,
-    shutdown_rx: &tokio::sync::watch::Receiver<bool>,
-) -> Option<tokio::task::JoinHandle<()>>
-where
-    S: EventStore + Send + Sync + 'static,
-{
-    let config = StreamConfig {
-        stream: nats.stream.clone(),
-        subject: nats.subject.clone(),
-        max_messages: NATS_MAX_MESSAGES,
-        max_bytes: NATS_MAX_BYTES,
-    };
-    // A broker that is not reachable yet is not a failure here: the link connects in the
-    // background, and the publisher reports the store offline until it does. Only an address that
-    // cannot be used at all ends up in this arm.
-    let link = match NatsLink::connect(url, config).await {
-        Ok(link) => link,
-        Err(error) => {
-            tracing::warn!(
-                %error,
-                "the event-stream address in {NATS_URL_ENV} is unusable; the outbox holds and the \
-                 store keeps trading"
-            );
-            return None;
-        }
-    };
-    let handle = spawn_publisher(edge, link, shutdown_rx);
-    tracing::info!(
-        stream = %nats.stream,
-        subject = %nats.subject,
-        "event publish enabled over NATS: the outbox is draining to the cloud"
-    );
-    Some(handle)
-}
-
-/// The HTTPS rail, over the box's device credential.
-async fn spawn_https_publish<S, V>(
-    edge: &Arc<Edge<S>>,
-    (cloud_url, roots): (&url::Url, &[CertificateDer<'static>]),
-    vault: &V,
-    shutdown_rx: &tokio::sync::watch::Receiver<bool>,
-) -> Option<tokio::task::JoinHandle<()>>
-where
-    S: EventStore + Send + Sync + 'static,
-    V: KeyVault,
-{
-    let Some(credential) = vault_text(vault, SecretName::DeviceCredential).await else {
-        tracing::warn!(
-            "no device credential could be read from the vault; the outbox is not being published \
-             (the store still trades and keeps every event)"
-        );
-        return None;
-    };
-    let client = match CloudHttpClient::trusting(cloud_url, credential, roots) {
-        Ok(client) => client,
-        Err(error) => {
-            tracing::error!(%error, "the event link could not be built; the outbox holds");
-            return None;
-        }
-    };
-    let handle = spawn_publisher(edge, HttpLink::new(client, edge.store_id()), shutdown_rx);
-    tracing::info!("event publish enabled over HTTPS: the outbox is draining to the cloud");
-    Some(handle)
-}
-
-/// Starts the publish loop over `link`.
-///
-/// The handle is kept, not dropped. A stop asks this loop for one last drain, and a drain nobody
-/// waits for is a drain that does not happen: `serve_until` returns as soon as `axum::serve` has
-/// finished, and the runtime it returns into stops polling every detached task. On a placement that
-/// is torn down rather than restarted, those unpublished events go with the volume
-/// ([ADR-0110](../../../docs/adr/0110-edge-placement-is-a-deployment-axis.md)).
-fn spawn_publisher<S, L>(
-    edge: &Arc<Edge<S>>,
-    link: L,
-    shutdown_rx: &tokio::sync::watch::Receiver<bool>,
-) -> tokio::task::JoinHandle<()>
-where
-    S: EventStore + Send + Sync + 'static,
-    L: pos_ports::message_link::MessageLink + 'static,
-{
-    // The release the store is running, stamped at build time (R1b). Was `CARGO_PKG_VERSION`,
-    // which is `0.0.0` in every artifact — so every store told the cloud the same thing and the
-    // OTA progress model could not tell one release from another.
-    let publisher = EventPublisher::new(Arc::clone(edge), link, crate::version::tag());
-    tokio::spawn(publisher.run(wait_for_shutdown(shutdown_rx.clone())))
-}
-
 /// Resolves when the shutdown flag flips true (or its sender drops) — one per background consumer.
 async fn wait_for_shutdown(mut shutdown_rx: tokio::sync::watch::Receiver<bool>) {
     let _ignored = shutdown_rx.wait_for(|stopped| *stopped).await;
@@ -1933,5 +1794,6 @@ pub async fn shutdown_signal() {
 }
 
 mod cloud_loops;
+mod event_rail;
 #[cfg(test)]
 mod tests;
