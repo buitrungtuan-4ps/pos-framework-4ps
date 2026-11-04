@@ -540,6 +540,97 @@ test("firing one course sends that course and leaves the rest of the order waiti
   }
 });
 
+// Sending to the kitchen paints first (ADR-0196 decision 1): the line shows fired at once, marked
+// as sending, before the edge answers. A refusal puts it back unsent with the refusal's sentence;
+// the refusal is substituted, since the real edge sends any unsent line it is asked to.
+test("a send paints the lines fired at once, and a refusal puts them back unsent", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addStarter(page);
+    const held = await holdPost(page, "**/api/orders/*/fire");
+    await page.locator('[data-step="fireOrder"]').click();
+    await held.sent;
+    await expect(page.locator('[data-outcome="line-fired"]')).toHaveCount(1);
+    await expect(page.locator('[data-outcome="line-sending"]')).toHaveCount(1);
+    held.release();
+    await expect(page.locator('[data-outcome="line-sending"]')).toHaveCount(0);
+    await expect(page.locator('[data-outcome="line-fired"]')).toHaveCount(1);
+
+    await addByName(page, "iced");
+    await refusePost(page, "**/api/orders/*/fire", "TRANSITION_REFUSED");
+    await page.locator('[data-step="fireOrder"]').click();
+    await expect(page.getByRole("alert")).toContainText("That is not possible right now");
+    await expect(page.locator('[data-outcome="line-unsent"]')).toHaveCount(1);
+    await expect(page.locator('[data-outcome="line-fired"]')).toHaveCount(1);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// No answer to a send puts the lines back and reads the open orders again, which find them sent:
+// the edge made it. It is sent once, never again by the till. A course's send takes the same path.
+test("a send whose answer is lost is read again, and the lines show fired, sent once", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addStarter(page);
+    let fires = 0;
+    await page.route("**/api/orders/*/fire/*", async (route) => {
+      fires += 1;
+      await route.fetch();
+      await route.abort("connectionreset");
+    });
+    await page.locator('[data-step="fireCourse"]').click();
+    await expect(page.locator('[data-outcome="line-fired"]')).toHaveCount(1);
+    await expect(page.locator('[data-outcome="line-sending"]')).toHaveCount(0);
+    await expect(page.locator('[data-outcome="line-unsent"]')).toHaveCount(0);
+    expect(fires).toBe(1);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A void paints first too: the line shows voided at once. A void that never reached the edge is put
+// back, read again and found not made; a refusal (substituted: this unsent line needs no manager, so
+// the real edge would not refuse it) puts it back with the refusal's sentence.
+test("a void paints at once, a refusal and a void never made put the line back", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addStarter(page);
+    await page.route("**/api/lines/*/void", (route) => route.abort("connectionreset"));
+    await page.locator('[data-step="askVoid"]').first().click();
+    await page.locator('[data-step="voidReason"]').first().click();
+    await expect(page.locator('[data-outcome="line-voided"]')).toHaveCount(0);
+    await expect(page.getByRole("alert").first()).toBeVisible();
+    await expect(page.locator('[data-outcome="line-unsent"]')).toHaveCount(1);
+    await page.unroute("**/api/lines/*/void");
+
+    await refusePost(page, "**/api/lines/*/void", "APPROVAL_REQUIRED");
+    await page.locator('[data-step="voidReason"]').first().click();
+    await expect(page.getByRole("alert").first()).toBeVisible();
+    await expect(page.locator('[data-outcome="line-voided"]')).toHaveCount(0);
+    await page.unroute("**/api/lines/*/void");
+
+    const held = await holdPost(page, "**/api/lines/*/void");
+    await page.locator('[data-step="voidReason"]').first().click();
+    await held.sent;
+    await expect(page.locator('[data-outcome="line-voided"]')).toHaveCount(1);
+    held.release();
+    await expect(page.locator('[data-outcome="line-voided"]')).toHaveCount(1);
+    await expect(page.locator('[data-outcome="line-sending"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // The till does not take money for food the kitchen was never sent (pilot U1).
 //
 // Take payment and the counter's charge used to open a bill whatever the lines' state, and settling

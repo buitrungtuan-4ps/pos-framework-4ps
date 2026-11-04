@@ -1,8 +1,7 @@
-// The four acts the till paints before the edge answers (ADR-0173 decision 4, and ADR-0188 for the
-// fourth): adding a line (with its modifiers and note), changing a quantity, moving a table, and
-// seating a free one. An allow-list: payment, voids,
-// discounts, refunds, comps, fees, firing, splits and every drawer act wait for the edge, and adding
-// to this list takes a new record.
+// The four acts the till painted first under ADR-0173 decision 4 (and ADR-0188 for the fourth):
+// adding a line (with its modifiers and note), changing a quantity, moving a table, and seating a
+// free one. They run on the one path every edge write takes (`./edge-write`, ADR-0196); this file
+// holds what each paints and undoes.
 //
 // - **The screen moves at once.** The line, the quantity or the table changes on the tap, marked as
 //   sending, and one request goes to the edge. Nothing is queued: the edge is the only writer, and a
@@ -16,32 +15,23 @@
 
 import { createSignal } from "solid-js";
 
-import { ApiError, api } from "../api/client";
+import { api } from "../api/client";
 import type { LineRequest, MenuItemResponse, OrderLineRequest } from "../api/schemas";
 import { type Money, addMoney } from "../lib/money";
 import { errorMessage } from "../lib/errors";
+import { editWrite } from "./edge-write";
 import { load } from "./engine";
 import { PENDING, type OrderLine, loadLiveOrders, moveOrder, state, updateStore, walkInOrder } from "./store";
+
+export { writesPending } from "./edge-write";
 
 // How long a write the edge answered waits for its event before the open orders are read again.
 const EVENT_WAIT_MS = 1_500;
 
-const [inFlight, setInFlight] = createSignal(0);
 let provisionalCount = 0;
 
-// Whether a write is on its way to the edge, or a line is still waiting for the edge's figures.
-export function writesPending(): boolean {
-  return inFlight() > 0 || Object.values(state.lines).some((line) => line.pending === true);
-}
-
-async function sending<T>(write: () => Promise<T>): Promise<T> {
-  setInFlight((count) => count + 1);
-  try {
-    return await write();
-  } finally {
-    setInFlight((count) => count - 1);
-  }
-}
+/** What every write on an order reads again when the edge did not answer. */
+const rereadOrders = () => void loadLiveOrders();
 
 // The edge answered: if its event has not brought the line's own figures by now, read them.
 function awaitEvent(lineId: string): void {
@@ -50,14 +40,6 @@ function awaitEvent(lineId: string): void {
       void loadLiveOrders();
     }
   }, EVENT_WAIT_MS);
-}
-
-// A write the edge did not answer may still have been made: the open orders say whether it was.
-function afterFailure(caught: unknown): never {
-  if (!(caught instanceof ApiError)) {
-    void loadLiveOrders();
-  }
-  throw caught;
 }
 
 // ---- seating a free table at once (ADR-0188) ----------------------------------------------------
@@ -88,37 +70,41 @@ function settled(tableId: string): void {
 // Seats a free table at once; `refused` runs, after the rollback, when the edge says no.
 export function seatAtOnce(tableId: string, refused: () => void): void {
   const was = state.tableState[tableId];
-  updateStore((draft) => {
-    draft.tableState[tableId] = "TABLE_STATE_OCCUPIED";
-    draft.seatedAt[tableId] ??= new Date().toISOString();
-  });
-  setSeatingTables((tables) => new Set([...tables, tableId]));
-  setSeatRefusal(null);
-  const seat = sending(() => api.seatTable(tableId)).then(
-    (response) => {
+  const seat = editWrite("sales.table.seat", {
+    paint: () => {
+      updateStore((draft) => {
+        draft.tableState[tableId] = "TABLE_STATE_OCCUPIED";
+        draft.seatedAt[tableId] ??= new Date().toISOString();
+      });
+      setSeatingTables((tables) => new Set([...tables, tableId]));
+      setSeatRefusal(null);
+      return (caught) => {
+        const ghost = `${PENDING}order:${tableId}`;
+        const kept = Object.values(state.lines).filter((line) => line.orderId === ghost);
+        updateStore((draft) => {
+          for (const line of kept) {
+            delete draft.lines[line.orderLineId];
+          }
+          draft.tableState[tableId] = was ?? "TABLE_STATE_FREE";
+          delete draft.seatedAt[tableId];
+        });
+        settled(tableId);
+        setSeatRefusal({ message: errorMessage(caught), lines: kept.map((line) => line.name) });
+        // The edge may have seated it, or another till may have: read the room again either way.
+        void load("floor", true);
+      };
+    },
+    send: () => api.seatTable(tableId),
+    confirmed: (response) => {
       updateStore((draft) => {
         draft.tableState[tableId] = response.state;
       });
       settled(tableId);
-      return true;
     },
-    (caught: unknown) => {
-      const ghost = `${PENDING}order:${tableId}`;
-      const kept = Object.values(state.lines).filter((line) => line.orderId === ghost);
-      updateStore((draft) => {
-        for (const line of kept) {
-          delete draft.lines[line.orderLineId];
-        }
-        draft.tableState[tableId] = was ?? "TABLE_STATE_FREE";
-        delete draft.seatedAt[tableId];
-      });
-      settled(tableId);
-      setSeatRefusal({ message: errorMessage(caught), lines: kept.map((line) => line.name) });
-      // The edge may have seated it, or another till may have: read the room again either way.
-      void load("floor", true);
-      if (!(caught instanceof ApiError)) {
-        void loadLiveOrders();
-      }
+    reread: rereadOrders,
+  }).then(
+    () => true,
+    () => {
       refused();
       return false;
     },
@@ -170,33 +156,43 @@ export async function addItem(
   if (seat !== undefined && !(await seat)) {
     return;
   }
-  try {
-    const response = await sending(() =>
+  await editWrite("sales.line.add", {
+    undo: () =>
+      updateStore((draft) => {
+        delete draft.lines[ghost];
+      }),
+    send: () =>
       walkIn === undefined
         ? api.addLine(tableId, tableLine(item, rate, unitPrice, line))
         : api.addOrderLine(walkIn, counterLine(item, line)),
-    );
-    updateStore((draft) => {
-      delete draft.lines[ghost];
-      draft.tableOrder[tableId] = response.order_id;
-      if (walkIn === undefined) {
-        draft.orderTable[response.order_id] = tableId;
-      }
-      // Unless the edge's event got here first, the line waits for it, still sending.
-      draft.lines[response.order_line_id] ??= {
-        ...line,
-        orderLineId: response.order_line_id,
-        orderId: response.order_id,
-        state: response.state,
-      };
-    });
-    awaitEvent(response.order_line_id);
-  } catch (caught) {
-    updateStore((draft) => {
-      delete draft.lines[ghost];
-    });
-    afterFailure(caught);
-  }
+    confirmed: (response) => addConfirmed(tableId, walkIn, ghost, line, response),
+    reread: rereadOrders,
+  });
+}
+
+// The edge took the line: it replaces the provisional one, unless the edge's event got here first.
+function addConfirmed(
+  tableId: string,
+  walkIn: string | undefined,
+  ghost: string,
+  line: OrderLine,
+  response: { order_id: string; order_line_id: string; state: string },
+): void {
+  updateStore((draft) => {
+    delete draft.lines[ghost];
+    draft.tableOrder[tableId] = response.order_id;
+    if (walkIn === undefined) {
+      draft.orderTable[response.order_id] = tableId;
+    }
+    // Unless the edge's event got here first, the line waits for it, still sending.
+    draft.lines[response.order_line_id] ??= {
+      ...line,
+      orderLineId: response.order_line_id,
+      orderId: response.order_id,
+      state: response.state,
+    };
+  });
+  awaitEvent(response.order_line_id);
 }
 
 // One of the dish at the table's price book: its own price plus each chosen modifier's, which is
@@ -260,63 +256,62 @@ export async function setQuantity(lineId: string, quantityMilli: number): Promis
     return;
   }
   const was = { quantityMilli: before.quantityMilli, pending: before.pending };
-  updateStore((draft) => {
-    const held = draft.lines[lineId];
-    if (held !== undefined) {
-      held.quantityMilli = quantityMilli;
-      held.pending = true;
-    }
+  await editWrite("sales.line.set_quantity", {
+    paint: () => {
+      updateStore((draft) => {
+        const held = draft.lines[lineId];
+        if (held !== undefined) {
+          held.quantityMilli = quantityMilli;
+          held.pending = true;
+        }
+      });
+      return () =>
+        updateStore((draft) => {
+          const held = draft.lines[lineId];
+          if (held !== undefined) {
+            held.quantityMilli = was.quantityMilli;
+            held.pending = was.pending;
+          }
+        });
+    },
+    send: () => api.setLineQuantity(lineId, { quantity: { milli: quantityMilli } }),
+    confirmed: (line) => {
+      updateStore((draft) => {
+        const held = draft.lines[line.order_line_id];
+        if (held !== undefined) {
+          held.state = line.state;
+        }
+      });
+      awaitEvent(lineId);
+    },
+    reread: rereadOrders,
   });
-  try {
-    const line = await sending(() =>
-      api.setLineQuantity(lineId, { quantity: { milli: quantityMilli } }),
-    );
-    updateStore((draft) => {
-      const held = draft.lines[line.order_line_id];
-      if (held !== undefined) {
-        held.state = line.state;
-      }
-    });
-    awaitEvent(lineId);
-  } catch (caught) {
-    updateStore((draft) => {
-      const held = draft.lines[lineId];
-      if (held !== undefined) {
-        held.quantityMilli = was.quantityMilli;
-        held.pending = was.pending;
-      }
-    });
-    afterFailure(caught);
-  }
 }
 
 // Moves the guests and their order to another table, at once; a refusal moves them back.
 export async function moveTable(from: string, to: string): Promise<void> {
   const order = state.tableOrder[from];
   const was = { from: state.tableState[from], to: state.tableState[to] };
-  if (order !== undefined) {
-    updateStore((draft) =>
-      moveOrder(draft, order, from, to, "TABLE_STATE_NEEDS_CLEANING", "TABLE_STATE_OCCUPIED"),
-    );
-  }
-  try {
-    const response = await sending(() => api.transferTable(from, to));
-    updateStore((draft) =>
-      moveOrder(draft, response.order_id, from, to, response.from_table.state, response.to_table.state),
-    );
-  } catch (caught) {
-    if (order !== undefined) {
+  await editWrite("sales.order.transfer", {
+    paint: () => {
+      if (order !== undefined) {
+        updateStore((draft) =>
+          moveOrder(draft, order, from, to, "TABLE_STATE_NEEDS_CLEANING", "TABLE_STATE_OCCUPIED"),
+        );
+      }
+      return () => {
+        if (order !== undefined) {
+          updateStore((draft) =>
+            moveOrder(draft, order, to, from, was.to ?? "TABLE_STATE_FREE", was.from ?? "TABLE_STATE_OCCUPIED"),
+          );
+        }
+      };
+    },
+    send: () => api.transferTable(from, to),
+    confirmed: (response) =>
       updateStore((draft) =>
-        moveOrder(
-          draft,
-          order,
-          to,
-          from,
-          was.to ?? "TABLE_STATE_FREE",
-          was.from ?? "TABLE_STATE_OCCUPIED",
-        ),
-      );
-    }
-    afterFailure(caught);
-  }
+        moveOrder(draft, response.order_id, from, to, response.from_table.state, response.to_table.state),
+      ),
+    reread: rereadOrders,
+  });
 }
