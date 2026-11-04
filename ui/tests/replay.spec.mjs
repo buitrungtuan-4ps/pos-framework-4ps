@@ -6137,13 +6137,13 @@ test("a double tap on any act on the till's own drawer sends one request", async
     await page.locator("#movement-amount").fill("20000");
     await page.locator('[data-step="askPaidIn"]').click();
     const paidIn = "**/api/shifts/*/paid-in";
-    expect(await doubleTap(page, "movementReason", paidIn, "Sending…", "cash-moved")).toBe(1);
+    expect(await doubleTap(page, "movementReason", paidIn, { painted: "paid-in-pending" }, "cash-moved")).toBe(1);
 
     await page.locator('[data-step="askOpenDrawer"]').click();
     await page.locator("#no-sale-approver-code").fill(edge.staffCode);
     await page.locator("#no-sale-approver-pin").fill(edge.staffPin);
     const noSale = "**/api/drawer/open";
-    expect(await doubleTap(page, "drawerReason", noSale, "Sending…", "drawer-opened")).toBe(1);
+    expect(await doubleTap(page, "drawerReason", noSale, { painted: "no-sale-pending" }, "drawer-opened")).toBe(1);
 
     await page.locator("#count").fill("120000");
     const count = "**/api/shifts/*/count";
@@ -6727,6 +6727,121 @@ test("a count the store server refuses as not adding up says why and stays open"
     );
     await page.locator('[data-step="dismissRefusal"]').click();
     await expect(page.locator('[data-outcome="shift-open"]')).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// ADR-0204 for cash out of the drawer: a paid out whose answer is lost is read again, and counts as
+// made because the shift's paid-out total grew by its amount since just before it was sent.
+test("a paid out whose answer is lost is checked by the shift's total, and shows recorded", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await openShift(page);
+    await page.route("**/api/shifts/*/paid-out", async (route) => {
+      await route.fetch();
+      await route.abort("connectionreset");
+    });
+    await page.locator("#movement-amount").fill("20000");
+    await page.locator('[data-step="askPaidOut"]').click();
+    await page.locator('[data-step="movementReason"]').first().click();
+    await expect(page.locator('[data-outcome="paid-out-pending"]')).toContainText("Checking with the store server");
+    await expect(page.locator('[data-outcome="cash-moved"]')).toHaveText("Paid out 20,000₫.");
+    await expect(page.locator('[data-outcome="cash-totals"]')).toContainText("20,000₫");
+    await expect(page.locator('[data-outcome="money-refused"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// ADR-0204: a drop to the safe that never reached the edge is found not made, and the pile stays as
+// it was typed for the cashier to send again or cancel.
+test("a drop that never reached the store server is found not made, and the pile stays typed", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await openShift(page);
+    await page.route("**/api/shifts/*/safe-drop", (route) => route.abort("connectionreset"));
+    await page.getByRole("button", { name: "Drop to safe" }).click();
+    await page.locator("#drop-amount").fill("50000");
+    await page.locator('[data-step="dropToSafe"]').click();
+    await expect(page.locator('[data-outcome="safe-drop-pending"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="money-refused"]')).toContainText("The cash was not recorded");
+    await page.locator('[data-step="dismissRefusal"]').click();
+    await expect(page.locator("#drop-amount")).toHaveValue("50000");
+    await expect(page.locator('[data-outcome="cash-dropped"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// ADR-0204 decision 5: the drawer opened without a sale changes nothing a read can show. With no
+// answer it is neither rolled back nor sent again: the till says it is unconfirmed, and the cashier,
+// who can see the drawer, dismisses it.
+test("a drawer opening with no answer is said unconfirmed, never sent again", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await openShift(page);
+    let opens = 0;
+    await page.route("**/api/drawer/open", async (route) => {
+      opens += 1;
+      await route.abort("connectionreset");
+    });
+    await page.locator('[data-step="askOpenDrawer"]').click();
+    await page.locator("#no-sale-approver-code").fill(edge.staffCode);
+    await page.locator("#no-sale-approver-pin").fill(edge.staffPin);
+    await page.locator('[data-step="drawerReason"]').first().click();
+    await expect(page.locator('[data-outcome="money-refused"]')).toContainText(
+      "The drawer opening is not confirmed: check the drawer before opening it again.",
+    );
+    await page.locator('[data-step="dismissRefusal"]').click();
+    expect(opens).toBe(1);
+    await expect(page.locator('[data-outcome="drawer-opened"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// DRAWER_COUNTED for a paid bill's void, at the edge only: the cash would go back out of a drawer
+// already counted, whose count is a snapshot. The till has no check of its own for it yet, because
+// the action catalogue does not list this refusal for `billing.bill.void_settled` (a pos-proto
+// change, waiting for the ADR-0191 follow-up).
+test("a paid bill's void out of a counted drawer is refused by the store server, saying why", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await openShift(page);
+    await navigateTo(page, "/");
+    await aSettledTable(page);
+    await navigateTo(page, "/shift");
+    await page.locator("#count").fill("100000");
+    await page.locator('[data-step="countShift"]').click();
+    await expect(page.locator('[data-outcome="shift-counted"]')).toBeVisible();
+
+    await navigateTo(page, "/today");
+    await page.locator('[data-step="chooseBill"]').click();
+    await page.locator('[data-step="askVoidPaidBill"]').click();
+    await page.locator("#void-paid-bill-approver-code").fill(edge.staffCode);
+    await page.locator("#void-paid-bill-approver-pin").fill(edge.staffPin);
+    const answered = page.waitForResponse(
+      (response) => response.url().endsWith("/void_settled") && response.request().method() === "POST",
+    );
+    await page.locator('[data-step="voidPaidBillReason"]').first().click();
+    const answer = await answered;
+    expect(answer.status()).toBe(409);
+    expect(answer.headers()["pos-error-reason"]).toBe("DRAWER_COUNTED");
+    await expect(page.locator('[data-outcome="money-refused"]')).toContainText("This drawer is being closed.");
+    await expect(page.locator('[data-outcome="paid-bill-voided"]')).toHaveCount(0);
   } finally {
     await edge.stop();
   }
