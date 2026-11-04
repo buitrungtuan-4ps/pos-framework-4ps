@@ -9,6 +9,7 @@
 import { createSignal, For, Show } from "solid-js";
 
 import { api } from "../api/client";
+import { listPackages, listPackageVersions } from "../api/packages";
 import type { PackageRecord, PackageVersionRecord } from "../api/schemas";
 import { t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
@@ -33,83 +34,63 @@ function labelOf(loaded: readonly Loaded[], versionId: string | null): string {
   return versionId ?? "";
 }
 
-export function Packages() {
-  const [packages, setPackages] = createSignal<Loaded[] | null>(null);
-  const [pin, setPin] = createSignal<PackagePin | null>(null);
-  const [error, setError] = createSignal("");
-  const [busy, setBusy] = createSignal(false);
-  // The version a lock is being confirmed for, or `null` with no dialog open.
-  const [locking, setLocking] = createSignal<PackageVersionRecord | null>(null);
-  const [clearing, setClearing] = createSignal(false);
+/** What the tenant's pin means for its stores, in words. */
+function pinSummary(loaded: readonly Loaded[], current: PackagePin): string {
+  switch (current.mode) {
+    case "PACKAGE_MODE_LOCKED":
+      return t("packages.summaryLocked", { version: labelOf(loaded, current.lockedVersionId) });
+    case "PACKAGE_MODE_CHOOSE":
+      return t("packages.summaryChoose", {
+        count: current.allowedVersionIds.length,
+        version: labelOf(loaded, current.defaultVersionId),
+      });
+    default:
+      return t("packages.summaryNone");
+  }
+}
 
-  const load = async () => {
-    setError("");
-    try {
-      const [records, values] = await Promise.all([
-        api.listPackages(tenantId()),
-        api.listSettingValues(tenantId()),
-      ]);
-      const loaded = await Promise.all(
-        records.map(async (record) => ({
-          record,
-          versions: await api.listPackageVersions(tenantId(), record.package_id),
-        })),
-      );
-      setPackages(loaded);
-      setPin(tenantPin(values));
-    } catch (caught) {
-      setError(apiMessage(caught));
-    }
-  };
-
-  onScopedContext("tenant", () => void load());
-
-  /** Sends `request`'s writes in order, stopping at the first refusal. */
-  const apply = async (request: PinRequest, done: string) => {
-    setBusy(true);
-    setError("");
-    try {
-      for (const write of pinWrites(request)) {
-        await api.putSetting(
-          tenantId(),
-          write.settingKey,
-          "SETTING_SCOPE_TENANT",
-          tenantId(),
-          write.value,
-        );
+/** The pin as it stands, and the way to remove it. */
+function PinCard(props: {
+  loaded: readonly Loaded[];
+  current: PackagePin;
+  busy: boolean;
+  onClear: () => void;
+}) {
+  const summary = () => pinSummary(props.loaded, props.current);
+  return (
+    <Card
+      title={t("packages.pinTitle")}
+      actions={
+        <Show when={props.current.mode !== "PACKAGE_MODE_UNSPECIFIED"}>
+          <Button variant="secondary" disabled={props.busy} onClick={() => props.onClear()}>
+            {t("packages.clear")}
+          </Button>
+        </Show>
       }
-      toast.ok(done);
-      setLocking(null);
-      setClearing(false);
-      await load();
-    } catch (caught) {
-      const message = apiMessage(caught);
-      setError(message);
-      toast.error(message);
-    } finally {
-      setBusy(false);
-    }
-  };
+    >
+      <Show
+        when={props.current.mode === "PACKAGE_MODE_LOCKED"}
+        fallback={<p class="text-sm text-ink">{summary()}</p>}
+      >
+        <p class="text-sm text-ink" data-outcome="package-pinned">
+          {summary()}
+        </p>
+      </Show>
+    </Card>
+  );
+}
 
-  const lockVersion = (version: PackageVersionRecord) => setLocking(version);
-
-  const confirmLock = () => {
-    const version = locking();
-    if (version) {
-      void apply(
-        { mode: "PACKAGE_MODE_LOCKED", versionId: version.content.package_version_id },
-        t("packages.locked", { version: version.content.version_label }),
-      );
-    }
-  };
-
-  const confirmClear = () =>
-    void apply({ mode: "PACKAGE_MODE_UNSPECIFIED" }, t("packages.cleared"));
-
-  const isLocked = (version: PackageVersionRecord) =>
-    pin()?.mode === "PACKAGE_MODE_LOCKED" &&
-    pin()?.lockedVersionId === version.content.package_version_id;
-
+/** One package's versions, each one a lock away from running on every store. */
+function VersionsCard(props: {
+  entry: Loaded;
+  current: PackagePin;
+  busy: boolean;
+  onLock: (version: PackageVersionRecord) => void;
+}) {
+  const isLocked = (row: PackageVersionRecord) =>
+    props.current.mode === "PACKAGE_MODE_LOCKED" &&
+    props.current.lockedVersionId === row.content.package_version_id;
+  const lockVersion = (row: PackageVersionRecord) => props.onLock(row);
   const columns = (): Column<PackageVersionRecord>[] => [
     {
       key: "label",
@@ -117,11 +98,7 @@ export function Packages() {
       cell: (row) => row.content.version_label,
       sortValue: (row) => row.content.version_label,
     },
-    {
-      key: "minEdge",
-      header: t("packages.minEdge"),
-      cell: (row) => row.content.min_edge_version,
-    },
+    { key: "minEdge", header: t("packages.minEdge"), cell: (row) => row.content.min_edge_version },
     {
       key: "published",
       header: t("packages.published"),
@@ -138,99 +115,132 @@ export function Packages() {
       ),
     },
   ];
+  return (
+    <Card title={props.entry.record.name}>
+      <DataTable
+        columns={columns()}
+        rows={props.entry.versions}
+        searchText={(row) => row.content.version_label}
+        pageSize={12}
+        empty={<EmptyState title={t("packages.noVersions")} />}
+        actionsHeader={t("common.actions")}
+        actions={(row) => (
+          <Show when={!isLocked(row)}>
+            <Button
+              variant="secondary"
+              disabled={props.busy}
+              onClick={() => lockVersion(row)}
+              data-step="lockVersion"
+            >
+              {t("packages.lock")}
+            </Button>
+          </Show>
+        )}
+      />
+    </Card>
+  );
+}
 
-  const loadedView = () => {
+/** The tenant's packages and pin, and the writes that change the pin. */
+function usePackages() {
+  const [packages, setPackages] = createSignal<Loaded[] | null>(null);
+  const [pin, setPin] = createSignal<PackagePin | null>(null);
+  const [error, setError] = createSignal("");
+  const [busy, setBusy] = createSignal(false);
+  const load = async () => {
+    setError("");
+    try {
+      const [records, values] = await Promise.all([
+        listPackages(tenantId()),
+        api.listSettingValues(tenantId()),
+      ]);
+      const versions = await Promise.all(
+        records.map((record) => listPackageVersions(tenantId(), record.package_id)),
+      );
+      setPackages(records.map((record, at) => ({ record, versions: versions[at] ?? [] })));
+      setPin(tenantPin(values));
+    } catch (caught) {
+      setError(apiMessage(caught));
+    }
+  };
+  /** Sends `request`'s writes in order, stopping at the first refusal; `true` once all landed. */
+  const apply = async (request: PinRequest, done: string): Promise<boolean> => {
+    setBusy(true);
+    setError("");
+    try {
+      for (const write of pinWrites(request)) {
+        await api.putSetting(tenantId(), write.settingKey, "SETTING_SCOPE_TENANT", tenantId(), write.value);
+      }
+      toast.ok(done);
+      await load();
+      return true;
+    } catch (caught) {
+      setError(apiMessage(caught));
+      toast.error(apiMessage(caught));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+  const view = () => {
     const loaded = packages();
     const current = pin();
     return loaded && current ? { loaded, current } : null;
   };
+  return { load, apply, view, error, busy };
+}
 
-  /** What the tenant's pin means for its stores, in words. */
-  const pinSummary = (loaded: readonly Loaded[], current: PackagePin) => {
-    switch (current.mode) {
-      case "PACKAGE_MODE_LOCKED":
-        return t("packages.summaryLocked", { version: labelOf(loaded, current.lockedVersionId) });
-      case "PACKAGE_MODE_CHOOSE":
-        return t("packages.summaryChoose", {
-          count: current.allowedVersionIds.length,
-          version: labelOf(loaded, current.defaultVersionId),
-        });
-      default:
-        return t("packages.summaryNone");
+export function Packages() {
+  const state = usePackages();
+  // The version a lock is being confirmed for, or `null` with no dialog open.
+  const [locking, setLocking] = createSignal<PackageVersionRecord | null>(null);
+  const [clearing, setClearing] = createSignal(false);
+  onScopedContext("tenant", () => void state.load());
+
+  const confirmLock = () => {
+    const version = locking()?.content;
+    if (version) {
+      const request = { mode: "PACKAGE_MODE_LOCKED", versionId: version.package_version_id } as const;
+      const done = t("packages.locked", { version: version.version_label });
+      void state.apply(request, done).then((landed) => landed && setLocking(null));
     }
   };
+  const confirmClear = () =>
+    void state
+      .apply({ mode: "PACKAGE_MODE_UNSPECIFIED" }, t("packages.cleared"))
+      .then((landed) => landed && setClearing(false));
 
   return (
     <div>
       <PageHeader title={t("packages.title")} description={t("packages.description")} />
       <RequireContext need="tenant">
-        <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
-        <Show
-          when={loadedView()}
-          fallback={<Skeleton label={t("common.loading")} rows={4} />}
-        >
-          {(view) => (
+        <Show when={state.error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
+        <Show when={state.view()} fallback={<Skeleton label={t("common.loading")} rows={4} />}>
+          {(shown) => (
             <div class="flex flex-col gap-4">
-              <Card
-                title={t("packages.pinTitle")}
-                actions={
-                  <Show when={view().current.mode !== "PACKAGE_MODE_UNSPECIFIED"}>
-                    <Button variant="secondary" disabled={busy()} onClick={() => setClearing(true)}>
-                      {t("packages.clear")}
-                    </Button>
-                  </Show>
-                }
-              >
-                <Show
-                  when={view().current.mode === "PACKAGE_MODE_LOCKED"}
-                  fallback={
-                    <p class="text-sm text-ink">{pinSummary(view().loaded, view().current)}</p>
-                  }
-                >
-                  <p class="text-sm text-ink" data-outcome="package-pinned">
-                    {pinSummary(view().loaded, view().current)}
-                  </p>
-                </Show>
-              </Card>
+              <PinCard {...shown()} busy={state.busy()} onClear={() => setClearing(true)} />
               <Show
-                when={view().loaded.length > 0}
+                when={shown().loaded.length > 0}
                 fallback={
                   <Card title={t("packages.listTitle")}>
                     <EmptyState title={t("packages.empty")} description={t("packages.emptyHint")} />
                   </Card>
                 }
               >
-                <For each={view().loaded}>
+                <For each={shown().loaded}>
                   {(entry) => (
-                    <Card title={entry.record.name}>
-                      <DataTable
-                        columns={columns()}
-                        rows={entry.versions}
-                        searchText={(row) => row.content.version_label}
-                        pageSize={12}
-                        empty={<EmptyState title={t("packages.noVersions")} />}
-                        actionsHeader={t("common.actions")}
-                        actions={(row) => (
-                          <Show when={!isLocked(row)}>
-                            <Button
-                              variant="secondary"
-                              disabled={busy()}
-                              onClick={() => lockVersion(row)}
-                              data-step="lockVersion"
-                            >
-                              {t("packages.lock")}
-                            </Button>
-                          </Show>
-                        )}
-                      />
-                    </Card>
+                    <VersionsCard
+                      entry={entry}
+                      current={shown().current}
+                      busy={state.busy()}
+                      onLock={setLocking}
+                    />
                   )}
                 </For>
               </Show>
             </div>
           )}
         </Show>
-
         <ConfirmDialog
           open={locking() !== null}
           title={t("packages.lockTitle")}
@@ -238,7 +248,7 @@ export function Packages() {
           confirmLabel={t("packages.lock")}
           cancelLabel={t("action.cancel")}
           closeLabel={t("action.close")}
-          busy={busy()}
+          busy={state.busy()}
           onConfirm={confirmLock}
           onCancel={() => setLocking(null)}
           data-step="confirmLock"
@@ -250,7 +260,7 @@ export function Packages() {
           confirmLabel={t("packages.clear")}
           cancelLabel={t("action.cancel")}
           closeLabel={t("action.close")}
-          busy={busy()}
+          busy={state.busy()}
           danger
           onConfirm={confirmClear}
           onCancel={() => setClearing(false)}
