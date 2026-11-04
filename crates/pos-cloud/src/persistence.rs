@@ -894,6 +894,7 @@ fn fleet_placement(token: Option<&str>) -> StorePlacement {
 fn fleet_row(row: FleetStoreRow) -> Result<FleetRow, FleetStoreError> {
     Ok(FleetRow {
         package: crate::fleet::ReportedPackage::from_row(&row),
+        config_wake: crate::fleet::ReportedConfigWake::from_row(&row),
         store_id: parse_registry_store(&row.store_id)
             .map_err(|error| FleetStoreError::new(error.to_string()))?,
         name: row.name,

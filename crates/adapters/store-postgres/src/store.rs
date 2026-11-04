@@ -361,8 +361,6 @@ const MIGRATION_0087: &str = include_str!("../migrations/0087_roles_can_void_a_p
 /// the cloud to publish them again
 /// ([ADR-0187](../../../docs/adr/0187-a-shift-is-handed-over-at-the-till-and-read-there.md) decision 4).
 const MIGRATION_0088: &str = include_str!("../migrations/0088_roles_can_read_a_shifts_x.sql");
-const MIGRATION_0089: &str = include_str!("../migrations/0089_packages.sql");
-const MIGRATION_0090: &str = include_str!("../migrations/0090_store_liveness_package.sql");
 
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
@@ -768,20 +766,7 @@ impl PostgresStore {
             .batch_execute(MIGRATION_0088)
             .await
             .map_err(unavailable)?;
-        Self::migrate_from_0089(&connection).await
-    }
-
-    /// The migrations from 0089 on, in order, after [`Self::migrate`]'s: a function of their own so
-    /// that one stays inside its size baseline.
-    async fn migrate_from_0089(connection: &Object) -> Result<(), PortError> {
-        connection
-            .batch_execute(MIGRATION_0089)
-            .await
-            .map_err(unavailable)?;
-        connection
-            .batch_execute(MIGRATION_0090)
-            .await
-            .map_err(unavailable)
+        crate::migrations_late::migrate_from_0089(&connection).await
     }
 
     /// The materialised-rollup store over this pool ([ADR-0036](../../../../docs/adr/0036-materialised-rollups.md)).

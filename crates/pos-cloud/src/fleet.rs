@@ -145,6 +145,42 @@ pub struct FleetRow {
     /// ([ADR-0189](../../../docs/adr/0189-a-store-runs-a-package-version-hq-pins.md) decision 6), or
     /// `None` if no heartbeat ever has: an older edge.
     pub package: Option<ReportedPackage>,
+    /// What the store's heartbeat last said about config delivery, and when
+    /// ([ADR-0195](../../../docs/adr/0195-the-cloud-wakes-a-store-to-pull-its-config.md)), or `None`
+    /// if no heartbeat ever has: an older edge.
+    pub config_wake: Option<ReportedConfigWake>,
+}
+
+/// A store's config delivery as its heartbeat reported it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportedConfigWake {
+    /// Wake or poll, and the wake-to-apply times.
+    pub beat: crate::config_tree::ConfigWakeBeat,
+    /// When the heartbeat said so.
+    pub reported_at: Timestamp,
+}
+
+impl ReportedConfigWake {
+    /// The report as the liveness row stores it (migration 0091), or `None` when no heartbeat
+    /// reported one or its instant cannot be read.
+    #[must_use]
+    pub fn from_row(row: &store_postgres::FleetStoreRow) -> Option<Self> {
+        let reported_at =
+            Timestamp::from_milliseconds_since_epoch(row.config_wake_reported_at_ms?).ok()?;
+        let non_negative = |ms: Option<i64>| ms.and_then(|ms| u64::try_from(ms).ok());
+        Some(Self {
+            beat: crate::config_tree::ConfigWakeBeat {
+                delivery: row.config_delivery.clone()?,
+                samples: row
+                    .config_wake_samples
+                    .and_then(|n| u32::try_from(n).ok())
+                    .unwrap_or(0),
+                p95_ms: non_negative(row.config_wake_p95_ms),
+                max_ms: non_negative(row.config_wake_max_ms),
+            },
+            reported_at,
+        })
+    }
 }
 
 /// A store's package as its heartbeat reported it.

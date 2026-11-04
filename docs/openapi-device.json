@@ -1177,7 +1177,7 @@
           }
         ],
         "requestBody": {
-          "description": "Optional: `outbox_depth`, `lease_generation`, `print_agents` and `package` (the package version the store runs and the configuration it last refused for its package, ADR-0189), each left out when the store cannot say. An empty body is a bare ping",
+          "description": "Optional: `outbox_depth`, `lease_generation`, `print_agents`, `package` (the package version the store runs and the configuration it last refused for its package, ADR-0189) and `config_wake` (wake or poll, and the wake-to-apply times, ADR-0195), each left out when the store cannot say. An empty body is a bare ping",
           "content": {
             "application/json": {
               "schema": {
@@ -1993,6 +1993,38 @@
         "description": "A `ConfigVersionId`: a ULID, 26 Crockford base-32 characters",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
       },
+      "ConfigWakeBeat": {
+        "type": "object",
+        "description": "What one heartbeat said about config delivery (ADR-0195): whether the store hears the cloud's\nwake or runs on the poll alone, and the time from wake to apply over its latest wakes.",
+        "required": [
+          "delivery",
+          "samples"
+        ],
+        "properties": {
+          "delivery": {
+            "type": "string",
+            "description": "`CONFIG_DELIVERY_WAKE`, or `CONFIG_DELIVERY_POLL` for a store on the poll alone."
+          },
+          "max_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The longest of them, in milliseconds.",
+            "minimum": 0
+          },
+          "p95_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Their 95th percentile, in milliseconds; absent with no samples.",
+            "minimum": 0
+          },
+          "samples": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many wake-to-apply times the figures are drawn from; the edge keeps its latest 128.",
+            "minimum": 0
+          }
+        }
+      },
       "DeviceId": {
         "type": "string",
         "description": "A `DeviceId`: a ULID, 26 Crockford base-32 characters",
@@ -2341,6 +2373,17 @@
         "type": "object",
         "description": "What a heartbeat may carry beyond \"I am here\" ([ADR-0068](../../../docs/adr/0068-fleet-liveness.md)).\n\nEvery field is optional and the whole body is optional, because the body is younger than the\nroute: a store running an older binary posts nothing at all, and must keep being recorded as\nalive rather than refused for sending the empty body it has always sent.",
         "properties": {
+          "config_wake": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ConfigWakeBeat",
+                "description": "How configuration reaches the store and how fast\n([ADR-0195](../../../docs/adr/0195-the-cloud-wakes-a-store-to-pull-its-config.md)), or `None`\nwhen the store said nothing about it, which leaves what was recorded alone."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "lease_generation": {
             "type": [
               "integer",

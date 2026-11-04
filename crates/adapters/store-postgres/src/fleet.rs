@@ -130,6 +130,17 @@ pub struct FleetStoreRow {
     pub package_refusal_reason: Option<String>,
     /// Unix ms of the heartbeat that reported the package.
     pub package_reported_at_ms: Option<i64>,
+    /// What the store's heartbeat last said about config delivery (migration 0091, ADR-0195):
+    /// `CONFIG_DELIVERY_WAKE` or `CONFIG_DELIVERY_POLL`. All five `None` until a heartbeat reports.
+    pub config_delivery: Option<String>,
+    /// How many wake-to-apply times the two figures below are drawn from.
+    pub config_wake_samples: Option<i32>,
+    /// Their 95th percentile, in milliseconds.
+    pub config_wake_p95_ms: Option<i64>,
+    /// The longest of them.
+    pub config_wake_max_ms: Option<i64>,
+    /// Unix ms of the heartbeat that reported them.
+    pub config_wake_reported_at_ms: Option<i64>,
 }
 
 /// The columns and joins shared by the list and the single-store read. `$1` is always the tenant.
@@ -167,7 +178,12 @@ const FLEET_SELECT: &str = "SELECT \
      l.package_refused_config_version_id, \
      l.package_refused_version_id, \
      l.package_refusal_reason, \
-     l.package_reported_at \
+     l.package_reported_at, \
+     l.config_delivery, \
+     l.config_wake_samples, \
+     l.config_wake_p95_ms, \
+     l.config_wake_max_ms, \
+     l.config_wake_reported_at \
      FROM stores s \
      LEFT JOIN store_liveness l ON l.tenant_id = s.tenant_id AND l.store_id = s.store_id \
      LEFT JOIN store_lease lease \
@@ -263,5 +279,10 @@ fn fleet_row(row: &tokio_postgres::Row) -> FleetStoreRow {
         package_refused_version_id: row.get(27),
         package_refusal_reason: row.get(28),
         package_reported_at_ms: row.get(29),
+        config_delivery: row.get(30),
+        config_wake_samples: row.get(31),
+        config_wake_p95_ms: row.get(32),
+        config_wake_max_ms: row.get(33),
+        config_wake_reported_at_ms: row.get(34),
     }
 }

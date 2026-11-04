@@ -291,6 +291,9 @@ The same connection carries the **config wake**
 each time it reconnects, instead of waiting up to 30 seconds for the poll. The log says `config wake
 enabled over NATS` at start, and each wake-driven apply logs `wake_to_apply_ms`. A store without
 `POS_EDGE_NATS_URL` keeps the 30-second poll alone, and so does any store while the broker is down.
+Each heartbeat reports which it is, as `config_wake`, with the 95th-percentile and longest
+wake-to-apply time over the store's latest 128 wakes; the console's fleet view shows both, so a store
+on the poll alone, or one slow to apply, stands out (migration 0091).
 
 The cloud sends the wakes on its own `[nats]` connection (the ingest cursor's, not a second one): every
 saved store configuration queues one wake for its store, and a cloud with no `[nats]` sends none. The

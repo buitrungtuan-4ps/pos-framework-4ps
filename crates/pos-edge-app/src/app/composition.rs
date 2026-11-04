@@ -17,6 +17,7 @@ use pos_proto::events::{
 };
 use pos_proto::ids::{DeviceId, OrderLineId, StoreId};
 
+use super::config_wake::ConfigWakeStanding;
 use super::package::PackageStanding;
 use super::{AppError, Edge, EdgeSession, Projection, StoreIdentity};
 use crate::auth::Lockout;
@@ -150,6 +151,7 @@ impl<S: EventStore> Edge<S> {
             notes: Mutex::new(LineNotes::default()),
             pin_lockout: Arc::new(Lockout::new()),
             package: PackageStanding::default(),
+            config_wake: ConfigWakeStanding::default(),
         })
     }
 
@@ -171,6 +173,12 @@ impl<S: EventStore> Edge<S> {
     #[must_use]
     pub const fn package_standing(&self) -> &PackageStanding {
         &self.package
+    }
+
+    /// How configuration reaches the store and how fast (ADR-0195 decision 6).
+    #[must_use]
+    pub const fn config_wake_standing(&self) -> &ConfigWakeStanding {
+        &self.config_wake
     }
 
     /// What the status bar shows: how many events wait for the cloud, how worried to be about it,

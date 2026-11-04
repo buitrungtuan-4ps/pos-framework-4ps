@@ -30,7 +30,9 @@ pub mod store;
 pub mod tree;
 pub mod validate;
 
-pub use store::{ConfigStoreError, ConfigTreeStore, PackageBeat, PrintAgentStanding, RefusedBeat};
+pub use store::{
+    ConfigStoreError, ConfigTreeStore, ConfigWakeBeat, PackageBeat, PrintAgentStanding, RefusedBeat,
+};
 pub use tree::{
     ConfigError, ConfigLevel, ConfigTree, ConfigTreeState, DEFAULT_K, PublishedVersion, SyncOutcome,
 };

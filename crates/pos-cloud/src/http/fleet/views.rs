@@ -72,6 +72,16 @@ pub(super) struct FleetStoreView {
     /// Unix ms of the heartbeat that reported the package, or `null`.
     #[schema(required = true)]
     package_reported_at_ms: Option<i64>,
+    /// How configuration reaches the store and how fast
+    /// ([ADR-0195](../../../docs/adr/0195-the-cloud-wakes-a-store-to-pull-its-config.md)):
+    /// `CONFIG_DELIVERY_WAKE`, or `CONFIG_DELIVERY_POLL` for a store on the 30-second poll alone, and
+    /// the 95th-percentile and longest time from a wake to applying its version over the store's
+    /// latest wakes. `null` until a heartbeat reports it, which an older edge never does.
+    #[schema(required = true)]
+    config_wake: Option<pos_cloud_config::config_tree::ConfigWakeBeat>,
+    /// Unix ms of the heartbeat that reported config delivery, or `null`.
+    #[schema(required = true)]
+    config_wake_reported_at_ms: Option<i64>,
     /// The lease generation the box last reported holding
     /// ([ADR-0108](../../../docs/adr/0108-the-lease-generation-is-authority.md)), or `null` if it
     /// has never said.
@@ -257,6 +267,11 @@ impl FleetStoreView {
                 .package
                 .as_ref()
                 .map(|package| package.reported_at.as_milliseconds_since_epoch()),
+            config_wake: row.config_wake.as_ref().map(|wake| wake.beat.clone()),
+            config_wake_reported_at_ms: row
+                .config_wake
+                .as_ref()
+                .map(|wake| wake.reported_at.as_milliseconds_since_epoch()),
             lease_generation_held: row.lease_generation_held,
             lease_reported_at_ms: row
                 .lease_reported_at
