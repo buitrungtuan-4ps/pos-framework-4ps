@@ -205,6 +205,7 @@ pub(crate) fn rollup_projector(config: &CloudConfig, store: &PostgresStore) -> J
     tokio::spawn(dashboard::projector::run(
         store.clone(),
         store.rollups(),
+        store.custom_values(),
         store.clone(),
         SystemClock,
         store.task_health(),

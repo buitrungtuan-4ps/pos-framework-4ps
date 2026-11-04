@@ -33,6 +33,7 @@ mod config_releases;
 mod config_saved;
 mod config_trees;
 mod connections;
+mod custom_values;
 mod data_migrations;
 mod devices;
 mod fee_rules;
@@ -87,6 +88,7 @@ pub use config_trees::{
     StoredRetire, StoredSettle,
 };
 pub use connections::{ConnectionRow, PostgresConnections};
+pub use custom_values::{CustomValueWrite, PostgresCustomValues};
 pub use data_migrations::PostgresDataMigrations;
 pub use devices::{DeviceProposalRow, PostgresDeviceProposals};
 pub use fee_rules::{FeeRuleRow, FeeRuleSlot, FeeRuleWrite, PostgresFeeRules};

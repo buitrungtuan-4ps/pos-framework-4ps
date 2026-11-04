@@ -30,5 +30,5 @@ pub use projection::{
     ProjectReport, RollupError, RollupStore, StoredRollups, admitted_devices, dashboard, project,
     revenue, xz_report,
 };
-pub use projector::{FleetReport, StoreCatalog, project_fleet};
+pub use projector::{FleetReport, StoreCatalog, project_custom_fleet, project_fleet};
 pub use rollup::RollupWindow;
