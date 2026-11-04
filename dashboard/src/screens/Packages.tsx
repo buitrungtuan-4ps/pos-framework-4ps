@@ -22,6 +22,7 @@ import { formatInstant } from "../lib/format";
 import { type PackagePin, type PinRequest, pinWrites, tenantPin } from "../lib/package-pin";
 import { ChoiceCard } from "./packages/ChoiceCard";
 import { StoreChoiceCard } from "./packages/StoreChoiceCard";
+import { StorePackageCard } from "./packages/StorePackageCard";
 
 type Loaded = { readonly record: PackageRecord; readonly versions: PackageVersionRecord[] };
 
@@ -261,6 +262,7 @@ export function Packages() {
             <div class="flex flex-col gap-4">
               <PinCard {...shown()} busy={state.busy()} onClear={() => setClearing(true)} />
               <Show when={storeId()}>
+                <StorePackageCard versions={allVersions(shown().loaded)} revision={state.revision()} />
                 <StoreChoiceCard versions={allVersions(shown().loaded)} revision={state.revision()} />
               </Show>
               <Show

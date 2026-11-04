@@ -134,3 +134,4 @@ export type FeePublishReport = Schemas["StoresPublished_FeePublishResult"];
 export type SampleBill = Schemas["SampleBillView"];
 export type PackageRecord = Schemas["PackageRecord"];
 export type PackageVersionRecord = Schemas["PackageVersionRecord"];
+export type StorePackage = Schemas["StorePackage"];

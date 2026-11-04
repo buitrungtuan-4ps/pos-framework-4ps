@@ -4,7 +4,7 @@
 // OpenAPI schema (ADR-0177).
 
 import { requestJson } from "./client";
-import type { PackageRecord, PackageVersionRecord } from "./schemas";
+import type { PackageRecord, PackageVersionRecord, StorePackage } from "./schemas";
 
 /** `GET /admin/packages`: the tenant's packages, in id order. */
 export const listPackages = (tenantId: string): Promise<PackageRecord[]> =>
@@ -37,3 +37,13 @@ export const chooseStorePackage = (
     tenant_id: tenantId,
     package_version_id: packageVersionId,
   });
+
+/**
+ * `GET /admin/stores/{store_id}/package`: the version a store is pinned to, the one it runs, and
+ * why it waits when they differ (ADR-0189 decision 5).
+ */
+export const storePackage = (tenantId: string, storeId: string): Promise<StorePackage> =>
+  requestJson<StorePackage>(
+    "GET",
+    `/admin/stores/${encodeURIComponent(storeId)}/package?tenant_id=${encodeURIComponent(tenantId)}`,
+  );

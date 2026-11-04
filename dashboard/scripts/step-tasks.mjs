@@ -164,4 +164,18 @@ export const TASKS = [
     ],
     outcome: { file: "screens/packages/StoreChoiceCard.tsx", mark: "package-chosen" },
   },
+  {
+    task: "See why a store does not run its pinned package version yet",
+    budget: 1,
+    note: "One: open Packages with the store in context. The store's card says what it runs, what it is pinned to, and why it waits — its edge's release, or that it never reported one — in words, so HQ does not have to infer it from two version ids (ADR-0189 decision 5).",
+    steps: [{ nav: "packages" }],
+    outcome: { file: "screens/packages/StorePackageCard.tsx", mark: "package-waiting" },
+  },
+  {
+    task: "See which stores take configuration on the poll alone",
+    budget: 1,
+    note: "One: the fleet table's Config delivery column says, per store, whether it hears the cloud's wake or waits for the 30-second poll, with how long a change took to apply (ADR-0195). It sorts the poll-only stores first.",
+    steps: [{ nav: "fleet" }],
+    outcome: { file: "screens/fleet/package-columns.tsx", mark: "config-delivery" },
+  },
 ];
