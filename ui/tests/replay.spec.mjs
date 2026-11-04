@@ -3389,6 +3389,123 @@ test("a guest's QR order shows its table by the floor's label, and the queue ref
   }
 });
 
+// Confirming or refusing a guest's QR order paints first (ADR-0196 decision 1): the order leaves the
+// queue on the tap. A refusal puts it back with its sentence; an answer that is lost puts it back and
+// reads the queue again, which finds whether the store made it. The demo store takes no QR orders,
+// so the queue and both acts are answered here, and each act is counted to show it is sent once.
+test("a guest's order confirmed or refused leaves the queue at once, and a refusal or a lost answer is read", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    const table = new URL(page.url()).pathname.split("/")[2];
+    await page.locator('a[href="/"]').first().click();
+
+    const money = (amount) => ({ amount_minor: amount, currency_code: "VND" });
+    const waiting = new Set(["01J0000000000000000000GUE1", "01J0000000000000000000GUE2"]);
+    await page.route("**/api/orders/awaiting-confirmation", (route) =>
+      route.fulfill({
+        json: {
+          orders: [...waiting].map((order_id) => ({
+            order_id,
+            table_id: table,
+            items: [{ display_name: "Iced tea", quantity: { milli: 1000 }, line_total: money(39_500) }],
+            total: money(43_450),
+          })),
+          reject_reasons: [{ reason_code_id: "01J00000000000000000REASON", code: "KITCHEN_CLOSED", display_name: "Kitchen closed" }],
+        },
+      }),
+    );
+    await navigateTo(page, "/guests");
+    const cards = page.locator('[data-outcome="guest-order"]');
+    await expect(cards).toHaveCount(2);
+    const accept = () => cards.first().getByRole("button", { name: "Send to kitchen" });
+
+    // Refused: the order is back, with the refusal's sentence.
+    await refusePost(page, "**/api/orders/*/confirm", "TRANSITION_REFUSED");
+    await accept().click();
+    await expect(page.getByText("That is not possible right now").first()).toBeVisible();
+    await expect(cards).toHaveCount(2);
+    await page.unroute("**/api/orders/*/confirm");
+
+    // Held: the order is off the queue before the edge answers, and stays off once it does.
+    let answer = () => {};
+    const answered = new Promise((resolve) => {
+      answer = resolve;
+    });
+    let confirms = 0;
+    await page.route("**/api/orders/*/confirm", async (route) => {
+      confirms += 1;
+      await answered;
+      waiting.delete("01J0000000000000000000GUE1");
+      await route.fulfill({ status: 204 });
+    });
+    await accept().click();
+    await expect(cards).toHaveCount(1);
+    answer();
+    await expect(cards).toHaveCount(1);
+    expect(confirms).toBe(1);
+
+    // A refusal (to the kitchen) whose answer never came back from a store that made it: the order
+    // comes back for a moment, and the queue's read takes it off again. Sent once.
+    let rejects = 0;
+    await page.route("**/api/orders/*/reject", async (route) => {
+      rejects += 1;
+      waiting.delete("01J0000000000000000000GUE2");
+      await route.abort("connectionreset");
+    });
+    await cards.first().getByRole("button", { name: "Refuse" }).click();
+    await page.getByRole("button", { name: "Kitchen closed" }).click();
+    await expect(page.getByText("No guest orders are waiting.")).toBeVisible();
+    expect(rejects).toBe(1);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// Bumping a ticket paints first: it leaves the board on the tap. A bump the edge refuses brings it
+// back with the refusal's sentence (substituted: the real edge bumps any fired line); a bump whose
+// answer is lost brings it back and reads the open orders again, which find it bumped.
+test("a ticket bumped leaves the board at once, a refusal brings it back, a lost answer is read again", async ({
+  context,
+}) => {
+  const edge = await startEdge();
+  try {
+    const till = await context.newPage();
+    await pair(till, edge);
+    await signIn(till, edge);
+    await seatTable(till);
+    await addByName(till, "iced");
+    await sendOrder(till);
+    const board = await context.newPage();
+    await board.goto(`${edge.baseURL}/kds`);
+    const ticket = board.locator('[data-step="onBump"]');
+    await expect(ticket).toHaveCount(1);
+
+    await refusePost(board, "**/api/kds/bump", "TRANSITION_REFUSED");
+    await ticket.click();
+    await expect(board.locator('[data-outcome="kds-bump-refused"]')).toContainText("That is not possible right now");
+    await expect(ticket).toHaveCount(1);
+    await board.unroute("**/api/kds/bump");
+
+    let bumps = 0;
+    await board.route("**/api/kds/bump", async (route) => {
+      bumps += 1;
+      await route.fetch();
+      await route.abort("connectionreset");
+    });
+    await ticket.click();
+    await expect(board.locator('[data-outcome="kds-bump-refused"]')).toBeVisible();
+    await expect(ticket).toHaveCount(0);
+    expect(bumps).toBe(1);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A guest's QR order that joins the table's order (ADR-0160 item 2, `docs/pos-spec.md` §13). The
 // edge writes the guest's line on the guest's own order and then `sales.table.merged`, which puts
 // it on the table's, and the till folds the two as they come. The frames are given the next

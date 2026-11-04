@@ -11,7 +11,6 @@ import { useDarkTakeover } from "../lib/screen";
 import { fold, matches } from "../lib/search";
 import { can } from "../state/permissions";
 import {
-  bump,
   kitchenTickets,
   lateAfterSeconds,
   loadLiveOrders,
@@ -20,6 +19,8 @@ import {
   state,
   type KitchenTicket,
 } from "../state/store";
+import { createBumper } from "../state/kitchen-writes";
+import { WriteRefused } from "../components/WriteRefused";
 import { setItemSoldOut } from "../state/floor-writes";
 import { queueNumberFor, refreshQueueNumbers } from "../state/queue-numbers";
 
@@ -209,9 +210,9 @@ export function Kds() {
     }
   };
 
-  const onBump = (ticket: KitchenTicket) => {
-    void bump(ticket.orderId, ticket.lineIds, ticket.stationId);
-  };
+  // The ticket leaves the board on the tap; a refusal, or no answer, brings it back and says why.
+  const bumper = createBumper();
+  const onBump = (ticket: KitchenTicket) => bumper.bump(ticket.orderId, ticket.lineIds, ticket.stationId);
 
   // Taking a dish off every till from the kitchen (86), and putting it back. The cook is usually
   // the first to know the mozzarella has run out, and the board is where the cook is. A panel over
@@ -292,6 +293,7 @@ export function Kds() {
           </button>
         </div>
       </div>
+      <WriteRefused message={bumper.refused()} outcome="kds-bump-refused" />
       <Show when={marking()}>
         <section
           class="mb-4 rounded-token border border-line bg-surface p-4"

@@ -1780,30 +1780,6 @@ export function applyVoided(billId: string): void {
   );
 }
 
-// A station marks a ticket's lines prepared. The edge records the durable `kitchen.ticket.bumped`
-// event and fans it out, so every KDS folds the same prepared set; the line drops off this screen at
-// once and stays off when its own event returns.
-// Bumps lines as made. `stationId` is the station the ticket was fired to, where the board knows it;
-// the store's default station otherwise, which is what every bump sent before lines carried one.
-export async function bump(
-  orderId: string,
-  orderLineIds: string[],
-  stationId?: string,
-): Promise<void> {
-  await api.bumpTicket({
-    order_id: orderId,
-    station_id: stationId ?? state.defaultStation,
-    order_line_ids: orderLineIds,
-  });
-  setState(
-    produce((draft) => {
-      for (const id of orderLineIds) {
-        draft.bumped[id] = true;
-      }
-    }),
-  );
-}
-
 // What one bill owes and the lines it covers — the pay screen's figure once a table can hold more
 // than one bill (ADR-0128).
 export async function loadBillCheck(billId: string): Promise<BillCheckResponse> {
