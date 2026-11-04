@@ -22318,6 +22318,294 @@
         "x-permission": "console.config.publish"
       }
     },
+    "/admin/stores/{store_id}/custom-values/summary": {
+      "get": {
+        "tags": [
+          "reports"
+        ],
+        "summary": "A console user reads how many of a store's objects hold each value of one custom field.",
+        "operationId": "admin_custom_value_summary",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "description": "The tenant the store belongs to (a 26-character ULID).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "custom_field_id",
+            "in": "path",
+            "description": "The field to group by (a 26-character ULID).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "object",
+            "in": "path",
+            "description": "The existing objects to count, as `DATA_OBJECT_ORDER` and the like. Give this or\n`object_type_id`.",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "object_type_id",
+            "in": "path",
+            "description": "The object type whose records to count. Give this or `object`.",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "filter_field_id",
+            "in": "path",
+            "description": "A field the counted objects must hold `filter_value` in.",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "filter_value",
+            "in": "path",
+            "description": "The value: a list entry's id, `true` or `false`, or a whole number, as the filter field's\ntype is.",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "How many objects hold each value of the field, the most first, at most 500 groups; `truncated` says whether there were more. No person is named or counted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValueSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An id is not a ULID; neither or both of `object` and `object_type_id` are given; a filter has no value; the field is not declared (`UNKNOWN`), is declared personal (`PERSONAL_FIELD`), or cannot filter (`INVALID`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The projection or the package store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
+      }
+    },
+    "/admin/stores/{store_id}/custom-values/summary.csv": {
+      "get": {
+        "tags": [
+          "reports"
+        ],
+        "summary": "A console user downloads the summary as CSV.",
+        "operationId": "admin_custom_value_summary_csv",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "description": "The tenant the store belongs to (a 26-character ULID).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "custom_field_id",
+            "in": "path",
+            "description": "The field to group by (a 26-character ULID).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "object",
+            "in": "path",
+            "description": "The existing objects to count, as `DATA_OBJECT_ORDER` and the like. Give this or\n`object_type_id`.",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "object_type_id",
+            "in": "path",
+            "description": "The object type whose records to count. Give this or `object`.",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "filter_field_id",
+            "in": "path",
+            "description": "A field the counted objects must hold `filter_value` in.",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "filter_value",
+            "in": "path",
+            "description": "The value: a list entry's id, `true` or `false`, or a whole number, as the filter field's\ntype is.",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`custom-values.csv`: `custom_field_id`, the value in the column of its type (`list_entry_id`, `boolean`, `integer`, `calendar_date`, `quantity_milli`) and `objects`. The export is audited by ids and row count",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "As the summary read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The projection or the package store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
+      }
+    },
     "/admin/stores/{store_id}/devices": {
       "get": {
         "tags": [
@@ -26502,6 +26790,11 @@
           }
         }
       },
+      "CalendarDate": {
+        "type": "string",
+        "description": "A calendar date, YYYY-MM-DD",
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+      },
       "CampaignId": {
         "type": "string",
         "description": "A `CampaignId`: a ULID, 26 Crockford base-32 characters",
@@ -28446,6 +28739,40 @@
         "type": "string",
         "description": "A `CustomFieldId`: a ULID, 26 Crockford base-32 characters",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "CustomFieldValue": {
+        "type": "object",
+        "description": "One custom field's value, as an event records it. At most one of the value fields is present,\nthe one the field's type declares; none present means the value was cleared.",
+        "required": [
+          "custom_field_id"
+        ],
+        "properties": {
+          "boolean": {
+            "type": "boolean",
+            "description": "A `bool` field's value."
+          },
+          "calendar_date": {
+            "$ref": "#/components/schemas/CalendarDate",
+            "description": "A `date` field's value."
+          },
+          "custom_field_id": {
+            "$ref": "#/components/schemas/CustomFieldId",
+            "description": "The field, as the package version declares it."
+          },
+          "integer": {
+            "type": "integer",
+            "format": "int64",
+            "description": "An `int` field's value."
+          },
+          "list_entry_id": {
+            "$ref": "#/components/schemas/ListEntryId",
+            "description": "A `choice` field's value: an entry of the field's list."
+          },
+          "quantity": {
+            "$ref": "#/components/schemas/Quantity",
+            "description": "A `quantity` field's value, in thousandths of the field's unit."
+          }
+        }
       },
       "CustomList": {
         "type": "object",
@@ -36194,6 +36521,47 @@
           },
           "media_id": {
             "type": "string"
+          }
+        }
+      },
+      "ValueCount": {
+        "type": "object",
+        "description": "How many objects hold one value.",
+        "required": [
+          "value",
+          "objects"
+        ],
+        "properties": {
+          "objects": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many objects hold it.",
+            "minimum": 0
+          },
+          "value": {
+            "$ref": "#/components/schemas/CustomFieldValue",
+            "description": "The value, with the field it is a value of."
+          }
+        }
+      },
+      "ValueSummary": {
+        "type": "object",
+        "description": "A summary's answer.",
+        "required": [
+          "groups",
+          "truncated"
+        ],
+        "properties": {
+          "groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValueCount"
+            },
+            "description": "The groups, the most objects first, at most [`SUMMARY_GROUPS_MAX`]."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "Whether more groups exist than were returned."
           }
         }
       },

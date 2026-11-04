@@ -26,18 +26,23 @@ pub struct CustomFieldValue {
     pub custom_field_id: CustomFieldId,
     /// An `int` field's value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub integer: Option<i64>,
     /// A `bool` field's value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub boolean: Option<bool>,
     /// A `choice` field's value: an entry of the field's list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub list_entry_id: Option<ListEntryId>,
     /// A `date` field's value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub calendar_date: Option<CalendarDate>,
     /// A `quantity` field's value, in thousandths of the field's unit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub quantity: Option<Quantity>,
 }
 

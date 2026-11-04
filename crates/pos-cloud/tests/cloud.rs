@@ -48,6 +48,8 @@ mod config_rollback;
 mod config_store;
 #[path = "cloud/countries.rs"]
 mod countries;
+#[path = "cloud/custom_values.rs"]
+mod custom_values;
 #[path = "cloud/device_activation.rs"]
 mod device_activation;
 #[path = "cloud/device_admitted.rs"]

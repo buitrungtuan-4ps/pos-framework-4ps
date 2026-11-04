@@ -112,6 +112,7 @@ mod cloud_routes;
 pub(crate) mod config_nodes;
 pub(crate) mod config_publish;
 pub(crate) mod countries;
+mod custom_values;
 pub(crate) mod fleet;
 pub(crate) mod health;
 pub(crate) mod integrations;
@@ -182,6 +183,10 @@ use config_publish::{admin_config_effective, admin_config_publish};
 pub use config_publish::{config_preview_router, config_release_router};
 pub(crate) use config_publish::{publish_config_nodes_with, strip_tree_version};
 pub use countries::country_router;
+pub use custom_values::custom_value_report_router;
+pub(crate) use custom_values::{
+    __path_admin_custom_value_summary, __path_admin_custom_value_summary_csv,
+};
 pub(crate) use devices::{
     __path_admin_revoke_device, __path_admin_set_printer_paper, __path_admin_set_terminal_float,
     __path_admin_set_terminal_receipt,
