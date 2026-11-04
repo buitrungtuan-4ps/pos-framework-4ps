@@ -540,6 +540,97 @@ test("firing one course sends that course and leaves the rest of the order waiti
   }
 });
 
+// Sending to the kitchen paints first (ADR-0196 decision 1): the line shows fired at once, before
+// the edge answers, and the Send button says it is sending. A refusal puts it back unsent with the refusal's sentence;
+// the refusal is substituted, since the real edge sends any unsent line it is asked to.
+test("a send paints the lines fired at once, and a refusal puts them back unsent", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addStarter(page);
+    const held = await holdPost(page, "**/api/orders/*/fire");
+    await page.locator('[data-step="fireOrder"]').click();
+    await held.sent;
+    await expect(page.locator('[data-outcome="line-fired"]')).toHaveCount(1);
+    await expect(page.locator('[data-step="fireOrder"]')).toHaveText("Sending…");
+    held.release();
+    await expect(page.locator('[data-step="fireOrder"]')).not.toHaveText("Sending…");
+    await expect(page.locator('[data-outcome="line-fired"]')).toHaveCount(1);
+
+    await addByName(page, "iced");
+    await refusePost(page, "**/api/orders/*/fire", "TRANSITION_REFUSED");
+    await page.locator('[data-step="fireOrder"]').click();
+    await expect(page.getByRole("alert")).toContainText("That is not possible right now");
+    await expect(page.locator('[data-outcome="line-unsent"]')).toHaveCount(1);
+    await expect(page.locator('[data-outcome="line-fired"]')).toHaveCount(1);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// No answer to a send puts the lines back and reads the open orders again, which find them sent:
+// the edge made it. It is sent once, never again by the till. A course's send takes the same path.
+test("a send whose answer is lost is read again, and the lines show fired, sent once", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addStarter(page);
+    let fires = 0;
+    await page.route("**/api/orders/*/fire/*", async (route) => {
+      fires += 1;
+      await route.fetch();
+      await route.abort("connectionreset");
+    });
+    await page.locator('[data-step="fireCourse"]').click();
+    await expect(page.locator('[data-outcome="line-fired"]')).toHaveCount(1);
+    await expect(page.locator('[data-outcome="line-sending"]')).toHaveCount(0);
+    await expect(page.locator('[data-outcome="line-unsent"]')).toHaveCount(0);
+    expect(fires).toBe(1);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A void paints first too: the line shows voided at once. A void that never reached the edge is put
+// back, read again and found not made; a refusal (substituted: this unsent line needs no manager, so
+// the real edge would not refuse it) puts it back with the refusal's sentence.
+test("a void paints at once, a refusal and a void never made put the line back", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addStarter(page);
+    await page.route("**/api/lines/*/void", (route) => route.abort("connectionreset"));
+    await page.locator('[data-step="askVoid"]').first().click();
+    await page.locator('[data-step="voidReason"]').first().click();
+    await expect(page.locator('[data-outcome="line-voided"]')).toHaveCount(0);
+    await expect(page.getByRole("alert").first()).toBeVisible();
+    await expect(page.locator('[data-outcome="line-unsent"]')).toHaveCount(1);
+    await page.unroute("**/api/lines/*/void");
+
+    await refusePost(page, "**/api/lines/*/void", "APPROVAL_REQUIRED");
+    await page.locator('[data-step="voidReason"]').first().click();
+    await expect(page.getByRole("alert").first()).toBeVisible();
+    await expect(page.locator('[data-outcome="line-voided"]')).toHaveCount(0);
+    await page.unroute("**/api/lines/*/void");
+
+    const held = await holdPost(page, "**/api/lines/*/void");
+    await page.locator('[data-step="voidReason"]').first().click();
+    await held.sent;
+    await expect(page.locator('[data-outcome="line-voided"]')).toHaveCount(1);
+    held.release();
+    await expect(page.locator('[data-outcome="line-voided"]')).toHaveCount(1);
+    await expect(page.locator('[data-outcome="line-sending"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // The till does not take money for food the kitchen was never sent (pilot U1).
 //
 // Take payment and the counter's charge used to open a bill whatever the lines' state, and settling
@@ -6328,6 +6419,45 @@ test("take payment moves at once, and reads the amount while the bill is opened"
     await expect(page.locator('[data-outcome="amount-loading"]')).toHaveCount(0);
     await page.locator('[data-step="payCash"]').click();
     await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
+// The answer to a send lands after the lines were painted fired, and must not make the order read
+// the table's figure again: the send changed no price. The CI shard met this ordering by chance, as
+// two reads of the check behind one Take payment; here it is made certain. The send's answer is
+// held until the lines show fired and the read the paint caused has landed, the reads are counted
+// from then, and Take payment, which waits for the send, is tapped as soon as the answer lets it.
+// A send that marked its lines as sending took them out of the figure's key at the paint and put
+// them back at the answer, so the answer read the check a second time.
+test("a send's answer, landing after its paint, reads the table's figure no second time", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    const fire = await holdPost(page, "**/api/orders/*/fire", { reachEdge: true });
+    const isCheck = (url) => /\/api\/tables\/[^/]+\/check$/.test(new URL(url).pathname);
+    const painted = page.waitForResponse((response) => isCheck(response.url()));
+    await page.locator('[data-step="fireOrder"]').click();
+    await fire.sent;
+    await expect(page.locator('[data-outcome="line-fired"]')).toHaveCount(1);
+    await painted;
+    const checks = [];
+    page.on("request", (request) => {
+      if (isCheck(request.url())) {
+        checks.push(request.url());
+      }
+    });
+    const bill = await holdPost(page, "**/api/tables/*/bill");
+    fire.release();
+    await page.locator('[data-step="takePayment"]').click();
+    await bill.sent;
+    await expect(page.locator('[data-outcome="amount-loading"]')).toBeVisible();
+    expect(checks, "only the pay screen's own read of the figure").toHaveLength(1);
+    bill.release();
   } finally {
     await edge.stop();
   }

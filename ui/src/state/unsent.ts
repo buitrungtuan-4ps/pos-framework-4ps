@@ -9,7 +9,8 @@
 
 import { createSignal } from "solid-js";
 
-import { type OrderLine, fireOrder, holdWalkIn, linesForTable, walkInKey } from "./store";
+import { fireOrder } from "./order-writes";
+import { type OrderLine, holdWalkIn, linesForTable, walkInKey } from "./store";
 
 /** The question a screen asks before it takes payment for an order with unsent lines. */
 export interface SendFirstGate {
