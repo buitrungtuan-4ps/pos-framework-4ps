@@ -15,6 +15,7 @@ use blob_garage::S3Blobs;
 use pos_cloud::audit::AuditRecorder;
 use pos_cloud::cell::signed::{CellDirectory, Offer};
 use pos_cloud::clock::SystemClock;
+use pos_cloud::config_wakes::{ConfigWakes, WakeQueue};
 use pos_cloud::http::CloudApp;
 use pos_cloud::qr_ordering::OneSwitch;
 use pos_cloud::release_source::GithubReleases;
@@ -53,7 +54,7 @@ pub(super) fn load_config() -> Result<CloudConfig, Box<dyn std::error::Error>> {
 /// failed; the run aborts the boot only when the stores cannot be listed or the run recorded.
 pub(super) async fn open_store(
     config: &CloudConfig,
-) -> Result<(PostgresStore, OneSwitch), Box<dyn std::error::Error>> {
+) -> Result<(PostgresStore, OneSwitch, Option<WakeQueue>), Box<dyn std::error::Error>> {
     let store = PostgresStore::connect(&config.database_url).map_err(|error| error.to_string())?;
     store.migrate().await.map_err(|error| error.to_string())?;
     let one_switch = pos_cloud::qr_ordering::run_once(
@@ -73,7 +74,15 @@ pub(super) async fn open_store(
             "set every store's QR ordering switch from what it did"
         );
     }
-    Ok((store, one_switch))
+    // Installed after the boot's own publishes, before the store is shared: from here every committed
+    // config-tree save queues a wake for its store, and a cloud with no `[nats]` sends none (ADR-0195).
+    let (store, wakes) = if config.nats.is_some() {
+        let (wakes, queue) = ConfigWakes::channel();
+        (store.with_config_saved(wakes.hook()), Some(queue))
+    } else {
+        (store, None)
+    };
+    Ok((store, one_switch, wakes))
 }
 
 /// The cloud's application layer over the store's one pool, with the store registry ingest stamps
@@ -148,6 +157,9 @@ pub(super) fn expected_tasks(config: &CloudConfig) -> Vec<String> {
         pos_cloud::health::WEBHOOK_DISPATCHER.to_owned(),
         pos_cloud::health::ALERT_EVALUATOR.to_owned(),
     ];
+    if config.nats.is_some() {
+        expected_tasks.push(pos_cloud::health::CONFIG_WAKE.to_owned());
+    }
     if config.retention_days.is_some() {
         expected_tasks.push(pos_cloud::health::RETENTION.to_owned());
     }

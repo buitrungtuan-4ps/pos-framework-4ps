@@ -69,10 +69,19 @@ impl ConfigTreeStore for PostgresConfigTrees {
         let json = serde_json::to_string(state).map_err(|error| {
             ConfigStoreError::new(format!("encoding the config tree failed: {error}"))
         })?;
-        self.save_state(tenant, store, &json, expected.map(Version::as_str))
+        let outcome = self
+            .save_state(tenant, store, &json, expected.map(Version::as_str))
             .await
             .map(update_outcome)
-            .map_err(|error| ConfigStoreError::new(error.to_string()))
+            .map_err(|error| ConfigStoreError::new(error.to_string()))?;
+        // Committed: `save_state` is one autocommit statement on its own connection. A lost race
+        // wrote nothing and tells nothing (ADR-0195).
+        if let (UpdateOutcome::Updated(_), Some(saved), Some(head)) =
+            (&outcome, self.saved(), state.history.last())
+        {
+            saved.notify(tenant, store, head.id);
+        }
+        Ok(outcome)
     }
 
     async fn record_store_seen(

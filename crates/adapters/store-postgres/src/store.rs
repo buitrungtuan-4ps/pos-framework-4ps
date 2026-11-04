@@ -372,7 +372,9 @@ const POOL_SIZE: usize = 16;
 /// draws from the same pool.
 #[derive(Clone, Debug)]
 pub struct PostgresStore {
-    pool: Pool,
+    pub(crate) pool: Pool,
+    /// What every config-tree handle tells after a committed save, if anything.
+    pub(crate) config_saved: Option<crate::config_saved::ConfigSaved>,
 }
 
 impl PostgresStore {
@@ -396,7 +398,10 @@ impl PostgresStore {
                 PortError::internal(PortName::EventStore, "could not build the connection pool")
                     .with_source(error)
             })?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            config_saved: None,
+        })
     }
 
     /// Applies the cloud schema, idempotently — safe to run on every boot.
@@ -827,14 +832,6 @@ impl PostgresStore {
     #[must_use]
     pub fn admin(&self) -> crate::admin::PostgresAdmin {
         crate::admin::PostgresAdmin::new(self.pool.clone())
-    }
-
-    /// The configuration-tree store over this pool ([ADR-0033](../../../../docs/adr/0033-config-tree.md)).
-    ///
-    /// A cheap handle sharing the same pool; `pos-cloud` implements its `ConfigTreeStore` seam over it.
-    #[must_use]
-    pub fn config_trees(&self) -> crate::config_trees::PostgresConfigTrees {
-        crate::config_trees::PostgresConfigTrees::new(self.pool.clone())
     }
 
     /// The subject store over this pool ([ADR-0035](../../../../docs/adr/0035-retention-and-pii-masking.md)).

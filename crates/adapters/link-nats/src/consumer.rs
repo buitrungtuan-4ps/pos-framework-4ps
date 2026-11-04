@@ -87,6 +87,13 @@ impl NatsConsumer {
         Self::from_client(client, config).await
     }
 
+    /// The connection the cursor reads on, so the cloud sends its config wakes on it rather than a
+    /// second one ([ADR-0195](../../../../docs/adr/0195-the-cloud-wakes-a-store-to-pull-its-config.md)).
+    #[must_use]
+    pub fn client(&self) -> async_nats::Client {
+        self.context.client()
+    }
+
     /// Binds the cursor over an existing client — how a binary shares one connection with
     /// [`NatsLink`](crate::NatsLink), and how a test keeps a handle to the same server.
     ///

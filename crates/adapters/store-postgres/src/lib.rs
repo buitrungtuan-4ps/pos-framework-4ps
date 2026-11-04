@@ -30,6 +30,7 @@ mod campaigns;
 mod catalog;
 mod claims;
 mod config_releases;
+mod config_saved;
 mod config_trees;
 mod connections;
 mod data_migrations;
@@ -78,6 +79,7 @@ pub use catalog::{
 };
 pub use claims::{ClaimBindRow, ClaimCollectRow, ClaimSlotRow, PostgresClaims};
 pub use config_releases::{NewReleaseRow, PostgresConfigReleases, ReleaseRow};
+pub use config_saved::ConfigSaved;
 pub use config_trees::{
     BumpOutcome, PostgresConfigTrees, StoredBump, StoredRegionAcknowledgement, StoredRegionWrite,
     StoredRetire, StoredSettle,

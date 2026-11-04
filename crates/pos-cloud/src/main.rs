@@ -41,7 +41,7 @@ async fn main() -> ExitCode {
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = startup::load_config()?;
     let (cell, directory_reload) = startup::cell_directory(&config)?;
-    let (store, one_switch) = startup::open_store(&config).await?;
+    let (store, one_switch, wakes) = startup::open_store(&config).await?;
     let cloud = startup::cloud(&store);
     // The console audit recorder (ADR-0069): every `/admin` write route records who changed what to
     // the append-only `audit_log`, best-effort after the mutation. One recorder, shared as an
@@ -50,7 +50,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let audit: Arc<dyn AuditRecorder> = Arc::new(AuditSink::new(store.audit()));
     let app = startup::cloud_app(&cloud, &store, &config, &audit, &one_switch);
 
-    let loops = startup::loops::Loops::spawn(&config, &cloud, &store, &audit).await?;
+    let loops = startup::loops::Loops::spawn(&config, &cloud, &store, &audit, wakes).await?;
 
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
     tracing::info!(bind = %config.bind, "pos_cloud listening");

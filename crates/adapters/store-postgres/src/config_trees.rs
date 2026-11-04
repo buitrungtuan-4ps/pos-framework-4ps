@@ -23,6 +23,7 @@ use crate::store::{RowUpdate, pool_unavailable, unavailable};
 #[derive(Clone, Debug)]
 pub struct PostgresConfigTrees {
     pool: Pool,
+    saved: Option<crate::config_saved::ConfigSaved>,
 }
 
 /// What a conditional bump did.
@@ -203,8 +204,15 @@ impl<'a> StoredRegionWrite<'a> {
 }
 
 impl PostgresConfigTrees {
-    pub(crate) fn new(pool: Pool) -> Self {
-        Self { pool }
+    pub(crate) const fn new(pool: Pool, saved: Option<crate::config_saved::ConfigSaved>) -> Self {
+        Self { pool, saved }
+    }
+
+    /// The hook a committed save is told to, if the cloud installed one
+    /// ([`PostgresStore::with_config_saved`](crate::PostgresStore::with_config_saved)).
+    #[must_use]
+    pub const fn saved(&self) -> Option<&crate::config_saved::ConfigSaved> {
+        self.saved.as_ref()
     }
 
     /// Loads a store's tree state as the raw JSON text of a `ConfigTreeState` **and the version the

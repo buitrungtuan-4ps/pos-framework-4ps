@@ -83,6 +83,7 @@ pub mod chain_audit;
 pub mod clock;
 pub mod cloud;
 pub mod config;
+pub mod config_wakes;
 pub mod connections;
 pub mod countries;
 pub mod cursor;

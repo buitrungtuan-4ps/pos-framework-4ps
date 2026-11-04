@@ -29,6 +29,9 @@ pub const ALERT_EVALUATOR: &str = "alert_evaluator";
 /// The canonical name of the store-archive retention sweep
 /// ([ADR-0124](../../../docs/adr/0124-a-store-that-can-be-restored.md)).
 pub const ARCHIVE_RETENTION: &str = "archive_retention";
+/// The canonical name of the config wake sender
+/// ([ADR-0195](../../../docs/adr/0195-the-cloud-wakes-a-store-to-pull-its-config.md)).
+pub const CONFIG_WAKE: &str = "config_wake";
 
 /// Builds a tick's self-describing detail. Every loop records at least `ok` (did this tick's work
 /// succeed) and `interval_secs` (its configured cadence, which the reader compares `now − last_tick`
