@@ -28,6 +28,7 @@ import { AuditTrail } from "../components/AuditTrail";
 import { CellPanel } from "../components/CellPanel";
 import { HqCellsPanel } from "../components/HqCellsPanel";
 import { apiMessage } from "../lib/errors";
+import { packageColumns } from "./fleet/package-columns";
 
 /** How often the view re-reads the fleet and health, so "online" and "last seen" stay current. */
 const POLL_MS = 15_000;
@@ -71,6 +72,13 @@ const healthLabel = (entry: TaskHealthEntry) =>
 /** The age, in whole seconds, of a Unix-ms instant against the browser clock (clamped at zero). */
 function ageSeconds(atMs: number): number {
   return Math.max(0, (Date.now() - atMs) / 1000);
+}
+
+/** How long ago the store was last heard from, or that it never was. */
+function lastSeen(row: FleetStore): string {
+  return row.last_seen_at_ms === null
+    ? t("fleet.never")
+    : formatRelativeAge(ageSeconds(row.last_seen_at_ms));
 }
 
 export function Fleet() {
@@ -343,9 +351,6 @@ export function Fleet() {
     }
   };
 
-  const lastSeen = (row: FleetStore) =>
-    row.last_seen_at_ms === null ? t("fleet.never") : formatRelativeAge(ageSeconds(row.last_seen_at_ms));
-
   const columns = (): Column<FleetStore>[] => [
     {
       key: "name",
@@ -417,6 +422,7 @@ export function Fleet() {
         </div>
       ),
     },
+    ...packageColumns(),
     {
       key: "id",
       header: t("common.technicalDetails"),

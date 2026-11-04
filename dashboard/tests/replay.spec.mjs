@@ -259,6 +259,11 @@ const PRECONDITIONS = {
   "Roll every store back to an earlier package version": async () => {
     await pinPackage({ locked_version_id: versionIds()[1], mode: "PACKAGE_MODE_LOCKED" });
   },
+  // A version is pinned that the seeded store, which has never reported a release, cannot be
+  // vouched for: the store waits, and says why.
+  "See why a store does not run its pinned package version yet": async () => {
+    await pinPackage({ locked_version_id: versionIds()[1], mode: "PACKAGE_MODE_LOCKED" });
+  },
   // The tenant lets stores choose, and this store has not chosen yet.
   "Choose the package version one store runs": async () => {
     const [march, april] = versionIds();
