@@ -772,6 +772,12 @@ export function ConfirmDialog(props: {
   typePrompt?: string;
   onConfirm: () => void;
   onCancel: () => void;
+  /**
+   * The step gate's handle on the confirm button, when a declared flow presses it
+   * (`scripts/step-tasks.mjs`), forwarded so the browser finds what `scripts/step-budget.mjs`
+   * resolved from `onConfirm`.
+   */
+  "data-step"?: string;
 }) {
   const [typed, setTyped] = createSignal("");
   // Cleared every time the dialog opens. The input is rendered inside `Modal`, which mounts its
@@ -803,6 +809,7 @@ export function ConfirmDialog(props: {
             variant={props.danger ? "danger" : "primary"}
             disabled={props.busy || !ready()}
             onClick={() => props.onConfirm()}
+            data-step={props["data-step"]}
           >
             {props.confirmLabel}
           </Button>

@@ -99,6 +99,8 @@ import type {
   MenuSection,
   ModifierGroup,
   NodePreview,
+  PackageRecord,
+  PackageVersionRecord,
   PermissionInfo,
   PermissionsPublishReport,
   PermissionsReadiness,
@@ -1841,6 +1843,16 @@ export const api = {
       tenant_id: tenantId,
       ...(storeId ? { store_id: storeId } : {}),
     }),
+  // Packages (ADR-0189): a tenant's packages and their published versions, read to pin them. A pin
+  // is the `package` node's settings, written with `putSetting` in the order `lib/package-pin.ts`
+  // gives; publishing a version is the package builder's, not this console's yet.
+  listPackages: (tenantId: string) =>
+    requestJson<PackageRecord[]>("GET", `/admin/packages?${tenantQuery(tenantId)}`),
+  listPackageVersions: (tenantId: string, packageId: string) =>
+    requestJson<PackageVersionRecord[]>(
+      "GET",
+      `/admin/packages/${encodeURIComponent(packageId)}/versions?${tenantQuery(tenantId)}`,
+    ),
   // Fees (ADR-0159): a rule written once, at the tenant, a brand or one store, and every store it
   // reaches republished in the same request — each answering how its publish went, so a `200` is
   // not "every store charges it". A rule's rate and amount are prices, so the reads and the sample
