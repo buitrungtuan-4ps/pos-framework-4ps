@@ -9,7 +9,7 @@ import { PRECHECKED, WRITES_PENDING } from "../package/prechecks";
 import type { Accessor } from "solid-js";
 
 import { type MoneyAct, type Recheck, useMoneyAct } from "./money-act";
-import { writesPending } from "./optimistic";
+import { writesPending } from "./edge-write";
 import { applyVoided, voidBill } from "./store";
 
 const CHECKED = PRECHECKED["billing.bill.void"] ?? [];

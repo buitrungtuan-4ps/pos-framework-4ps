@@ -10,7 +10,7 @@ import { reasonMessage } from "../lib/errors";
 import type { Money } from "../lib/money";
 import { PRECHECKED, WRITES_PENDING } from "../package/prechecks";
 import { type MoneyAct, type Recheck, useMoneyAct } from "./money-act";
-import { writesPending } from "./optimistic";
+import { writesPending } from "./edge-write";
 import { applyDiscount, waiveFee } from "./store";
 
 /** The first of an act's checks that refuses, as the operator's sentence, or null. */

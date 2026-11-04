@@ -1,11 +1,13 @@
-// The four acts the till painted first under ADR-0173 decision 4 (and ADR-0188 for the fourth):
-// adding a line (with its modifiers and note), changing a quantity, moving a table, and seating a
-// free one. They run on the one path every edge write takes (`./edge-write`, ADR-0196); this file
-// holds what each paints and undoes.
+// What four edge writes paint and undo: adding a line (with its modifiers and note), changing a
+// quantity, moving a table, and seating a free one (ADR-0188). This was once the list of the only
+// acts the till painted first (ADR-0173 decision 4). That list is retired: since ADR-0196 every act
+// the catalogue marks an edge write paints first, on the one path in `./edge-write`, and a unit test
+// (`unit/edge-write-coverage.test.ts`) holds every such act to it. These four keep their paint here
+// because a line that is sending is drawn apart from the edge's lines.
 //
 // - **The screen moves at once.** The line, the quantity or the table changes on the tap, marked as
 //   sending, and one request goes to the edge. Nothing is queued: the edge is the only writer, and a
-//   write it did not answer fails now (decision 5).
+//   write it did not answer fails now (ADR-0173 decision 5).
 // - **No amount is the device's.** A line that is sending shows no figure; the line's own amount
 //   comes with the edge's event, and the bill's totals are always the edge's check. Payment waits,
 //   and says why, while any write is in flight or any line is still sending.
@@ -23,7 +25,6 @@ import { editWrite } from "./edge-write";
 import { load } from "./engine";
 import { PENDING, type OrderLine, loadLiveOrders, moveOrder, state, updateStore, walkInOrder } from "./store";
 
-export { writesPending } from "./edge-write";
 
 // How long a write the edge answered waits for its event before the open orders are read again.
 const EVENT_WAIT_MS = 1_500;
