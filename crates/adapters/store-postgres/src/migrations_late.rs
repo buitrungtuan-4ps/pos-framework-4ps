@@ -13,6 +13,7 @@ use crate::store::unavailable;
 const MIGRATION_0089: &str = include_str!("../migrations/0089_packages.sql");
 const MIGRATION_0090: &str = include_str!("../migrations/0090_store_liveness_package.sql");
 const MIGRATION_0091: &str = include_str!("../migrations/0091_store_liveness_config_wake.sql");
+const MIGRATION_0092: &str = include_str!("../migrations/0092_custom_values.sql");
 
 /// Applies 0089 onwards on `connection`, one `batch_execute` each, as `store.rs`'s wiring tests read.
 pub(crate) async fn migrate_from_0089(connection: &Object) -> Result<(), PortError> {
@@ -26,6 +27,10 @@ pub(crate) async fn migrate_from_0089(connection: &Object) -> Result<(), PortErr
         .map_err(unavailable)?;
     connection
         .batch_execute(MIGRATION_0091)
+        .await
+        .map_err(unavailable)?;
+    connection
+        .batch_execute(MIGRATION_0092)
         .await
         .map_err(unavailable)
 }

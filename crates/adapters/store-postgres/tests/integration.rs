@@ -144,7 +144,7 @@ impl EventStoreHarness for StoreHarness {
                  catalog_display_subcategories, catalog_item_categories, catalog_item_subcategories, \
                  catalog_items, catalog_layout_buttons, catalog_menu_sections, catalog_menus, \
                  catalog_modifier_groups, catalog_placements, catalog_tax_classes, catalog_tax_rate_versions, \
-                 catalog_tax_rates, config_trees, data_migrations, device_claims, device_credentials, device_proposals, devices, \
+                 catalog_tax_rates, config_trees, custom_value_cursors, custom_values, data_migrations, device_claims, device_credentials, device_proposals, devices, \
                  employee_scope_assignments, employee_store_assignments, employees, event_outbox, events, fee_rules, floor_areas, floor_tables, \
                  integration_connections, inventory_items, kitchen_stations, media_assets, order_queue, ota_releases, \
                  people_republishes, reconcile_runs, \
@@ -210,7 +210,7 @@ async fn prepared() -> Setup<(PostgresStore, Client)> {
              catalog_display_subcategories, catalog_item_categories, catalog_item_subcategories, \
              catalog_items, catalog_layout_buttons, catalog_menu_sections, catalog_menus, \
              catalog_modifier_groups, catalog_placements, catalog_tax_classes, catalog_tax_rate_versions, \
-             catalog_tax_rates, config_trees, data_migrations, device_claims, device_credentials, device_proposals, devices, \
+             catalog_tax_rates, config_trees, custom_value_cursors, custom_values, data_migrations, device_claims, device_credentials, device_proposals, devices, \
              employee_scope_assignments, employee_store_assignments, employees, event_outbox, events, fee_rules, floor_areas, floor_tables, \
              integration_connections, inventory_items, kitchen_stations, media_assets, order_queue, ota_releases, \
              people_republishes, reconcile_runs, \
@@ -879,3 +879,8 @@ mod setting_values;
 /// recorded by a migration's own SQL reads as made too, since the two share the table.
 #[path = "integration/data_migrations.rs"]
 mod data_migrations;
+
+/// The custom-value projection: writes and their cursor land together, a cleared value removes its
+/// row, and a tenant reads only its own rows (ADR-0194, migration 0092).
+#[path = "integration/custom_values.rs"]
+mod custom_values;

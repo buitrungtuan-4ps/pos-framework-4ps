@@ -23,6 +23,8 @@ use pos_ports::event_store::EventStore;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{StoreId, TenantId};
 
+use pos_cloud_reports::custom_data::{CustomValueStore, project_custom_values};
+
 use super::projection::{RollupStore, project};
 
 /// How often the projector sweeps the fleet, by default. Frequent enough that a dashboard is never
@@ -91,13 +93,51 @@ where
     Ok(report)
 }
 
-/// Runs the projector on `interval` until `shutdown` resolves.
+/// Projects every store's custom values once ([ADR-0194](../../../../docs/adr/0194-custom-data-is-declared-and-personal-fields-are-kept-apart.md)
+/// decision 3), as [`project_fleet`] projects its rollups: a store that fails is logged by its ids
+/// and counted, never propagated.
+///
+/// # Errors
+///
+/// [`PortError`] only if the fleet itself cannot be listed.
+pub async fn project_custom_fleet<E, V, Cat>(
+    events: &E,
+    values: &V,
+    catalog: &Cat,
+) -> Result<FleetReport, PortError>
+where
+    E: EventStore,
+    V: CustomValueStore,
+    Cat: StoreCatalog,
+{
+    let mut report = FleetReport::default();
+    for (tenant, store_id) in catalog.active_stores().await? {
+        match project_custom_values(events, values, tenant, store_id).await {
+            Ok(read) => {
+                report.stores = report.stores.saturating_add(1);
+                report.folded = report.folded.saturating_add(read);
+            }
+            Err(error) => {
+                report.failed = report.failed.saturating_add(1);
+                tracing::error!(
+                    %tenant, %store_id, %error,
+                    "projecting a store's custom values failed; skipping it this pass"
+                );
+            }
+        }
+    }
+    Ok(report)
+}
+
+/// Runs the projector on `interval` until `shutdown` resolves: each tick folds the fleet's rollups,
+/// then its custom values.
 ///
 /// A listing failure is logged and retried on the next tick rather than crashing the cloud — a
 /// dashboard one interval stale is a far smaller problem than a cloud that will not stay up.
-pub async fn run<E, R, Cat, C, H>(
+pub async fn run<E, R, V, Cat, C, H>(
     events: E,
     rollups: R,
+    values: V,
     catalog: Cat,
     clock: C,
     health: H,
@@ -106,6 +146,7 @@ pub async fn run<E, R, Cat, C, H>(
 ) where
     E: EventStore,
     R: RollupStore,
+    V: CustomValueStore,
     Cat: StoreCatalog,
     C: ClockSource,
     H: crate::health::TaskHealthStore,
@@ -113,6 +154,16 @@ pub async fn run<E, R, Cat, C, H>(
     tokio::pin!(shutdown);
     loop {
         let pass = project_fleet(&events, &rollups, &catalog).await;
+        match project_custom_fleet(&events, &values, &catalog).await {
+            Ok(custom) if custom.failed > 0 => tracing::warn!(
+                failed = custom.failed,
+                "custom-value projection failed for some stores; retrying next pass"
+            ),
+            Ok(_) => {}
+            Err(error) => {
+                tracing::error!(%error, "listing the fleet for custom values failed; will retry");
+            }
+        }
         let detail = match &pass {
             Ok(report) if report.folded > 0 || report.failed > 0 => {
                 tracing::info!(

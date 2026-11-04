@@ -777,6 +777,13 @@ impl PostgresStore {
         crate::rollups::PostgresRollups::new(self.pool.clone())
     }
 
+    /// The custom-value projection over this pool (ADR-0194); `pos-cloud-reports` implements its
+    /// `CustomValueStore` seam over it.
+    #[must_use]
+    pub fn custom_values(&self) -> crate::custom_values::PostgresCustomValues {
+        crate::custom_values::PostgresCustomValues::new(self.pool.clone())
+    }
+
     /// The store-archive registry over this pool
     /// ([ADR-0124](../../../../docs/adr/0124-a-store-that-can-be-restored.md)).
     ///
