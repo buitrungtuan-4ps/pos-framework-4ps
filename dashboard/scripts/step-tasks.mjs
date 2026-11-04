@@ -132,4 +132,36 @@ export const TASKS = [
     ],
     outcome: { screen: "packages", mark: "package-pinned" },
   },
+  {
+    task: "Roll every store back to an earlier package version",
+    budget: 3,
+    note: "Three, the same as running a version: open Packages, roll back to the earlier version, confirm. A rollback is pinning the earlier version (ADR-0189), so it is the same act with the earlier version's own button, and the confirm says every store is republished.",
+    steps: [
+      { nav: "packages" },
+      { screen: "packages", action: "rollBack" },
+      { screen: "packages", action: "confirmLock" },
+    ],
+    outcome: { screen: "packages", mark: "package-rolled-back" },
+  },
+  {
+    task: "Let each store choose its package version",
+    budget: 3,
+    note: "Three: open Packages, offer a version, save. The first version offered becomes what a store runs until it chooses, so the common case needs no second control; another default is one more pick.",
+    steps: [
+      { nav: "packages" },
+      { file: "screens/packages/ChoiceCard.tsx", action: "allowVersion" },
+      { file: "screens/packages/ChoiceCard.tsx", action: "saveChoice" },
+    ],
+    outcome: { file: "screens/packages/ChoiceCard.tsx", mark: "package-choosing" },
+  },
+  {
+    task: "Choose the package version one store runs",
+    budget: 2,
+    note: "Two: open Packages with the store in context, and pick the version. HQ makes the choice for the store (ADR-0189 decision 2); the store's own staff choosing waits for its own record.",
+    steps: [
+      { nav: "packages" },
+      { file: "screens/packages/StoreChoiceCard.tsx", action: "chooseForStore" },
+    ],
+    outcome: { file: "screens/packages/StoreChoiceCard.tsx", mark: "package-chosen" },
+  },
 ];
