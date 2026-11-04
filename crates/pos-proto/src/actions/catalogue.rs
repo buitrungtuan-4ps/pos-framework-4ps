@@ -46,6 +46,8 @@ const CASH_MOVEMENT_REFUSALS: &[&str] = &[
     "CASH_REASON_NOT_VALID",
     "APPROVAL_REQUIRED",
     "DRAWER_ASSIGNED_TO_ANOTHER",
+    "NOT_A_TILL",
+    "DRAWER_DAY_ENDED",
 ];
 
 /// Every act, in the order of the domains: the till's own screen, sales, billing, cash, reports,
@@ -298,6 +300,7 @@ pub const CATALOGUE: &[Action] = &[
             "DRAWER_ASSIGNED_TO_ANOTHER",
             "NOT_A_TILL",
             "PAYMENTS_DO_NOT_SUM_TO_TOTAL",
+            "DRAWER_DAY_ENDED",
         ],
         summary: "Take payment for a bill and settle it",
         ..BASE
@@ -394,6 +397,11 @@ pub const CATALOGUE: &[Action] = &[
             "APPROVAL_REQUIRED",
             "SETTLED_VOID_WINDOW_CLOSED",
             "E_INVOICE_ISSUED",
+            "NOT_A_TILL",
+            "OPEN_SHIFT_REQUIRED",
+            "DRAWER_COUNTED",
+            "DRAWER_DAY_ENDED",
+            "DRAWER_ASSIGNED_TO_ANOTHER",
         ],
         summary: "Void a paid bill whole and give its money back, with a reason",
         ..BASE
@@ -437,6 +445,7 @@ pub const CATALOGUE: &[Action] = &[
             "ASSIGNEE_REQUIRED",
             "COUNT_DOES_NOT_ADD_UP",
             "APPROVAL_REQUIRED",
+            "NOT_THE_SHIFT_HANDED_OVER",
         ],
         summary: "Open a drawer's shift with its float",
         ..BASE
@@ -452,7 +461,11 @@ pub const CATALOGUE: &[Action] = &[
         ],
         routes: &["POST /api/shifts/{id}/count"],
         permissions: CLOSE_SHIFT,
-        refusals: &["COUNT_DOES_NOT_ADD_UP"],
+        refusals: &[
+            "COUNT_DOES_NOT_ADD_UP",
+            "APPROVAL_REQUIRED",
+            "DRAWER_ASSIGNED_TO_ANOTHER",
+        ],
         summary: "Record what a drawer holds at the end of its shift",
         ..BASE
     },
@@ -463,7 +476,12 @@ pub const CATALOGUE: &[Action] = &[
         params: &[required("shift_id", Id), optional("reason_code_id", Id)],
         routes: &["POST /api/shifts/{id}/close"],
         permissions: CLOSE_SHIFT,
-        refusals: &["VARIANCE_REASON_REQUIRED", "CASH_REASON_NOT_VALID"],
+        refusals: &[
+            "VARIANCE_REASON_REQUIRED",
+            "CASH_REASON_NOT_VALID",
+            "APPROVAL_REQUIRED",
+            "DRAWER_ASSIGNED_TO_ANOTHER",
+        ],
         summary: "Close a counted shift",
         ..BASE
     },
@@ -477,7 +495,11 @@ pub const CATALOGUE: &[Action] = &[
         ],
         routes: &["POST /api/shifts:batch_close"],
         permissions: CLOSE_SHIFT,
-        refusals: &["VARIANCE_REASON_REQUIRED"],
+        refusals: &[
+            "VARIANCE_REASON_REQUIRED",
+            "APPROVAL_REQUIRED",
+            "DRAWER_ASSIGNED_TO_ANOTHER",
+        ],
         summary: "Close several counted shifts at the end of the day",
         ..BASE
     },
@@ -529,6 +551,8 @@ pub const CATALOGUE: &[Action] = &[
             "CASH_REASON_NOT_VALID",
             "APPROVAL_REQUIRED",
             "DRAWER_ASSIGNED_TO_ANOTHER",
+            "NOT_A_TILL",
+            "DRAWER_DAY_ENDED",
         ],
         summary: "Move cash from a drawer to the safe",
         ..BASE
