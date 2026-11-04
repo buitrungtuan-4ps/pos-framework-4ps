@@ -28,7 +28,8 @@ use pos_proto::wire_enum::WireEnum;
 /// [ADR-0091](../../../docs/adr/0091-durable-edge-auth-state.md) (`DeviceRegistry`, the
 /// eighteenth), [ADR-0064](../../../docs/adr/0064-edge-order-in.md) (`IntakeLedger`, the
 /// nineteenth) and [ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md) (`SubjectStore`, the
-/// twentieth); a twenty-first variant needs an ADR first.
+/// twentieth) and [ADR-0195](../../../docs/adr/0195-the-cloud-wakes-a-store-to-pull-its-config.md)
+/// (`StoreWake`, the twenty-first); a twenty-second variant needs an ADR first.
 ///
 /// `IntakeLedger` is the odd one: ADR-0064 called it a port when it landed, but it was given no
 /// variant here — so [`crate::IntakeLedger`] had no suite and no row in `docs/architecture.md` §5,
@@ -78,6 +79,8 @@ pub enum PortName {
     IntakeLedger,
     /// [`crate::SubjectStore`].
     SubjectStore,
+    /// [`crate::StoreWake`].
+    StoreWake,
 }
 
 impl PortName {
@@ -106,6 +109,7 @@ impl PortName {
         Self::DeviceRegistry,
         Self::IntakeLedger,
         Self::SubjectStore,
+        Self::StoreWake,
     ];
 
     /// The port's name in `snake_case`, for metric labels and log fields.
@@ -135,6 +139,7 @@ impl PortName {
             Self::DeviceRegistry => "device_registry",
             Self::IntakeLedger => "intake_ledger",
             Self::SubjectStore => "subject_store",
+            Self::StoreWake => "store_wake",
         }
     }
 }
@@ -349,12 +354,12 @@ mod tests {
     }
 
     #[test]
-    fn the_port_list_is_the_twenty_adr_0021_and_its_amendments_name() {
+    fn the_port_list_is_the_twenty_one_adr_0021_and_its_amendments_name() {
         // Sixteen from ADR-0021, plus `CloudSync` (ADR-0053), `DeviceRegistry` (ADR-0091),
-        // `IntakeLedger` (ADR-0064 — a port from the start, registered late) and `SubjectStore`
-        // (ADR-0107). The number is asserted rather than described so that adding a port without its
+        // `IntakeLedger` (ADR-0064 — a port from the start, registered late), `SubjectStore`
+        // (ADR-0107) and `StoreWake` (ADR-0195). The number is asserted rather than described so that adding a port without its
         // ADR, its suite and its row in `docs/architecture.md` §5 fails here first.
-        assert_eq!(PortName::ALL.len(), 20);
+        assert_eq!(PortName::ALL.len(), 21);
     }
 
     #[test]

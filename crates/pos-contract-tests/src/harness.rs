@@ -39,12 +39,15 @@
 
 use core::fmt;
 use core::future::Future;
+use core::time::Duration;
 
 use pos_ports::{
     BlobStore, CloudSync, ConfigStore, DeliveryVendor, DeviceRegistry, ErpSink, EventStore,
     Fiscalization, IntakeLedger, KeyVault, MessageLink, MetricsSink, OrderIn, PaymentTerminal,
-    PrinterDriver, PublicKey, ShippingDispatch, Signature, Signer, SubjectStore, UpdateReport,
+    PrinterDriver, PublicKey, ShippingDispatch, Signature, Signer, StoreWake, SubjectStore,
+    UpdateReport,
 };
+use pos_proto::wake::ConfigWake;
 use pos_proto::{ClockSource, DeviceId, IdGenerator, ReleaseTag, StoreId};
 
 /// The test fixture itself failed.
@@ -263,6 +266,31 @@ pub trait SubjectStoreHarness: Send + Sync {
 
     /// A store identifier the cases may use.
     fn store_id(&self) -> StoreId;
+}
+
+/// Subscribes a [`StoreWake`] for one store, and sends wakes as the cloud's publish does.
+///
+/// Sending is the harness's because the port is receive only: the cloud's side is a function of the
+/// adapter, not a port ([ADR-0195](../../../docs/adr/0195-the-cloud-wakes-a-store-to-pull-its-config.md)
+/// decision 3).
+pub trait StoreWakeHarness: Send + Sync {
+    /// The implementation under test.
+    type Wake: StoreWake;
+
+    /// Two distinct stores no other case uses, so cases sharing a broker cannot hear each other.
+    fn store_ids(&self) -> (StoreId, StoreId);
+
+    /// A wake subscribed for `store_id`, nothing heard yet.
+    fn subscribe(&self, store_id: StoreId) -> impl Future<Output = Setup<Self::Wake>> + Send;
+
+    /// Sends `wake` to `store_id`.
+    fn send(&self, store_id: StoreId, wake: &ConfigWake) -> impl Future<Output = Setup<()>> + Send;
+
+    /// Drops the connection under `wake` and lets it come back.
+    fn reconnect(&self, wake: &Self::Wake) -> impl Future<Output = Setup<()>> + Send;
+
+    /// How long a case waits for a signal, and for silence.
+    fn patience(&self) -> Duration;
 }
 
 /// Supplies a fresh [`CloudSync`] seeded with one recognised activation and one published release.

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The twenty boundaries between the framework and the outside world.
+//! The twenty-one boundaries between the framework and the outside world.
 //!
 //! Every external system — database, broker, printer, terminal, marketplace, tax
 //! authority — is one implementation of one trait defined here. The list is fixed
@@ -10,8 +10,10 @@
 //! the eighteenth, `docs/adr/0064-edge-order-in.md` Amendment the nineteenth — `IntakeLedger`,
 //! which shipped as a trait its own record called a port and was registered late — and
 //! `docs/adr/0107-the-buyer-is-a-subject.md` the twentieth, `SubjectStore`, the place a store keeps
-//! personal data so the immutable log never has to. A twenty-first needs an ADR merged first, and
-//! the count here is checkable against `PortName::ALL`.
+//! personal data so the immutable log never has to, and
+//! `docs/adr/0195-the-cloud-wakes-a-store-to-pull-its-config.md` the twenty-first, `StoreWake`, the
+//! receive-only wake that tells a store to pull its configuration. A twenty-second needs an ADR
+//! merged first, and the count here is checkable against `PortName::ALL`.
 //!
 //! # Shape
 //!
@@ -19,9 +21,9 @@
 //! `unimplemented!()` means the port is wrong, not the adapter
 //! (`docs/design-principles.md`, interface segregation).
 //!
-//! Two of the twenty are synchronous and are re-exported from `pos-proto`
+//! Two of the twenty-one are synchronous and are re-exported from `pos-proto`
 //! rather than defined here, so that there is exactly one definition of each:
-//! `ClockSource` and `IdGenerator`. The other eighteen are asynchronous,
+//! `ClockSource` and `IdGenerator`. The other nineteen are asynchronous,
 //! declared with native `async fn` in trait — no procedural macro, no boxing on
 //! the happy path. Where a family needs runtime selection between several
 //! compiled-in adapters, this crate also carries a hand-written object-safe
@@ -61,6 +63,7 @@ pub mod payment;
 pub mod printer;
 pub mod shipping;
 pub mod signer;
+pub mod store_wake;
 pub mod subject_store;
 pub mod tx;
 
@@ -97,6 +100,7 @@ pub use shipping::{
     CourierJobRef, DeliveryContact, DeliveryRequest, Shipment, ShipmentUpdate, ShippingDispatch,
 };
 pub use signer::{KeyId, PublicKey, Signature, Signer};
+pub use store_wake::{StoreWake, WakeSignal};
 pub use subject_store::{REDACTION, SubjectRecord, SubjectStore};
 pub use tx::{Transactional, TxContext};
 
