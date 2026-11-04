@@ -18,7 +18,7 @@ use pos_ports::subject_store::SubjectStore;
 use super::revalidated;
 use super::{
     bills, cash_movements, check, floor, integrations, kds, layout, lines, live, locale, menu,
-    printers, qr, reason_codes, reports, shift_x, shifts, sync, tables,
+    package, printers, qr, reason_codes, reports, shift_x, shifts, sync, tables,
 };
 use crate::app::Edge;
 
@@ -56,6 +56,8 @@ where
         // (ADR-0066, production-readiness C4). A separate node, so a separate route: a price change
         // relays no buttons and a button moving reprices nothing.
         .route("/api/layout", revalidated(get(layout::layout_plan::<S>)))
+        // The package version this store runs and its last refusal, read-only (ADR-0189 decision 6).
+        .route("/api/package", get(package::package_standing::<S>))
         // The money facts the pay pad needs — currency, the notes a guest carries, what the total
         // rounds to in cash. A country's coinage, published rather than compiled in (ADR-0105).
         .route(

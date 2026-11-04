@@ -1177,7 +1177,7 @@
           }
         ],
         "requestBody": {
-          "description": "Optional: `outbox_depth`, `lease_generation` and `print_agents`, each left out when the store cannot say. An empty body is a bare ping",
+          "description": "Optional: `outbox_depth`, `lease_generation`, `print_agents` and `package` (the package version the store runs and the configuration it last refused for its package, ADR-0189), each left out when the store cannot say. An empty body is a bare ping",
           "content": {
             "application/json": {
               "schema": {
@@ -2359,6 +2359,17 @@
             "description": "How many events the store has committed and not yet published — its own publish backlog, the\nopposite direction from the relay backlog the fleet row already carries. `None` when the store\ndid not say, which is a different answer from zero and leaves the recorded depth alone.",
             "minimum": 0
           },
+          "package": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PackageBeat",
+                "description": "The package version the store runs and the configuration it last refused for its package\n([ADR-0189](../../../docs/adr/0189-a-store-runs-a-package-version-hq-pins.md) decision 6), or\n`None` when the store said nothing about it, which leaves what was recorded alone."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "print_agents": {
             "type": [
               "array",
@@ -2523,6 +2534,20 @@
           "user_code": {
             "type": "string",
             "description": "The code to show, as `XXXX-XXXX`."
+          }
+        }
+      },
+      "PackageBeat": {
+        "type": "object",
+        "description": "What one heartbeat said about the store's package.",
+        "properties": {
+          "package_version_id": {
+            "type": "string",
+            "description": "The package version the store runs, or absent for its release's default package."
+          },
+          "refused": {
+            "$ref": "#/components/schemas/RefusedBeat",
+            "description": "The configuration the store last refused for its package, while the latest one was."
           }
         }
       },
@@ -2738,6 +2763,28 @@
               "type": "string"
             },
             "description": "The subset of the manifest the cloud's event log does not contain (ULID strings)."
+          }
+        }
+      },
+      "RefusedBeat": {
+        "type": "object",
+        "description": "A configuration a store refused for its package; it kept the one before.",
+        "required": [
+          "config_version_id",
+          "reason"
+        ],
+        "properties": {
+          "config_version_id": {
+            "type": "string",
+            "description": "The configuration version refused."
+          },
+          "package_version_id": {
+            "type": "string",
+            "description": "The package version it carried, when the store could read it."
+          },
+          "reason": {
+            "type": "string",
+            "description": "`PACKAGE_MALFORMED`, `PACKAGE_INVALID` or `EDGE_TOO_OLD`."
           }
         }
       },

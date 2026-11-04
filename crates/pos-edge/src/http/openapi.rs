@@ -52,6 +52,7 @@ use utoipa::{Modify, OpenApi};
         super::floor::floor_plan,
         super::menu::menu_catalog,
         super::layout::layout_plan,
+        super::package::package_standing,
         super::locale::locale_settings,
         super::reason_codes::list_reason_codes,
         super::integrations::list_integrations,

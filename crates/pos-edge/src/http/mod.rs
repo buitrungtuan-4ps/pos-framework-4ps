@@ -34,6 +34,7 @@ pub mod menu;
 mod openapi;
 #[cfg(all(test, feature = "openapi"))]
 mod openapi_required;
+pub mod package;
 pub mod pair;
 mod print_agent;
 mod print_jobs;

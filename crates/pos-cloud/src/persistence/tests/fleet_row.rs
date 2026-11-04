@@ -52,6 +52,11 @@ fn full_row() -> FleetStoreRow {
                 .to_owned(),
         ),
         print_agents_reported_at_ms: Some(8_000),
+        package_version_id: Some("V1".to_owned()),
+        package_refused_config_version_id: Some("C2".to_owned()),
+        package_refused_version_id: Some("V2".to_owned()),
+        package_refusal_reason: Some("EDGE_TOO_OLD".to_owned()),
+        package_reported_at_ms: Some(9_000),
     }
 }
 
@@ -88,6 +93,18 @@ fn every_readable_column_reaches_the_fleet_row() {
     assert_eq!(agents[0].agent_device_id, "a1");
     assert_eq!(agents[0].oldest_unacknowledged_secs, Some(9));
     assert_eq!(row.print_agents_reported_at, at(8_000));
+    let package = row.package.expect("the package report reaches the row");
+    assert_eq!(package.reported_at, at(9_000).expect("an instant"));
+    assert_eq!(package.beat.package_version_id.as_deref(), Some("V1"));
+    let refused = package.beat.refused.expect("the refusal reaches the row");
+    assert_eq!(
+        (
+            refused.config_version_id.as_str(),
+            refused.package_version_id.as_deref(),
+            refused.reason.as_str()
+        ),
+        ("C2", Some("V2"), "EDGE_TOO_OLD")
+    );
 }
 
 #[test]

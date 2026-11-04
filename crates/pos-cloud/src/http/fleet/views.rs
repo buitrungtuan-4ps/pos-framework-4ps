@@ -63,6 +63,15 @@ pub(super) struct FleetStoreView {
     /// beat that carried it, so the instant travels with the list.
     #[schema(required = true)]
     print_agents_reported_at_ms: Option<i64>,
+    /// What the store's heartbeat last said about its package
+    /// ([ADR-0189](../../../docs/adr/0189-a-store-runs-a-package-version-hq-pins.md) decision 6):
+    /// the version it runs (absent: its release's default package) and the configuration it last
+    /// refused for its package. `null` until a heartbeat reports one, which an older edge never does.
+    #[schema(required = true)]
+    package: Option<pos_cloud_config::config_tree::PackageBeat>,
+    /// Unix ms of the heartbeat that reported the package, or `null`.
+    #[schema(required = true)]
+    package_reported_at_ms: Option<i64>,
     /// The lease generation the box last reported holding
     /// ([ADR-0108](../../../docs/adr/0108-the-lease-generation-is-authority.md)), or `null` if it
     /// has never said.
@@ -243,6 +252,11 @@ impl FleetStoreView {
             print_agents_reported_at_ms: row
                 .print_agents_reported_at
                 .map(pos_proto::Timestamp::as_milliseconds_since_epoch),
+            package: row.package.as_ref().map(|package| package.beat.clone()),
+            package_reported_at_ms: row
+                .package
+                .as_ref()
+                .map(|package| package.reported_at.as_milliseconds_since_epoch()),
             lease_generation_held: row.lease_generation_held,
             lease_reported_at_ms: row
                 .lease_reported_at

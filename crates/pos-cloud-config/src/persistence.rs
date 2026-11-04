@@ -93,6 +93,32 @@ impl ConfigTreeStore for PostgresConfigTrees {
         .map_err(|error| ConfigStoreError::new(error.to_string()))
     }
 
+    async fn record_package_beat(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        seen_at: Timestamp,
+        beat: &crate::config_tree::PackageBeat,
+    ) -> Result<(), ConfigStoreError> {
+        let refused = beat.refused.as_ref().map(|refused| {
+            (
+                refused.config_version_id.as_str(),
+                refused.package_version_id.as_deref(),
+                refused.reason.as_str(),
+            )
+        });
+        PostgresConfigTrees::record_package_beat(
+            self,
+            tenant,
+            store,
+            seen_at.as_milliseconds_since_epoch(),
+            beat.package_version_id.as_deref(),
+            refused,
+        )
+        .await
+        .map_err(|error| ConfigStoreError::new(error.to_string()))
+    }
+
     async fn record_store_heartbeat(
         &self,
         tenant: TenantId,

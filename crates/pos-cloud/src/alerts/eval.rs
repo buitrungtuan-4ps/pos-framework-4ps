@@ -378,6 +378,7 @@ mod tests {
             retired_by: None,
             print_agents: None,
             print_agents_reported_at: None,
+            package: None,
         }
     }
 

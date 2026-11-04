@@ -560,6 +560,9 @@ impl HeartbeatTransport for HeartbeatHttpTransport {
                 .collect();
             fields.insert("print_agents".to_owned(), agents.into());
         }
+        if let Some(package) = &report.package {
+            fields.insert("package".to_owned(), package.to_json());
+        }
         let body = if fields.is_empty() {
             Vec::new()
         } else {
