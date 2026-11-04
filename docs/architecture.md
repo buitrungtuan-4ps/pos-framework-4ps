@@ -136,7 +136,7 @@ Identifiers are **ULIDs**: generated offline, sortable by time, collision-free w
 | `DeviceRegistry` | Which devices a store has admitted, and who is signed in on each | SQLite (edge-local) |
 | `IntakeLedger` | What a caller's `(channel, reference)` produced, so a retry is not a second order | SQLite (edge-local) |
 | `SubjectStore` | Where personal data lives, keyed by `SubjectId`, so the immutable log never holds any | SQLite (edge-local) |
-| `StoreWake` | Hears the cloud's wake that a store's configuration changed, so it pulls now rather than at the next poll | in-memory fake; core NATS next |
+| `StoreWake` | Hears the cloud's wake that a store's configuration changed, so it pulls now rather than at the next poll | core NATS on the edge's existing connection (`link-nats`) |
 
 **`ConfigStore` has one adapter, not two.** The row said "SQLite / PostgreSQL" and no PostgreSQL implementation of this port exists — the only `impl ConfigStore` outside the fakes is `store-sqlite`. What the cloud has is a *different* thing that happens to store configuration: `pos-cloud`'s own config-tree seam over its Postgres tables, which publishes nodes down to stores. The port is the store's local view of the config it was given; the cloud's is the authoring side. Naming both "ConfigStore" in one cell implied a swappable adapter a fork could pick, and there is none to pick.
 

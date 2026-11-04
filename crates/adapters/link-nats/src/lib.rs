@@ -26,12 +26,22 @@
 //! is the **cloud** end — the durable cursor that reads the stream back and feeds idempotent ingest
 //! (`docs/roadmap.md` P7). Both live here so all JetStream wire code is in one adapter, per the
 //! one-adapter-per-external-system rule.
+//!
+//! # The other direction: a wake, never data
+//!
+//! [`NatsStoreWake`] is the store's [`StoreWake`](pos_ports::store_wake::StoreWake) and
+//! [`publish_config_wake`] the cloud's side of it
+//! ([ADR-0195](../../../../docs/adr/0195-the-cloud-wakes-a-store-to-pull-its-config.md)): a core NATS
+//! message naming a configuration version, on the connection the store already opened, that only
+//! triggers the store's own pull. The link above stays outbound only.
 
 #![forbid(unsafe_code)]
 
 mod consumer;
 mod endpoint;
 mod link;
+mod wake;
 
 pub use consumer::{ConsumedBatch, ConsumerConfig, NatsConsumer};
 pub use link::{NatsConfig, NatsLink};
+pub use wake::{NatsStoreWake, RECONNECT_CHECK, publish_config_wake};
