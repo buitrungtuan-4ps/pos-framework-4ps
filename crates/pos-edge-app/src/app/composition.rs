@@ -17,6 +17,7 @@ use pos_proto::events::{
 };
 use pos_proto::ids::{DeviceId, OrderLineId, StoreId};
 
+use super::package::PackageStanding;
 use super::{AppError, Edge, EdgeSession, Projection, StoreIdentity};
 use crate::auth::Lockout;
 use crate::clock::SystemClock;
@@ -148,6 +149,7 @@ impl<S: EventStore> Edge<S> {
             clock_status: ClockStatus::new(),
             notes: Mutex::new(LineNotes::default()),
             pin_lockout: Arc::new(Lockout::new()),
+            package: PackageStanding::default(),
         })
     }
 
@@ -162,6 +164,13 @@ impl<S: EventStore> Edge<S> {
     #[must_use]
     pub const fn sync(&self) -> &SyncStatus {
         &self.sync
+    }
+
+    /// What became of the last configuration document's package: its refusal, if it was refused
+    /// (ADR-0189 decision 6).
+    #[must_use]
+    pub const fn package_standing(&self) -> &PackageStanding {
+        &self.package
     }
 
     /// What the status bar shows: how many events wait for the cloud, how worried to be about it,

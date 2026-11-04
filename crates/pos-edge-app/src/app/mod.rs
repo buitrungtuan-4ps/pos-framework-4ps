@@ -45,6 +45,7 @@ mod floor;
 pub mod flows;
 mod kitchen;
 mod orders;
+mod package;
 mod projection;
 mod publish;
 mod records;
@@ -54,6 +55,7 @@ mod shifts;
 mod views;
 
 pub use error::{AppError, Approval};
+pub use package::{PackageRefusal, PackageStanding, RefusedPackage};
 pub(crate) use records::fee_records;
 pub use records::fee_records_in;
 use records::{
@@ -268,6 +270,9 @@ pub struct Edge<S> {
     /// and every manager approval, so a PIN the sign-in screen would have locked cannot be guessed
     /// at an approval prompt instead. Owned here and lent to the sign-in route as one `Arc`.
     pin_lockout: Arc<Lockout>,
+    /// The last configuration document refused for its package, written by the config-pull loop
+    /// and read by the heartbeat and `GET /api/package` (ADR-0189 decision 6).
+    package: PackageStanding,
 }
 
 /// What [`Edge::open_inbound_order`] opened, and the one acceptance fact the caller must not work

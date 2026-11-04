@@ -185,6 +185,7 @@ async fn one_evaluator_tick_pushes_the_newly_opened_alerts_to_the_channel() {
             retired_by: None,
             print_agents: None,
             print_agents_reported_at: None,
+            package: None,
         },
     );
     let channel = SpyAlertChannel::default();
@@ -267,6 +268,7 @@ async fn an_evaluator_tick_without_a_channel_still_stores_the_alert() {
             retired_by: None,
             print_agents: None,
             print_agents_reported_at: None,
+            package: None,
         },
     );
     let alerts = FakeAlerts::default();

@@ -49,6 +49,7 @@ From [`docs/openapi-edge.json`](../openapi-edge.json).
 | POST | `/api/orders/{id}/fire/{course_id}` | `fire_course` | `till_session` | `sales.line.fire` | [`crates/pos-edge/src/http/lines.rs`](../../crates/pos-edge/src/http/lines.rs) |
 | POST | `/api/orders/{id}/lines` | `add_order_line` | `till_session` | `sales.line.add` | [`crates/pos-edge/src/http/counter.rs`](../../crates/pos-edge/src/http/counter.rs) |
 | POST | `/api/orders/{id}/reject` | `reject_order` | `till_session` | `sales.order.confirm_qr` | [`crates/pos-edge/src/http/qr.rs`](../../crates/pos-edge/src/http/qr.rs) |
+| GET | `/api/package` | `package_standing` | `till_session` | — | [`crates/pos-edge/src/http/package.rs`](../../crates/pos-edge/src/http/package.rs) |
 | POST | `/api/pair` | `pair` | public: a pairing code a manager minted, spent once (ADR-0030) | — | [`crates/pos-edge/src/http/pair.rs`](../../crates/pos-edge/src/http/pair.rs) |
 | POST | `/api/pair/codes` | `mint_pairing_code` | `till_session` | `admin.device.manage` | [`crates/pos-edge/src/http/pair.rs`](../../crates/pos-edge/src/http/pair.rs) |
 | GET | `/api/pair/devices` | `paired_devices` | `till_session` | — | [`crates/pos-edge/src/http/pair.rs`](../../crates/pos-edge/src/http/pair.rs) |

@@ -2160,6 +2160,38 @@
         "x-permission": "sales.order.confirm_qr"
       }
     },
+    "/api/package": {
+      "get": {
+        "tags": [
+          "published configuration"
+        ],
+        "summary": "`GET /api/package` — the package this store runs and its last refusal.",
+        "operationId": "package_standing",
+        "responses": {
+          "200": {
+            "description": "The package version this store runs (null: the default package of its release), and the last configuration refused for its package (null: the latest was applied)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PackageResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
+      }
+    },
     "/api/pair": {
       "post": {
         "tags": [
@@ -6321,6 +6353,38 @@
           }
         }
       },
+      "PackageResponse": {
+        "type": "object",
+        "description": "The store's package, as the edge runs it.",
+        "required": [
+          "running",
+          "refused"
+        ],
+        "properties": {
+          "refused": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RefusedResponse",
+                "description": "The last configuration refused for its package, or `null` when the latest was applied."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "running": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RunningPackage",
+                "description": "The version running, or `null` for the default package of this release."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
       "PairAccepted": {
         "type": "object",
         "description": "The token issued to a successfully paired device.",
@@ -6839,6 +6903,31 @@
           }
         }
       },
+      "RefusedResponse": {
+        "type": "object",
+        "description": "A configuration refused for its package; the store kept the one before it.",
+        "required": [
+          "config_version_id",
+          "package_version_id",
+          "reason"
+        ],
+        "properties": {
+          "config_version_id": {
+            "type": "string"
+          },
+          "package_version_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The package version it carried, when that could be read."
+          },
+          "reason": {
+            "type": "string",
+            "description": "`PACKAGE_MALFORMED`, `PACKAGE_INVALID` or `EDGE_TOO_OLD`."
+          }
+        }
+      },
       "RejectReasonResponse": {
         "type": "object",
         "description": "One reason the till may offer for a refusal — id to send back, name to show.",
@@ -6932,6 +7021,28 @@
           "station_id": {
             "$ref": "#/components/schemas/StationId",
             "description": "The station a matching line routes to."
+          }
+        }
+      },
+      "RunningPackage": {
+        "type": "object",
+        "description": "The version running.",
+        "required": [
+          "package_version_id",
+          "version_label",
+          "min_edge_version"
+        ],
+        "properties": {
+          "min_edge_version": {
+            "type": "string",
+            "description": "The oldest edge release that runs it."
+          },
+          "package_version_id": {
+            "type": "string"
+          },
+          "version_label": {
+            "type": "string",
+            "description": "The version's name in the console."
           }
         }
       },

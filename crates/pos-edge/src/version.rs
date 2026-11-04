@@ -26,6 +26,11 @@
 //!   — and the Docker build does not have it.
 //! * **No build script and no new dependency.**
 //!
+//! Development, replay and simulator builds made through the justfile (`just run-edge`, `just
+//! build-replay-edge`, `just simulate`) stamp `dev_edge_release`, the release this tree will
+//! become, so they run the package versions it publishes
+//! ([ADR-0189](../../../docs/adr/0189-a-store-runs-a-package-version-hq-pins.md) decision 5).
+//!
 //! # The `v` is stripped, and that is load-bearing
 //!
 //! The tag is `v1.2.0`; this reports `1.2.0`. Not cosmetic:
