@@ -372,9 +372,9 @@ const POOL_SIZE: usize = 16;
 /// draws from the same pool.
 #[derive(Clone, Debug)]
 pub struct PostgresStore {
-    pool: Pool,
+    pub(crate) pool: Pool,
     /// What every config-tree handle tells after a committed save, if anything.
-    config_saved: Option<crate::config_trees::ConfigSaved>,
+    pub(crate) config_saved: Option<crate::config_saved::ConfigSaved>,
 }
 
 impl PostgresStore {
@@ -832,23 +832,6 @@ impl PostgresStore {
     #[must_use]
     pub fn admin(&self) -> crate::admin::PostgresAdmin {
         crate::admin::PostgresAdmin::new(self.pool.clone())
-    }
-
-    /// The configuration-tree store over this pool ([ADR-0033](../../../../docs/adr/0033-config-tree.md)).
-    ///
-    /// A cheap handle sharing the same pool; `pos-cloud` implements its `ConfigTreeStore` seam over it.
-    #[must_use]
-    pub fn config_trees(&self) -> crate::config_trees::PostgresConfigTrees {
-        crate::config_trees::PostgresConfigTrees::new(self.pool.clone(), self.config_saved.clone())
-    }
-
-    /// Has every config-tree handle built from here on tell `hook` after each committed save
-    /// ([ADR-0195](../../../../docs/adr/0195-the-cloud-wakes-a-store-to-pull-its-config.md)). Set once
-    /// at startup, before the store is shared.
-    #[must_use]
-    pub fn with_config_saved(mut self, hook: crate::config_trees::ConfigSaved) -> Self {
-        self.config_saved = Some(hook);
-        self
     }
 
     /// The subject store over this pool ([ADR-0035](../../../../docs/adr/0035-retention-and-pii-masking.md)).
