@@ -56,7 +56,8 @@ answer, from another area, and the till does not re-decide it:
 fn next(from: BillState, trigger: BillTrigger) -> Option<BillState> {
     Some(match (from, trigger) {
         (BillState::Open, BillTrigger::Settle) => BillState::Settled,
-        (BillState::Open, BillTrigger::Void) => BillState::Voided,
+        (BillState::Open, BillTrigger::Void)
+        | (BillState::Settled, BillTrigger::VoidSettled) => BillState::Voided,
         (BillState::Open, BillTrigger::Reduce) => BillState::Open,
         (BillState::Open, BillTrigger::Split) => BillState::Split,
         (BillState::Open, BillTrigger::Merge) => BillState::Merged,
