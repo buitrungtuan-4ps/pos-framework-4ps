@@ -169,6 +169,9 @@ const Translations = lazy(() =>
 const Webhooks = lazy(() =>
   import("./screens/Webhooks").then((module) => ({ default: module.Webhooks })),
 );
+const CustomData = lazy(() =>
+  import("./screens/CustomData").then((module) => ({ default: module.CustomData })),
+);
 
 
 // The authenticated area: render the nav Shell around the matched child route, or bounce to login.
@@ -221,6 +224,7 @@ const COMPONENTS: Record<ScreenId, Component> = {
   webhooks: Webhooks,
   mySessions: MySessions,
   mySecurity: MySecurity,
+  customData: CustomData,
 };
 
 const TENANT_SCOPED = (Object.keys(SCREENS) as ScreenId[]).filter(

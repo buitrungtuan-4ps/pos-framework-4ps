@@ -370,6 +370,7 @@ export const SCREENS = {
   // Console-level: the signed-in admin's own sessions and security, which no tenant owns.
   mySessions: { path: "/my-sessions", key: "nav.mySessions", tenantScoped: false, icon: "monitor-check" },
   mySecurity: { path: "/my-security", key: "nav.mySecurity", tenantScoped: false, icon: "shield-check" },
+  customData: { path: "/custom-data", key: "nav.customData", scope: "store", tenantScoped: true, icon: "clipboard-list" },
 } as const satisfies Record<string, Screen>;
 
 /** Every screen's id. A `ScreenId` that is not in [`SCREENS`] does not compile. */
@@ -434,7 +435,7 @@ export const NAV_GROUPS: readonly {
   items: readonly ScreenId[];
 }[] = [
   // Is the shop all right, what did it make, and what is on fire.
-  { key: "nav.group.overview", items: ["storeHub", "reports", "alerts"] },
+  { key: "nav.group.overview", items: ["storeHub", "reports", "alerts", "customData"] },
   // What is sold and for how much: the menu, how it is laid out on a till, its pictures, the
   // promotions on it, the tax on it and the fees a bill adds to it (ADR-0159).
   {
