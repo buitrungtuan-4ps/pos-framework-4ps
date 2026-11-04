@@ -32,6 +32,10 @@ mod persistence;
 /// the parts a version uses can only raise it (ADR-0189 decision 5).
 pub const PACKAGE_NODE_SINCE: &str = "0.14.1";
 
+/// The first release whose edge checks a package's data part (ADR-0194). A version that declares
+/// data needs at least it.
+pub const DATA_PART_SINCE: &str = "0.14.1";
+
 /// The most packages, and the most versions of all packages, the in-memory store holds.
 pub const IN_MEMORY_ROWS: usize = 1024;
 
@@ -58,8 +62,12 @@ pub struct PackageVersionRecord {
 /// The oldest edge release that runs `content`: [`PACKAGE_NODE_SINCE`] until a part a version
 /// uses introduces a later one (ADR-0190, ADR-0191). Nobody types it.
 #[must_use]
-pub fn min_edge_version(_content: &PackageContent) -> ReleaseTag {
-    ReleaseTag::new(PACKAGE_NODE_SINCE)
+pub fn min_edge_version(content: &PackageContent) -> ReleaseTag {
+    if content.data.is_empty() {
+        ReleaseTag::new(PACKAGE_NODE_SINCE)
+    } else {
+        ReleaseTag::new(DATA_PART_SINCE)
+    }
 }
 
 /// Persists and reads a tenant's packages and their versions.

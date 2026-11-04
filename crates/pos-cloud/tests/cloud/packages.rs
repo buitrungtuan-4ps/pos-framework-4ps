@@ -11,7 +11,7 @@ use axum::http::StatusCode;
 use pos_cloud::audit::{AuditRecorder, AuditSink, NoopAuditRecorder};
 use pos_cloud::auth::admin::AdminRole;
 use pos_cloud::{Cloud, http};
-use pos_cloud_config::packages::InMemoryPackages;
+use pos_cloud_config::packages::{DATA_PART_SINCE, InMemoryPackages};
 use pos_fakes::FakeStore;
 use tower::ServiceExt;
 
@@ -237,4 +237,75 @@ async fn a_viewer_reads_packages_and_cannot_author_them() {
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+/// A field on an order, choosing from a list. Fake labels only.
+const OCCASION: &str = r#"{"custom_fields":[{"custom_field_id":"01J0000000000000000000CF01","object":"DATA_OBJECT_ORDER","label_key":"data.order.occasion","field_type":"CUSTOM_FIELD_TYPE_CHOICE","personal":false,"custom_list_id":"01J0000000000000000000CA01"}],"lists":[{"custom_list_id":"01J0000000000000000000CA01","label_key":"data.list.occasion","entries":[{"list_entry_id":"01J0000000000000000000EE01","label_key":"data.occasion.birthday"}]}]}"#;
+
+fn data_body(tenant: &str, data: &str) -> serde_json::Value {
+    let mut body = version_body(tenant, "March", "[]");
+    body["data"] = serde_json::from_str(data).expect("data");
+    body
+}
+
+/// A version with a data part is published and carries the release that checks it; a personal
+/// field is refused as unavailable (ADR-0206 decision 11); a later version that drops what an
+/// earlier one declared is refused (ADR-0194 decision 6), and one that only adds is published.
+#[tokio::test]
+async fn a_data_part_is_published_checked_and_only_ever_added_to() {
+    let router = package_app(provisioned_admin(), Arc::new(NoopAuditRecorder));
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+    let (_, package) = send(
+        &router,
+        post_with_cookie(
+            "/admin/packages",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Bar" }),
+            &cookie,
+        ),
+    )
+    .await;
+    let versions = format!(
+        "/admin/packages/{}/versions",
+        package["package_id"].as_str().expect("an id")
+    );
+    let publish = |data: String| {
+        let body = data_body(&tenant, &data);
+        let request = post_with_cookie(&versions, &body, &cookie);
+        send(&router, request)
+    };
+
+    let (status, body) = publish(OCCASION.to_owned()).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["content"]["min_edge_version"], DATA_PART_SINCE);
+    assert_eq!(
+        body["content"]["data"]["custom_fields"][0]["custom_field_id"],
+        "01J0000000000000000000CF01"
+    );
+
+    let personal = OCCASION.replace(
+        r#""field_type":"CUSTOM_FIELD_TYPE_CHOICE","personal":false,"custom_list_id":"01J0000000000000000000CA01""#,
+        r#""field_type":"CUSTOM_FIELD_TYPE_TEXT","personal":true,"retention_days":30,"consent_purpose_key":"data.consent.order""#,
+    );
+    let (status, body) = publish(personal).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body.to_string().contains("PERSONAL_FIELD_UNAVAILABLE"),
+        "{body}"
+    );
+    assert!(
+        body.to_string().contains("data.custom_fields.personal"),
+        "{body}"
+    );
+
+    let (status, body) = publish(r#"{"lists":[]}"#.to_owned()).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.to_string().contains("NOT_ADDITIVE"), "{body}");
+
+    let added = OCCASION.replace(
+        "]}]}",
+        r#"]}],"object_types":[{"object_type_id":"01J00000000000000000000B01","label_key":"data.reservation","fields":[{"custom_field_id":"01J0000000000000000000CF02","label_key":"data.reservation.party","field_type":"CUSTOM_FIELD_TYPE_INT","personal":false}]}]}"#,
+    );
+    let (status, body) = publish(added).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
 }
