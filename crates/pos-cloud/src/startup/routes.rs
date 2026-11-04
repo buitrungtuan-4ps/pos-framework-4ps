@@ -672,6 +672,15 @@ fn catalog_routes(deps: &RouteDeps<'_>) -> Router {
             SystemClock,
             Arc::clone(audit),
         ))
+        // The custom-data report (ADR-0194 decision 7): how many of a store's objects hold each
+        // value of one non-personal field (console.data.read; a personal field is refused).
+        .merge(http::custom_value_report_router(
+            store.custom_values(),
+            store.packages(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(audit),
+        ))
         // Vouchers (ADR-0077, Track M3): mint and list the distributable codes a voucher-kind
         // campaign redeems (behind console.campaigns.manage, audited by count only).
         .merge(http::voucher_router(
