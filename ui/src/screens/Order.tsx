@@ -20,8 +20,6 @@ import {
   groupsFor,
   holdWalkIn,
   modifiersSatisfied,
-  fireCourse,
-  fireOrder,
   floorTables,
   linesForTable,
   loadCheck,
@@ -40,7 +38,6 @@ import {
   unfiredLinesForTable,
   unsentCoursesForTable,
   PENDING,
-  voidLine,
   waiveFee,
   walkInAsks,
   walkInKey,
@@ -49,6 +46,7 @@ import {
   formatAmount,
 } from "../state/store";
 import { addItem, moveTable, setQuantity, writesPending } from "../state/optimistic";
+import { fireCourse, fireOrder, voidLine } from "../state/order-writes";
 import { errorMessage } from "../lib/errors";
 import { useInFlight } from "../lib/in-flight";
 import { printOutcomeKey } from "../lib/print";
