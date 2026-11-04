@@ -78,8 +78,10 @@ use crate::origins::Origins;
 
 mod apply;
 mod package;
+mod wake;
 
 pub use package::{PackageRefusal, PackageStanding, RefusedPackage, checked_package};
+pub use wake::{WAKE_PULL_SPACING, WAKE_RETRY};
 
 /// How long the loop waits after a transport error before retrying — the store trades locally with
 /// its last-known-good session while the cloud link is down, so this is a background reconnect.
