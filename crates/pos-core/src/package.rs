@@ -35,9 +35,11 @@ use crate::campaign::{LocalTime, Schedule, WeekdaySet};
 
 mod content;
 mod data;
+mod evolution;
 
 pub use content::{ContentRefusal, LABEL_KEY_CHARS_MAX, check_content};
 pub use data::{DataRefusal, FieldAt, FieldFault, PERSONAL_FIELDS_AVAILABLE, check_data};
+pub use evolution::{EvolutionRefusal, check_evolution};
 
 /// What a variant is chosen against: the device, the person and the moment on screen.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize)]
