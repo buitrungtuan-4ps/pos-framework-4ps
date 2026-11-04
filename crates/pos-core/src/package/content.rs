@@ -5,8 +5,10 @@
 //! ([ADR-0189](../../../../docs/adr/0189-a-store-runs-a-package-version-hq-pins.md) decisions 3
 //! and 6): the cloud checks it before a version is stored, and the edge again before it runs one.
 //!
-//! The parts (screens, flows, rules, data) add their own checks as they join the content.
+//! The parts (screens, flows, rules, data) add their own checks as they join the content: the data
+//! part's are [`super::data`]'s.
 
+use super::data::{DataRefusal, check_data};
 use pos_proto::package::{
     LABEL_CHARS_MAX, PackageContent, SCHEDULES_PER_TIME_SLOT_MAX, TIME_SLOTS_MAX, TimeSlot,
 };
@@ -35,6 +37,8 @@ pub enum ContentRefusal {
     TimeSlotSchedules(usize),
     /// A window names no day, a minute outside the day, or starts where it ends.
     Schedule(usize),
+    /// The data part is refused ([ADR-0194](../../../../docs/adr/0194-custom-data-is-declared-and-personal-fields-are-kept-apart.md)).
+    Data(DataRefusal),
 }
 
 impl ContentRefusal {
@@ -47,6 +51,24 @@ impl ContentRefusal {
             Self::TimeSlotId(_) | Self::DuplicateTimeSlot(_) => "time_slots.time_slot_id",
             Self::TimeSlotLabelKey(_) => "time_slots.label_key",
             Self::TimeSlotSchedules(_) | Self::Schedule(_) => "time_slots.schedules",
+            Self::Data(refusal) => refusal.field(),
+        }
+    }
+
+    /// The code the console's field error carries: the data part's own for a data refusal
+    /// (`PERSONAL_FIELD_UNAVAILABLE` for a personal field, ADR-0206 decision 11), `INVALID` for
+    /// every other.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Data(refusal) => refusal.code(),
+            Self::VersionLabel
+            | Self::TooManyTimeSlots
+            | Self::TimeSlotId(_)
+            | Self::DuplicateTimeSlot(_)
+            | Self::TimeSlotLabelKey(_)
+            | Self::TimeSlotSchedules(_)
+            | Self::Schedule(_) => "INVALID",
         }
     }
 }
@@ -78,13 +100,15 @@ impl core::fmt::Display for ContentRefusal {
                 "time slot {index}: a window names at least one day, minutes from 0 to 1439, and \
                  does not start where it ends"
             ),
+            Self::Data(refusal) => write!(f, "data: {refusal}"),
         }
     }
 }
 
 impl core::error::Error for ContentRefusal {}
 
-/// Checks a version's content: its label, and each time slot's id, name key and windows.
+/// Checks a version's content: its label, each time slot's id, name key and windows, and its data
+/// part.
 ///
 /// # Errors
 ///
@@ -108,7 +132,7 @@ pub fn check_content(content: &PackageContent) -> Result<(), ContentRefusal> {
             return Err(ContentRefusal::DuplicateTimeSlot(index));
         }
     }
-    Ok(())
+    check_data(&content.data).map_err(ContentRefusal::Data)
 }
 
 fn check_slot(index: usize, slot: &TimeSlot) -> Result<(), ContentRefusal> {
