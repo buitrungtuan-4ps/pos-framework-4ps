@@ -4,7 +4,9 @@
 //! What the projection records of tables and orders: the table an order is at, where an order came
 //! from and who confirmed it, opening, closing, joining and merging an order.
 
-use pos_proto::ids::{OrderId, OrderLineId, TableId};
+use std::collections::HashSet;
+
+use pos_proto::ids::{OrderId, OrderLineId, PackageVersionId, TableId};
 use pos_proto::{BillState, SalesChannel, TableState};
 
 use crate::app::{EdgeSession, LineRecord, OrderOrigin, Projection, StaffDecision, StaffStanding};
@@ -54,6 +56,37 @@ impl Projection {
         if let Some(origin) = self.orders.get_mut(&order_id) {
             origin.table_id = Some(to_table_id);
         }
+    }
+
+    /// Records what a guard reads about an order from its opening: the guest count, if it was given
+    /// one (ADR-0192 decision 4), and the package version it opened under, if any (decision 5).
+    pub(in crate::app) fn record_opened(
+        &mut self,
+        order_id: OrderId,
+        guest_count: Option<u16>,
+        package_version_id: Option<PackageVersionId>,
+    ) {
+        if let Some(count) = guest_count {
+            self.guest_counts.insert(order_id, count);
+        }
+        if let Some(version) = package_version_id {
+            self.package_versions.insert(order_id, version);
+        }
+    }
+
+    /// The package version an open order opened under, if any.
+    pub(in crate::app) fn package_version(&self, order_id: OrderId) -> Option<PackageVersionId> {
+        self.package_versions.get(&order_id).copied()
+    }
+
+    /// The package versions open orders still run under.
+    pub(in crate::app) fn referenced_versions(&self) -> HashSet<PackageVersionId> {
+        self.package_versions.values().copied().collect()
+    }
+
+    /// The guest count an open order recorded, if any.
+    pub(in crate::app) fn guest_count(&self, order_id: OrderId) -> Option<u16> {
+        self.guest_counts.get(&order_id).copied()
     }
 
     /// Records where an order came from, from a live open or from the fold on rebuild.
@@ -231,6 +264,8 @@ impl Projection {
     /// ended: on no screen, on no bill, and never charged.
     pub(in crate::app) fn close_order(&mut self, order_id: OrderId) {
         self.closed_orders.insert(order_id);
+        self.guest_counts.remove(&order_id);
+        self.package_versions.remove(&order_id);
         if let Some(table_id) = self.table_for_order(order_id) {
             self.table_orders.remove(&table_id);
         }

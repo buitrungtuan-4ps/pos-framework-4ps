@@ -7,6 +7,7 @@ import { createStore, produce, reconcile } from "solid-js/store";
 
 import { api } from "../api/client";
 import { adoptStoreLanguage } from "../i18n";
+import { editWrite } from "./edge-write";
 import { load, reload } from "./engine";
 import { ownOverride } from "./drawer-access";
 import { keptShift, shiftInfo } from "./shift-info";
@@ -867,7 +868,7 @@ export function fold(event: ServerEvent): void {
       } else if (own === null) {
         void loadShift();
       }
-      void loadDrawers();
+      void loadDrawers(true);
       break;
     }
     // A count names the drawer's shift and no till: under a drawer per till it is this device's when
@@ -883,7 +884,7 @@ export function fold(event: ServerEvent): void {
           void loadShift();
         }
       }
-      void loadDrawers();
+      void loadDrawers(true);
       break;
     }
     // A paid in or out on any device: read the shift's totals back, rather than add the amount here,
@@ -893,7 +894,7 @@ export function fold(event: ServerEvent): void {
       if (ownDrawer(str(payload, "terminal_device_id")) !== false) {
         void loadShift();
       }
-      void loadDrawers();
+      void loadDrawers(true);
       break;
     case "cash.shift.closed": {
       const shiftId = str(payload, "closed_shift_id");
@@ -902,17 +903,11 @@ export function fold(event: ServerEvent): void {
       const variance = asMoney(payload["variance"]);
       const own = ownDrawer(str(payload, "terminal_device_id"));
       if (shiftId !== null && own === true) {
-        replaceShift({
-          shiftId,
-          state: "SHIFT_STATE_CLOSED",
-          expected: expected ?? undefined,
-          counted: counted ?? undefined,
-          variance: variance ?? undefined,
-        });
+        heardClosed(shiftId, expected, counted, variance);
       } else if (own === null) {
         void loadShift();
       }
-      void loadDrawers();
+      void loadDrawers(true);
       break;
     }
     case "billing.bill.settled": {
@@ -1118,7 +1113,7 @@ export function openBillCount(): number {
 // ---- commands (call the edge, update at once, let the fan-out reconcile) -----
 
 // Marks an item sold out, or back, in the price book this device holds.
-function setSoldOut(menuItemId: string, soldOut: boolean): void {
+export function setSoldOut(menuItemId: string, soldOut: boolean): void {
   const index = state.menu.findIndex((item) => item.menu_item_id === menuItemId);
   if (index >= 0) {
     setState("menu", index, { sold_out: soldOut, available: !soldOut });
@@ -1132,45 +1127,10 @@ function setSoldOut(menuItemId: string, soldOut: boolean): void {
   }
 }
 
-// Staff mark an item sold out at this store (86), or bring it back. The fan-out brings the same fact
-// to every other till; this device shows it at once.
-export async function setItemSoldOut(menuItemId: string, soldOut: boolean): Promise<void> {
-  await (soldOut ? api.markSoldOut(menuItemId) : api.restoreItem(menuItemId));
-  setSoldOut(menuItemId, soldOut);
-  if (!soldOut) {
-    void reload("menu");
-  }
-}
-
 // When this table's guests sat down, or undefined for a table nobody is sitting at.
 export function seatedAt(tableId: string): string | undefined {
   return state.seatedAt[tableId];
 }
-
-export async function clean(tableId: string): Promise<void> {
-  const response = await api.cleanTable(tableId);
-  setState("tableState", tableId, response.state);
-}
-
-// Gives a table seated by mistake straight back to the floor, while nothing is sold on it
-// (ADR-0163). The edge ends its order owing nothing; the fan-out brings the same to every other
-// device, and this one shows it at once.
-export async function releaseTable(tableId: string): Promise<void> {
-  const response = await api.releaseTable(tableId);
-  setState(
-    produce((draft) => {
-      draft.tableState[tableId] = response.state;
-      delete draft.seatedAt[tableId];
-      const order = draft.tableOrder[tableId];
-      if (order !== undefined) {
-        draft.liveOrders[order] = false;
-        delete draft.tableOrder[tableId];
-        delete draft.orderTable[order];
-      }
-    }),
-  );
-}
-
 
 /// The groups this item attaches, in the order it names them (ADR-0127).
 ///
@@ -1231,8 +1191,14 @@ export function holdWalkIn(orderId: string): void {
  * it the day's next queue number, and prices every line added to it at the order's own channel:
  * `channel` where the cashier asked the guest, and the store's walk-in channel otherwise.
  */
+//
+// An edge write (ADR-0196 decision 1): the draft walk-in on screen is its paint (`./draft-walk-in`),
+// a refusal leaves the draft as it was, and no answer reads the open orders again.
 export async function startWalkIn(channel?: string): Promise<string> {
-  const opened = await api.openOrder(channel);
+  const opened = await editWrite("sales.order.open", {
+    send: () => api.openOrder(channel),
+    reread: () => void loadLiveOrders(),
+  });
   holdWalkIn(opened.order_id);
   if (channel !== undefined) {
     setState("walkInChannels", opened.order_id, channel);
@@ -1669,6 +1635,16 @@ function heardShift(shiftId: string, shiftState: string, counted?: Money): void 
   if (kept === null) void loadShift();
 }
 
+// This device's shift closed, as its live link heard it. The shift already held keeps the figures the
+// close's answer gave it (paid in and out, dropped, voided, the report), which the event does not
+// carry: it can reach the link after that answer, and replacing the shift with its four figures lost
+// them.
+function heardClosed(shiftId: string, expected: Money | null, counted: Money | null, variance: Money | null): void {
+  const held = state.shift?.shiftId === shiftId ? state.shift : null;
+  const figures = { expected: expected ?? held?.expected, counted: counted ?? held?.counted, variance: variance ?? held?.variance };
+  replaceShift({ ...held, ...figures, shiftId, state: "SHIFT_STATE_CLOSED" });
+}
+
 // Sets the shift outright. A store *merges* an object set at a path, so setting an open shift over a
 // closed one would keep the closed one's variance on screen; naming every field is what replaces it.
 function replaceShift(info: ShiftInfo | null): void {
@@ -1696,8 +1672,11 @@ function replaceShift(info: ShiftInfo | null): void {
 
 // Every drawer the store keeps (ADR-0167). Read through the engine: an edge that predates the
 // read, or a blip, leaves whatever is held, and a till that never read one shows one drawer.
-export function loadDrawers(): Promise<void> {
-  return load("drawers");
+//
+// `fresh` for a read a live-link event sets off: a read already out may have been answered before
+// the event's change, so the event's read follows it instead of joining it (`load`).
+export function loadDrawers(fresh = false): Promise<void> {
+  return load("drawers", fresh);
 }
 
 export function applyDrawers(response: DrawersResponse): void {
@@ -1733,89 +1712,6 @@ export async function loadSync(): Promise<void> {
   } catch {
     // Keep the last reading; the next poll tries again.
   }
-}
-
-// Sends every unsent line on this table's order in one act — the operator's own unit of work.
-//
-// One tap and one request, where the screen used to put a Send button on every row: a table of six
-// was six taps and six round trips, and a failure halfway left three lines with the kitchen and
-// three not, with nothing on screen saying which. The edge commits them together or not at all.
-//
-// A table with no order, or nothing unsent, is not an error here any more than it is on the edge:
-// there is nothing to send, and the button that calls this is disabled anyway.
-export async function fireOrder(tableId: string): Promise<void> {
-  const orderId = state.tableOrder[tableId];
-  if (orderId === undefined) {
-    return;
-  }
-  const fired = await api.fireOrder(orderId, { station_id: state.defaultStation });
-  setState(
-    produce((draft) => {
-      for (const line of fired) {
-        const held = draft.lines[line.order_line_id];
-        if (held !== undefined) {
-          held.state = line.state;
-        }
-      }
-    }),
-  );
-}
-
-// Sends the unsent lines on one course of this table's order — "starters away" (ADR-0130).
-//
-// `fireOrder` narrowed to one course, and deliberately the same shape: one tap, one request, and the
-// edge commits the course's lines together or not at all. The screen offers this only for courses
-// that still have something waiting, so the empty case is not a button an operator can press — but
-// it is answered rather than refused if a colleague gets there first, which is why nothing here
-// treats an empty response as a failure.
-export async function fireCourse(tableId: string, courseId: string): Promise<void> {
-  const orderId = state.tableOrder[tableId];
-  if (orderId === undefined) {
-    return;
-  }
-  const fired = await api.fireCourse(orderId, courseId, { station_id: state.defaultStation });
-  setState(
-    produce((draft) => {
-      for (const line of fired) {
-        const held = draft.lines[line.order_line_id];
-        if (held !== undefined) {
-          held.state = line.state;
-        }
-      }
-    }),
-  );
-}
-
-// Changes how many of a line, while the kitchen has not been told about it.
-//
-// Sends a quantity and no money: the edge holds the unit price captured when the line was added and
-// extends the line itself, so this cannot quote the guest a total that does not follow from the
-// price on the menu they were shown.
-
-export async function fire(lineId: string): Promise<void> {
-  // The edge derives the fired line's station from the published routing (ADR-0072); the station we
-  // send is only the fallback it uses when the store has published no station plan yet.
-  const response = await api.fireLine(lineId, { station_id: state.defaultStation });
-  setState("lines", lineId, "state", response.state);
-}
-
-// Voids a line, citing a reason from the store's managed list (ADR-0115, §11 item 2).
-//
-// `approval` is the manager's badge and PIN, present only when the line has already fired: the
-// kitchen has made it, stock has moved, and §5 puts that behind `VoidFiredLine` and a verified PIN.
-// An unfired line is an ordinary cancel and the field is left off. The edge decides either way — it
-// refuses without the approval when one is needed — so this passes what it was given rather than
-// second-guessing the rule.
-//
-// The PIN is never held: it arrives as an argument, goes out on the one request, and the screen
-// clears the field it was typed into.
-export async function voidLine(
-  lineId: string,
-  reasonCodeId: string,
-  approval?: ApproverRequest,
-): Promise<void> {
-  const response = await api.voidLine(lineId, { reason_code_id: reasonCodeId, ...approval });
-  setState("lines", lineId, "state", response.state);
 }
 
 // Voids a bill before it settles. A bill is money whether or not the kitchen started, so it needs a
@@ -1863,6 +1759,11 @@ export async function voidBill(
   approval?: ApproverRequest,
 ): Promise<void> {
   await api.voidBill(billId, { reason_code_id: reasonCodeId, ...approval });
+  applyVoided(billId);
+}
+
+// A void the edge committed, whether it answered or a re-read found it later (ADR-0204).
+export function applyVoided(billId: string): void {
   setState(
     produce((draft) => {
       const closed = closeBill(draft, billId);
@@ -1873,70 +1774,20 @@ export async function voidBill(
   );
 }
 
-// A station marks a ticket's lines prepared. The edge records the durable `kitchen.ticket.bumped`
-// event and fans it out, so every KDS folds the same prepared set; the line drops off this screen at
-// once and stays off when its own event returns.
-// Bumps lines as made. `stationId` is the station the ticket was fired to, where the board knows it;
-// the store's default station otherwise, which is what every bump sent before lines carried one.
-export async function bump(
-  orderId: string,
-  orderLineIds: string[],
-  stationId?: string,
-): Promise<void> {
-  await api.bumpTicket({
-    order_id: orderId,
-    station_id: stationId ?? state.defaultStation,
-    order_line_ids: orderLineIds,
-  });
-  setState(
-    produce((draft) => {
-      for (const id of orderLineIds) {
-        draft.bumped[id] = true;
-      }
-    }),
-  );
-}
-
-export async function openBill(tableId: string): Promise<string> {
-  const existing = openBillFor(tableId);
-  if (existing !== undefined) {
-    return existing;
-  }
-  const response = await api.openBill(tableId);
-  setState(
-    produce((draft) => {
-      const open = draft.openBills[tableId] ?? [];
-      if (!open.includes(response.bill_id)) {
-        draft.openBills[tableId] = [...open, response.bill_id];
-      }
-      const order = draft.tableOrder[tableId];
-      if (order !== undefined) {
-        draft.billOrder[response.bill_id] = order;
-      }
-      if (response.table_state !== undefined) {
-        draft.tableState[tableId] = response.table_state;
-      }
-    }),
-  );
-  return response.bill_id;
-}
-
 // What one bill owes and the lines it covers — the pay screen's figure once a table can hold more
 // than one bill (ADR-0128).
 export async function loadBillCheck(billId: string): Promise<BillCheckResponse> {
   return api.billCheck(billId);
 }
 
-// Splits a bill into parts, each the lines one guest pays for (ADR-0128), and answers with the
-// parts' ids in the order they were given. The parts take the source's place on its table's list,
-// so the first part is the bill the pay screen offers next.
+// A split the edge committed (ADR-0128), whether it answered or a re-read of the table's bills found
+// it later (ADR-0204): the parts take the source's place on its table's list, so the first part is
+// the bill the pay screen offers next.
 //
 // The fan-out brings the same facts — each part's `billing.bill.opened`, then the split — and may
-// land before this answer does. Either order ends with the same list: a part already folded is not
-// added twice, and a source already folded away is simply not there to replace.
-export async function splitBill(billId: string, parts: string[][]): Promise<string[]> {
-  const response = await api.splitBill(billId, { parts });
-  const partIds = response.bill_ids;
+// land before this does. Either order ends with the same list: a part already folded is not added
+// twice, and a source already folded away is simply not there to replace.
+export function applySplit(billId: string, partIds: readonly string[]): void {
   setState(
     produce((draft) => {
       const order = draft.billOrder[billId];
@@ -1959,13 +1810,16 @@ export async function splitBill(billId: string, parts: string[][]): Promise<stri
         at < 0 ? [...partIds, ...others] : [...others.slice(0, at), ...partIds, ...others.slice(at)];
     }),
   );
-  return partIds;
 }
 
-// Folds the other bills open on a table back into this one — undoing a split is a merge, never an
-// edit (ADR-0128 decision 10).
-export async function mergeBills(billId: string, absorbed: string[]): Promise<void> {
-  await api.mergeBills(billId, { absorbed_bill_ids: absorbed });
+/** The order a bill this device knows is on. */
+export function orderOfBill(billId: string): string | undefined {
+  return state.billOrder[billId];
+}
+
+// A merge the edge committed, answered or found by a re-read (ADR-0204): the absorbed bills close.
+// Undoing a split is a merge, never an edit (ADR-0128 decision 10).
+export function applyMerged(absorbed: readonly string[]): void {
   setState(
     produce((draft) => {
       for (const id of absorbed) {
@@ -1981,6 +1835,13 @@ export async function settle(
   buyer?: BuyerRequest,
 ): Promise<BillResponse> {
   const response = await api.settleBill(billId, { payments, buyer, ...ownOverride() });
+  applySettled(billId, response);
+  return response;
+}
+
+// A settle the edge committed, whether it answered or a re-read found it later (ADR-0204): the bill
+// leaves its table, and the table takes the state the edge gave it.
+export function applySettled(billId: string, response: BillResponse): void {
   setState(
     produce((draft) => {
       const closed = closeBill(draft, billId);
@@ -1999,7 +1860,6 @@ export async function settle(
       }
     }),
   );
-  return response;
 }
 
 // ---- shift, driven by the operator's own commands ---------------------------

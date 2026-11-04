@@ -52,6 +52,16 @@ fn full_row() -> FleetStoreRow {
                 .to_owned(),
         ),
         print_agents_reported_at_ms: Some(8_000),
+        package_version_id: Some("V1".to_owned()),
+        package_refused_config_version_id: Some("C2".to_owned()),
+        package_refused_version_id: Some("V2".to_owned()),
+        package_refusal_reason: Some("EDGE_TOO_OLD".to_owned()),
+        package_reported_at_ms: Some(9_000),
+        config_delivery: Some("CONFIG_DELIVERY_WAKE".to_owned()),
+        config_wake_samples: Some(12),
+        config_wake_p95_ms: Some(240),
+        config_wake_max_ms: Some(900),
+        config_wake_reported_at_ms: Some(10_000),
     }
 }
 
@@ -88,6 +98,31 @@ fn every_readable_column_reaches_the_fleet_row() {
     assert_eq!(agents[0].agent_device_id, "a1");
     assert_eq!(agents[0].oldest_unacknowledged_secs, Some(9));
     assert_eq!(row.print_agents_reported_at, at(8_000));
+    let package = row.package.expect("the package report reaches the row");
+    assert_eq!(package.reported_at, at(9_000).expect("an instant"));
+    assert_eq!(package.beat.package_version_id.as_deref(), Some("V1"));
+    let refused = package.beat.refused.expect("the refusal reaches the row");
+    assert_eq!(
+        (
+            refused.config_version_id.as_str(),
+            refused.package_version_id.as_deref(),
+            refused.reason.as_str()
+        ),
+        ("C2", Some("V2"), "EDGE_TOO_OLD")
+    );
+    let wake = row
+        .config_wake
+        .expect("the config delivery report reaches the row");
+    assert_eq!(wake.reported_at, at(10_000).expect("an instant"));
+    assert_eq!(
+        (
+            wake.beat.delivery.as_str(),
+            wake.beat.samples,
+            wake.beat.p95_ms,
+            wake.beat.max_ms
+        ),
+        ("CONFIG_DELIVERY_WAKE", 12, Some(240), Some(900))
+    );
 }
 
 #[test]

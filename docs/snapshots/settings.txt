@@ -3,7 +3,8 @@
 #
 # A REMOVED key, kind, value or scope line fails CI: a stored value and an older edge both
 # rely on it, so it may be added to but never renamed or removed. A default, a preset, a
-# since, and a whole number's min, max and unit lines may change. ADR-0160 decision 9.
+# since, a whole number's min, max and unit lines, and an identifier list's max line may
+# change. ADR-0160 decision 9.
 # A REMOVED confirm line fails CI too: it is a value written only with a recorded
 # confirmation, and dropping that takes an ADR. ADR-0169.
 backup.interval_hours
@@ -49,6 +50,47 @@ locale.tax_rounding	scope=SETTING_SCOPE_TENANT
 locale.tax_rounding	since=0.14.1
 locale.tax_rounding	value=TAX_ROUNDING_DOWN
 locale.tax_rounding	value=TAX_ROUNDING_HALF_UP
+package.allowed_version_ids
+package.allowed_version_ids	default=[]
+package.allowed_version_ids	kind=SETTING_KIND_ULID_LIST
+package.allowed_version_ids	max=32
+package.allowed_version_ids	scope=SETTING_SCOPE_BRAND
+package.allowed_version_ids	scope=SETTING_SCOPE_STORE
+package.allowed_version_ids	scope=SETTING_SCOPE_STORE_GROUP
+package.allowed_version_ids	scope=SETTING_SCOPE_TENANT
+package.allowed_version_ids	since=0.14.1
+package.chosen_version_id
+package.chosen_version_id	default=null
+package.chosen_version_id	kind=SETTING_KIND_ULID
+package.chosen_version_id	scope=SETTING_SCOPE_STORE
+package.chosen_version_id	since=0.14.1
+package.default_version_id
+package.default_version_id	default=null
+package.default_version_id	kind=SETTING_KIND_ULID
+package.default_version_id	scope=SETTING_SCOPE_BRAND
+package.default_version_id	scope=SETTING_SCOPE_STORE
+package.default_version_id	scope=SETTING_SCOPE_STORE_GROUP
+package.default_version_id	scope=SETTING_SCOPE_TENANT
+package.default_version_id	since=0.14.1
+package.locked_version_id
+package.locked_version_id	default=null
+package.locked_version_id	kind=SETTING_KIND_ULID
+package.locked_version_id	scope=SETTING_SCOPE_BRAND
+package.locked_version_id	scope=SETTING_SCOPE_STORE
+package.locked_version_id	scope=SETTING_SCOPE_STORE_GROUP
+package.locked_version_id	scope=SETTING_SCOPE_TENANT
+package.locked_version_id	since=0.14.1
+package.mode
+package.mode	default=PACKAGE_MODE_UNSPECIFIED
+package.mode	kind=SETTING_KIND_CHOICE
+package.mode	scope=SETTING_SCOPE_BRAND
+package.mode	scope=SETTING_SCOPE_STORE
+package.mode	scope=SETTING_SCOPE_STORE_GROUP
+package.mode	scope=SETTING_SCOPE_TENANT
+package.mode	since=0.14.1
+package.mode	value=PACKAGE_MODE_CHOOSE
+package.mode	value=PACKAGE_MODE_LOCKED
+package.mode	value=PACKAGE_MODE_UNSPECIFIED
 permissions.enforced
 permissions.enforced	default=false
 permissions.enforced	kind=SETTING_KIND_BOOL

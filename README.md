@@ -58,7 +58,7 @@ pos-framework/
 │   ├── adapters/             Twelve today; the port list is docs/architecture.md §5
 │   │   ├── store-sqlite/      EventStore, ConfigStore, DeviceRegistry, IntakeLedger, SubjectStore (edge)
 │   │   ├── store-postgres/    EventStore + the cloud's own stores
-│   │   ├── link-nats/         MessageLink          cloud-sync-http/  CloudSync
+│   │   ├── link-nats/         MessageLink, StoreWake cloud-sync-http/ CloudSync
 │   │   ├── printer-escpos/    PrinterDriver        key-vault-keyring/ KeyVault
 │   │   ├── blob-garage/       BlobStore            updater-minisign/  Signer
 │   │   ├── metrics-vm/        MetricsSink          erp-sap/           ErpSink

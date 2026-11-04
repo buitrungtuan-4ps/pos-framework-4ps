@@ -18232,7 +18232,7 @@
           }
         ],
         "requestBody": {
-          "description": "The tenant, the version's label and its time slots. The version id and the minimum edge release are the server's",
+          "description": "The tenant, the version's label, its time slots and its data part. The version id and the minimum edge release are the server's. Whether a custom field is personal is required; the lawful basis, consent wording and retention period of a personal field are the tenant's decision (ADR-0206)",
           "content": {
             "application/json": {
               "schema": {
@@ -18254,7 +18254,7 @@
             }
           },
           "400": {
-            "description": "tenant_id or package_id is not a ULID, or the content is refused: a blank or long label, a malformed or repeated time slot, a window that is not whole, or content over 1 MiB. The detail names the field",
+            "description": "tenant_id or package_id is not a ULID, or the content is refused: a blank or long label, a malformed or repeated time slot, a window that is not whole, a data part ADR-0194 refuses, or content over 1 MiB. The detail names the field: its code is `INVALID`, `PERSONAL_FIELD_UNAVAILABLE` for a field declared personal before personal fields are available (ADR-0206), or `NOT_ADDITIVE` for data that removes, moves or retypes what an earlier version declared",
             "content": {
               "application/json": {
                 "schema": {
@@ -20000,7 +20000,7 @@
         "operationId": "admin_settings_catalogue",
         "responses": {
           "200": {
-            "description": "Every setting in the register: its key, node and field, its kind (SETTING_KIND_CHOICE, _INT or _BOOL) and what it takes — a choice's values, or a whole number's min, max and unit — its default and the value a new store is given (each as the node carries it), the scopes it may be written at, the first release that honours it, and any value it writes only with a recorded confirmation (confirm)",
+            "description": "Every setting in the register: its key, node and field, its kind (SETTING_KIND_CHOICE, _INT, _BOOL, _ULID or _ULID_LIST) and what it takes — a choice's values, or a whole number's min, max and unit — its default and the value a new store is given (each as the node carries it), the scopes it may be written at, the first release that honours it, and any value it writes only with a recorded confirmation (confirm)",
             "content": {
               "application/json": {
                 "schema": {
@@ -22820,6 +22820,212 @@
           }
         ],
         "x-permission": "console.devices.manage"
+      }
+    },
+    "/admin/stores/{store_id}/package": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "`GET /admin/stores/{store_id}/package` — a store's pinned, running and waiting package version.",
+        "operationId": "admin_store_package",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The version the store is pinned to, the version it runs, and why it waits when they differ: its release is older than the version needs or unknown, the version is missing, or the pin names none",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorePackage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "tenant_id or store_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no such store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The settings store, the registry, the store groups or the config tree is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
+      }
+    },
+    "/admin/stores/{store_id}/package/choice": {
+      "put": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "`PUT /admin/stores/{store_id}/package/choice`: the store's choice among the package versions it\nis allowed (ADR-0189 decision 2), written at the store and republished.",
+        "operationId": "admin_choose_package",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The tenant, and the version the store chooses, or null to clear its choice",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PackageChoiceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Written, and the store republished",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoresPublished_SettingPublishResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An id is not a ULID, or the version is not one the store is allowed (NOT_ALLOWED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no such store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The store's package is not in PACKAGE_MODE_CHOOSE (PACKAGE_NOT_CHOOSING)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The settings store, the registry, the store groups or the config tree is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.config.publish"
       }
     },
     "/admin/stores/{store_id}/permissions/readiness": {
@@ -27044,6 +27250,38 @@
           }
         }
       },
+      "ConfigWakeBeat": {
+        "type": "object",
+        "description": "What one heartbeat said about config delivery (ADR-0195): whether the store hears the cloud's\nwake or runs on the poll alone, and the time from wake to apply over its latest wakes.",
+        "required": [
+          "delivery",
+          "samples"
+        ],
+        "properties": {
+          "delivery": {
+            "type": "string",
+            "description": "`CONFIG_DELIVERY_WAKE`, or `CONFIG_DELIVERY_POLL` for a store on the poll alone."
+          },
+          "max_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The longest of them, in milliseconds.",
+            "minimum": 0
+          },
+          "p95_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Their 95th percentile, in milliseconds; absent with no samples.",
+            "minimum": 0
+          },
+          "samples": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many wake-to-apply times the figures are drawn from; the edge keeps its latest 128.",
+            "minimum": 0
+          }
+        }
+      },
       "ConnectionRequest": {
         "type": "object",
         "description": "A create/update body for a connection. The id is server-owned: minted on create, the path id on\nupdate.\n\n`secrets` holds only the values this write sets. A secret field left out keeps the value the\nconnection already holds, because the console cannot show it to be sent back. `clear_secrets`\nremoves a stored value on purpose. Switching `provider_id` drops every stored secret: one\nvendor's key is never another's, even when both call the field `api_key`.",
@@ -28146,6 +28384,99 @@
         "type": "string",
         "description": "An ISO 4217 currency code: three upper-case letters",
         "pattern": "^[A-Z]{3}$"
+      },
+      "CustomField": {
+        "type": "object",
+        "description": "One custom field, on an existing object or in an object type.",
+        "required": [
+          "custom_field_id",
+          "label_key",
+          "field_type"
+        ],
+        "properties": {
+          "consent_purpose_key": {
+            "$ref": "#/components/schemas/TranslationKey",
+            "description": "The translation key of the purpose a person consents to before a personal value is saved.\nRequired for a personal field; absent for any other."
+          },
+          "custom_field_id": {
+            "$ref": "#/components/schemas/CustomFieldId",
+            "description": "The field's id, stable for good: a field is never renamed or retyped (ADR-0194 decision 6)."
+          },
+          "custom_list_id": {
+            "$ref": "#/components/schemas/CustomListId",
+            "description": "The list a `choice` field draws from."
+          },
+          "deprecated": {
+            "type": "boolean",
+            "description": "Hidden from new entries and kept for reading (ADR-0194 decision 6)."
+          },
+          "field_type": {
+            "$ref": "#/components/schemas/OpenCustomFieldType_CustomFieldType",
+            "description": "The kind of value it holds."
+          },
+          "label_key": {
+            "$ref": "#/components/schemas/TranslationKey",
+            "description": "The translation key of the field's label."
+          },
+          "object": {
+            "$ref": "#/components/schemas/OpenDataObject_DataObject",
+            "description": "The existing object the field is on. Stated for a field of [`PackageData::custom_fields`],\nabsent for a field of an object type."
+          },
+          "personal": {
+            "type": "boolean",
+            "description": "Whether the value is personal data. Required, with no default: absent, the field is refused\nat publish."
+          },
+          "required": {
+            "type": "boolean",
+            "description": "Whether an entry must give it a value."
+          },
+          "retention_days": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many days a personal value is kept. Required for a personal field, with no default\n(ADR-0194 decision 5); absent for any other.",
+            "minimum": 0
+          },
+          "unit_key": {
+            "$ref": "#/components/schemas/TranslationKey",
+            "description": "The translation key of a `quantity` field's unit."
+          }
+        }
+      },
+      "CustomFieldId": {
+        "type": "string",
+        "description": "A `CustomFieldId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "CustomList": {
+        "type": "object",
+        "description": "A managed option list, like the reason codes (ADR-0115).",
+        "required": [
+          "custom_list_id",
+          "label_key",
+          "entries"
+        ],
+        "properties": {
+          "custom_list_id": {
+            "$ref": "#/components/schemas/CustomListId",
+            "description": "The list's id."
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ListEntry"
+            },
+            "description": "Its entries, at most [`LIST_ENTRIES_MAX`], in the order a till offers them."
+          },
+          "label_key": {
+            "$ref": "#/components/schemas/TranslationKey",
+            "description": "The translation key of the list's name in the console."
+          }
+        }
+      },
+      "CustomListId": {
+        "type": "string",
+        "description": "A `CustomListId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
       },
       "DailyCash": {
         "type": "object",
@@ -29272,6 +29603,10 @@
           "outbox_reported_at_ms",
           "print_agents",
           "print_agents_reported_at_ms",
+          "package",
+          "package_reported_at_ms",
+          "config_wake",
+          "config_wake_reported_at_ms",
           "lease_generation_held",
           "lease_reported_at_ms",
           "lease_generation_authoritative",
@@ -29299,6 +29634,25 @@
               "string",
               "null"
             ]
+          },
+          "config_wake": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ConfigWakeBeat",
+                "description": "How configuration reaches the store and how fast\n([ADR-0195](../../../docs/adr/0195-the-cloud-wakes-a-store-to-pull-its-config.md)):\n`CONFIG_DELIVERY_WAKE`, or `CONFIG_DELIVERY_POLL` for a store on the 30-second poll alone, and\nthe 95th-percentile and longest time from a wake to applying its version over the store's\nlatest wakes. `null` until a heartbeat reports it, which an older edge never does."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "config_wake_reported_at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unix ms of the heartbeat that reported config delivery, or `null`."
           },
           "edge_placement": {
             "$ref": "#/components/schemas/EdgePlacement",
@@ -29393,6 +29747,25 @@
             ],
             "format": "int64",
             "description": "Unix ms of the heartbeat that reported `outbox_depth`, or `null`."
+          },
+          "package": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PackageBeat",
+                "description": "What the store's heartbeat last said about its package\n([ADR-0189](../../../docs/adr/0189-a-store-runs-a-package-version-hq-pins.md) decision 6):\nthe version it runs (absent: its release's default package) and the configuration it last\nrefused for its package. `null` until a heartbeat reports one, which an older edge never does."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "package_reported_at_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unix ms of the heartbeat that reported the package, or `null`."
           },
           "print_agents": {
             "type": [
@@ -29544,6 +29917,46 @@
           "tenant_id": {
             "$ref": "#/components/schemas/TenantId",
             "description": "The owning tenant."
+          }
+        }
+      },
+      "FlowStep": {
+        "type": "object",
+        "description": "One step of a flow. It names exactly one of `screen_id` and `action_id`.",
+        "required": [
+          "step_id"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "string",
+            "description": "The catalogue action the step runs."
+          },
+          "applies_when": {
+            "type": "string",
+            "description": "When the step applies at all. Absent: always. A step that does not apply is passed over,\nand counts as done for the steps that wait on it."
+          },
+          "done_when": {
+            "type": "string",
+            "description": "When the edge sees the step as done, from its own facts. Present only on a step the edge\nenforces; a condition over state the edge does not hold is refused at publish."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/OpenStepKind_StepKind",
+            "description": "Required or optional."
+          },
+          "prerequisites": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The steps of the same flow that must be done before this one can run."
+          },
+          "screen_id": {
+            "type": "string",
+            "description": "The package screen the step shows."
+          },
+          "step_id": {
+            "type": "string",
+            "description": "The step's id within its flow."
           }
         }
       },
@@ -30050,6 +30463,33 @@
             "minimum": 0
           }
         }
+      },
+      "ListEntry": {
+        "type": "object",
+        "description": "One option of a list.",
+        "required": [
+          "list_entry_id",
+          "label_key"
+        ],
+        "properties": {
+          "deprecated": {
+            "type": "boolean",
+            "description": "No longer offered, and kept for reading."
+          },
+          "label_key": {
+            "$ref": "#/components/schemas/TranslationKey",
+            "description": "The translation key of the entry's label."
+          },
+          "list_entry_id": {
+            "$ref": "#/components/schemas/ListEntryId",
+            "description": "The entry's id, which a `choice` value carries."
+          }
+        }
+      },
+      "ListEntryId": {
+        "type": "string",
+        "description": "A `ListEntryId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
       },
       "ListOrPage_AuditEntryView": {
         "oneOf": [
@@ -30701,6 +31141,53 @@
           }
         }
       },
+      "ObjectType": {
+        "type": "object",
+        "description": "A new kind of object, such as a reservation or a locker.",
+        "required": [
+          "object_type_id",
+          "label_key",
+          "fields"
+        ],
+        "properties": {
+          "deprecated": {
+            "type": "boolean",
+            "description": "Hidden from new entries and kept for reading."
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomField"
+            },
+            "description": "Its fields, at most [`FIELDS_PER_OBJECT_MAX`], none naming an [`CustomField::object`]."
+          },
+          "label_key": {
+            "$ref": "#/components/schemas/TranslationKey",
+            "description": "The translation key of the type's name."
+          },
+          "object_type_id": {
+            "$ref": "#/components/schemas/ObjectTypeId",
+            "description": "The type's id, stable for good."
+          }
+        }
+      },
+      "ObjectTypeId": {
+        "type": "string",
+        "description": "A `ObjectTypeId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "OpenCustomFieldType_CustomFieldType": {
+        "type": "string",
+        "description": "A `CustomFieldType` token: CUSTOM_FIELD_TYPE_UNSPECIFIED, CUSTOM_FIELD_TYPE_INT, CUSTOM_FIELD_TYPE_BOOL, CUSTOM_FIELD_TYPE_CHOICE, CUSTOM_FIELD_TYPE_DATE, CUSTOM_FIELD_TYPE_QUANTITY, CUSTOM_FIELD_TYPE_TEXT, or one a newer build sent, which is kept as it arrived"
+      },
+      "OpenDataObject_DataObject": {
+        "type": "string",
+        "description": "A `DataObject` token: DATA_OBJECT_UNSPECIFIED, DATA_OBJECT_ORDER, DATA_OBJECT_LINE, DATA_OBJECT_BILL, DATA_OBJECT_TABLE, DATA_OBJECT_SHIFT, or one a newer build sent, which is kept as it arrived"
+      },
+      "OpenDeviceClass_DeviceClass": {
+        "type": "string",
+        "description": "A `DeviceClass` token: DEVICE_CLASS_UNSPECIFIED, DEVICE_CLASS_TERMINAL, DEVICE_CLASS_TABLET, DEVICE_CLASS_PHONE, DEVICE_CLASS_KITCHEN_DISPLAY, DEVICE_CLASS_KIOSK, or one a newer build sent, which is kept as it arrived"
+      },
       "OpenFeeItems_FeeItems": {
         "type": "string",
         "description": "A `FeeItems` token: FEE_ITEMS_UNSPECIFIED, FEE_ITEMS_ALL, FEE_ITEMS_INCLUDE, FEE_ITEMS_EXCLUDE, or one a newer build sent, which is kept as it arrived"
@@ -30729,6 +31216,10 @@
         "type": "string",
         "description": "A `SettingScope` token: SETTING_SCOPE_UNSPECIFIED, SETTING_SCOPE_TENANT, SETTING_SCOPE_BRAND, SETTING_SCOPE_STORE_GROUP, SETTING_SCOPE_STORE, or one a newer build sent, which is kept as it arrived"
       },
+      "OpenStepKind_StepKind": {
+        "type": "string",
+        "description": "A `StepKind` token: STEP_KIND_UNSPECIFIED, STEP_KIND_REQUIRED, STEP_KIND_OPTIONAL, or one a newer build sent, which is kept as it arrived"
+      },
       "OpenTableOrder_TableOrder": {
         "type": "string",
         "description": "A `TableOrder` token: TABLE_ORDER_UNSPECIFIED, TABLE_ORDER_SEPARATE, TABLE_ORDER_JOIN, or one a newer build sent, which is kept as it arrived"
@@ -30741,6 +31232,39 @@
         "type": "string",
         "description": "A `VendorAvailability` token: VENDOR_AVAILABILITY_UNSPECIFIED, VENDOR_AVAILABILITY_OPEN, VENDOR_AVAILABILITY_BUSY, VENDOR_AVAILABILITY_CLOSED, or one a newer build sent, which is kept as it arrived"
       },
+      "PackageBeat": {
+        "type": "object",
+        "description": "What one heartbeat said about the store's package.",
+        "properties": {
+          "package_version_id": {
+            "type": "string",
+            "description": "The package version the store runs, or absent for its release's default package."
+          },
+          "refused": {
+            "$ref": "#/components/schemas/RefusedBeat",
+            "description": "The configuration the store last refused for its package, while the latest one was."
+          }
+        }
+      },
+      "PackageChoiceRequest": {
+        "type": "object",
+        "description": "A `PUT /admin/stores/{store_id}/package/choice` body.",
+        "required": [
+          "tenant_id"
+        ],
+        "properties": {
+          "package_version_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The version the store runs from now, one of its allowed versions; `null` clears the choice,\nso the store runs its default version."
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
       "PackageContent": {
         "type": "object",
         "description": "One published package version, as it rides the store's document.",
@@ -30751,6 +31275,17 @@
           "min_edge_version"
         ],
         "properties": {
+          "data": {
+            "$ref": "#/components/schemas/PackageData",
+            "description": "The package's data part: custom fields, object types and lists\n([ADR-0194](../../../docs/adr/0194-custom-data-is-declared-and-personal-fields-are-kept-apart.md)).\nEmpty, and left off the wire, in a version that declares none."
+          },
+          "flows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Variant_Flow"
+            },
+            "description": "The package's flows ([ADR-0192](../../../docs/adr/0192-a-flow-is-a-graph-of-steps-the-edge-re-checks.md)),\neach with its variants; the variants of one flow share its `flow_id`."
+          },
           "min_edge_version": {
             "$ref": "#/components/schemas/ReleaseTag",
             "description": "The oldest edge release that runs this version, which the cloud computes at publish\n(ADR-0189 decision 5). An edge on an older release refuses the version as a whole."
@@ -30773,6 +31308,33 @@
           "version_label": {
             "type": "string",
             "description": "The version's name as HQ reads it in the console, at most [`LABEL_CHARS_MAX`] characters.\nNever shown on a till."
+          }
+        }
+      },
+      "PackageData": {
+        "type": "object",
+        "description": "A package's data part. Empty, and left off the wire, in a version that declares no data.",
+        "properties": {
+          "custom_fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomField"
+            },
+            "description": "Custom fields on existing objects, each naming its [`CustomField::object`]: at most\n[`FIELDS_PER_OBJECT_MAX`] per object."
+          },
+          "lists": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomList"
+            },
+            "description": "Managed option lists a `choice` field draws from."
+          },
+          "object_types": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObjectType"
+            },
+            "description": "New object types, at most [`OBJECT_TYPES_MAX`]."
           }
         }
       },
@@ -30852,6 +31414,10 @@
           "version_label"
         ],
         "properties": {
+          "data": {
+            "$ref": "#/components/schemas/PackageData",
+            "description": "The package's data part: custom fields, object types and lists (ADR-0194). Each field says\nwhether it is personal; publishing a personal field is the tenant's decision on its lawful\nbasis, consent wording and retention, and is refused until personal fields are available\n(ADR-0206)."
+          },
           "tenant_id": {
             "type": "string"
           },
@@ -32759,6 +33325,28 @@
           }
         }
       },
+      "RefusedBeat": {
+        "type": "object",
+        "description": "A configuration a store refused for its package; it kept the one before.",
+        "required": [
+          "config_version_id",
+          "reason"
+        ],
+        "properties": {
+          "config_version_id": {
+            "type": "string",
+            "description": "The configuration version refused."
+          },
+          "package_version_id": {
+            "type": "string",
+            "description": "The package version it carried, when the store could read it."
+          },
+          "reason": {
+            "type": "string",
+            "description": "`PACKAGE_MALFORMED`, `PACKAGE_INVALID` or `EDGE_TOO_OLD`."
+          }
+        }
+      },
       "RegionAcknowledgementView": {
         "type": "object",
         "description": "A recorded answer to a store's region difference, as the console sees it\n([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).\n\nThe two country codes ride along rather than being left implicit: the console renders them in\nthe sentence it shows (\"data in SG, store registered in VN — acknowledged\"), and a reader of the\npayload can see *what* was answered without inferring it from the fields beside it.\n\nNo `acknowledged_by`. The row does not carry one — the audit action\n`store.edge_placement.acknowledge` does, and it is the copy that survives the next answer. The\nconsole links to the store's audit tab rather than showing a name this read cannot honestly give.",
@@ -33920,7 +34508,9 @@
           "SETTING_KIND_UNSPECIFIED",
           "SETTING_KIND_CHOICE",
           "SETTING_KIND_INT",
-          "SETTING_KIND_BOOL"
+          "SETTING_KIND_BOOL",
+          "SETTING_KIND_ULID",
+          "SETTING_KIND_ULID_LIST"
         ]
       },
       "SettingPublishOutcome": {
@@ -33965,6 +34555,17 @@
           {
             "type": "boolean",
             "description": "A `BOOL`"
+          },
+          {
+            "type": "null",
+            "description": "A `ULID` setting's none"
+          },
+          {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "A `ULID_LIST`'s identifiers"
           }
         ],
         "description": "A setting's value, in the shape its kind gives it"
@@ -34317,6 +34918,24 @@
         "type": "string",
         "description": "A `StoreId`: a ULID, 26 Crockford base-32 characters",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "StorePackage": {
+        "type": "object",
+        "description": "A store's package, as the console shows it.",
+        "properties": {
+          "pinned_version_id": {
+            "type": "string",
+            "description": "The version the store's pin names, or absent when it is not pinned or names nothing."
+          },
+          "running_version_id": {
+            "type": "string",
+            "description": "The version the store's published document carries, or absent when it runs the default\npackage."
+          },
+          "waiting": {
+            "$ref": "#/components/schemas/Waiting",
+            "description": "Why the store does not run the version it is pinned to, or absent when it does."
+          }
+        }
       },
       "StoreRecord": {
         "type": "object",
@@ -35575,6 +36194,71 @@
           },
           "media_id": {
             "type": "string"
+          }
+        }
+      },
+      "VariantSelector": {
+        "type": "object",
+        "description": "The dimensions a variant states: zero to four of device, role, sales channel and time slot\n(ADR-0189 decision 4). A dimension left absent matches every store, device and moment.\n\nThe device dimension is stated by `device_id` or by `device_class`, never both, which the cloud\nrefuses at publish. A token from a newer release states its dimension and matches nothing here.",
+        "properties": {
+          "device_class": {
+            "$ref": "#/components/schemas/OpenDeviceClass_DeviceClass",
+            "description": "Every device of a class."
+          },
+          "device_id": {
+            "$ref": "#/components/schemas/DeviceId",
+            "description": "One device."
+          },
+          "role_id": {
+            "$ref": "#/components/schemas/Ulid",
+            "description": "The role a signed-in person holds, by its role id in the tenant's people."
+          },
+          "sales_channel": {
+            "$ref": "#/components/schemas/OpenSalesChannel_SalesChannel",
+            "description": "The sales channel of the order on screen."
+          },
+          "time_slot_id": {
+            "type": "string",
+            "description": "A time slot of the package, by its id."
+          }
+        }
+      },
+      "Variant_Flow": {
+        "type": "object",
+        "description": "One variant of a package part: what a till shows or runs when its selector is the one chosen.",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "object",
+            "description": "One flow of a package.",
+            "required": [
+              "flow_id",
+              "start_action_id",
+              "steps"
+            ],
+            "properties": {
+              "flow_id": {
+                "type": "string",
+                "description": "The flow's id within its package. Its variants share it."
+              },
+              "start_action_id": {
+                "type": "string",
+                "description": "The catalogue action whose tap starts the flow."
+              },
+              "steps": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/FlowStep"
+                },
+                "description": "The steps, at most [`STEPS_MAX`], in the order the till offers them when several are\navailable at once."
+              }
+            }
+          },
+          "selector": {
+            "$ref": "#/components/schemas/VariantSelector",
+            "description": "When the variant applies. Empty for the part's base variant."
           }
         }
       },
@@ -37391,6 +38075,34 @@
           },
           "voucher_id": {
             "type": "string"
+          }
+        }
+      },
+      "WaitReason": {
+        "type": "string",
+        "description": "Why a pinned store keeps the version it runs.",
+        "enum": [
+          "EDGE_TOO_OLD",
+          "RELEASE_UNKNOWN",
+          "VERSION_MISSING",
+          "PIN_UNRESOLVED",
+          "UNREADABLE"
+        ]
+      },
+      "Waiting": {
+        "type": "object",
+        "description": "Why a store keeps the version it runs.",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "installed_release": {
+            "type": "string",
+            "description": "The release the store last reported, or absent if it never has."
+          },
+          "reason": {
+            "$ref": "#/components/schemas/WaitReason",
+            "description": "`EDGE_TOO_OLD`, `RELEASE_UNKNOWN`, `VERSION_MISSING`, `PIN_UNRESOLVED` or `UNREADABLE`."
           }
         }
       },

@@ -149,6 +149,26 @@ fn the_committed_snapshot_matches_the_catalogue() {
     );
 }
 
+/// The till's module is the catalogue as rendered, so the till cannot drift from the edge.
+#[test]
+fn the_tills_snapshot_of_the_catalogue_matches_it() {
+    let rendered = super::render_typescript();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(super::TYPESCRIPT_PATH);
+    if std::env::var("POS_UPDATE_SNAPSHOTS").is_ok() {
+        std::fs::write(&path, &rendered).expect("write the till's module");
+        return;
+    }
+    let committed = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(
+        committed == rendered,
+        "{} no longer matches the action catalogue. Regenerate it with:\n\
+         \n    POS_UPDATE_SNAPSHOTS=1 cargo test -p pos-proto snapshot\n",
+        super::TYPESCRIPT_PATH
+    );
+}
+
 #[test]
 fn every_action_appears_in_the_snapshot_with_its_effect() {
     let rendered = render_snapshot();

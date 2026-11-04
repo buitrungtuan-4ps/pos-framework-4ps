@@ -31,14 +31,17 @@ use crate::enums::{
 use crate::envelope::{DecodeError, EventEnvelope, EventPayload, RawPayload};
 use crate::fees::FrozenFee;
 use crate::ids::{
-    BillId, CampaignId, ConfigVersionId, CourseId, DeviceId, EmployeeId, FeeId, IngredientId,
-    MenuItemId, OrderId, OrderLineId, PaymentId, QrSessionId, ReasonCodeId, ShiftId, ShipmentId,
-    StationId, StockLedgerEntryId, SubjectId, SupplierId, TableId, TaxClassId, VoucherId,
+    BillId, CampaignId, ConfigVersionId, CourseId, CustomRecordId, DeviceId, EmployeeId, FeeId,
+    IngredientId, MenuItemId, ObjectTypeId, OrderId, OrderLineId, PackageVersionId, PaymentId,
+    QrSessionId, ReasonCodeId, ShiftId, ShipmentId, StationId, StockLedgerEntryId, SubjectId,
+    SupplierId, TableId, TaxClassId, VoucherId,
 };
 use crate::money::{Money, Ratio};
+use crate::package::DataObject;
 use crate::quantity::Quantity;
 use crate::text::{DisplayName, PermissionKey, ReleaseTag};
 use crate::time::Timestamp;
+use crate::ulid::Ulid;
 use crate::wire_enum::Open;
 
 #[macro_use]
@@ -57,6 +60,16 @@ event_catalogue! {
         table_id: Option<TableId>,
         /// Guest count, for reporting. Optional because staff may not record it.
         guest_count: Option<u16>,
+        /// The package version the store ran when the order opened
+        /// ([ADR-0192](../../../docs/adr/0192-a-flow-is-a-graph-of-steps-the-edge-re-checks.md)
+        /// decision 5). The order's flows and guards are evaluated under it until it closes, so
+        /// a version published meanwhile does not change an order's rules half-way.
+        ///
+        /// Absent while the store runs its release's default package, and on every order opened
+        /// before this field. `#[serde(default)]` and left off the wire while absent, so those
+        /// orders replay and their bytes stay the same.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        package_version_id: Option<PackageVersionId>,
     },
     /// An order reached a terminal state.
     ///
@@ -860,12 +873,49 @@ event_catalogue! {
         /// Which ring the store is in.
         ring: u8,
     },
+    // ---------------------------------------------------------- custom data
+    /// Custom fields on an existing object were given values
+    /// ([ADR-0194](../../../docs/adr/0194-custom-data-is-declared-and-personal-fields-are-kept-apart.md)
+    /// decision 3). Only the values that changed are listed.
+    DataCustomFieldSet => "data.custom_field.set", version = 1 {
+        /// The kind of object the fields are on.
+        object: Open<DataObject>,
+        /// The object: an order, line, bill, table or shift id, as `object` says.
+        object_id: Ulid,
+        /// The non-personal values, by field. A personal value is never here.
+        values: Vec<CustomFieldValue>,
+        /// The subject record holding the object's personal values, when it has any (ADR-0194
+        /// decision 4).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subject_id: Option<SubjectId>,
+        /// The package version whose declarations the values follow.
+        package_version_id: PackageVersionId,
+    },
+    /// A record of a custom object type was created or changed (ADR-0194 decision 3). Only the
+    /// values that changed are listed; a record's first event lists every value it was created
+    /// with.
+    DataCustomRecordChanged => "data.custom_record.changed", version = 1 {
+        /// The record.
+        custom_record_id: CustomRecordId,
+        /// Its object type.
+        object_type_id: ObjectTypeId,
+        /// The non-personal values, by field. A personal value is never here.
+        values: Vec<CustomFieldValue>,
+        /// The subject record holding the record's personal values, when it has any (ADR-0194
+        /// decision 4).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subject_id: Option<SubjectId>,
+        /// The package version whose declarations the values follow.
+        package_version_id: PackageVersionId,
+    },
 }
 
 mod bill_parts;
 mod cash_count;
+mod custom_data;
 pub use bill_parts::{BillFeeLine, BillTaxComponent, BillTaxLine};
 pub use cash_count::DenominationCount;
+pub use custom_data::CustomFieldValue;
 
 #[cfg(test)]
 mod tests;

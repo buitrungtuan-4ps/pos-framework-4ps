@@ -129,6 +129,124 @@ pub trait ConfigTreeStore {
         lease_generation: Option<u64>,
         print_agents: Option<Vec<PrintAgentStanding>>,
     ) -> impl Future<Output = Result<(), ConfigStoreError>> + Send;
+
+    /// Records what a heartbeat said about the store's package
+    /// ([ADR-0189](../../../../docs/adr/0189-a-store-runs-a-package-version-hq-pins.md) decision 6):
+    /// the version it runs and the configuration it last refused for its package, replacing what was
+    /// recorded. A heartbeat that said nothing about it is not passed here.
+    ///
+    /// The default records nothing, for a store that keeps no fleet row.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigStoreError`] if the liveness row could not be written.
+    fn record_package_beat(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        seen_at: Timestamp,
+        beat: &PackageBeat,
+    ) -> impl Future<Output = Result<(), ConfigStoreError>> + Send {
+        let _ = (tenant, store, seen_at, beat);
+        async { Ok(()) }
+    }
+
+    /// Records what a heartbeat said about how configuration reaches the store and how fast
+    /// ([ADR-0195](../../../../docs/adr/0195-the-cloud-wakes-a-store-to-pull-its-config.md)), replacing
+    /// what was recorded. A heartbeat that said nothing about it is not passed here.
+    ///
+    /// The default records nothing, for a store that keeps no fleet row.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigStoreError`] if the liveness row could not be written.
+    fn record_config_wake_beat(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        seen_at: Timestamp,
+        beat: &ConfigWakeBeat,
+    ) -> impl Future<Output = Result<(), ConfigStoreError>> + Send {
+        let _ = (tenant, store, seen_at, beat);
+        async { Ok(()) }
+    }
+}
+
+/// What one heartbeat said about config delivery (ADR-0195): whether the store hears the cloud's
+/// wake or runs on the poll alone, and the time from wake to apply over its latest wakes.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize, utoipa::ToSchema)]
+pub struct ConfigWakeBeat {
+    /// `CONFIG_DELIVERY_WAKE`, or `CONFIG_DELIVERY_POLL` for a store on the poll alone.
+    pub delivery: String,
+    /// How many wake-to-apply times the figures are drawn from; the edge keeps its latest 128.
+    pub samples: u32,
+    /// Their 95th percentile, in milliseconds; absent with no samples.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub p95_ms: Option<u64>,
+    /// The longest of them, in milliseconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub max_ms: Option<u64>,
+}
+
+impl ConfigWakeBeat {
+    /// The longest delivery name a beat keeps, in characters.
+    pub const TEXT_MAX: usize = 64;
+
+    /// The most samples a beat may say it drew from.
+    pub const SAMPLES_MAX: u32 = 1024;
+
+    /// Whether the beat is one an edge could have sent.
+    #[must_use]
+    pub fn is_bounded(&self) -> bool {
+        self.delivery.chars().count() <= Self::TEXT_MAX && self.samples <= Self::SAMPLES_MAX
+    }
+}
+
+/// What one heartbeat said about the store's package.
+#[derive(
+    Clone, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, utoipa::ToSchema,
+)]
+pub struct PackageBeat {
+    /// The package version the store runs, or absent for its release's default package.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub package_version_id: Option<String>,
+    /// The configuration the store last refused for its package, while the latest one was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub refused: Option<RefusedBeat>,
+}
+
+/// A configuration a store refused for its package; it kept the one before.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize, utoipa::ToSchema)]
+pub struct RefusedBeat {
+    /// The configuration version refused.
+    pub config_version_id: String,
+    /// The package version it carried, when the store could read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub package_version_id: Option<String>,
+    /// `PACKAGE_MALFORMED`, `PACKAGE_INVALID` or `EDGE_TOO_OLD`.
+    pub reason: String,
+}
+
+impl PackageBeat {
+    /// The longest id or reason a beat keeps, in characters; longer text is not one this cloud wrote.
+    pub const TEXT_MAX: usize = 64;
+
+    /// Whether every text the beat carries is within [`Self::TEXT_MAX`].
+    #[must_use]
+    pub fn is_bounded(&self) -> bool {
+        let fits = |text: &str| text.chars().count() <= Self::TEXT_MAX;
+        self.package_version_id.as_deref().is_none_or(fits)
+            && self.refused.as_ref().is_none_or(|refused| {
+                fits(&refused.config_version_id)
+                    && fits(&refused.reason)
+                    && refused.package_version_id.as_deref().is_none_or(fits)
+            })
+    }
 }
 
 /// A failure of the config-tree store itself — the database is unreachable, or a stored document

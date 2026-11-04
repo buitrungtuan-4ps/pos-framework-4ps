@@ -137,6 +137,7 @@ impl EdgeSession {
             counter: PublishedCounter::default(),
             billing: PublishedBilling::default(),
             backup: PublishedBackup::default(),
+            package: None,
             display_language: None,
             country_language: None,
             qr_staff_confirmation_required: true,

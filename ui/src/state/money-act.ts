@@ -1,0 +1,161 @@
+// How the till runs a money act (ADR-0196, ADR-0204): it checks what it can predict, paints the
+// act's pending state at once, and lets the edge decide.
+//
+// - **Predictable refusals first** (safeguard 2). A refusal the till can decide is shown before
+//   anything is sent or painted.
+// - **Pending, never derived.** While the act is out, the screen shows it pending with what the edge
+//   already confirmed, and nothing the act would derive (change due, a receipt).
+// - **The edge decides.** Its answer shows the act done; its refusal rolls the screen back with the
+//   refusal's own sentence, which the operator must dismiss (safeguard 3).
+// - **No answer is never a rollback** (ADR-0204). The act stays pending and its subject is read again
+//   every 2 s for 30 s, then every 10 s with a sentence saying the store server cannot be reached,
+//   until the edge says whether it committed. Nothing is re-sent, and while the answer is unknown
+//   the subject is marked unconfirmed, so the act is not offered on it again.
+
+import { createSignal, onCleanup } from "solid-js";
+
+import { ApiError } from "../api/client";
+import { errorMessage } from "../lib/errors";
+
+export type MoneyPhase = "idle" | "sending" | "checking" | "unreachable";
+
+/** What a read of the subject says about an act that went unanswered. */
+export type Recheck<T> = { readonly committed: T } | { readonly refused: string } | null;
+
+export const RECHECK_EVERY_MS = 2_000;
+export const RECHECK_FAST_FOR_MS = 30_000;
+export const RECHECK_SLOW_MS = 10_000;
+
+// Each unconfirmed subject, with the act that left it so: only that act picks it up again.
+const [unconfirmed, setUnconfirmed] = createSignal<ReadonlyMap<string, string>>(new Map<string, string>());
+
+/** Whether an act on this subject went unanswered and the edge has not yet said what came of it. */
+export function isUnconfirmed(subject: string | null): boolean {
+  return subject !== null && unconfirmed().has(subject);
+}
+
+function mark(subject: string, act: string | null): void {
+  setUnconfirmed((current) => {
+    const next = new Map(current);
+    if (act !== null) {
+      next.set(subject, act);
+    } else {
+      next.delete(subject);
+    }
+    return next;
+  });
+}
+
+/** A refusal the edge gave, as opposed to an answer that never came: a 5xx or no response at all. */
+export function isRefusal(caught: unknown): caught is ApiError {
+  return caught instanceof ApiError && caught.status < 500;
+}
+
+export interface MoneyAct<T> {
+  /** Sends the act, unless `precheck` names a refusal. */
+  readonly run: (subject: string, precheck: () => string | null, send: () => Promise<T>) => Promise<void>;
+  /** Picks up an act left unconfirmed on this subject, as a screen opened on it again does. */
+  readonly resume: (subject: string) => void;
+  readonly phase: () => MoneyPhase;
+  readonly refusal: () => string | null;
+  readonly dismiss: () => void;
+}
+
+interface Options<T> {
+  /** Which act this is, so a screen opened again resumes only the act left unconfirmed. */
+  readonly act?: string;
+  readonly recheck: (subject: string) => Promise<Recheck<T>>;
+  readonly committed: (value: T) => void;
+  /** The sentence for an edge refusal, where the act says it better than `errorMessage`. */
+  readonly refusalMessage?: (caught: ApiError) => string;
+  readonly timers?: { set: (run: () => void, ms: number) => number; clear: (id: number) => void };
+  readonly now?: () => number;
+}
+
+/** The re-reads of ADR-0204: fast, then slow and "unreachable", until the edge answers. */
+function createRechecker<T>(
+  options: Options<T>,
+  setPhase: (phase: MoneyPhase) => void,
+  setRefusal: (message: string | null) => void,
+) {
+  const timers = options.timers ?? {
+    set: (run: () => void, ms: number) => window.setTimeout(run, ms),
+    clear: (id: number) => window.clearTimeout(id),
+  };
+  const now = options.now ?? (() => performance.now());
+  let timer: number | null = null;
+  onCleanup(() => {
+    if (timer !== null) {
+      timers.clear(timer);
+    }
+  });
+  const answered = (subject: string, answer: NonNullable<Recheck<T>>) => {
+    mark(subject, null);
+    setPhase("idle");
+    if ("committed" in answer) {
+      options.committed(answer.committed);
+    } else {
+      setRefusal(answer.refused);
+    }
+  };
+  const check = (subject: string, since: number) => {
+    const slow = now() - since >= RECHECK_FAST_FOR_MS;
+    if (slow) {
+      setPhase("unreachable");
+    }
+    timer = timers.set(
+      () => {
+        timer = null;
+        options
+          .recheck(subject)
+          .then((answer) => (answer === null ? check(subject, since) : answered(subject, answer)))
+          .catch(() => check(subject, since));
+      },
+      slow ? RECHECK_SLOW_MS : RECHECK_EVERY_MS,
+    );
+  };
+  /** Starts checking `subject`, marked unconfirmed until the edge answers. */
+  return (subject: string) => {
+    mark(subject, options.act ?? "");
+    setPhase("checking");
+    check(subject, now());
+  };
+}
+
+export function useMoneyAct<T>(options: Options<T>): MoneyAct<T> {
+  const [phase, setPhase] = createSignal<MoneyPhase>("idle");
+  const [refusal, setRefusal] = createSignal<string | null>(null);
+  const startChecking = createRechecker(options, setPhase, setRefusal);
+
+  const resume = (subject: string) => {
+    if (unconfirmed().get(subject) === (options.act ?? "") && phase() === "idle") {
+      startChecking(subject);
+    }
+  };
+
+  const run = async (subject: string, precheck: () => string | null, send: () => Promise<T>) => {
+    if (phase() !== "idle" || refusal() !== null || isUnconfirmed(subject)) {
+      return;
+    }
+    const predicted = precheck();
+    if (predicted !== null) {
+      setRefusal(predicted);
+      return;
+    }
+    setPhase("sending");
+    try {
+      const value = await send();
+      setPhase("idle");
+      options.committed(value);
+    } catch (caught) {
+      if (isRefusal(caught)) {
+        setPhase("idle");
+        setRefusal(options.refusalMessage?.(caught) ?? errorMessage(caught));
+        return;
+      }
+      startChecking(subject);
+    }
+  };
+
+  return { run, resume, phase, refusal, dismiss: () => setRefusal(null) };
+}

@@ -34,6 +34,7 @@ pub mod menu;
 mod openapi;
 #[cfg(all(test, feature = "openapi"))]
 mod openapi_required;
+pub mod package;
 pub mod pair;
 mod print_agent;
 mod print_jobs;
@@ -595,6 +596,7 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
         AppError::ApprovalRefused => "APPROVAL_REFUSED",
         AppError::ApproverLockedOut => "APPROVER_LOCKED_OUT",
         AppError::Superseded => "SUPERSEDED",
+        AppError::FlowPrerequisiteUnmet { .. } => "FLOW_PREREQUISITE_UNMET",
         AppError::Port(_) => "STORE_UNAVAILABLE",
         AppError::Clock | AppError::Encode(_) => "INTERNAL",
     }
@@ -652,7 +654,10 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::ModifierSelectionInvalid
         | AppError::ChannelNotAccepted
         | AppError::ItemNotSellable
-        | AppError::AlreadyFired => refusal(StatusCode::CONFLICT, reason, error.to_string()),
+        | AppError::AlreadyFired
+        | AppError::FlowPrerequisiteUnmet { .. } => {
+            refusal(StatusCode::CONFLICT, reason, error.to_string())
+        }
         // A missing or refused manager PIN is an authorisation failure, not a state conflict: the
         // command is well-formed and applies to the record, and the only thing missing is the
         // authority to run it. `403` and not `401`, because the *caller* is authenticated — it is

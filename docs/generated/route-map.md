@@ -49,6 +49,7 @@ From [`docs/openapi-edge.json`](../openapi-edge.json).
 | POST | `/api/orders/{id}/fire/{course_id}` | `fire_course` | `till_session` | `sales.line.fire` | [`crates/pos-edge/src/http/lines.rs`](../../crates/pos-edge/src/http/lines.rs) |
 | POST | `/api/orders/{id}/lines` | `add_order_line` | `till_session` | `sales.line.add` | [`crates/pos-edge/src/http/counter.rs`](../../crates/pos-edge/src/http/counter.rs) |
 | POST | `/api/orders/{id}/reject` | `reject_order` | `till_session` | `sales.order.confirm_qr` | [`crates/pos-edge/src/http/qr.rs`](../../crates/pos-edge/src/http/qr.rs) |
+| GET | `/api/package` | `package_standing` | `till_session` | — | [`crates/pos-edge/src/http/package.rs`](../../crates/pos-edge/src/http/package.rs) |
 | POST | `/api/pair` | `pair` | public: a pairing code a manager minted, spent once (ADR-0030) | — | [`crates/pos-edge/src/http/pair.rs`](../../crates/pos-edge/src/http/pair.rs) |
 | POST | `/api/pair/codes` | `mint_pairing_code` | `till_session` | `admin.device.manage` | [`crates/pos-edge/src/http/pair.rs`](../../crates/pos-edge/src/http/pair.rs) |
 | GET | `/api/pair/devices` | `paired_devices` | `till_session` | — | [`crates/pos-edge/src/http/pair.rs`](../../crates/pos-edge/src/http/pair.rs) |
@@ -346,6 +347,8 @@ From [`docs/openapi-admin.json`](../openapi-admin.json).
 | GET | `/admin/stores/{store_id}/devices/admitted` | `admin_admitted_devices` | `session_cookie` | `console.data.read` | [`crates/pos-cloud/src/http/admitted_devices.rs`](../../crates/pos-cloud/src/http/admitted_devices.rs) |
 | POST | `/admin/stores/{store_id}/devices/revoke` | `admin_revoke_device` | `session_cookie` | `console.stores.manage` | [`crates/pos-cloud-devices/src/routes/revoke.rs`](../../crates/pos-cloud-devices/src/routes/revoke.rs) |
 | PATCH | `/admin/stores/{store_id}/devices/{device_id}` | `admin_update_device` | `session_cookie` | `console.devices.manage` | [`crates/pos-cloud/src/http/registry/devices.rs`](../../crates/pos-cloud/src/http/registry/devices.rs) |
+| GET | `/admin/stores/{store_id}/package` | `admin_store_package` | `session_cookie` | `console.data.read` | [`crates/pos-cloud/src/http/settings/package_status.rs`](../../crates/pos-cloud/src/http/settings/package_status.rs) |
+| PUT | `/admin/stores/{store_id}/package/choice` | `admin_choose_package` | `session_cookie` | `console.config.publish` | [`crates/pos-cloud/src/http/settings/package_pin.rs`](../../crates/pos-cloud/src/http/settings/package_pin.rs) |
 | GET | `/admin/stores/{store_id}/permissions/readiness` | `admin_permissions_readiness` | `session_cookie` | `console.people.read` | [`crates/pos-cloud-people/src/routes/readiness.rs`](../../crates/pos-cloud-people/src/routes/readiness.rs) |
 | POST | `/admin/stores/{store_id}/region-acknowledgement` | `admin_acknowledge_region` | `session_cookie` | `console.stores.manage` | [`crates/pos-cloud/src/http/fleet/regions.rs`](../../crates/pos-cloud/src/http/fleet/regions.rs) |
 | GET | `/admin/stores/{store_id}/reports/xz` | `admin_xz_report` | `session_cookie` | `console.reports.revenue` | [`crates/pos-cloud-reports/src/xz.rs`](../../crates/pos-cloud-reports/src/xz.rs) |

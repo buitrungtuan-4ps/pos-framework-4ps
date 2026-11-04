@@ -655,3 +655,83 @@ fn joins_identity_liveness_drift_and_backlog() {
         );
     });
 }
+
+/// A heartbeat's config delivery report lands on the liveness row and comes back out of the fleet
+/// read at its columns, 30 to 34 (migration 0091, ADR-0195); the next report replaces it.
+#[test]
+fn a_config_delivery_report_reaches_the_fleet_row_and_the_next_replaces_it() {
+    block_on(async {
+        let (store, _admin) = prepared().await.expect("prepare the database");
+        let trees = store.config_trees();
+        let tenant = TenantId::new(Ulid::from_u128(0x000F_1EE8));
+        let shop = StoreId::new(Ulid::from_u128(0x570C));
+        store
+            .registry()
+            .insert_store(&shop.to_string(), &tenant.to_string(), None, "Waking")
+            .await
+            .expect("insert the store");
+        trees
+            .record_seen(tenant, shop, None, 1000)
+            .await
+            .expect("a liveness row");
+        let read = || async {
+            let rows = store.fleet().list(&tenant.to_string()).await.expect("list");
+            let row = rows.into_iter().next().expect("the store");
+            (
+                row.config_delivery,
+                row.config_wake_samples,
+                row.config_wake_p95_ms,
+                row.config_wake_max_ms,
+                row.config_wake_reported_at_ms,
+            )
+        };
+        assert_eq!(
+            read().await,
+            (None, None, None, None, None),
+            "never reported"
+        );
+
+        let wake = store_postgres::ConfigWakeRow {
+            delivery: "CONFIG_DELIVERY_WAKE",
+            samples: 12,
+            p95_ms: Some(240),
+            max_ms: Some(900),
+        };
+        trees
+            .record_config_wake_beat(tenant, shop, 2000, wake)
+            .await
+            .expect("record");
+        assert_eq!(
+            read().await,
+            (
+                Some("CONFIG_DELIVERY_WAKE".to_owned()),
+                Some(12),
+                Some(240),
+                Some(900),
+                Some(2000)
+            )
+        );
+
+        let poll = store_postgres::ConfigWakeRow {
+            delivery: "CONFIG_DELIVERY_POLL",
+            samples: 0,
+            p95_ms: None,
+            max_ms: None,
+        };
+        trees
+            .record_config_wake_beat(tenant, shop, 3000, poll)
+            .await
+            .expect("record");
+        assert_eq!(
+            read().await,
+            (
+                Some("CONFIG_DELIVERY_POLL".to_owned()),
+                Some(0),
+                None,
+                None,
+                Some(3000)
+            ),
+            "the next report replaces the last"
+        );
+    });
+}

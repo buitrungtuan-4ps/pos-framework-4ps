@@ -72,6 +72,7 @@ pub mod payment;
 pub mod printer;
 pub mod shipping;
 pub mod signer;
+pub mod store_wake;
 pub mod subject_store;
 
 /// Re-exported for the suite macros, which expand in the adapter's crate and so cannot name
@@ -117,6 +118,8 @@ pub const __PORT_PRINTER_DRIVER: PortName = PortName::PrinterDriver;
 pub const __PORT_SHIPPING_DISPATCH: PortName = PortName::ShippingDispatch;
 #[doc(hidden)]
 pub const __PORT_SIGNER: PortName = PortName::Signer;
+#[doc(hidden)]
+pub const __PORT_STORE_WAKE: PortName = PortName::StoreWake;
 
 /// A contract obligation was not met.
 ///
@@ -379,7 +382,7 @@ pub fn report(port: PortName, case: &'static str, outcome: Result<(), CaseFailur
 /// `docs/roadmap.md` P2's exit criterion is *"every port has a contract suite"*, and a criterion
 /// nothing checks is a criterion that stops being true the first time somebody is in a hurry.
 ///
-/// Twenty entries, matching `PortName::ALL`.
+/// Twenty-one entries, matching `PortName::ALL`.
 pub const SUITES: &[(PortName, &str)] = &[
     (PortName::EventStore, "event_store_suite"),
     (PortName::ConfigStore, "config_store_suite"),
@@ -401,6 +404,7 @@ pub const SUITES: &[(PortName, &str)] = &[
     (PortName::DeviceRegistry, "device_registry_suite"),
     (PortName::IntakeLedger, "intake_ledger_suite"),
     (PortName::SubjectStore, "subject_store_suite"),
+    (PortName::StoreWake, "store_wake_suite"),
 ];
 
 /// Turns a list of *synchronous* case functions into `#[test]` functions.

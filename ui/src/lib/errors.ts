@@ -102,12 +102,33 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
 //
 // `own` words a token for the screen asking, where the till's one sentence for it would name the
 // wrong thing: a drawer that changed on another device is not a table or a bill.
+/** The sentence for a refusal token, as the edge's refusal would read, for one the till predicts. */
+export function reasonMessage(reason: string): string {
+  const key = REASONS[reason];
+  return key === undefined ? t("common.store_error") : t(key);
+}
+
+/**
+ * An act the edge did not answer, whose outcome the till cannot read back, already in the operator's
+ * words (ADR-0204 decision 5). `errorMessage` shows its sentence as it is.
+ */
+export class Unconfirmed extends Error {}
+
 export function errorMessage(
   caught: unknown,
   own: Readonly<Record<string, MessageKey>> = {},
 ): string {
+  if (caught instanceof Unconfirmed) {
+    return caught.message;
+  }
   if (!(caught instanceof ApiError)) {
     return t("common.store_error");
+  }
+  // A step of the store's flow comes first (ADR-0192): named, so the operator can do it and a
+  // manager can fix the guard. The edge's sentence carries the step's id.
+  if (caught.reason === "FLOW_PREREQUISITE_UNMET") {
+    const step = /step (\S+) of flow/.exec(caught.message)?.[1] ?? "";
+    return t("error.flow_prerequisite_unmet", { step });
   }
   const key = caught.reason === null ? undefined : (own[caught.reason] ?? REASONS[caught.reason]);
   return key === undefined ? caught.message : t(key);

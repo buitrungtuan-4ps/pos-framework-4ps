@@ -30,6 +30,7 @@ mod campaigns;
 mod catalog;
 mod claims;
 mod config_releases;
+mod config_saved;
 mod config_trees;
 mod connections;
 mod data_migrations;
@@ -38,7 +39,9 @@ mod fee_rules;
 mod fleet;
 mod floor;
 mod inventory;
+mod liveness_wake;
 mod media;
+mod migrations_late;
 mod order_queue;
 mod ota;
 mod packages;
@@ -78,6 +81,7 @@ pub use catalog::{
 };
 pub use claims::{ClaimBindRow, ClaimCollectRow, ClaimSlotRow, PostgresClaims};
 pub use config_releases::{NewReleaseRow, PostgresConfigReleases, ReleaseRow};
+pub use config_saved::ConfigSaved;
 pub use config_trees::{
     BumpOutcome, PostgresConfigTrees, StoredBump, StoredRegionAcknowledgement, StoredRegionWrite,
     StoredRetire, StoredSettle,
@@ -89,6 +93,7 @@ pub use fee_rules::{FeeRuleRow, FeeRuleSlot, FeeRuleWrite, PostgresFeeRules};
 pub use fleet::{FleetStoreRow, PostgresFleet};
 pub use floor::{AreaRow, PostgresFloor, RoutingRuleRow, StationRow, TableRow};
 pub use inventory::{InventoryRow, PostgresInventory};
+pub use liveness_wake::ConfigWakeRow;
 pub use media::{MediaAssetRow, PostgresMedia};
 pub use order_queue::{OrderQueueRow, PendingOrderRow, PostgresOrderQueue, PostgresStoreDirectory};
 pub use ota::{PostgresArtifacts, ReleaseArtifactRow};

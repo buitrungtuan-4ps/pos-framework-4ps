@@ -145,6 +145,7 @@ impl<S: EventStore> Edge<S> {
         order_id: OrderId,
         station_id: Option<StationId>,
     ) -> Result<Vec<LineView>, AppError> {
+        self.check_flow_guard("sales.order.fire", order_id)?;
         self.fire_unsent(actor, order_id, station_id, None).await
     }
 
@@ -177,6 +178,7 @@ impl<S: EventStore> Edge<S> {
         course_id: CourseId,
         station_id: Option<StationId>,
     ) -> Result<Vec<LineView>, AppError> {
+        self.check_flow_guard("sales.course.fire", order_id)?;
         self.fire_unsent(actor, order_id, station_id, Some(course_id))
             .await
     }

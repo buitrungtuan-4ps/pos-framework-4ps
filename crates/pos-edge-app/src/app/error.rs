@@ -170,6 +170,16 @@ pub enum AppError {
          on the replacement"
     )]
     Superseded,
+    /// A step of the store's flow that this act waits on is not done, as the edge sees it from its
+    /// own facts ([ADR-0192](../../../../docs/adr/0192-a-flow-is-a-graph-of-steps-the-edge-re-checks.md)
+    /// decision 4). Names the step, so a manager can fix the guard or the operator do the step.
+    #[error("step {step_id} of flow {flow_id} comes first")]
+    FlowPrerequisiteUnmet {
+        /// The flow.
+        flow_id: String,
+        /// The step not done.
+        step_id: String,
+    },
     /// A void cited a reason the store's managed list does not hold for voiding
     /// ([ADR-0115](../../../../docs/adr/0115-reason-codes-are-a-managed-list.md)).
     ///

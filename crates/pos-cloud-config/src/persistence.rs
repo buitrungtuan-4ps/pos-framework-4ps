@@ -69,10 +69,19 @@ impl ConfigTreeStore for PostgresConfigTrees {
         let json = serde_json::to_string(state).map_err(|error| {
             ConfigStoreError::new(format!("encoding the config tree failed: {error}"))
         })?;
-        self.save_state(tenant, store, &json, expected.map(Version::as_str))
+        let outcome = self
+            .save_state(tenant, store, &json, expected.map(Version::as_str))
             .await
             .map(update_outcome)
-            .map_err(|error| ConfigStoreError::new(error.to_string()))
+            .map_err(|error| ConfigStoreError::new(error.to_string()))?;
+        // Committed: `save_state` is one autocommit statement on its own connection. A lost race
+        // wrote nothing and tells nothing (ADR-0195).
+        if let (UpdateOutcome::Updated(_), Some(saved), Some(head)) =
+            (&outcome, self.saved(), state.history.last())
+        {
+            saved.notify(tenant, store, head.id);
+        }
+        Ok(outcome)
     }
 
     async fn record_store_seen(
@@ -91,6 +100,52 @@ impl ConfigTreeStore for PostgresConfigTrees {
         )
         .await
         .map_err(|error| ConfigStoreError::new(error.to_string()))
+    }
+
+    async fn record_package_beat(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        seen_at: Timestamp,
+        beat: &crate::config_tree::PackageBeat,
+    ) -> Result<(), ConfigStoreError> {
+        let refused = beat.refused.as_ref().map(|refused| {
+            (
+                refused.config_version_id.as_str(),
+                refused.package_version_id.as_deref(),
+                refused.reason.as_str(),
+            )
+        });
+        PostgresConfigTrees::record_package_beat(
+            self,
+            tenant,
+            store,
+            seen_at.as_milliseconds_since_epoch(),
+            beat.package_version_id.as_deref(),
+            refused,
+        )
+        .await
+        .map_err(|error| ConfigStoreError::new(error.to_string()))
+    }
+
+    async fn record_config_wake_beat(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        seen_at: Timestamp,
+        beat: &crate::config_tree::ConfigWakeBeat,
+    ) -> Result<(), ConfigStoreError> {
+        let ms = |ms: Option<u64>| ms.map(|ms| i64::try_from(ms).unwrap_or(i64::MAX));
+        let row = store_postgres::ConfigWakeRow {
+            delivery: &beat.delivery,
+            samples: i32::try_from(beat.samples).unwrap_or(i32::MAX),
+            p95_ms: ms(beat.p95_ms),
+            max_ms: ms(beat.max_ms),
+        };
+        let seen_at_ms = seen_at.as_milliseconds_since_epoch();
+        PostgresConfigTrees::record_config_wake_beat(self, tenant, store, seen_at_ms, row)
+            .await
+            .map_err(|error| ConfigStoreError::new(error.to_string()))
     }
 
     async fn record_store_heartbeat(

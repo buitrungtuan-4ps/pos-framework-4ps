@@ -141,6 +141,84 @@ pub struct FleetRow {
     /// trail holds the address as it stood, and this row is read by anyone who can open the fleet
     /// console.
     pub retired_by: Option<String>,
+    /// What the store's heartbeat last said about its package, and when
+    /// ([ADR-0189](../../../docs/adr/0189-a-store-runs-a-package-version-hq-pins.md) decision 6), or
+    /// `None` if no heartbeat ever has: an older edge.
+    pub package: Option<ReportedPackage>,
+    /// What the store's heartbeat last said about config delivery, and when
+    /// ([ADR-0195](../../../docs/adr/0195-the-cloud-wakes-a-store-to-pull-its-config.md)), or `None`
+    /// if no heartbeat ever has: an older edge.
+    pub config_wake: Option<ReportedConfigWake>,
+}
+
+/// A store's config delivery as its heartbeat reported it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportedConfigWake {
+    /// Wake or poll, and the wake-to-apply times.
+    pub beat: crate::config_tree::ConfigWakeBeat,
+    /// When the heartbeat said so.
+    pub reported_at: Timestamp,
+}
+
+impl ReportedConfigWake {
+    /// The report as the liveness row stores it (migration 0091), or `None` when no heartbeat
+    /// reported one or its instant cannot be read.
+    #[must_use]
+    pub fn from_row(row: &store_postgres::FleetStoreRow) -> Option<Self> {
+        let reported_at =
+            Timestamp::from_milliseconds_since_epoch(row.config_wake_reported_at_ms?).ok()?;
+        let non_negative = |ms: Option<i64>| ms.and_then(|ms| u64::try_from(ms).ok());
+        Some(Self {
+            beat: crate::config_tree::ConfigWakeBeat {
+                delivery: row.config_delivery.clone()?,
+                samples: row
+                    .config_wake_samples
+                    .and_then(|n| u32::try_from(n).ok())
+                    .unwrap_or(0),
+                p95_ms: non_negative(row.config_wake_p95_ms),
+                max_ms: non_negative(row.config_wake_max_ms),
+            },
+            reported_at,
+        })
+    }
+}
+
+/// A store's package as its heartbeat reported it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportedPackage {
+    /// The version it runs and the configuration it last refused.
+    pub beat: crate::config_tree::PackageBeat,
+    /// When the heartbeat said so.
+    pub reported_at: Timestamp,
+}
+
+impl ReportedPackage {
+    /// The package as the liveness row stores it (migration 0090), or `None` when no heartbeat
+    /// reported one or its instant cannot be read. It borrows the row, so the fleet mapping reads
+    /// it before moving the row's other fields out.
+    #[must_use]
+    pub fn from_row(row: &store_postgres::FleetStoreRow) -> Option<Self> {
+        let reported_at =
+            Timestamp::from_milliseconds_since_epoch(row.package_reported_at_ms?).ok()?;
+        let refused = row
+            .package_refused_config_version_id
+            .clone()
+            .zip(row.package_refusal_reason.clone())
+            .map(
+                |(config_version_id, reason)| crate::config_tree::RefusedBeat {
+                    config_version_id,
+                    package_version_id: row.package_refused_version_id.clone(),
+                    reason,
+                },
+            );
+        Some(Self {
+            beat: crate::config_tree::PackageBeat {
+                package_version_id: row.package_version_id.clone(),
+                refused,
+            },
+            reported_at,
+        })
+    }
 }
 
 /// Reads the fleet read model, per tenant.
@@ -191,6 +269,26 @@ pub trait OtaReportStore {
         self_test_passed: Option<bool>,
         reported_at: Timestamp,
     ) -> impl Future<Output = Result<(), FleetStoreError>> + Send;
+}
+
+/// The release each store last reported, read from the fleet read model: what the settings publish
+/// asks before it compiles a package version into a store's document
+/// ([ADR-0189](../../../docs/adr/0189-a-store-runs-a-package-version-hq-pins.md) decision 5).
+#[derive(Clone, Debug)]
+pub struct FleetReleases<F>(pub F);
+
+impl<F: FleetStore + Sync> pos_cloud_config::package_pin::StoreReleases for FleetReleases<F> {
+    async fn installed_release(
+        &self,
+        tenant_id: TenantId,
+        store_id: StoreId,
+    ) -> Result<Option<String>, String> {
+        self.0
+            .store_detail(tenant_id, store_id)
+            .await
+            .map(|row| row.and_then(|row| row.installed_version))
+            .map_err(|error| error.to_string())
+    }
 }
 
 /// A failure of the fleet read model itself — one of the joined tables could not be read, a stored

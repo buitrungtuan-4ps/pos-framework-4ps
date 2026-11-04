@@ -204,6 +204,7 @@ fn an_envelope_round_trips_through_json() {
         channel: Open::from_known(SalesChannel::DineIn),
         table_id: Some(TableId::new(Ulid::from_parts(1, 12))),
         guest_count: Some(4),
+        package_version_id: None,
     };
     let envelope = sample_envelope(EventType::SalesOrderOpened, payload.clone());
     let json = serde_json::to_string(&envelope).expect("serialise");
@@ -969,4 +970,23 @@ fn an_opening_names_the_shift_it_took_over_only_at_a_handover() {
         handed_over
     );
     assert_eq!(check_field_name("handed_over_from_shift_id"), Ok(()));
+}
+
+/// An order opened before `package_version_id` existed replays as one opened under the default
+/// package, and an order with no version is written byte for byte as before (ADR-0192 decision 5).
+#[test]
+fn an_order_records_the_package_version_it_opened_under() {
+    let before = r#"{"order_id":"01J00000000000000000000001","channel":"SALES_CHANNEL_DINE_IN","table_id":null,"guest_count":2}"#;
+    let opened: SalesOrderOpened = serde_json::from_str(before).expect("an old order replays");
+    assert_eq!(opened.package_version_id, None);
+    assert_eq!(serde_json::to_string(&opened).expect("serialise"), before);
+
+    let pinned = SalesOrderOpened {
+        package_version_id: Some(crate::ids::PackageVersionId::new(Ulid::from_parts(1, 7))),
+        ..opened
+    };
+    let json = serde_json::to_string(&pinned).expect("serialise");
+    assert!(json.contains(r#""package_version_id":"#), "{json}");
+    let back: SalesOrderOpened = serde_json::from_str(&json).expect("deserialise");
+    assert_eq!(back, pinned);
 }

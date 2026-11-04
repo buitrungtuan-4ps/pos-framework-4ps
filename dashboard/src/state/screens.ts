@@ -274,6 +274,18 @@ export const SCREENS = {
   // `layers` rather than a glyph of its own: a value resolved through layers (the store, its groups,
   // its brand, every store) is what the screen is about, and the vendored set is transcribed, not
   // drawn (`components/icons.tsx`) — two screens already share a glyph where one fits both.
+  // Packages (ADR-0189): the tenant's packages and the pin that says which version every store
+  // runs. Owner/admin only, matching the server's console.config.publish — a pin republishes every
+  // store.
+  packages: {
+    path: "/packages",
+    key: "nav.packages",
+    scope: "tenant",
+    roles: ADMIN_MANAGERS,
+    tenantScoped: true,
+    inPalette: true,
+    icon: "package",
+  },
   settings: {
     path: "/settings",
     key: "nav.settings",
@@ -454,6 +466,10 @@ export const NAV_GROUPS: readonly {
     key: "nav.group.settings",
     items: ["config", "storeGroups", "releases", "settings", "storeSettings", "translations"],
   },
+  // What the tills run: the package versions HQ publishes and pins (ADR-0189). Its own group
+  // because the settings group is full and a package is not a setting: it is the product a store
+  // runs, and its screens and flows (ADR-0190, ADR-0192) join it here.
+  { key: "nav.group.packages", items: ["packages"] },
   // Who and what may reach this console, or be reached from it: console users, machine keys, the
   // endpoints it calls out to, and the vendors it connects to. All four answer "who is allowed in,
   // or out". Integrations moved here from Settings when Shared settings filled that group's sixth

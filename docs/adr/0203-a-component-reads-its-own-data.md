@@ -1,12 +1,14 @@
 # ADR-0203 — A component reads its own data, and a package gives it only literals
 
-**Status** Proposed · **Owner** @maintainers-architecture · **Date** 2026-11-03
+**Status** Accepted · **Owner** @maintainers-architecture · **Date** 2026-11-03
 · Amends [ADR-0190](0190-a-screen-is-drawn-from-the-package.md) decisions 1 and 2
 · Relates to [ADR-0191](0191-every-act-is-in-a-typed-catalogue.md),
 [ADR-0193](0193-conditions-and-reactions-are-written-in-cel.md),
 [ADR-0197](0197-every-tap-paints-within-ten-milliseconds.md)
 
-Proposed: it waits on the owner's choice among the three options below.
+Accepted by the owner on 2026-11-04, who asked for the freest model that still keeps ADR-0197's
+budget and chose to reach it in two steps: this record now, and compiled bindings in phase 4
+(decision 5).
 
 ## Context
 
@@ -47,9 +49,22 @@ used generic `$path` bindings into a scope the host screen supplied, with `each`
    supplied by the component nor fixed in the package.
 4. **Validation is complete at publish.** Every property is checked against its kind, so a version
    that publishes cannot fail to draw for a reason the cloud could have seen.
-5. **Bindings may come later, additively.** If a business-type template (phase 6) needs data a
-   component cannot read, options 2 or 3 may be added as a new property kind, under their own ADR.
-   Every package written under this record stays valid.
+5. **Step two: compiled bindings in phase 4.** With the console designers, option 2 is added as a
+   new property kind under its own ADR, so HQ can wire data into a component without a release.
+   It keeps the budget by these rules, which that ADR states in full:
+   - **Typed scope.** Each screen declares the schema of the data it offers. A path that does not
+     resolve, or whose type does not match the property, is refused at publish.
+   - **Compiled at publish.** The cloud compiles every path into a direct accessor. The till runs
+     the compiled form and never parses a path while serving.
+   - **Bounded repetition.** Every `each` declares a maximum and draws only the rows on view.
+   - **Fine-grained updates.** A binding re-renders only when the data on its path changes. A
+     `when` guard is re-evaluated on a change to what it reads, never on every frame.
+   - **A cost budget at publish.** The cloud computes each screen's cost (nodes, bindings, bounds)
+     and refuses a version that exceeds ADR-0197's budget, naming the screen and the part over.
+   - **Measured in the field.** Till telemetry reports p95 per screen and per package version.
+
+   This record's components stay valid beside bindings, and every package written under it keeps
+   drawing unchanged.
 
 ## Consequences accepted
 
@@ -58,5 +73,8 @@ used generic `$path` bindings into a scope the host screen supplied, with `each`
 - **The paint cost is bounded per component**, which keeps ADR-0197's budget checkable.
 - **Today's screens can be expressed as the default package** with this catalogue, which is
   phase 2's exit criterion.
-- **HQ customises layout, labels, choices and acts, not data plumbing**, until a later record adds
-  bindings.
+- **HQ customises layout, labels, choices and acts, not data plumbing**, until phase 4's record
+  adds compiled bindings.
+- **Step two costs more than this record.** It needs a per-screen schema, a path compiler, bounded
+  lists and a publish-time cost model, built with the phase-4 designers so HQ picks data rather than
+  typing paths.

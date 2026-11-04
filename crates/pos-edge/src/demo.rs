@@ -57,6 +57,22 @@ pub const DEMO_STAFF_CODE: &str = "A01";
 /// The PIN that goes with [`DEMO_STAFF_CODE`].
 pub const DEMO_STAFF_PIN: &str = "1234";
 
+/// The manager the `approvals` profile adds ([`approvals`]): a second badge, holding every permission
+/// directly, whose code and PIN approve what the demo employee holds only with approval.
+pub const DEMO_MANAGER_CODE: &str = "M01";
+
+/// The PIN that goes with [`DEMO_MANAGER_CODE`].
+pub const DEMO_MANAGER_PIN: &str = "5678";
+
+/// What the demo employee holds only with a manager's approval on the `approvals` profile: voiding a
+/// bill, paid or not, and taking money off one (ADR-0158 decision 4).
+const WITH_APPROVAL: [&str; 4] = [
+    "billing.bill.void",
+    "billing.bill.void_settled",
+    "billing.discount.apply",
+    "billing.fee.waive",
+];
+
 /// The demo store's employee id — the identity every sale in the example is attributed to.
 fn demo_employee() -> EmployeeId {
     EmployeeId::new(Ulid::from_u128(2))
@@ -192,6 +208,60 @@ fn tills() -> bool {
 /// every store kept before, and asks no reason.
 fn drawers() -> bool {
     std::env::var("POS_DEMO_PROFILE").is_ok_and(|profile| profile.eq_ignore_ascii_case("drawers"))
+}
+
+/// Whether this demo store decides with each person's own permissions and asks a manager for voids
+/// and reductions — `POS_DEMO_PROFILE=approvals`.
+///
+/// That profile publishes the `permissions` node with `enforced` on: the demo employee holds the
+/// acts in [`WITH_APPROVAL`] only with approval, and a manager ([`DEMO_MANAGER_CODE`]) holds
+/// everything. It exists so the browser gate can replay `APPROVAL_REQUIRED` at the till and at the
+/// edge (ADR-0196 safeguard 2); `examples/minimal-edge` prints the manager's badge on it.
+#[must_use]
+pub fn approvals() -> bool {
+    std::env::var("POS_DEMO_PROFILE").is_ok_and(|profile| profile.eq_ignore_ascii_case("approvals"))
+}
+
+/// The `permissions` node: one employee holding every permission, or, where `approvals`, an employee
+/// who holds [`WITH_APPROVAL`] only with approval and a manager who approves them.
+fn demo_permissions(approvals: bool) -> Option<serde_json::Value> {
+    let all: Vec<&str> = Permission::ALL
+        .iter()
+        .map(|permission| permission.meta().id)
+        .collect();
+    if !approvals {
+        return Some(serde_json::json!({
+            "staff": [{
+                "id": demo_employee().to_string(),
+                "code": DEMO_STAFF_CODE,
+                "permissions": all,
+                "pin_phc": crate::auth::hash_pin(DEMO_STAFF_PIN)?,
+            }],
+        }));
+    }
+    let direct: Vec<&str> = all
+        .iter()
+        .copied()
+        .filter(|id| !WITH_APPROVAL.contains(id))
+        .collect();
+    Some(serde_json::json!({
+        "enforced": true,
+        "staff": [
+            {
+                "id": demo_employee().to_string(),
+                "code": DEMO_STAFF_CODE,
+                "permissions": direct,
+                "permissions_with_approval": WITH_APPROVAL,
+                "pin_phc": crate::auth::hash_pin(DEMO_STAFF_PIN)?,
+            },
+            {
+                "id": EmployeeId::new(Ulid::from_u128(3)).to_string(),
+                "code": DEMO_MANAGER_CODE,
+                "permissions": all,
+                "pin_phc": crate::auth::hash_pin(DEMO_MANAGER_PIN)?,
+            },
+        ],
+    }))
 }
 
 /// Whether this demo store has anybody to sign in: `POS_DEMO_PROFILE=unstaffed` says it has not.
@@ -385,19 +455,8 @@ fn demo_catalog(salad: i64) -> MenuCatalog {
 /// that drifts.
 #[must_use]
 pub fn config_document() -> Option<serde_json::Value> {
-    let permissions: Vec<&str> = Permission::ALL
-        .iter()
-        .map(|permission| permission.meta().id)
-        .collect();
     let mut document = serde_json::json!({
-        "permissions": {
-            "staff": [{
-                "id": demo_employee().to_string(),
-                "code": DEMO_STAFF_CODE,
-                "permissions": permissions,
-                "pin_phc": crate::auth::hash_pin(DEMO_STAFF_PIN)?,
-            }],
-        },
+        "permissions": demo_permissions(approvals())?,
         "menu": serde_json::to_value(demo_menu(walk_in_profile().is_some())).ok()?,
         "floor": demo_floor(),
         // Table service, unless the profile says otherwise. On by default (§10), so the flag is
@@ -666,8 +725,9 @@ mod tests {
     use pos_proto::ulid::Ulid;
 
     use super::{
-        DEMO_BAR_FLOAT, DEMO_STAFF_CODE, DEMO_STAFF_PIN, config_document, demo_counter,
-        demo_drawers, demo_menu, demo_stations, demo_tender_keys, demo_tills,
+        DEMO_BAR_FLOAT, DEMO_MANAGER_CODE, DEMO_MANAGER_PIN, DEMO_STAFF_CODE, DEMO_STAFF_PIN,
+        WITH_APPROVAL, config_document, demo_counter, demo_drawers, demo_menu, demo_permissions,
+        demo_stations, demo_tender_keys, demo_tills,
     };
     use crate::app::EdgeSession;
     use crate::config_client::session_from_config;
@@ -677,6 +737,46 @@ mod tests {
     /// means rather than a ULID nobody can read.
     fn menu_item(id: u128) -> MenuItemId {
         MenuItemId::new(Ulid::from_u128(id))
+    }
+
+    /// The `approvals` profile enforces each person's own set: the employee holds the voids and the
+    /// reductions only with approval, and the manager's badge signs in and holds them directly.
+    #[test]
+    fn the_approvals_profile_asks_a_manager_for_voids_and_reductions() {
+        let mut document = config_document().expect("the fixture hashes its PIN");
+        document["permissions"] = demo_permissions(true).expect("the fixture hashes its PINs");
+        assert_eq!(document["permissions"]["enforced"], true);
+        let employee = &document["permissions"]["staff"][0];
+        for id in WITH_APPROVAL {
+            assert!(
+                !employee["permissions"]
+                    .as_array()
+                    .expect("a list")
+                    .iter()
+                    .any(|held| held == id),
+                "{id} is not held directly"
+            );
+        }
+        assert_eq!(
+            employee["permissions_with_approval"]
+                .as_array()
+                .map(Vec::len),
+            Some(4)
+        );
+        let session = session_from_config(&EdgeSession::bootstrap(), &document);
+        assert!(
+            session
+                .staff
+                .authorise(DEMO_MANAGER_CODE, DEMO_MANAGER_PIN)
+                .is_some(),
+            "the manager's badge signs in"
+        );
+        assert!(
+            session
+                .staff
+                .authorise(DEMO_STAFF_CODE, DEMO_STAFF_PIN)
+                .is_some()
+        );
     }
 
     /// The fixture is only worth anything if it goes through the published-config seam and comes out

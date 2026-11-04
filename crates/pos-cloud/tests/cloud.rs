@@ -90,6 +90,10 @@ mod ota_releases;
 mod ota_report;
 #[path = "cloud/ota_rollout.rs"]
 mod ota_rollout;
+#[path = "cloud/package_compile.rs"]
+mod package_compile;
+#[path = "cloud/package_pin.rs"]
+mod package_pin;
 #[path = "cloud/packages.rs"]
 mod packages;
 #[path = "cloud/people.rs"]
@@ -1028,6 +1032,9 @@ struct FakeConfigTrees {
     /// replaces the entry rather than leaving it — a manager releasing the last terminal must not
     /// leave a stale agent on the console.
     print_agents: Arc<Mutex<RecordedAgents>>,
+    /// The package a heartbeat last reported (migration 0090, ADR-0189).
+    packages: Arc<Mutex<HashMap<(TenantId, StoreId), pos_cloud::config_tree::PackageBeat>>>,
+    config_wakes: Arc<Mutex<HashMap<(TenantId, StoreId), pos_cloud::config_tree::ConfigWakeBeat>>>,
     /// A store's recorded answer to its region difference, mirroring
     /// `store_region_acknowledgement` ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
     /// One row per store and overwritten, exactly as the table is.
@@ -1422,6 +1429,26 @@ impl ConfigTreeStore for FakeConfigTrees {
             (held_version, seen_at.as_milliseconds_since_epoch()),
         );
         Ok(())
+    }
+
+    async fn record_package_beat(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        _seen_at: Timestamp,
+        beat: &pos_cloud::config_tree::PackageBeat,
+    ) -> Result<(), ConfigStoreError> {
+        sync::record_beat(&self.packages, (tenant, store), beat)
+    }
+
+    async fn record_config_wake_beat(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        _seen_at: Timestamp,
+        beat: &pos_cloud::config_tree::ConfigWakeBeat,
+    ) -> Result<(), ConfigStoreError> {
+        sync::record_beat(&self.config_wakes, (tenant, store), beat)
     }
 
     async fn record_store_heartbeat(
@@ -2675,6 +2702,7 @@ async fn an_internal_route_with_no_secret_configured_refuses_rather_than_admits(
         FakeOtaReports::default(),
         clock(),
         FakeKeys::default(),
+        None,
         None,
     );
     let response = router
@@ -5614,6 +5642,8 @@ fn store_in_handover(
         retired_by: retired_at.map(|_| "01ADMINADMINADMINADMINADMI".to_owned()),
         print_agents: None,
         print_agents_reported_at: None,
+        package: None,
+        config_wake: None,
     }
 }
 
@@ -7301,6 +7331,7 @@ fn ota_report_app(reports: FakeOtaReports) -> axum::Router {
         clock(),
         FakeKeys::default(),
         Some(internal_secret()),
+        None,
     ))
 }
 
@@ -7320,6 +7351,7 @@ fn store_report_app(reports: FakeOtaReports) -> (axum::Router, FakeKeys) {
         clock(),
         keys.clone(),
         Some(internal_secret()),
+        None,
     ));
     (router, keys)
 }
@@ -11458,6 +11490,19 @@ fn settings_app() -> (axum::Router, FakeConfigTrees, FakeStoreGroups) {
 fn settings_app_with(
     audit: Arc<dyn AuditRecorder>,
 ) -> (axum::Router, FakeConfigTrees, FakeStoreGroups) {
+    settings_app_with_packages(
+        audit,
+        pos_cloud_config::packages::InMemoryPackages::new(),
+        pos_cloud_config::package_pin::InMemoryReleases::new(),
+    )
+}
+
+/// [`settings_app_with`], with the package versions the `package` settings may name (ADR-0189).
+fn settings_app_with_packages(
+    audit: Arc<dyn AuditRecorder>,
+    packages: pos_cloud_config::packages::InMemoryPackages,
+    releases: pos_cloud_config::package_pin::InMemoryReleases,
+) -> (axum::Router, FakeConfigTrees, FakeStoreGroups) {
     let admin = provisioned_admin();
     let config_trees = FakeConfigTrees::default();
     let registry = FakeRegistry::default();
@@ -11514,16 +11559,41 @@ fn settings_app_with(
         config_trees.clone(),
         FakeWebhooks::default(),
     );
+    let settings = pos_cloud_config::package_pin::WithPackages::new(
+        FakeSettings::default(),
+        packages,
+        releases,
+    );
+    // The package catch-up over the very same fakes, handed to the OTA report route below
+    // (ADR-0189 decision 5); its worker runs on the test's runtime.
+    let (catch_up, worker) = http::package_catch_up(
+        &pos_cloud::countries::registry(),
+        settings.clone(),
+        registry.clone(),
+        groups.clone(),
+        config_trees.clone(),
+        admin.clone(),
+        clock(),
+        Arc::clone(&audit),
+    );
+    tokio::spawn(worker);
     let router = http::router(app)
         .merge(http::settings_router(
             &pos_cloud::countries::registry(),
-            FakeSettings::default(),
+            settings,
             registry,
             groups.clone(),
             config_trees.clone(),
             admin.clone(),
             clock(),
             audit,
+        ))
+        .merge(http::ota_report_router(
+            FakeOtaReports::default(),
+            clock(),
+            FakeKeys::default(),
+            Some(internal_secret()),
+            Some(catch_up),
         ))
         // The tender publish, whose node the tip keys share (ADR-0160).
         .merge(http::config_channels_router(

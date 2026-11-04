@@ -3,13 +3,12 @@
 // store counts so, else typed as one amount; then one tap records it, on a reason from the store's
 // list for a drop (ADR-0186 amendment) or on the plain button, since a reason is not required.
 
-import { For, Show, createSignal } from "solid-js";
+import { For, Show, createSignal, on, createEffect } from "solid-js";
 
-import type { DrawerOutcome } from "../api/schemas";
+import type { CountBreakdown } from "../api/schemas";
 import { t } from "../i18n";
-import { money, type Money } from "../lib/money";
+import { money } from "../lib/money";
 import { EMPTY_COUNT, fieldAmount } from "../state/cash-count";
-import { recordSafeDrop } from "../state/safe-drop";
 import { formatAmount, reasonsFor, storeCurrency } from "../state/store";
 import { CountField } from "./CountField";
 
@@ -17,13 +16,12 @@ import { CountField } from "./CountField";
 const CASH_DROPPED = "REASON_ACTION_CASH_DROPPED";
 
 export function SafeDrop(props: {
-  shiftId: string;
-  /** The act on the drawer awaiting its answer, if any: every act waits for it. */
-  busy: string | null;
-  /** Runs the drop as the screen's act on its drawer, one at a time. */
-  run: (key: string, act: () => Promise<unknown>) => Promise<void>;
-  /** Told what was dropped and what the drawer did. */
-  onDropped: (amount: Money, outcome: DrawerOutcome | undefined) => void;
+  /** Whether an act on the drawer awaits its answer: every act waits for it. */
+  busy: boolean;
+  /** How many drops the edge has committed: the pile closes when one more is. */
+  dropped: number;
+  /** Sends the drop as the screen's money act (`../state/cash-acts`). */
+  onDrop: (minor: number, breakdown: CountBreakdown | undefined, reasonCodeId?: string) => void;
 }) {
   const [open, setOpen] = createSignal(false);
   const [text, setText] = createSignal("");
@@ -37,17 +35,14 @@ export function SafeDrop(props: {
     setText("");
     setCount(EMPTY_COUNT);
   };
-  // Keyed by the reason tapped, or `drop` for none, so the button tapped is the one that says so.
+  // Kept open while the drop is out, so a refusal leaves the pile as it was typed; closed once the
+  // edge commits it.
+  createEffect(on(() => props.dropped, close, { defer: true }));
   const drop = (reasonCodeId?: string) => {
     const value = dropped();
-    if (value === null) {
-      return;
+    if (value !== null) {
+      props.onDrop(value.minor, value.breakdown, reasonCodeId);
     }
-    void props.run(reasonCodeId ?? "drop", async () => {
-      const outcome = await recordSafeDrop(props.shiftId, value.minor, value.breakdown, reasonCodeId);
-      close();
-      props.onDropped(money(storeCurrency(), value.minor), outcome);
-    });
   };
   const button = "min-h-touch rounded-token border border-line bg-surface font-semibold disabled:opacity-50";
 
@@ -78,11 +73,11 @@ export function SafeDrop(props: {
                 <button
                   type="button"
                   class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
-                  disabled={dropped() === null || props.busy !== null}
+                  disabled={dropped() === null || props.busy}
                   data-step="dropReason"
                   onClick={() => drop(reason.reason_code_id)}
                 >
-                  {props.busy === reason.reason_code_id ? t("common.sending") : reason.display_name}
+                  {reason.display_name}
                 </button>
               )}
             </For>
@@ -92,17 +87,15 @@ export function SafeDrop(props: {
           <button
             type="button"
             class={`${button} border-primary`}
-            disabled={dropped() === null || props.busy !== null}
+            disabled={dropped() === null || props.busy}
             data-step="dropToSafe"
             onClick={() => drop()}
           >
-            {props.busy === "drop"
-              ? t("common.sending")
-              : t("shift.drop_confirm", {
-                  amount: formatAmount(money(storeCurrency(), dropped()?.minor ?? 0)),
-                })}
+            {t("shift.drop_confirm", {
+              amount: formatAmount(money(storeCurrency(), dropped()?.minor ?? 0)),
+            })}
           </button>
-          <button type="button" class={button} disabled={props.busy !== null} onClick={close}>
+          <button type="button" class={button} disabled={props.busy} onClick={close}>
             {t("common.cancel")}
           </button>
         </div>

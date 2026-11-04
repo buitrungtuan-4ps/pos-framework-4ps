@@ -52,7 +52,7 @@ async function freePort() {
 export async function startEdge(profile) {
   if (!existsSync(BINARY)) {
     throw new Error(
-      `${BINARY} is not built — run \`cargo build -p minimal-edge\` first (it embeds ui/dist, so build the UI before it), or set POS_EDGE_BIN`,
+      `${BINARY} is not built — run \`just build-replay-edge\` first (it embeds ui/dist, so build the UI before it), or set POS_EDGE_BIN`,
     );
   }
   const port = await freePort();
@@ -94,14 +94,18 @@ export async function startEdge(profile) {
   for (;;) {
     const pairing = /pairing_url=\S*code=(\d{6})/.exec(output);
     const staff = /sign in with code (\S+) and PIN (\S+)/.exec(output);
+    // The `approvals` store's manager, whose badge approves what the employee holds with approval.
+    const manager = /approve with code (\S+) and PIN (\S+)/.exec(output);
     // The unstaffed store prints no badge, because it has none to print.
     const unstaffed = /publishes no staff/.test(output);
-    if (pairing !== null && (staff !== null || unstaffed)) {
+    if (pairing !== null && (staff !== null || unstaffed) && (profile !== "approvals" || manager !== null)) {
       return {
         baseURL,
         pairingCode: pairing[1],
         staffCode: staff?.[1],
         staffPin: staff?.[2],
+        managerCode: manager?.[1],
+        managerPin: manager?.[2],
         stop,
       };
     }

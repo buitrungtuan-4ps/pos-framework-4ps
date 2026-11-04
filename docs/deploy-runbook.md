@@ -285,6 +285,28 @@ The `tls://` scheme is what makes the client require TLS — `nats://` would con
 the broker would reject it. The token belongs in the userinfo exactly as shown; `link-nats` lifts it
 into the connect options, because the client library reads credentials only from there.
 
+The same connection carries the **config wake**
+([ADR-0195](adr/0195-the-cloud-wakes-a-store-to-pull-its-config.md)): the store listens on
+`pos.store.<store_id>.config` and pulls its configuration as soon as a publish changes it, and again
+each time it reconnects, instead of waiting up to 30 seconds for the poll. The log says `config wake
+enabled over NATS` at start, and each wake-driven apply logs `wake_to_apply_ms`. A store without
+`POS_EDGE_NATS_URL` keeps the 30-second poll alone, and so does any store while the broker is down.
+Each heartbeat reports which it is, as `config_wake`, with the 95th-percentile and longest
+wake-to-apply time over the store's latest 128 wakes; the console's fleet view shows both, so a store
+on the poll alone, or one slow to apply, stands out (migration 0091).
+
+The cloud sends the wakes on its own `[nats]` connection (the ingest cursor's, not a second one): every
+saved store configuration queues one wake for its store, and a cloud with no `[nats]` sends none. The
+console's task health shows a `config_wake` task with `sent_total`, `dropped_total` (the queue of 1024
+was full) and `failed_total` (the broker refused); a tick that dropped or failed a wake reads not ok.
+A lost wake costs that store nothing but the wait for its next poll.
+
+The cloud sends the wakes on its own `[nats]` connection (the ingest cursor's, not a second one): every
+saved store configuration queues one wake for its store, and a cloud with no `[nats]` sends none. The
+console's task health shows a `config_wake` task with `sent_total`, `dropped_total` (the queue of 1024
+was full) and `failed_total` (the broker refused); a tick that dropped or failed a wake reads not ok.
+A lost wake costs that store nothing but the wait for its next poll.
+
 Recover the token with `sudo sed -n 's/  token: //p' deploy/secrets/nats.conf`. It is **not**
 rotated by a redeploy: `bootstrap.sh` rewrites `nats.conf` on every run but carries the existing
 token across, and refuses the run outright if it cannot read it — a rotated token would silently

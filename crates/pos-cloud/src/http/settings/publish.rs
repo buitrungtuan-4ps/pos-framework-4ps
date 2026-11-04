@@ -23,6 +23,11 @@ use crate::registry::RegistryStore;
 use crate::settings::SettingsStore;
 use crate::store_groups::StoreGroupStore;
 use pos_cloud_api::response::StoresPublished;
+use pos_cloud_config::package_pin::{
+    ContentChange, Pin, SettingsPackages, StoreReleases as _, WaitReason, compile, pinned_version,
+    with_content,
+};
+use pos_cloud_config::packages::PackageStore as _;
 // Moved to pos-cloud-config; imported here, so the settings routes keep reaching it.
 pub(in crate::http) use pos_cloud_config::route::TenantLayout;
 
@@ -61,7 +66,7 @@ pub(super) async fn admin_publish_settings<St, Rg, Grp, Cfg, A, C>(
     Json(request): Json<SettingsStoreRequest>,
 ) -> Response
 where
-    St: SettingsStore + Clone + Send + Sync + 'static,
+    St: SettingsStore + SettingsPackages + Clone + Send + Sync + 'static,
     Rg: RegistryStore + Clone + Send + Sync + 'static,
     Grp: StoreGroupStore + Clone + Send + Sync + 'static,
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
@@ -158,7 +163,7 @@ pub(super) async fn publish_settings_to<St, Rg, Grp, Cfg, A, C>(
     stores: &[StoreId],
 ) -> Vec<SettingPublishResult>
 where
-    St: SettingsStore,
+    St: SettingsStore + SettingsPackages,
     Cfg: ConfigTreeStore,
     C: ClockSource,
 {
@@ -241,9 +246,11 @@ async fn publish_settings_to_store<St, Rg, Grp, Cfg, A, C>(
     resolved: &[crate::settings::ResolvedSetting],
 ) -> StorePublish
 where
+    St: SettingsPackages,
     Cfg: ConfigTreeStore,
     C: ClockSource,
 {
+    let change = content_change(&state.settings, tenant_id, store_id, resolved).await;
     let tenant_layer = |tree: Option<&ConfigTreeState>| {
         tree.map_or(serde_json::Value::Null, |tree| {
             tree.layer(ConfigLevel::Tenant).clone()
@@ -257,7 +264,10 @@ where
         };
     };
     let layer = tenant_layer(loaded.state.as_ref());
-    let nodes = crate::settings::tenant_layer_nodes(&layer, resolved);
+    let nodes = with_content(
+        crate::settings::tenant_layer_nodes(&layer, resolved),
+        &change,
+    );
     let switch_without_people = crate::settings::switch_without_people(
         &nodes,
         loaded
@@ -282,9 +292,9 @@ where
         (tenant_id, store_id, ConfigLevel::Tenant),
         ConfirmCheck::SettingsRepublish,
         |tree| {
-            Ok(crate::settings::tenant_layer_nodes(
-                &tenant_layer(tree),
-                resolved,
+            Ok(with_content(
+                crate::settings::tenant_layer_nodes(&tenant_layer(tree), resolved),
+                &change,
             ))
         },
     )
@@ -299,6 +309,37 @@ where
     StorePublish {
         version,
         switch_without_people,
+    }
+}
+
+/// What a publish does with the store's package content: the pinned version's, when the store's
+/// reported release meets it; none, when nothing is pinned; and otherwise what the store runs
+/// (ADR-0189 decisions 3 and 5).
+pub(super) async fn content_change<St: SettingsPackages>(
+    settings: &St,
+    tenant_id: TenantId,
+    store_id: StoreId,
+    resolved: &[crate::settings::ResolvedSetting],
+) -> ContentChange {
+    let pin = pinned_version(resolved);
+    let Pin::Version(version_id) = pin else {
+        return compile(pin, None, None);
+    };
+    let version = settings.packages().get_version(tenant_id, version_id).await;
+    let installed = settings
+        .releases()
+        .installed_release(tenant_id, store_id)
+        .await;
+    match (version, installed) {
+        (Ok(version), Ok(installed)) => compile(pin, version.as_ref(), installed.as_deref()),
+        (Err(error), _) => {
+            tracing::error!(%error, %store_id, "the package store could not be read for a publish");
+            ContentChange::Keep(WaitReason::Unreadable)
+        }
+        (_, Err(error)) => {
+            tracing::error!(%error, %store_id, "a store's release could not be read for a publish");
+            ContentChange::Keep(WaitReason::Unreadable)
+        }
     }
 }
 

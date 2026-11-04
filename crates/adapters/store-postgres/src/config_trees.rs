@@ -22,7 +22,8 @@ use crate::store::{RowUpdate, pool_unavailable, unavailable};
 /// The config-tree store over a shared pool. Built by [`PostgresStore::config_trees`](crate::PostgresStore::config_trees).
 #[derive(Clone, Debug)]
 pub struct PostgresConfigTrees {
-    pool: Pool,
+    pub(crate) pool: Pool,
+    saved: Option<crate::config_saved::ConfigSaved>,
 }
 
 /// What a conditional bump did.
@@ -203,8 +204,15 @@ impl<'a> StoredRegionWrite<'a> {
 }
 
 impl PostgresConfigTrees {
-    pub(crate) fn new(pool: Pool) -> Self {
-        Self { pool }
+    pub(crate) const fn new(pool: Pool, saved: Option<crate::config_saved::ConfigSaved>) -> Self {
+        Self { pool, saved }
+    }
+
+    /// The hook a committed save is told to, if the cloud installed one
+    /// ([`PostgresStore::with_config_saved`](crate::PostgresStore::with_config_saved)).
+    #[must_use]
+    pub const fn saved(&self) -> Option<&crate::config_saved::ConfigSaved> {
+        self.saved.as_ref()
     }
 
     /// Loads a store's tree state as the raw JSON text of a `ConfigTreeState` **and the version the
@@ -704,6 +712,48 @@ impl PostgresConfigTrees {
             .await
             .map_err(unavailable)?;
         Ok(row.map(|row| row.get(0)))
+    }
+
+    /// Records what a heartbeat said about the store's package (migration 0090,
+    /// [ADR-0189](../../../../docs/adr/0189-a-store-runs-a-package-version-hq-pins.md) decision 6):
+    /// the version it runs and the configuration it last refused, all four replaced, so a refusal
+    /// that has cleared is cleared. Keyed like the heartbeat, which has already written the row.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn record_package_beat(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+        seen_at_ms: i64,
+        running: Option<&str>,
+        refused: Option<(&str, Option<&str>, &str)>,
+    ) -> Result<(), PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let (refused_config, refused_version, reason) = refused
+            .map_or((None, None, None), |(config, version, reason)| {
+                (Some(config), version, Some(reason))
+            });
+        connection
+            .execute(
+                "UPDATE store_liveness SET package_version_id = $3, \
+                 package_refused_config_version_id = $4, package_refused_version_id = $5, \
+                 package_refusal_reason = $6, package_reported_at = $7 \
+                 WHERE tenant_id = $1 AND store_id = $2",
+                &[
+                    &tenant.to_string(),
+                    &store_id.to_string(),
+                    &running,
+                    &refused_config,
+                    &refused_version,
+                    &reason,
+                    &seen_at_ms,
+                ],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(())
     }
 
     /// Advances a store's `last_seen_at` from a heartbeat ([ADR-0068](../../../../docs/adr/0068-fleet-liveness.md)),

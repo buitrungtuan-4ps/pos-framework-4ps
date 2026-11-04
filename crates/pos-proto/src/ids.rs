@@ -259,6 +259,28 @@ resource_id! {
     /// one content for good (ADR-0189 decision 1).
     PackageVersionId
 }
+resource_id! {
+    /// A custom field a package declares, on an existing object or in an object type
+    /// ([ADR-0194](../../../docs/adr/0194-custom-data-is-declared-and-personal-fields-are-kept-apart.md)
+    /// decision 1). Stable for good: a field is never renamed or retyped.
+    CustomFieldId
+}
+resource_id! {
+    /// An object type a package declares, such as a reservation (ADR-0194 decision 1).
+    ObjectTypeId
+}
+resource_id! {
+    /// A managed option list a package declares (ADR-0194 decision 1).
+    CustomListId
+}
+resource_id! {
+    /// One entry of a [`CustomListId`]'s list: what a `choice` value carries.
+    ListEntryId
+}
+resource_id! {
+    /// One record of a custom object type, such as one reservation (ADR-0194 decision 3).
+    CustomRecordId
+}
 
 #[cfg(test)]
 mod tests {

@@ -19,6 +19,7 @@
 //!   (ADR-0122), and the batch history.
 //! - [`qr_ordering`]: QR ordering's one switch, which every Store-layer publish aligns, and the
 //!   one-time migration that settled it ([`data_migrations`]).
+//! - [`package_pin`]: the lock and the choice the `package` settings obey (ADR-0189).
 //! - [`packages`]: a tenant's packages and their published versions (ADR-0189).
 //! - [`persistence`]: those stores over PostgreSQL, through `store-postgres`.
 //!
@@ -33,6 +34,7 @@ use pos_cloud_api::version;
 pub mod config_tree;
 pub mod confirmed_values;
 pub mod data_migrations;
+pub mod package_pin;
 pub mod packages;
 pub mod persistence;
 pub mod publish;

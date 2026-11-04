@@ -6,6 +6,11 @@ import { ApproverFields, createApprover } from "../components/ApproverFields";
 import { DISCOUNT, DiscountPanel, useDiscount } from "../components/DiscountPanel";
 import { VOID_BILL, VoidBillPanel, useVoidBill } from "../components/VoidBillPanel";
 import { BillEnded } from "../components/BillEnded";
+import { PendingSettle } from "../components/PendingSettle";
+import { RefusalPanel } from "../components/RefusalPanel";
+import { receiptLine } from "../state/settle-act";
+import { usePayActs } from "../state/pay-acts";
+import { useWaiveAct, waiveRefusal } from "../state/reduction-acts";
 import { DrawerOwner } from "../components/DrawerOwner";
 import { CheckRow } from "../components/ui";
 import { Keypad } from "../components/Keypad";
@@ -34,27 +39,24 @@ import {
   linesForTable,
   loadBillCheck,
   loadCheck,
-  mergeBills,
   openBillFor,
   openBillsFor,
   reasonsFor,
   seatsEnabled,
-  settle,
-  splitBill,
   splitWays,
   tenderAccepted,
   tipPercents,
   tipsEnabled,
-  waiveFee,
   formatAmount,
 } from "../state/store";
 import { errorMessage } from "../lib/errors";
-import { useInFlight } from "../lib/in-flight";
 import { endedElsewhere } from "../state/closing";
 import { openForPay } from "../state/open-for-pay";
 import { useSplitPlan } from "../state/split-plan";
+import { useSplitActs } from "../state/split-acts";
 import { printOutcomeKey } from "../lib/print";
 import { asksApprover, can } from "../state/permissions";
+import { createPrint } from "../state/print-writes";
 
 // The action waiving a fee cites (ADR-0159 decision 5), its own again: a reason for forgiving a
 // service charge is not necessarily one for taking money off the food.
@@ -109,6 +111,7 @@ function distinctAndSpendable(keys: readonly number[]): boolean {
 // budget would fail the build, correctly. So the tip row sits in the flow already visible: a
 // cashier who takes no tip taps nothing extra, and the tip's own taps are declared as their own
 // task in `ui/scripts/step-tasks.mjs`.
+
 /**
  * What the till says about the receipt (ADR-0100). An edge built before C2 sends no
  * `receipt_print`, so the old "Printing receipt…" wording is the fallback — the one case where the
@@ -182,27 +185,18 @@ export function Pay() {
   // (ADR-0164): what came of the last press, or null before the first. The same act as the Today
   // screen's reprint, marked COPY and counted the same way.
   const [copy, setCopy] = createSignal<ReprintResponse | null>(null);
-  const printAgain = async (id: string) => {
-    setError(null);
-    try {
-      setCopy(await api.reprintReceipt(id));
-    } catch (caught) {
-      setError(errorMessage(caught));
-    }
-  };
+  const print = createPrint(setError);
+  const printAgain = (id: string) =>
+    print.run("billing.receipt.reprint", () => api.reprintReceipt(id), setCopy);
   const printPreBill = async () => {
     const id = billId();
     if (id === null) {
       return;
     }
-    setError(null);
     setPreBill(null);
-    try {
-      const printed = await api.printBillCheck(id);
-      setPreBill(printed.prints[0] ?? null);
-    } catch (caught) {
-      setError(errorMessage(caught));
-    }
+    await print.run("billing.check.print", () => api.printBillCheck(id), (printed) =>
+      setPreBill(printed.prints[0] ?? null),
+    );
   };
 
   // What the bill on screen owes, read by its own id. Once a table is split, the table's check is
@@ -379,29 +373,27 @@ export function Pay() {
     };
   };
 
-  // The settle in flight, keyed by the tender tapped, which says so until the edge answers.
-  const paying = useInFlight<string>(setError);
+  // Taking payment and voiding the bill (ADR-0196, ADR-0204, `../state/pay-acts`): refused at once
+  // where the till can tell, pending until the edge answers, never re-sent.
+  const acts = usePayActs({
+    billId,
+    onSettled: (bill, change) => {
+      setGivenChange(change);
+      setDone(bill);
+    },
+    onVoided: () => {
+      voiding.closeVoid();
+      setVoided(true);
+    },
+  });
+  const paying = { busy: acts.busy };
+  onMount(() => {
+    acts.resume();
+    shape.resume();
+  });
   // The bill on screen settled or voided on another till; not asked while this till's own act is out.
   const ended = () => (done() === null && !voided() && paying.busy() === null ? endedElsewhere(params.id, billId()) : null);
-  const pay = (payments: PaymentRequest[]) =>
-    paying.run(payments[payments.length - 1]?.method ?? "", async () => {
-      const id = billId();
-      if (id === null) {
-        return;
-      }
-      const settled = await settle(id, payments, buyer());
-      setGivenChange(
-        payments.reduce(
-          (sum, payment) =>
-            sum +
-            payment.tendered.amount_minor -
-            payment.applied_to_bill.amount_minor -
-            (payment.tip?.amount_minor ?? 0),
-          0,
-        ),
-      );
-      setDone(settled);
-    });
+  const pay = (payments: PaymentRequest[]) => acts.pay(payments, total(), buyer());
 
   // Records one payment. Outside a split, or on a split's last share, that settles the bill with
   // every payment taken; before the last share it keeps this one and clears the pad for the next
@@ -555,21 +547,33 @@ export function Pay() {
     }
     return parts.length > 1 ? parts : null;
   };
-  // One tap: a bill per seat, from the seat each line already carries, and the first on screen.
-  const splitBySeat = async () => {
-    const id = billId();
-    const parts = seatParts();
-    if (id === null || parts === null) {
-      return;
-    }
-    setError(null);
-    try {
-      const [first] = await splitBill(id, parts);
+  // Splitting and putting back as money acts (`../state/split-acts`): the first part goes on screen
+  // once the edge commits the split, and the bill is read again once it commits the merge.
+  const shape = useSplitActs({
+    billId,
+    tableId: () => params.id,
+    onSplit: ([first]) => {
+      setPicking(false);
       if (first !== undefined) {
         switchTo(first);
       }
-    } catch (caught) {
-      setError(errorMessage(caught));
+    },
+    onMerged: () => {
+      setTender(null);
+      setTyping(false);
+      setTypedText("");
+      const id = billId();
+      if (id !== null) {
+        void showBill(id);
+      }
+    },
+  });
+  // One tap: a bill per seat, from the seat each line already carries, and the first on screen.
+  const splitBySeat = () => {
+    const parts = seatParts();
+    if (parts !== null) {
+      setError(null);
+      shape.split(covered() ?? [], parts);
     }
   };
 
@@ -594,44 +598,21 @@ export function Pay() {
   // Splits the picked lines off into a bill of their own and puts it on screen; the rest stay open
   // on the table as the next bill. A partition of exactly what the bill covers, which is the one
   // shape the edge accepts.
-  const splitOff = async () => {
-    const id = billId();
+  const splitOff = () => {
     const ids = covered();
-    if (id === null || ids === null || !canSplitOff()) {
-      return;
-    }
-    const chosen = ids.filter((lineId) => picked().has(lineId));
-    const rest = ids.filter((lineId) => !picked().has(lineId));
-    setError(null);
-    try {
-      const [first] = await splitBill(id, [chosen, rest]);
-      setPicking(false);
-      if (first !== undefined) {
-        switchTo(first);
-      }
-    } catch (caught) {
-      setError(errorMessage(caught));
+    if (ids !== null && canSplitOff()) {
+      setError(null);
+      shape.split(ids, [ids.filter((lineId) => picked().has(lineId)), ids.filter((lineId) => !picked().has(lineId))]);
     }
   };
 
   // The table's other open bills, which putting the bill back together folds into this one.
   const otherParts = () => openBillsFor(params.id).filter((id) => id !== billId());
   // Undoing a split is a merge into the bill on screen, never an edit (ADR-0128 decision 10).
-  const putBack = async () => {
-    const id = billId();
-    const others = otherParts();
-    if (id === null || others.length === 0) {
-      return;
-    }
-    setError(null);
-    try {
-      await mergeBills(id, others);
-      setTender(null);
-      setTyping(false);
-      setTypedText("");
-      await showBill(id);
-    } catch (caught) {
-      setError(errorMessage(caught));
+  const putBack = () => {
+    if (otherParts().length > 0) {
+      setError(null);
+      shape.merge(otherParts());
     }
   };
 
@@ -643,10 +624,9 @@ export function Pay() {
     billId,
     approver,
     report: setError,
-    run: (act) => paying.run("void", act),
-    onVoided: () => setVoided(true),
+    voidWith: acts.voidBill,
   });
-  const discount = useDiscount({ billId, currency, approver, report: setError, onApplied: setCheck });
+  const discount = useDiscount({ billId, currency, approver, report: setError, onApplied: setCheck, due: () => (check() === null ? null : total()) });
 
   // Waiving a fee (ADR-0159 decision 5): offered on a fee whose rule allows it, on a bill nothing
   // has been taken against yet, to a person who may waive and where the store publishes a reason to
@@ -676,22 +656,19 @@ export function Pay() {
     setWaiving(fee);
   };
 
-  // The second tap: waive it, citing this reason. The edge answers with the whole bill as it now
-  // stands and the screen takes that figure, because the fee's tax leaves with it.
+  // The second tap: waive it, citing this reason, as a money act (`../state/reduction-acts`). The
+  // edge answers with the whole bill as it now stands and the screen takes that figure.
+  let waivingName = "";
+  const waiveAct = useWaiveAct((totals) => (setCheck(totals), setWaivedFee(waivingName), closeWaive()));
   const waiveFeeReason = (reasonCodeId: string) => {
     const id = billId();
     const fee = waiving();
-    if (id === null || fee === null) {
-      return;
+    const approval = waiveAsks() ? approver.approval() : undefined;
+    if (id !== null && fee !== null) {
+      setError(null);
+      waivingName = fee.display_name;
+      waiveAct.send(id, fee.fee_id, reasonCodeId, approval, () => waiveRefusal({ waivable: fee.waivable, asks: waiveAsks(), approval }));
     }
-    setError(null);
-    void waiveFee(id, fee.fee_id, reasonCodeId, waiveAsks() ? approver.approval() : undefined)
-      .then((totals) => {
-        setCheck(totals);
-        setWaivedFee(fee.display_name);
-        closeWaive();
-      })
-      .catch((caught: unknown) => setError(errorMessage(caught)));
   };
 
   // What the screen becomes once the bill is voided: no money was taken, and the order is still
@@ -723,7 +700,7 @@ export function Pay() {
       <Show
         when={done()}
         fallback={
-          <Show when={!voided() && ended() === null} fallback={voided() ? voidedPanel() : <BillEnded how={ended() ?? "settled"} tableId={params.id} />}>
+          <Show when={!voided() && ended() === null && acts.pending() === null} fallback={voided() ? voidedPanel() : acts.pending() !== null ? <PendingSettle phase={acts.pending()?.phase ?? "sending"} act={acts.pending()?.act} amount={formatAmount(money(currency(), total()))} onLeave={() => navigate("/")} /> : <BillEnded how={ended() ?? "settled"} tableId={params.id} />}>
             <p class="mt-4 text-sm text-ink-muted">{t("pay.amount_due")}</p>
             <Show when={check()} fallback={<p class="h-8 w-40 animate-pulse rounded-token bg-surface-raised" role="status" aria-label={t("pay.amount_loading")} data-outcome="amount-loading" />}>
               {(totals) => (
@@ -813,7 +790,7 @@ export function Pay() {
                         <button
                           type="button"
                           class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
-                          disabled={!readyToWaive()}
+                          disabled={!readyToWaive() || waiveAct.phase() !== "idle" || waiveAct.refusal() !== null}
                           data-step="waiveFeeReason"
                           onClick={() => waiveFeeReason(reason.reason_code_id)}
                         >
@@ -822,6 +799,8 @@ export function Pay() {
                       )}
                     </For>
                   </div>
+                  <Show when={waiveAct.phase() !== "idle"}><PendingSettle act="waive" phase={waiveAct.phase()} amount="" onLeave={closeWaive} /></Show>
+                  <RefusalPanel message={waiveAct.refusal()} onDismiss={waiveAct.dismiss} />
                   <button
                     type="button"
                     class="mt-3 min-h-touch rounded-token border border-line px-3 text-sm"
@@ -858,7 +837,7 @@ export function Pay() {
               <button
                 type="button"
                 class="mt-2 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted"
-                onClick={() => void putBack()}
+                onClick={() => putBack()}
               >
                 {t("pay.put_back", { count: otherParts().length + 1 })}
               </button>
@@ -870,10 +849,10 @@ export function Pay() {
               <button
                 type="button"
                 class="mt-2 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted disabled:opacity-50"
-                disabled={billId() === null || check() === null}
+                disabled={billId() === null || check() === null || print.printing()}
                 onClick={() => void printPreBill()}
               >
-                {t("order.pre_bill")}
+                {t(print.printing() ? "common.sending" : "order.pre_bill")}
               </button>
             </Show>
             <Show when={preBill()}>
@@ -884,6 +863,11 @@ export function Pay() {
               )}
             </Show>
 
+            <RefusalPanel message={acts.refusal()} onDismiss={acts.dismiss} />
+            <Show when={shape.pending()}>
+              {(out) => <PendingSettle act={out().act} phase={out().phase} amount="" onLeave={() => navigate("/")} />}
+            </Show>
+            <RefusalPanel message={shape.refusal()} onDismiss={shape.dismiss} />
             <Show when={error()}>
               {(message) => (
                 <p class="mt-3 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
@@ -1007,7 +991,7 @@ export function Pay() {
                       class="min-h-touch flex-1 rounded-token border border-line bg-surface disabled:opacity-50"
                       disabled={ways() !== null || taken().length > 0}
                       data-step="splitBySeat"
-                      onClick={() => void splitBySeat()}
+                      onClick={() => splitBySeat()}
                     >
                       {t("pay.split_by_seat", { count: parts().length })}
                     </button>
@@ -1042,7 +1026,7 @@ export function Pay() {
                   class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
                   disabled={!canSplitOff()}
                   data-step="splitOff"
-                  onClick={() => void splitOff()}
+                  onClick={() => splitOff()}
                 >
                   {t("pay.split_off", { count: picked().size })}
                 </button>
@@ -1268,7 +1252,7 @@ export function Pay() {
           <div class="mt-6 rounded-token border border-line bg-surface p-4" data-outcome="settled">
             <p class="text-lg font-semibold text-ok">{t("pay.settled")}</p>
             <p class="mt-2 tabular-nums">
-              {t("pay.receipt", { number: bill().receipt_number ?? 0 })}
+              {receiptLine(bill())}
             </p>
             {/* The change is what the cashier acts on next, so it is the largest figure here (UX-15). */}
             <Show when={givenChange() > 0}>
@@ -1301,9 +1285,10 @@ export function Pay() {
               type="button"
               class="mt-3 min-h-touch w-full rounded-token border border-line text-sm"
               data-step="printAgain"
+              disabled={print.printing()}
               onClick={() => void printAgain(bill().bill_id)}
             >
-              {t("pay.print_again")}
+              {t(print.printing() ? "common.sending" : "pay.print_again")}
             </button>
             </Show>
             <Show when={copy()}>

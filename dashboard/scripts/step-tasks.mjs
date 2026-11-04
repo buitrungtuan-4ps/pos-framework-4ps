@@ -121,4 +121,61 @@ export const TASKS = [
     ],
     outcome: { screen: "fees", mark: "fee-published" },
   },
+  {
+    task: "Run one package version on every store",
+    budget: 3,
+    note: "Three: open Packages, choose the version, confirm. The confirm is not ceremony: every store is republished by it, and a store whose edge is too old keeps what it runs, which the dialog says before anything changes (ADR-0189). Rolling back is the same three clicks on an earlier version, which is why there is no separate rollback flow to learn.",
+    steps: [
+      { nav: "packages" },
+      { screen: "packages", action: "lockVersion" },
+      { screen: "packages", action: "confirmLock" },
+    ],
+    outcome: { screen: "packages", mark: "package-pinned" },
+  },
+  {
+    task: "Roll every store back to an earlier package version",
+    budget: 3,
+    note: "Three, the same as running a version: open Packages, roll back to the earlier version, confirm. A rollback is pinning the earlier version (ADR-0189), so it is the same act with the earlier version's own button, and the confirm says every store is republished.",
+    steps: [
+      { nav: "packages" },
+      { screen: "packages", action: "rollBack" },
+      { screen: "packages", action: "confirmLock" },
+    ],
+    outcome: { screen: "packages", mark: "package-rolled-back" },
+  },
+  {
+    task: "Let each store choose its package version",
+    budget: 3,
+    note: "Three: open Packages, offer a version, save. The first version offered becomes what a store runs until it chooses, so the common case needs no second control; another default is one more pick.",
+    steps: [
+      { nav: "packages" },
+      { file: "screens/packages/ChoiceCard.tsx", action: "allowVersion" },
+      { file: "screens/packages/ChoiceCard.tsx", action: "saveChoice" },
+    ],
+    outcome: { file: "screens/packages/ChoiceCard.tsx", mark: "package-choosing" },
+  },
+  {
+    task: "Choose the package version one store runs",
+    budget: 2,
+    note: "Two: open Packages with the store in context, and pick the version. HQ makes the choice for the store (ADR-0189 decision 2); the store's own staff choosing waits for its own record.",
+    steps: [
+      { nav: "packages" },
+      { file: "screens/packages/StoreChoiceCard.tsx", action: "chooseForStore" },
+    ],
+    outcome: { file: "screens/packages/StoreChoiceCard.tsx", mark: "package-chosen" },
+  },
+  {
+    task: "See why a store does not run its pinned package version yet",
+    budget: 1,
+    note: "One: open Packages with the store in context. The store's card says what it runs, what it is pinned to, and why it waits — its edge's release, or that it never reported one — in words, so HQ does not have to infer it from two version ids (ADR-0189 decision 5).",
+    steps: [{ nav: "packages" }],
+    outcome: { file: "screens/packages/StorePackageCard.tsx", mark: "package-waiting" },
+  },
+  {
+    task: "See which stores take configuration on the poll alone",
+    budget: 1,
+    note: "One: the fleet table's Config delivery column says, per store, whether it hears the cloud's wake or waits for the 30-second poll, with how long a change took to apply (ADR-0195). It sorts the poll-only stores first.",
+    steps: [{ nav: "fleet" }],
+    outcome: { file: "screens/fleet/package-columns.tsx", mark: "config-delivery" },
+  },
 ];

@@ -6,6 +6,7 @@
 //!
 //! The state, the router and the scope, audit and error helpers are here.
 
+use core::future::Future;
 use std::sync::Arc;
 
 use axum::Router;
@@ -30,17 +31,24 @@ use crate::registry::RegistryStore;
 use crate::settings::SettingsStore;
 use crate::store_groups::StoreGroupStore;
 use pos_cloud_api::response::StoresPublished;
+use pos_cloud_config::package_pin::SettingsPackages;
 
 // `pub(super)`: the unit tests in `http.rs` and `settings_confirm.rs` reach the catalogue entry.
 pub(super) mod catalogue;
+mod catch_up;
 mod effective;
+mod package_pin;
+mod package_status;
 mod presets;
 mod publish;
 mod values;
 
 // The handlers the console's OpenAPI document names.
 pub(crate) use catalogue::{__path_admin_list_settings, __path_admin_settings_catalogue};
+pub use catch_up::{CATCH_UP_QUEUE, PackageCatchUp};
 pub(crate) use effective::__path_admin_effective_settings;
+pub(crate) use package_pin::__path_admin_choose_package;
+pub(crate) use package_status::__path_admin_store_package;
 pub(crate) use presets::__path_admin_apply_setting_presets;
 pub(crate) use presets::as_node_value;
 pub(crate) use publish::__path_admin_publish_settings;
@@ -92,7 +100,7 @@ pub fn settings_router<St, Rg, Grp, Cfg, A, C>(
     audit: Arc<dyn AuditRecorder>,
 ) -> Router
 where
-    St: SettingsStore + Clone + Send + Sync + 'static,
+    St: SettingsStore + SettingsPackages + Clone + Send + Sync + 'static,
     Rg: RegistryStore + Clone + Send + Sync + 'static,
     Grp: StoreGroupStore + Clone + Send + Sync + 'static,
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
@@ -109,6 +117,16 @@ where
             get(admin_list_settings::<St, Rg, Grp, Cfg, A, C>)
                 .put(admin_put_setting::<St, Rg, Grp, Cfg, A, C>)
                 .delete(admin_clear_setting::<St, Rg, Grp, Cfg, A, C>),
+        )
+        // The store's choice among the package versions it is allowed (ADR-0189 decision 2): the
+        // one way `package.chosen_version_id` is written.
+        .route(
+            "/admin/stores/{store_id}/package",
+            get(package_status::admin_store_package::<St, Rg, Grp, Cfg, A, C>),
+        )
+        .route(
+            "/admin/stores/{store_id}/package/choice",
+            axum::routing::put(package_pin::admin_choose_package::<St, Rg, Grp, Cfg, A, C>),
         )
         .route(
             "/admin/settings/effective",
@@ -132,6 +150,45 @@ where
             audit,
             country_values: Arc::new(country_setting_values(countries)),
         })
+}
+
+/// The hand-off the OTA report route gives each reporting store, and the worker that catches a
+/// waiting store's package up once its release meets the pinned version
+/// ([ADR-0189](../../../docs/adr/0189-a-store-runs-a-package-version-hq-pins.md) decision 5).
+/// The caller spawns the worker; it ends when every hand-off is dropped.
+pub fn package_catch_up<St, Rg, Grp, Cfg, A, C>(
+    countries: &CountryRegistry,
+    settings: St,
+    registry: Rg,
+    groups: Grp,
+    config_trees: Cfg,
+    admin: A,
+    clock: C,
+    audit: Arc<dyn AuditRecorder>,
+) -> (
+    PackageCatchUp,
+    impl Future<Output = ()> + Send + 'static + use<St, Rg, Grp, Cfg, A, C>,
+)
+where
+    St: SettingsStore + SettingsPackages + Send + Sync + 'static,
+    Rg: RegistryStore + Send + Sync + 'static,
+    Grp: StoreGroupStore + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Send + Sync + 'static,
+    A: Send + Sync + 'static,
+    C: ClockSource + Send + Sync + 'static,
+{
+    let (hand_off, receiver) = PackageCatchUp::channel();
+    let state = SettingsState {
+        settings,
+        registry,
+        groups,
+        config_trees,
+        admin,
+        clock,
+        audit,
+        country_values: Arc::new(country_setting_values(countries)),
+    };
+    (hand_off, catch_up::run(state, receiver))
 }
 
 /// The `200` a write answers: every store it reached and how its publish went.

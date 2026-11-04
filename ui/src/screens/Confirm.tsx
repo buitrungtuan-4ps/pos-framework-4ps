@@ -1,6 +1,6 @@
 import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
 
-import { api } from "../api/client";
+import { ApiError, api } from "../api/client";
 import type { RejectReason, WaitingOrder } from "../api/schemas";
 import { ReadFailed } from "../components/StoreData";
 import { PageHeader } from "../components/ui";
@@ -9,6 +9,7 @@ import { formatAmount, tableLabel } from "../state/store";
 import { errorMessage } from "../lib/errors";
 import { can } from "../state/permissions";
 import { createScreenRead } from "../state/screen-read";
+import { confirmGuestOrder, rejectGuestOrder } from "../state/kitchen-writes";
 
 // The staff-confirmation queue: the guest orders waiting, and the two ways one leaves this screen
 // (ADR-0116).
@@ -31,6 +32,13 @@ import { createScreenRead } from "../state/screen-read";
 // `REFRESH_MS` while it is open, which is well inside how long a guest waits before asking a server.
 const REFRESH_MS = 15_000;
 
+// # It answers at once
+//
+// Confirming or refusing takes the order off the queue on the tap (ADR-0196 decision 1,
+// `../state/kitchen-writes`). A refusal puts it back where it stood, with its sentence, and brings
+// the reason picker back; no answer puts it back and reads the queue again, which drops it if the
+// store made the act. Until the edge answers, no other order on the queue takes a tap.
+
 export function Confirm() {
   const [orders, setOrders] = createSignal<WaitingOrder[] | null>(null);
   const [reasons, setReasons] = createSignal<RejectReason[]>([]);
@@ -38,8 +46,7 @@ export function Confirm() {
   const [error, setError] = createSignal<string | null>(null);
   const [busy, setBusy] = createSignal(false);
 
-  const explain = (caught: unknown) =>
-    setError(errorMessage(caught));
+  const explain = (caught: unknown) => setError(errorMessage(caught));
 
   // Read every fifteen seconds, and between those with the engine's backoff after a failure. A
   // failed reload keeps what is on screen: a queue that blanked on one dropped request would be worse
@@ -60,25 +67,26 @@ export function Confirm() {
     onCleanup(() => clearInterval(timer));
   });
 
-  const confirm = (order: WaitingOrder) => {
+  const list = { get: orders, set: setOrders };
+  const answer = (act: Promise<void>, onRefused?: () => void) => {
+    setError(null);
     setBusy(true);
-    void api
-      .confirmOrder(order.order_id)
+    void act
       .then(() => refresh())
-      .catch(explain)
+      .catch((caught: unknown) => {
+        // A refusal brings the reason picker back; with no answer the queue's read decides.
+        if (caught instanceof ApiError) {
+          onRefused?.();
+        }
+        explain(caught);
+      })
       .finally(() => setBusy(false));
   };
-
+  const confirm = (order: WaitingOrder) => answer(confirmGuestOrder(list, order.order_id, refresh));
   const reject = (order: WaitingOrder, reason: RejectReason) => {
-    setBusy(true);
-    void api
-      .rejectOrder(order.order_id, reason.reason_code_id)
-      .then(() => {
-        setRefusing(null);
-        return refresh();
-      })
-      .catch(explain)
-      .finally(() => setBusy(false));
+    setRefusing(null);
+    const refused = () => setRefusing(order);
+    answer(rejectGuestOrder(list, order.order_id, reason.reason_code_id, refresh), refused);
   };
 
   return (

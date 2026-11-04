@@ -55,7 +55,7 @@ use pos_ports::event_store::EventStore;
 use pos_proto::ClockSource as _;
 use pos_proto::ids::DeviceId;
 
-use crate::app::Edge;
+use crate::app::{ConfigWakeReport, Edge, RefusedPackage};
 use crate::clock::SystemClock;
 use crate::lease_state::LeaseAuthority;
 use crate::print_agent::{AgentBacklog, PrintAgents};
@@ -102,6 +102,72 @@ pub struct HeartbeatReport {
     /// leaving a revoked agent standing on the console is exactly the stale answer this field exists
     /// to prevent. The same distinction `outbox_depth` draws between `None` and `0`.
     pub print_agents: Option<Vec<PrintAgentStanding>>,
+    /// The package version the store runs and the last document refused for its package
+    /// ([ADR-0189](../../../docs/adr/0189-a-store-runs-a-package-version-hq-pins.md) decision 6), or
+    /// `None` if this source did not look.
+    pub package: Option<PackageReport>,
+    /// How configuration reaches the store and how fast
+    /// ([ADR-0195](../../../docs/adr/0195-the-cloud-wakes-a-store-to-pull-its-config.md)), or `None`
+    /// if this source did not look.
+    pub config_wake: Option<ConfigWakeReport>,
+}
+
+/// The heartbeat body's `config_wake` field: `delivery`, `samples`, and `p95_ms` and `max_ms` once
+/// there is a sample.
+#[must_use]
+pub fn config_wake_json(report: &ConfigWakeReport) -> serde_json::Value {
+    serde_json::json!({
+        "delivery": report.delivery.as_wire(),
+        "samples": report.samples,
+        "p95_ms": report.p95_ms,
+        "max_ms": report.max_ms,
+    })
+}
+
+/// What a heartbeat says about the store's package.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct PackageReport {
+    /// The package version the store runs, or `None` for the release's default package.
+    pub package_version_id: Option<String>,
+    /// The last document refused for its package, while the latest one was.
+    pub refused: Option<RefusedPackage>,
+}
+
+impl PackageReport {
+    /// What the store's session and its refusal record say now.
+    #[must_use]
+    pub fn of<S: EventStore>(edge: &Edge<S>) -> Self {
+        Self {
+            package_version_id: edge
+                .session()
+                .package
+                .as_ref()
+                .map(|content| content.package_version_id.to_string()),
+            refused: edge.package_standing().refused(),
+        }
+    }
+
+    /// The report as the heartbeat body's `package` field: `package_version_id` (`null` for the
+    /// default package) and, while a document stands refused, `refused`.
+    #[must_use]
+    pub fn to_json(&self) -> serde_json::Value {
+        let mut fields = serde_json::Map::new();
+        fields.insert(
+            "package_version_id".to_owned(),
+            self.package_version_id.clone().into(),
+        );
+        if let Some(refused) = &self.refused {
+            fields.insert(
+                "refused".to_owned(),
+                serde_json::json!({
+                    "config_version_id": refused.config_version_id,
+                    "package_version_id": refused.package_version_id,
+                    "reason": refused.refusal.reason(),
+                }),
+            );
+        }
+        serde_json::Value::Object(fields)
+    }
 }
 
 /// What one bound print agent's standing says: which terminal, who answers for it, and how long the
@@ -177,6 +243,8 @@ where
             // An `Edge` alone holds no print-agent record, so this source does not claim a store has
             // no agents — it says it did not look. `StoreReport` is the one that asks.
             print_agents: None,
+            package: Some(PackageReport::of(self)),
+            config_wake: Some(self.config_wake_standing().report()),
         }
     }
 }
@@ -242,6 +310,8 @@ where
             outbox_depth: outbox_depth(&self.edge).await,
             lease_generation,
             print_agents,
+            package: Some(PackageReport::of(&self.edge)),
+            config_wake: Some(self.edge.config_wake_standing().report()),
         }
     }
 }
@@ -425,6 +495,63 @@ where
 
 #[cfg(test)]
 mod tests {
+
+    /// The heartbeat's `package` field: the running version, `null` for the default package, and
+    /// the refusal only while a document stands refused (ADR-0189 decision 6).
+    #[test]
+    fn a_config_wake_report_is_the_delivery_and_the_wake_to_apply_times() {
+        use crate::app::{ConfigDelivery, ConfigWakeReport};
+        assert_eq!(
+            super::config_wake_json(&ConfigWakeReport::default()),
+            serde_json::json!({
+                "delivery": "CONFIG_DELIVERY_POLL", "samples": 0, "p95_ms": null, "max_ms": null,
+            })
+        );
+        let report = ConfigWakeReport {
+            delivery: ConfigDelivery::Wake,
+            samples: 12,
+            p95_ms: Some(240),
+            max_ms: Some(900),
+        };
+        assert_eq!(
+            super::config_wake_json(&report),
+            serde_json::json!({
+                "delivery": "CONFIG_DELIVERY_WAKE", "samples": 12, "p95_ms": 240, "max_ms": 900,
+            })
+        );
+    }
+
+    #[test]
+    fn a_package_report_is_the_running_version_and_any_refusal() {
+        use super::PackageReport;
+        use crate::app::{PackageRefusal, RefusedPackage};
+
+        assert_eq!(
+            PackageReport::default().to_json(),
+            serde_json::json!({ "package_version_id": null })
+        );
+        let report = PackageReport {
+            package_version_id: Some("V1".to_owned()),
+            refused: Some(RefusedPackage {
+                config_version_id: "C2".to_owned(),
+                package_version_id: Some("V2".to_owned()),
+                refusal: PackageRefusal::NeedsNewerEdge {
+                    min_edge_version: "0.15.0".to_owned(),
+                },
+            }),
+        };
+        assert_eq!(
+            report.to_json(),
+            serde_json::json!({
+                "package_version_id": "V1",
+                "refused": {
+                    "config_version_id": "C2",
+                    "package_version_id": "V2",
+                    "reason": "EDGE_TOO_OLD",
+                },
+            })
+        );
+    }
     use super::{
         HeartbeatClient, HeartbeatError, HeartbeatReport, HeartbeatSource, HeartbeatTransport,
         standings,
@@ -466,6 +593,8 @@ mod tests {
                 outbox_depth: Some(self.0.load(Ordering::SeqCst)),
                 lease_generation: Some(4),
                 print_agents: None,
+                package: None,
+                config_wake: None,
             }
         }
     }
@@ -479,6 +608,8 @@ mod tests {
                 outbox_depth: self.0,
                 lease_generation: None,
                 print_agents: None,
+                package: None,
+                config_wake: None,
             }
         }
     }
@@ -588,6 +719,8 @@ mod tests {
                 outbox_depth: Some(0),
                 lease_generation: Some(4),
                 print_agents: None,
+                package: None,
+                config_wake: None,
             }),
             "the last beat carries the drained zero and the generation this box held — the two \
              facts the cloud's clear is keyed on"
@@ -612,6 +745,8 @@ mod tests {
                 outbox_depth: Some(42),
                 lease_generation: None,
                 print_agents: None,
+                package: None,
+                config_wake: None,
             }),
             "the depth the source read is the depth the transport sent"
         );

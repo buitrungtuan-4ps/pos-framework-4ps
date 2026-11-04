@@ -77,6 +77,11 @@ use crate::lease_state::LeaseWatch;
 use crate::origins::Origins;
 
 mod apply;
+mod package;
+mod wake;
+
+pub use package::{PackageRefusal, PackageStanding, RefusedPackage, checked_package};
+pub use wake::{WAKE_PULL_SPACING, WAKE_RETRY};
 
 /// How long the loop waits after a transport error before retrying — the store trades locally with
 /// its last-known-good session while the cloud link is down, so this is a background reconnect.
@@ -175,6 +180,7 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
     apply::apply_qr_and_retention(&mut session, document);
     apply::apply_locale(&mut session, document);
     apply::apply_updates(&mut session, document);
+    package::apply_package(&mut session, document);
     session
 }
 
@@ -188,56 +194,6 @@ pub fn session_from_config(base: &EdgeSession, document: &serde_json::Value) -> 
 /// first pull answers) — which is also what the config-pull loop should start out holding, so a
 /// restart does not re-pull a document it already has.
 ///
-/// Applies the `origins` node to the shared allow-list, if the document carries a usable one
-/// ([ADR-0111](../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)).
-///
-/// **Beside `session_from_config`, not inside it.** That function produces an `EdgeSession`, which is
-/// what the application layer decides against; this list is read by the CORS layer on the front of
-/// every request, before any handler. Different reader, different carrier.
-///
-/// The config tree's never-blank rule is enforced here and stated as three cases, because they are
-/// three different operator intentions and only one of them is a mistake:
-///
-/// - **The node is absent** — this document says nothing about origins, so the previous list stands.
-///   Every store that has never published one is in this case, and it is not an error.
-/// - **The node is present and is a list of strings that validate** — replaced, including an empty
-///   list, which is a person deliberately withdrawing every second origin.
-/// - **The node is present and does not validate** — refused whole, logged, and the previous list
-///   stands. A malformed publish must not open the edge to nobody, or to everybody.
-fn apply_origins(origins: &Origins, document: &serde_json::Value) {
-    let Some(node) = document.get("origins") else {
-        return;
-    };
-    // `{"origins": {"allowed": [...]}}` — an object with a named field rather than a bare array, so
-    // the node can gain a sibling later without changing shape. A bare array is accepted too,
-    // because refusing it would be a refusal about punctuation.
-    let listed = node
-        .get("allowed")
-        .unwrap_or(node)
-        .as_array()
-        .map(|entries| {
-            entries
-                .iter()
-                .map(|entry| entry.as_str().map(str::to_owned))
-                .collect::<Option<Vec<String>>>()
-        });
-    let Some(Some(listed)) = listed else {
-        tracing::warn!(
-            "the origins node is not a list of strings; keeping the origins already applied"
-        );
-        return;
-    };
-    match origins.replace(&listed) {
-        Ok(count) => tracing::info!(count, "applied the published origin allow-list"),
-        // The entries are published configuration, never secrets, so the reason names the offender:
-        // an operator who cannot see which entry was refused cannot fix it.
-        Err(error) => tracing::warn!(
-            %error,
-            "the origins node was refused whole; keeping the origins already applied"
-        ),
-    }
-}
-
 /// The highest receipt number the cloud has seen from this store, from the document's
 /// `receipt_floor` node (`{ "number": M }`, ADR-0149), or `None` when the node is absent or is not a
 /// whole number.
@@ -508,6 +464,13 @@ where
         let Some(synced) = self.transport.fetch(self.held().as_deref()).await? else {
             return Ok(None);
         };
+        // A package this edge cannot run refuses the whole document (ADR-0189 decision 6). The
+        // version is held, as for any refusal, so it is not pulled again every interval.
+        if package::refuses(self.edge.package_standing(), &synced) {
+            *self.held_version.lock().expect("held-version lock") =
+                Some(synced.config_version_id.clone());
+            return Ok(None);
+        }
         // The receipt floor first, before anything else in the document takes effect (ADR-0149): a
         // replacement box learns it is the store from this same document, and its first receipt
         // must already be above every number the cloud has seen. A floor that could not be written
@@ -525,7 +488,7 @@ where
         }
         // Beside the session swap, not inside it: a different reader on a different carrier.
         if let Some(origins) = &self.origins {
-            apply_origins(origins, &synced.document);
+            apply::apply_origins(origins, &synced.document);
         }
         // And the same again for the device deny-list, which additionally has to `await` a durable
         // write — something the pure `session_from_config` could not do even if it wanted to. The
@@ -2841,7 +2804,7 @@ mod tests {
 
 #[cfg(test)]
 mod origins_node_tests {
-    use super::apply_origins;
+    use super::apply::apply_origins;
     use crate::origins::Origins;
 
     /// A document that says nothing about origins leaves the applied list alone.

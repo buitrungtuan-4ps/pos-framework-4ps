@@ -41,7 +41,7 @@ async fn main() -> ExitCode {
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = startup::load_config()?;
     let (cell, directory_reload) = startup::cell_directory(&config)?;
-    let (store, one_switch) = startup::open_store(&config).await?;
+    let (store, one_switch, wakes) = startup::open_store(&config).await?;
     let cloud = startup::cloud(&store);
     // The console audit recorder (ADR-0069): every `/admin` write route records who changed what to
     // the append-only `audit_log`, best-effort after the mutation. One recorder, shared as an
@@ -50,7 +50,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let audit: Arc<dyn AuditRecorder> = Arc::new(AuditSink::new(store.audit()));
     let app = startup::cloud_app(&cloud, &store, &config, &audit, &one_switch);
 
-    let loops = startup::loops::Loops::spawn(&config, &cloud, &store, &audit).await?;
+    let loops = startup::loops::Loops::spawn(&config, &cloud, &store, &audit, wakes).await?;
 
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
     tracing::info!(bind = %config.bind, "pos_cloud listening");
@@ -71,6 +71,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let chain_anchors: Arc<dyn pos_cloud::anchor::AnchorLedger> = Arc::new(store.chain_anchors());
 
     let providers = startup::vendor_catalogue(&config)?;
+    let (package_catch_up, catch_up_worker) = startup::packages::package_catch_up(&store, &audit);
+    let catch_up_task = tokio::spawn(catch_up_worker);
 
     let deps = startup::routes::RouteDeps {
         store: &store,
@@ -84,6 +86,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         orders_limiter: &orders_limiter,
         relay_wake: &relay_wake,
         cell: &cell,
+        package_catch_up: &package_catch_up,
     };
     let service = startup::routes::api_routes(app, &deps);
     let service = startup::routes::with_guest_ordering(service, &deps);
@@ -93,6 +96,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     loops.wind_down(archive_retention_task).await;
+    catch_up_task.abort();
     if let Some(task) = directory_reload {
         task.abort();
     }

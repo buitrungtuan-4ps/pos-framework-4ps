@@ -262,3 +262,13 @@ fn one_compiled_condition_answers_many_times() {
     assert_eq!(condition.evaluate(&order()), Ok(true));
     assert_eq!(condition.evaluate(&few), Ok(false));
 }
+
+#[test]
+fn a_condition_says_which_views_it_reads() {
+    let condition = rules()
+        .compile("has(order.guest_count) && channel == 'SALES_CHANNEL_DINE_IN'")
+        .expect("compiles");
+    assert!(condition.reads(Variable::Order));
+    assert!(condition.reads(Variable::Channel));
+    assert!(!condition.reads(Variable::Device));
+}

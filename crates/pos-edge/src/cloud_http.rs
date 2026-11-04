@@ -560,6 +560,15 @@ impl HeartbeatTransport for HeartbeatHttpTransport {
                 .collect();
             fields.insert("print_agents".to_owned(), agents.into());
         }
+        if let Some(package) = &report.package {
+            fields.insert("package".to_owned(), package.to_json());
+        }
+        if let Some(config_wake) = &report.config_wake {
+            fields.insert(
+                "config_wake".to_owned(),
+                crate::heartbeat_client::config_wake_json(config_wake),
+            );
+        }
         let body = if fields.is_empty() {
             Vec::new()
         } else {

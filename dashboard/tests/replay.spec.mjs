@@ -238,7 +238,41 @@ const AFTER_STEP = {
  * outcome before its own publish ran. The menu is published here instead, as an operator would have
  * published it before writing a fee — and `walk` runs this, so every test that walks the flow has it.
  */
+/** Writes the tenant's package pin, setting by setting, as the Packages screen does. */
+async function pinPackage(fields) {
+  for (const [field, value] of Object.entries(fields)) {
+    await cloud.call("PUT", "/admin/settings", {
+      tenant_id: fixtures.tenant.tenant_id,
+      setting_key: `package.${field}`,
+      scope: "SETTING_SCOPE_TENANT",
+      scope_id: fixtures.tenant.tenant_id,
+      value,
+    });
+  }
+}
+
+/** The seeded package versions' ids, oldest first. */
+const versionIds = () => fixtures.versions.map((version) => version.content.package_version_id);
+
 const PRECONDITIONS = {
+  // Every store already runs the newer version, so there is an earlier one to roll back to.
+  "Roll every store back to an earlier package version": async () => {
+    await pinPackage({ locked_version_id: versionIds()[1], mode: "PACKAGE_MODE_LOCKED" });
+  },
+  // A version is pinned that the seeded store, which has never reported a release, cannot be
+  // vouched for: the store waits, and says why.
+  "See why a store does not run its pinned package version yet": async () => {
+    await pinPackage({ locked_version_id: versionIds()[1], mode: "PACKAGE_MODE_LOCKED" });
+  },
+  // The tenant lets stores choose, and this store has not chosen yet.
+  "Choose the package version one store runs": async () => {
+    const [march, april] = versionIds();
+    await pinPackage({
+      allowed_version_ids: [march, april],
+      default_version_id: march,
+      mode: "PACKAGE_MODE_CHOOSE",
+    });
+  },
   "Add a fee, try it on a sample bill and publish it": async () => {
     await cloud.call("POST", "/admin/catalog/publish", {
       tenant_id: fixtures.tenant.tenant_id,

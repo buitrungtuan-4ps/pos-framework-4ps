@@ -313,6 +313,8 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::admin_put_setting,
         crate::http::admin_clear_setting,
         crate::http::admin_effective_settings,
+        crate::http::admin_choose_package,
+        crate::http::admin_store_package,
         crate::http::admin_apply_setting_presets,
         crate::http::admin_publish_settings,
         pos_cloud_people::routes::admin_permissions_readiness,

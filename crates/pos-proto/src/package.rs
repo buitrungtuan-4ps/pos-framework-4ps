@@ -26,11 +26,19 @@ use serde::{Deserialize, Serialize};
 use crate::campaign::PublishedSchedule;
 use crate::devices::DeviceClass;
 use crate::enums::SalesChannel;
+use crate::flow::Flow;
 use crate::ids::{DeviceId, PackageId, PackageVersionId};
 use crate::text::{ReleaseTag, TranslationKey};
 use crate::ulid::Ulid;
 use crate::wire_enum;
 use crate::wire_enum::{Open, WireEnum, is_absent};
+
+mod data;
+
+pub use data::{
+    CustomField, CustomFieldType, CustomList, DataObject, FIELDS_PER_OBJECT_MAX, LIST_ENTRIES_MAX,
+    ListEntry, OBJECT_TYPES_MAX, ObjectType, PackageData, TEXT_BYTES_MAX,
+};
 
 /// The most versions a choice may allow.
 pub const ALLOWED_VERSIONS_MAX: usize = 32;
@@ -110,6 +118,15 @@ pub struct PackageContent {
     /// The package's named time slots, in the order that decides which one is current.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub time_slots: Vec<TimeSlot>,
+    /// The package's flows ([ADR-0192](../../../docs/adr/0192-a-flow-is-a-graph-of-steps-the-edge-re-checks.md)),
+    /// each with its variants; the variants of one flow share its `flow_id`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub flows: Vec<Variant<Flow>>,
+    /// The package's data part: custom fields, object types and lists
+    /// ([ADR-0194](../../../docs/adr/0194-custom-data-is-declared-and-personal-fields-are-kept-apart.md)).
+    /// Empty, and left off the wire, in a version that declares none.
+    #[serde(default, skip_serializing_if = "PackageData::is_empty")]
+    pub data: PackageData,
 }
 
 /// A named part of the week a variant may be chosen for, such as lunch.
@@ -132,6 +149,7 @@ pub struct TimeSlot {
 
 /// One variant of a package part: what a till shows or runs when its selector is the one chosen.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Variant<T> {
     /// When the variant applies. Empty for the part's base variant.
     #[serde(default, skip_serializing_if = "VariantSelector::is_base")]
@@ -146,21 +164,25 @@ pub struct Variant<T> {
 /// The device dimension is stated by `device_id` or by `device_class`, never both, which the cloud
 /// refuses at publish. A token from a newer release states its dimension and matches nothing here.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct VariantSelector {
     /// One device.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub device_id: Option<DeviceId>,
     /// Every device of a class.
     #[serde(default, skip_serializing_if = "is_absent")]
     pub device_class: Open<DeviceClass>,
     /// The role a signed-in person holds, by its role id in the tenant's people.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub role_id: Option<Ulid>,
     /// The sales channel of the order on screen.
     #[serde(default, skip_serializing_if = "is_absent")]
     pub sales_channel: Open<SalesChannel>,
     /// A time slot of the package, by its id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub time_slot_id: Option<String>,
 }
 

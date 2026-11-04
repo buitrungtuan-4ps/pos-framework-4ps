@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use cloud_sync_http::HttpCloudSync;
+use link_nats::NatsStoreWake;
 use pos_ports::config_store::ConfigStore;
 use pos_ports::event_store::EventStore;
 use pos_ports::intake_ledger::IntakeLedger;
@@ -51,6 +52,7 @@ pub(super) fn spawn_cloud_loops<S, Q, L, P>(
     sync_key: Option<String>,
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
     drained: tokio::sync::oneshot::Receiver<()>,
+    wake: Option<NatsStoreWake>,
 ) -> Option<CloudLoops>
 where
     S: EventStore + IntakeLedger + ConfigStore + Send + Sync + 'static,
@@ -82,7 +84,12 @@ where
         revocations,
         lease_watch,
     );
-    tokio::spawn(config_client.run(CONFIG_POLL_INTERVAL, wait_for_shutdown(shutdown_rx.clone())));
+    let shutdown = wait_for_shutdown(shutdown_rx.clone());
+    // With a wake, a publish reaches the store at once; without one, on the next poll (ADR-0195).
+    match wake {
+        Some(wake) => tokio::spawn(config_client.run_waking(wake, CONFIG_POLL_INTERVAL, shutdown)),
+        None => tokio::spawn(config_client.run(CONFIG_POLL_INTERVAL, shutdown)),
+    };
     let heartbeat = spawn_heartbeat(&client, store_id, edge, lease, agents, shutdown_rx, drained);
     spawn_relay(&client, store_id, edge, queue, shutdown_rx);
     if let Some(plan) = backup {

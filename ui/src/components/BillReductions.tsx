@@ -10,9 +10,11 @@ import { Show, type Accessor } from "solid-js";
 
 import type { CheckResponse } from "../api/schemas";
 import { t } from "../i18n";
-import { useInFlight } from "../lib/in-flight";
 import { can } from "../state/permissions";
 import { reasonsFor } from "../state/store";
+import { useVoidAct } from "../state/void-act";
+import { PendingSettle } from "./PendingSettle";
+import { RefusalPanel } from "./RefusalPanel";
 import { createApprover } from "./ApproverFields";
 import { DISCOUNT, DiscountPanel, useDiscount } from "./DiscountPanel";
 import { WhyUnavailable } from "./StoreData";
@@ -28,7 +30,11 @@ export function BillReductions(props: {
   onVoided: () => void;
 }) {
   const approver = createApprover();
-  const voidRun = useInFlight<"void">(props.report);
+  // The void as a money act (ADR-0196, ADR-0204): pending until the edge answers, never re-sent.
+  const voidAct = useVoidAct(props.billId, () => {
+    voiding.closeVoid();
+    props.onVoided();
+  });
   const discount = useDiscount({
     billId: props.billId,
     currency: props.currency,
@@ -40,8 +46,7 @@ export function BillReductions(props: {
     billId: props.billId,
     approver,
     report: props.report,
-    run: (act) => voidRun.run("void", act),
-    onVoided: () => props.onVoided(),
+    voidWith: voidAct.voidWith,
   });
   // One panel at a time, as on the table: opening one puts the other away.
   const askDiscount = () => {
@@ -94,7 +99,10 @@ export function BillReductions(props: {
           </Show>
         }
       >
-        <VoidBillPanel state={voiding} approver={approver} data-step="voidBillReason" onSubmit={(id) => voiding.voidBillReason(id)} />
+        <Show when={voidAct.phase() === "idle"} fallback={<PendingSettle act="void" phase={voidAct.phase()} amount="" onLeave={() => props.onVoided()} />}>
+          <VoidBillPanel state={voiding} approver={approver} data-step="voidBillReason" onSubmit={(id) => voiding.voidBillReason(id)} />
+        </Show>
+        <RefusalPanel message={voidAct.refusal()} onDismiss={voidAct.dismiss} />
       </Show>
     </>
   );

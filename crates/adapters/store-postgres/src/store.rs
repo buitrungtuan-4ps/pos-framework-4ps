@@ -361,7 +361,6 @@ const MIGRATION_0087: &str = include_str!("../migrations/0087_roles_can_void_a_p
 /// the cloud to publish them again
 /// ([ADR-0187](../../../docs/adr/0187-a-shift-is-handed-over-at-the-till-and-read-there.md) decision 4).
 const MIGRATION_0088: &str = include_str!("../migrations/0088_roles_can_read_a_shifts_x.sql");
-const MIGRATION_0089: &str = include_str!("../migrations/0089_packages.sql");
 
 /// How many pooled connections the cloud keeps to PostgreSQL.
 const POOL_SIZE: usize = 16;
@@ -371,7 +370,9 @@ const POOL_SIZE: usize = 16;
 /// draws from the same pool.
 #[derive(Clone, Debug)]
 pub struct PostgresStore {
-    pool: Pool,
+    pub(crate) pool: Pool,
+    /// What every config-tree handle tells after a committed save, if anything.
+    pub(crate) config_saved: Option<crate::config_saved::ConfigSaved>,
 }
 
 impl PostgresStore {
@@ -395,7 +396,10 @@ impl PostgresStore {
                 PortError::internal(PortName::EventStore, "could not build the connection pool")
                     .with_source(error)
             })?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            config_saved: None,
+        })
     }
 
     /// Applies the cloud schema, idempotently — safe to run on every boot.
@@ -762,16 +766,7 @@ impl PostgresStore {
             .batch_execute(MIGRATION_0088)
             .await
             .map_err(unavailable)?;
-        Self::migrate_from_0089(&connection).await
-    }
-
-    /// The migrations from 0089 on, in order, after [`Self::migrate`]'s: a function of their own so
-    /// that one stays inside its size baseline.
-    async fn migrate_from_0089(connection: &Object) -> Result<(), PortError> {
-        connection
-            .batch_execute(MIGRATION_0089)
-            .await
-            .map_err(unavailable)
+        crate::migrations_late::migrate_from_0089(&connection).await
     }
 
     /// The materialised-rollup store over this pool ([ADR-0036](../../../../docs/adr/0036-materialised-rollups.md)).
@@ -822,14 +817,6 @@ impl PostgresStore {
     #[must_use]
     pub fn admin(&self) -> crate::admin::PostgresAdmin {
         crate::admin::PostgresAdmin::new(self.pool.clone())
-    }
-
-    /// The configuration-tree store over this pool ([ADR-0033](../../../../docs/adr/0033-config-tree.md)).
-    ///
-    /// A cheap handle sharing the same pool; `pos-cloud` implements its `ConfigTreeStore` seam over it.
-    #[must_use]
-    pub fn config_trees(&self) -> crate::config_trees::PostgresConfigTrees {
-        crate::config_trees::PostgresConfigTrees::new(self.pool.clone())
     }
 
     /// The subject store over this pool ([ADR-0035](../../../../docs/adr/0035-retention-and-pii-masking.md)).
@@ -1485,10 +1472,11 @@ mod migration_wiring_tests {
     use std::fs;
     use std::path::Path;
 
-    /// This file's own text. A migration only runs if this file both **declares** it (an
-    /// `include_str!`) and **executes** it (a `batch_execute`), so reading the source catches both
-    /// ways one goes missing — and they are different mistakes, made months apart.
-    const SOURCE: &str = include_str!("store.rs");
+    /// The runner's text: this file and `migrations_late.rs`, which holds 0089 on. A migration only
+    /// runs if they both **declare** it (an `include_str!`) and **execute** it (a `batch_execute`),
+    /// so reading the source catches both ways one goes missing — different mistakes, made months
+    /// apart.
+    const SOURCE: &str = concat!(include_str!("store.rs"), include_str!("migrations_late.rs"));
 
     /// Every `.sql` file in the migrations directory, by stem.
     fn migration_stems() -> BTreeSet<String> {

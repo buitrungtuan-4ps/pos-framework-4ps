@@ -36,3 +36,38 @@ async fn a_broker_that_is_not_up_yet_does_not_fail_the_connect() {
         "connecting to a broker that is not up yet must hand back a link that keeps trying, not fail"
     );
 }
+
+/// A store whose broker is not up keeps its poll: the wake subscribes without waiting on the broker,
+/// and a wait ends at its bound with nothing, rather than holding the config loop (ADR-0195).
+#[tokio::test]
+async fn a_wake_on_a_broker_that_is_not_up_ends_its_wait_with_nothing() {
+    let link = NatsLink::connect(
+        "nats://127.0.0.1:1",
+        NatsConfig {
+            stream: "POS_TEST".to_owned(),
+            subject: "pos.test.events".to_owned(),
+            max_messages: -1,
+            max_bytes: -1,
+        },
+    )
+    .await
+    .expect("a link that keeps trying");
+    let store = pos_proto::ids::StoreId::new(pos_proto::Ulid::from_u128(7));
+    let wake = tokio::time::timeout(
+        Duration::from_secs(5),
+        link_nats::NatsStoreWake::subscribe(link.client().clone(), store),
+    )
+    .await
+    .expect("subscribing does not wait on the broker")
+    .expect("a subscription queued for the connect");
+    let heard = tokio::time::timeout(
+        Duration::from_secs(5),
+        pos_ports::store_wake::StoreWake::next_signal(&wake, Duration::from_millis(250)),
+    )
+    .await
+    .expect("the wait is bounded");
+    assert!(
+        matches!(heard, Ok(None)),
+        "nothing heard and never Connected while the broker is down: {heard:?}"
+    );
+}

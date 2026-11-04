@@ -21,7 +21,9 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use pos_core::inventory::StockProjection;
 use pos_proto::TableState;
-use pos_proto::ids::{BillId, DeviceId, MenuItemId, OrderId, OrderLineId, ShiftId, TableId};
+use pos_proto::ids::{
+    BillId, DeviceId, MenuItemId, OrderId, OrderLineId, PackageVersionId, ShiftId, TableId,
+};
 use pos_proto::money::Money;
 use pos_proto::time::{BusinessDate, Timestamp};
 
@@ -38,10 +40,13 @@ use crate::sync_status::SyncStatus;
 mod authority;
 mod bills;
 mod composition;
+mod config_wake;
 mod error;
 mod floor;
+pub mod flows;
 mod kitchen;
 mod orders;
+mod package;
 mod projection;
 mod publish;
 mod records;
@@ -50,7 +55,9 @@ mod session;
 mod shifts;
 mod views;
 
+pub use config_wake::{ConfigDelivery, ConfigWakeReport, ConfigWakeStanding, WAKE_SAMPLES_MAX};
 pub use error::{AppError, Approval};
+pub use package::{PackageRefusal, PackageStanding, RefusedPackage};
 pub(crate) use records::fee_records;
 pub use records::fee_records_in;
 use records::{
@@ -103,10 +110,15 @@ struct Projection {
     /// unrecognised token from a newer sender records as `None`, and the caller falls back to the
     /// session channel rather than guessing a variant and taxing a bill at a rate nobody chose.
     ///
-    /// The guest count `sales.order.opened` also carries is deliberately **not** here. It is
-    /// reporting data (average check per cover) whose readers are the event log and the cloud
-    /// rollups; no edge decision consults it, and a cached copy no code reads is a field that rots.
+    /// The guest count `sales.order.opened` also carries is kept apart, in [`Self::guest_counts`].
     orders: HashMap<OrderId, OrderOrigin>,
+    /// The guest count each open order recorded when it opened, where one was given: the fact a
+    /// package's "guest count first" guard reads ([ADR-0192](../../../../docs/adr/0192-a-flow-is-a-graph-of-steps-the-edge-re-checks.md)
+    /// decision 4). Folded from `sales.order.opened`, dropped when the order closes.
+    guest_counts: HashMap<OrderId, u16>,
+    /// The package version each open order opened under, where it opened under one: its flows and
+    /// guards are that version's until it closes (ADR-0192 decision 5). Dropped when it closes.
+    package_versions: HashMap<OrderId, PackageVersionId>,
     /// The orders a member of staff has confirmed or refused
     /// ([ADR-0116](../../../../docs/adr/0116-the-qr-hold-is-derived-and-it-gates-firing.md)), folded
     /// from `sales.order.confirmed_by_staff` and `sales.order.rejected_by_staff`.
@@ -225,6 +237,11 @@ pub struct Edge<S> {
     ids: Mutex<EdgeIdGenerator<SystemClock>>,
     fanout: Fanout,
     projection: Mutex<Projection>,
+    /// The package versions open orders still reference, at most four, with their guards compiled
+    /// ([ADR-0192](../../../../docs/adr/0192-a-flow-is-a-graph-of-steps-the-edge-re-checks.md)
+    /// decision 5). Not folded from events: a version's content comes with the session, so after a
+    /// restart an order on an older version is checked under the current one.
+    packages: Mutex<flows::Retained>,
     /// The gapless receipt-number authority a settle allocates from (ADR-0025). Injected rather than
     /// derived from `S`, so the one loop runs over the real SQLite store and over the fakes alike.
     receipts: Arc<dyn ReceiptAuthority>,
@@ -255,6 +272,11 @@ pub struct Edge<S> {
     /// and every manager approval, so a PIN the sign-in screen would have locked cannot be guessed
     /// at an approval prompt instead. Owned here and lent to the sign-in route as one `Arc`.
     pin_lockout: Arc<Lockout>,
+    /// The last configuration document refused for its package, written by the config-pull loop
+    /// and read by the heartbeat and `GET /api/package` (ADR-0189 decision 6).
+    package: PackageStanding,
+    /// How configuration reaches the store and how fast (ADR-0195).
+    config_wake: ConfigWakeStanding,
 }
 
 /// What [`Edge::open_inbound_order`] opened, and the one acceptance fact the caller must not work

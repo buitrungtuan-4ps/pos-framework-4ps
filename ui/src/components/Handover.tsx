@@ -8,7 +8,6 @@ import { Dynamic } from "solid-js/web";
 import { api } from "../api/client";
 import type { DrawerEntry } from "../api/schemas";
 import { t } from "../i18n";
-import { errorMessage } from "../lib/errors";
 import { money } from "../lib/money";
 import { printOutcomeKey } from "../lib/print";
 import {
@@ -18,12 +17,15 @@ import {
   count,
   countingOut,
   difference,
+  dismiss,
   error,
   goTo,
   handIn,
   handOut,
   outgoing,
+  pending,
   printed,
+  refusal,
   setCount,
   setText,
   signInIncoming,
@@ -35,6 +37,9 @@ import { holdsOwn } from "../state/permissions";
 import { formatAmount, reasonsFor, storeCurrency } from "../state/store";
 import { ApproverFields } from "./ApproverFields";
 import { CountField } from "./CountField";
+import { PendingSettle } from "./PendingSettle";
+import { RefusalPanel } from "./RefusalPanel";
+import { createPrint } from "../state/print-writes";
 
 export { handingOver } from "../state/handover";
 
@@ -54,7 +59,7 @@ function Act(props: { label: string; step: string; disabled: boolean; onClick: (
       data-step={props.step}
       onClick={() => props.onClick()}
     >
-      {busy() ? t("common.sending") : props.label}
+      {props.label}
     </button>
   );
 }
@@ -84,7 +89,7 @@ function HandOut() {
         label={t("handover.close_out")}
         step="handOut"
         disabled={countingOut() && typed() === null}
-        onClick={() => void handOut()}
+        onClick={() => handOut()}
       />
     </>
   );
@@ -102,7 +107,7 @@ function Reasons() {
               class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
               disabled={busy()}
               data-step="handoverReason"
-              onClick={() => void closeOut(reason.reason_code_id)}
+              onClick={() => closeOut(reason.reason_code_id)}
             >
               {reason.display_name}
             </button>
@@ -159,14 +164,14 @@ function HandIn() {
           </p>
         )}
       </Show>
-      <Act label={t("handover.open_in")} step="handIn" disabled={typed() === null} onClick={() => void handIn(false)} />
+      <Act label={t("handover.open_in")} step="handIn" disabled={typed() === null} onClick={() => handIn(false)} />
       <Show when={ask() === "confirm"}>
         <Act
           label={t("handover.confirm_in")}
           step="confirmHandIn"
           disabled={typed() === null}
           plain
-          onClick={() => void handIn(true)}
+          onClick={() => handIn(true)}
         />
       </Show>
     </>
@@ -215,6 +220,10 @@ export function Handover() {
           <div class="rounded-token border border-line bg-surface p-3">
             <h2 class="font-semibold">{t("handover.title")}</h2>
             <Dynamic component={STEPS[current()]} />
+            <Show when={pending()}>
+              {(out) => <PendingSettle act={out().act} phase={out().phase} amount="" onLeave={() => goTo(null)} />}
+            </Show>
+            <RefusalPanel message={refusal()} onDismiss={dismiss} />
             <Show when={error()}>
               {(message) => (
                 <p class="mt-3 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
@@ -237,20 +246,14 @@ export function Handover() {
 export function ReprintSlip(props: { drawer?: DrawerEntry }) {
   const [outcome, setOutcome] = createSignal<string | null>(null);
   const [failed, setFailed] = createSignal<string | null>(null);
-  const [sending, setSending] = createSignal(false);
+  const printer = createPrint(setFailed);
   const shiftId = () =>
     props.drawer?.shift?.handed_over_from_shift_id === undefined ? undefined : props.drawer.shift.shift_id;
-  const print = async (id: string) => {
-    setSending(true);
-    setFailed(null);
-    try {
-      setOutcome((await api.reprintHandoverSlip(id)).handover_slip_print);
-    } catch (caught) {
-      setFailed(errorMessage(caught));
-    } finally {
-      setSending(false);
-    }
-  };
+  const sending = printer.printing;
+  const print = (id: string) =>
+    printer.run("reports.shift.print_handover", () => api.reprintHandoverSlip(id), (printed) =>
+      setOutcome(printed.handover_slip_print),
+    );
   return (
     <Show when={holdsOwn("reports.shift.read_x") && shiftId()}>
       {(id) => (

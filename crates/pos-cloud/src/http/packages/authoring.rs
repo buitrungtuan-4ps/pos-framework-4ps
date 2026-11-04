@@ -11,7 +11,7 @@ use pos_cloud_api::response::{api_error_with_details, parse_ulid_fields};
 use pos_cloud_config::packages::{
     PackageRecord, PackageStore, PackageVersionRecord, min_edge_version,
 };
-use pos_core::package::check_content;
+use pos_core::package::{check_content, check_evolution};
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{PackageId, PackageVersionId, TenantId};
@@ -217,8 +217,10 @@ where
     extensions(("x-permission" = json!("console.packages.manage"))),
     params(("package_id" = String, Path, description = "The package's 26-character ULID")),
     request_body(
-        content = PackageVersionRequest, description = "The tenant, the version's label and its time slots. The \
-                       version id and the minimum edge release are the server's",
+        content = PackageVersionRequest, description = "The tenant, the version's label, its time slots and its \
+                       data part. The version id and the minimum edge release are the server's. Whether a \
+                       custom field is personal is required; the lawful basis, consent wording and \
+                       retention period of a personal field are the tenant's decision (ADR-0206)",
         content_type = "application/json",
     ),
     responses(
@@ -227,7 +229,12 @@ where
                                       release that runs it"),
         (status = 400, description = "tenant_id or package_id is not a ULID, or the content is refused: a blank or long \
                                       label, a malformed or repeated time slot, a window that is \
-                                      not whole, or content over 1 MiB. The detail names the field", body = crate::openapi_admin::ErrorResponse),
+                                      not whole, a data part ADR-0194 refuses, or content over 1 MiB. \
+                                      The detail names the field: its code is `INVALID`, \
+                                      `PERSONAL_FIELD_UNAVAILABLE` for a field declared personal \
+                                      before personal fields are available (ADR-0206), or \
+                                      `NOT_ADDITIVE` for data that removes, moves or retypes what \
+                                      an earlier version declared", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
         (status = 403, description = "The role lacks console.packages.manage", body = crate::openapi_admin::ErrorResponse),
         (status = 404, description = "The tenant has no package with that id", body = crate::openapi_admin::ErrorResponse),
@@ -283,14 +290,20 @@ where
         version_label: request.version_label.trim().to_owned(),
         min_edge_version: ReleaseTag::new(""),
         time_slots: request.time_slots,
+        // A version is authored with no flows until the console designs them (ADR-0192, phase 4).
+        flows: Vec::new(),
+        data: request.data,
     };
     content.min_edge_version = min_edge_version(&content);
     if let Err(refusal) = check_content(&content) {
         return api_error_with_details(
             ErrorStatus::InvalidArgument,
             refusal.to_string(),
-            &[(refusal.field(), "INVALID")],
+            &[(refusal.field(), refusal.code())],
         );
+    }
+    if let Err(refusal) = only_adds(&state.packages, tenant_id, &content).await {
+        return refusal;
     }
     if serde_json::to_vec(&content).map_or(true, |bytes| bytes.len() > CONTENT_BYTES_MAX) {
         return FieldRefusal::new(
@@ -322,5 +335,29 @@ where
         }
         Ok(CreateOutcome::AlreadyExists) => already_exists("package version"),
         Err(error) => package_error_response(&error),
+    }
+}
+
+/// Refuses `content` unless its data only adds to the data of every earlier version of its package
+/// (ADR-0194 decision 6), with `NOT_ADDITIVE` on the field at fault.
+async fn only_adds<P: PackageStore>(
+    packages: &P,
+    tenant_id: TenantId,
+    content: &PackageContent,
+) -> Result<(), Response> {
+    let earlier = packages
+        .list_versions(tenant_id, content.package_id)
+        .await
+        .map_err(|error| package_error_response(&error))?;
+    match earlier
+        .iter()
+        .find_map(|version| check_evolution(&version.content.data, &content.data).err())
+    {
+        Some(refusal) => Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            refusal.to_string(),
+            &[(refusal.field(), "NOT_ADDITIVE")],
+        )),
+        None => Ok(()),
     }
 }

@@ -18,7 +18,8 @@ use pos_contract_tests::harness::{
     DeliveryVendorHarness, DeviceRegistryHarness, ErpSinkHarness, EventStoreHarness,
     FiscalizationHarness, HarnessError, IdGeneratorHarness, IntakeLedgerHarness, KeyVaultHarness,
     MessageLinkHarness, MetricsSinkHarness, OrderInHarness, PaymentTerminalHarness,
-    PrinterDriverHarness, Setup, ShippingDispatchHarness, SignerHarness, SubjectStoreHarness,
+    PrinterDriverHarness, Setup, ShippingDispatchHarness, SignerHarness, StoreWakeHarness,
+    SubjectStoreHarness,
 };
 use pos_ports::{
     AccountCode, BusyMode, CourierJobRef, MetricSample, PrinterCapabilities, PublicKey, Signature,
@@ -39,6 +40,7 @@ use crate::vendors::{
     FakeDeliveryVendor, FakeErp, FakeFiscal, FakeIntake, FakeShipping, known_menu_item,
     unknown_menu_item,
 };
+use crate::wake::FakeStoreWake;
 
 /// The store every fake harness reports.
 ///
@@ -491,4 +493,42 @@ impl IdGeneratorHarness for IdHarness {
 #[must_use]
 pub fn example_setup_failure() -> HarnessError {
     HarnessError::new("no writable temporary directory")
+}
+
+/// Harness for [`FakeStoreWake`]: the wakes it subscribed, so a send reaches the one for its store.
+#[derive(Debug, Default)]
+pub struct WakeHarness {
+    subscribed: std::sync::Mutex<Vec<FakeStoreWake>>,
+}
+
+impl StoreWakeHarness for WakeHarness {
+    type Wake = FakeStoreWake;
+
+    fn store_ids(&self) -> (StoreId, StoreId) {
+        (store_id(), StoreId::new(Ulid::from_u128(2)))
+    }
+
+    async fn subscribe(&self, store_id: StoreId) -> Setup<Self::Wake> {
+        let wake = FakeStoreWake::new(store_id);
+        crate::lock(&self.subscribed).push(wake.clone());
+        Ok(wake)
+    }
+
+    async fn send(&self, store_id: StoreId, wake: &pos_proto::wake::ConfigWake) -> Setup<()> {
+        for subscribed in crate::lock(&self.subscribed).iter() {
+            if subscribed.store_id() == store_id {
+                subscribed.wake(wake.clone());
+            }
+        }
+        Ok(())
+    }
+
+    async fn reconnect(&self, wake: &Self::Wake) -> Setup<()> {
+        wake.reconnect();
+        Ok(())
+    }
+
+    fn patience(&self) -> core::time::Duration {
+        core::time::Duration::ZERO
+    }
 }
