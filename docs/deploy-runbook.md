@@ -301,6 +301,12 @@ console's task health shows a `config_wake` task with `sent_total`, `dropped_tot
 was full) and `failed_total` (the broker refused); a tick that dropped or failed a wake reads not ok.
 A lost wake costs that store nothing but the wait for its next poll.
 
+The cloud sends the wakes on its own `[nats]` connection (the ingest cursor's, not a second one): every
+saved store configuration queues one wake for its store, and a cloud with no `[nats]` sends none. The
+console's task health shows a `config_wake` task with `sent_total`, `dropped_total` (the queue of 1024
+was full) and `failed_total` (the broker refused); a tick that dropped or failed a wake reads not ok.
+A lost wake costs that store nothing but the wait for its next poll.
+
 Recover the token with `sudo sed -n 's/  token: //p' deploy/secrets/nats.conf`. It is **not**
 rotated by a redeploy: `bootstrap.sh` rewrites `nats.conf` on every run but carries the existing
 token across, and refuses the run outright if it cannot read it — a rotated token would silently
