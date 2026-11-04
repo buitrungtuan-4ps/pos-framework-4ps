@@ -165,4 +165,64 @@ impl PostgresCustomValues {
             .map_err(unavailable)?;
         transaction.commit().await.map_err(unavailable)
     }
+
+    /// Counts the objects of one store holding each value of `custom_field_id`, the most first, at
+    /// most `limit` groups.
+    ///
+    /// `object` (an existing object's kind token) or `object_type_id` names what is counted; a
+    /// `filter` keeps only the objects whose filter field's value contains the given JSON. Returns
+    /// each group's value as JSON text and its count. It reads no `subject_id`: a report counts
+    /// values, never people.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn summary(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+        scope: &SummaryScope,
+        limit: i64,
+    ) -> Result<Vec<(String, i64)>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .query(
+                "SELECT v.value::text, count(*) FROM custom_values v \
+                 WHERE v.tenant_id = $1 AND v.store_id = $2 AND v.custom_field_id = $3 \
+                 AND (v.object = $4 OR v.object_type_id = $5) \
+                 AND ($6::text IS NULL OR EXISTS (SELECT 1 FROM custom_values f \
+                     WHERE f.tenant_id = v.tenant_id AND f.store_id = v.store_id \
+                     AND f.object_id = v.object_id AND f.custom_field_id = $6 \
+                     AND f.value @> $7::text::jsonb)) \
+                 GROUP BY v.value ORDER BY count(*) DESC, v.value::text LIMIT $8",
+                &[
+                    &tenant.to_string(),
+                    &store_id.to_string(),
+                    &scope.custom_field_id,
+                    &scope.object,
+                    &scope.object_type_id,
+                    &scope.filter_field_id,
+                    &scope.filter_json,
+                    &limit,
+                ],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows.iter().map(|row| (row.get(0), row.get(1))).collect())
+    }
+}
+
+/// What a summary counts and groups by, as the table holds it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SummaryScope {
+    /// The field the objects are grouped by.
+    pub custom_field_id: String,
+    /// The existing object's kind, when the summary counts existing objects.
+    pub object: Option<String>,
+    /// The object type, when the summary counts records.
+    pub object_type_id: Option<String>,
+    /// The field a filter reads, if any.
+    pub filter_field_id: Option<String>,
+    /// The JSON the filter field's value must contain, such as `{"boolean":true}`.
+    pub filter_json: Option<String>,
 }

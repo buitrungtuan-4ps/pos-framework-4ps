@@ -117,3 +117,60 @@ fn custom_value_write(
         },
     })
 }
+
+impl crate::custom_data::CustomValueSummary for store_postgres::PostgresCustomValues {
+    async fn summary(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+        query: &crate::custom_data::SummaryQuery,
+        limit: usize,
+    ) -> Result<Vec<crate::custom_data::ValueCount>, pos_ports::PortError> {
+        use crate::custom_data::{FilterValue, SummaryObject, ValueCount};
+        use pos_proto::wire_enum::WireEnum;
+
+        let (object, object_type_id) = match query.object {
+            SummaryObject::Existing(kind) => (Some(kind.as_wire().to_owned()), None),
+            SummaryObject::Record(object_type) => (None, Some(object_type.to_string())),
+        };
+        let (filter_field_id, filter_json) = match query.filter {
+            Some((field, value)) => {
+                let json = match value {
+                    FilterValue::ListEntry(entry) => serde_json::json!({ "list_entry_id": entry }),
+                    FilterValue::Boolean(flag) => serde_json::json!({ "boolean": flag }),
+                    FilterValue::Integer(number) => serde_json::json!({ "integer": number }),
+                };
+                (Some(field.to_string()), Some(json.to_string()))
+            }
+            None => (None, None),
+        };
+        let scope = store_postgres::SummaryScope {
+            custom_field_id: query.custom_field_id.to_string(),
+            object,
+            object_type_id,
+            filter_field_id,
+            filter_json,
+        };
+        let rows = self
+            .summary(
+                tenant,
+                store_id,
+                &scope,
+                i64::try_from(limit).unwrap_or(i64::MAX),
+            )
+            .await?;
+        rows.into_iter()
+            .map(|(value, count)| {
+                Ok(ValueCount {
+                    value: serde_json::from_str(&value).map_err(|_| {
+                        pos_ports::PortError::internal(
+                            pos_ports::PortName::EventStore,
+                            "a projected custom value could not be decoded",
+                        )
+                    })?,
+                    objects: u64::try_from(count).unwrap_or(0),
+                })
+            })
+            .collect()
+    }
+}

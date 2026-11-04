@@ -10,13 +10,27 @@ use store_postgres::CustomValueWrite;
 use super::{block_on, prepared};
 
 fn upsert(object_id: &str, field: &str, value: &str) -> CustomValueWrite {
+    upsert_with(object_id, field, value, None)
+}
+
+/// The same write, for an object whose personal values a subject record holds.
+fn upsert_for_subject(object_id: &str, field: &str, value: &str) -> CustomValueWrite {
+    upsert_with(object_id, field, value, Some("SUBJECT0000000000000000AA"))
+}
+
+fn upsert_with(
+    object_id: &str,
+    field: &str,
+    value: &str,
+    subject: Option<&str>,
+) -> CustomValueWrite {
     CustomValueWrite::Upsert {
         object_id: object_id.to_owned(),
         custom_field_id: field.to_owned(),
         object: Some("DATA_OBJECT_ORDER".to_owned()),
         object_type_id: None,
         value_json: value.to_owned(),
-        subject_id: None,
+        subject_id: subject.map(str::to_owned),
         package_version_id: "01J00000000000000000000V01".to_owned(),
         update_time_ms: 1_767_225_600_000,
     }
@@ -109,5 +123,71 @@ fn values_are_upserted_cleared_and_isolated_with_their_cursor() {
             .await
             .expect("reset");
         assert!(seen.is_empty(), "tenant B sees none of tenant A's values");
+    });
+}
+
+/// A summary counts objects per value, the most first, keeps only the objects a filter matches,
+/// and answers values and counts alone: no `subject_id` is read or returned, even where the rows
+/// carry one.
+#[test]
+fn a_summary_counts_values_and_never_returns_a_subject() {
+    block_on(async {
+        let (store, _admin) = prepared().await.expect("prepare the database");
+        let values = store.custom_values();
+        let tenant = TenantId::new(Ulid::from_u128(0x0A));
+        let shop = StoreId::new(Ulid::from_u128(0x5));
+        let birthday = r#"{"custom_field_id":"OCCASION","list_entry_id":"BIRTHDAY"}"#;
+        let wedding = r#"{"custom_field_id":"OCCASION","list_entry_id":"WEDDING"}"#;
+        values
+            .apply(
+                tenant,
+                shop,
+                &[
+                    upsert_for_subject("ORDER1", "OCCASION", birthday),
+                    upsert_for_subject("ORDER2", "OCCASION", birthday),
+                    upsert_for_subject("ORDER3", "OCCASION", wedding),
+                    upsert(
+                        "ORDER1",
+                        "TERRACE",
+                        r#"{"custom_field_id":"TERRACE","boolean":true}"#,
+                    ),
+                ],
+                EventId::new(Ulid::from_u128(0x201)),
+            )
+            .await
+            .expect("seed");
+
+        let scope = |filter: Option<(&str, &str)>| store_postgres::SummaryScope {
+            custom_field_id: "OCCASION".to_owned(),
+            object: Some("DATA_OBJECT_ORDER".to_owned()),
+            object_type_id: None,
+            filter_field_id: filter.map(|(field, _)| field.to_owned()),
+            filter_json: filter.map(|(_, json)| json.to_owned()),
+        };
+        let all = values
+            .summary(tenant, shop, &scope(None), 10)
+            .await
+            .expect("summary");
+        assert_eq!(all.len(), 2);
+        assert_eq!(
+            all.first().map(|(_, count)| *count),
+            Some(2),
+            "birthdays first"
+        );
+        for (value, _) in &all {
+            assert!(!value.contains("subject"), "{value}");
+        }
+
+        let on_the_terrace = values
+            .summary(
+                tenant,
+                shop,
+                &scope(Some(("TERRACE", r#"{"boolean":true}"#))),
+                10,
+            )
+            .await
+            .expect("filtered summary");
+        assert_eq!(on_the_terrace.len(), 1);
+        assert_eq!(on_the_terrace.first().map(|(_, count)| *count), Some(1));
     });
 }
