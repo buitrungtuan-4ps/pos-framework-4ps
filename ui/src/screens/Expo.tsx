@@ -4,8 +4,9 @@ import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { useDarkTakeover } from "../lib/screen";
 import { can } from "../state/permissions";
+import { createBumper } from "../state/kitchen-writes";
+import { WriteRefused } from "../components/WriteRefused";
 import {
-  bump,
   firedLines,
   type KitchenLine,
 } from "../state/store";
@@ -62,20 +63,19 @@ export function Expo() {
       : t("counter.queue_number", { number });
   };
 
+  // The table leaves the pass on the tap; a refusal, or no answer, brings it back and says why.
+  const bumper = createBumper();
   const runAway = (lines: KitchenLine[]) => {
     const [first] = lines;
-    if (first === undefined) {
-      return;
+    if (first !== undefined) {
+      bumper.bump(first.orderId, lines.map((line) => line.orderLineId));
     }
-    void bump(
-      first.orderId,
-      lines.map((line) => line.orderLineId),
-    );
   };
 
   return (
     <section class="p-4">
       <PageHeader title={t("expo.title")} size="xl" />
+      <WriteRefused message={bumper.refused()} outcome="pass-bump-refused" />
       <div class="grid grid-cols-1 gap-3 tablet:grid-cols-2 terminal:grid-cols-3">
         <For
           each={groups()}
