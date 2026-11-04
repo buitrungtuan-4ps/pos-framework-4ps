@@ -18232,7 +18232,7 @@
           }
         ],
         "requestBody": {
-          "description": "The tenant, the version's label and its time slots. The version id and the minimum edge release are the server's",
+          "description": "The tenant, the version's label, its time slots and its data part. The version id and the minimum edge release are the server's. Whether a custom field is personal is required; the lawful basis, consent wording and retention period of a personal field are the tenant's decision (ADR-0206)",
           "content": {
             "application/json": {
               "schema": {
@@ -18254,7 +18254,7 @@
             }
           },
           "400": {
-            "description": "tenant_id or package_id is not a ULID, or the content is refused: a blank or long label, a malformed or repeated time slot, a window that is not whole, or content over 1 MiB. The detail names the field",
+            "description": "tenant_id or package_id is not a ULID, or the content is refused: a blank or long label, a malformed or repeated time slot, a window that is not whole, a data part ADR-0194 refuses, or content over 1 MiB. The detail names the field: its code is `INVALID`, `PERSONAL_FIELD_UNAVAILABLE` for a field declared personal before personal fields are available (ADR-0206), or `NOT_ADDITIVE` for data that removes, moves or retypes what an earlier version declared",
             "content": {
               "application/json": {
                 "schema": {
@@ -31414,6 +31414,10 @@
           "version_label"
         ],
         "properties": {
+          "data": {
+            "$ref": "#/components/schemas/PackageData",
+            "description": "The package's data part: custom fields, object types and lists (ADR-0194). Each field says\nwhether it is personal; publishing a personal field is the tenant's decision on its lawful\nbasis, consent wording and retention, and is refused until personal fields are available\n(ADR-0206)."
+          },
           "tenant_id": {
             "type": "string"
           },

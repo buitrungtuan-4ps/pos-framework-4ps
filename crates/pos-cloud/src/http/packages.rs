@@ -16,7 +16,7 @@ use axum::routing::get;
 use pos_cloud_api::response::api_error;
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
-use pos_proto::package::TimeSlot;
+use pos_proto::package::{PackageData, TimeSlot};
 use serde::Deserialize;
 
 use crate::audit::AuditRecorder;
@@ -58,6 +58,12 @@ struct PackageVersionRequest {
     /// The package's named time slots, in the order that decides which one is current.
     #[serde(default)]
     time_slots: Vec<TimeSlot>,
+    /// The package's data part: custom fields, object types and lists (ADR-0194). Each field says
+    /// whether it is personal; publishing a personal field is the tenant's decision on its lawful
+    /// basis, consent wording and retention, and is refused until personal fields are available
+    /// (ADR-0206).
+    #[serde(default)]
+    data: PackageData,
 }
 
 /// Builds the package sub-router. Reads are `console.data.read`; creating a package and publishing
