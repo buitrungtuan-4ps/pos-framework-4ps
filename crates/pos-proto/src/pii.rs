@@ -147,6 +147,13 @@ no_pii!(
     // configuration, like `ConfigVersionId`, never a person.
     ids::PackageVersionId,
     ids::PaymentId,
+    // Custom data (ADR-0194 decision 3): which field, which entry of a list, which object type,
+    // which record. Each names a declaration or a record, never what a person typed: a personal
+    // value is held in the subject store and reached through a `SubjectId`.
+    ids::CustomFieldId,
+    ids::CustomRecordId,
+    ids::ListEntryId,
+    ids::ObjectTypeId,
     ids::QrSessionId,
     ids::ShiftId,
     ids::StockLedgerEntryId,
@@ -189,6 +196,7 @@ no_pii!(
     events::BillTaxLine,
     events::BillTaxComponent,
     events::DenominationCount,
+    events::CustomFieldValue,
 );
 
 impl<T: NoPii> sealed::Sealed for Option<T> {}

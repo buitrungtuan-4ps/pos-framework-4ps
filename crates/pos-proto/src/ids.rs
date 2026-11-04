@@ -277,6 +277,10 @@ resource_id! {
     /// One entry of a [`CustomListId`]'s list: what a `choice` value carries.
     ListEntryId
 }
+resource_id! {
+    /// One record of a custom object type, such as one reservation (ADR-0194 decision 3).
+    CustomRecordId
+}
 
 #[cfg(test)]
 mod tests {

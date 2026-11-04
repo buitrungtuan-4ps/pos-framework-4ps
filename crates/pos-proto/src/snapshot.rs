@@ -30,7 +30,9 @@
 //! from here rather than arriving fully formed with no history.
 
 use crate::envelope::{EventPayload, PayloadPart};
-use crate::events::{BillFeeLine, BillTaxComponent, BillTaxLine, DenominationCount, EventType};
+use crate::events::{
+    BillFeeLine, BillTaxComponent, BillTaxLine, CustomFieldValue, DenominationCount, EventType,
+};
 use crate::fees::FrozenFee;
 
 /// Where the rendered snapshot is committed, relative to the repository root.
@@ -82,6 +84,16 @@ const PARTS: &[(EventType, &str, &[&str])] = &[
         EventType::CashDrawerDropped,
         "denomination_counts[]",
         DenominationCount::FIELD_NAMES,
+    ),
+    (
+        EventType::DataCustomFieldSet,
+        "values[]",
+        CustomFieldValue::FIELD_NAMES,
+    ),
+    (
+        EventType::DataCustomRecordChanged,
+        "values[]",
+        CustomFieldValue::FIELD_NAMES,
     ),
 ];
 
