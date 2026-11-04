@@ -18,6 +18,7 @@
 //! paths. The projector loop that keeps the rollups current stays there, with the task health it
 //! reports to.
 
+pub mod custom_data;
 pub mod dashboard;
 pub mod export;
 mod persistence;
