@@ -5090,6 +5090,8 @@ test("starting several drawers stops at the first refusal and says which did not
     expect(starts).toHaveLength(1);
     await expect(page.locator("#drawer-approver-code")).toHaveValue("");
     await expect(page.locator("#drawer-approver-pin")).toHaveValue("");
+    // The refusal stands in place until it is dismissed (ADR-0196 safeguard 3).
+    await page.locator('[data-step="dismissRefusal"]').click();
 
     // Both are still picked, and each starts on its own till's float.
     await approve(page, edge);
@@ -5208,6 +5210,146 @@ test("a close beyond the store's limit shows the variance and closes with the re
     await expect(page.locator('[data-outcome="shift-closed"]')).toContainText("-50,000₫");
     await expect(owed).toHaveCount(0);
     expect(closes).toEqual([null, { reason_code_id: "00000000000000000000000009" }]);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// ADR-0204 for the drawer list: a start whose answer is lost is read again from the list of drawers,
+// and the drawer shows started; a batch close whose answer is lost is found made because none of its
+// shifts is listed any more, and its figures, which only the close's answer gives, are left to the
+// shift's report rather than worked out here.
+test("a start and a batch close from the list whose answers are lost are checked, not sent again", async ({
+  page,
+}) => {
+  const edge = await startEdge("drawers");
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await bindTill(page, "Counter till");
+    await page.locator('[data-step="openShift"]').click();
+    await expect(page.locator('[data-outcome="shift-open"]')).toBeVisible();
+    const starts = startsSent(page);
+    const lose = async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.fallback();
+        return;
+      }
+      await route.fetch();
+      await route.abort("connectionreset");
+    };
+    await page.route("**/api/shifts", lose);
+    await drawerRow(page, "Bar till").click();
+    await approve(page, edge);
+    await page.locator('[data-step="startDrawers"]').click();
+    await expect(page.locator('[data-outcome="open-pending"]')).toContainText("Checking with the store server");
+    await expect(page.locator('[data-outcome="drawers-started"]')).toHaveText("Started: Bar till.");
+    await expect(drawerRow(page, "Bar till")).toContainText("Open");
+    expect(starts).toHaveLength(1);
+    await page.unroute("**/api/shifts", lose);
+
+    await page.locator("#count").fill("500000");
+    await page.locator('[data-step="countShift"]').click();
+    await expect(page.locator('[data-outcome="shift-counted"]')).toBeVisible();
+    await drawerRow(page, "Bar till").click();
+    await page.locator("#drawer-count").fill("200000");
+    await approve(page, edge);
+    await page.locator('[data-step="countDrawer"]').click();
+    await expect(page.locator('[data-outcome="drawer-counted"]')).toBeVisible();
+
+    let closes = 0;
+    await page.route("**/api/shifts:batch_close", async (route) => {
+      closes += 1;
+      await route.fetch();
+      await route.abort("connectionreset");
+    });
+    await drawerRow(page, "Counter till").click();
+    await drawerRow(page, "Bar till").click();
+    await approve(page, edge);
+    await page.locator('[data-step="closeDrawers"]').click();
+    await expect(page.locator('[data-outcome="close-pending"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="drawers-closed-unread"]')).toContainText("read it on the shift's report");
+    await expect(drawerRow(page, "Bar till")).toContainText("Closed");
+    expect(closes).toBe(1);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// ADR-0204: a count from the list that never reached the edge is found not made, and says so.
+test("a count from the list that never reached the store server is found not made", async ({ page }) => {
+  const edge = await startEdge("drawers");
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await bindTill(page, "Counter till");
+    await drawerRow(page, "Bar till").click();
+    await approve(page, edge);
+    await page.locator('[data-step="startDrawers"]').click();
+    await expect(page.locator('[data-outcome="drawers-started"]')).toHaveText("Started: Bar till.");
+    await page.route("**/api/shifts/*/count", (route) => route.abort("connectionreset"));
+    await drawerRow(page, "Bar till").click();
+    await page.locator("#drawer-count").fill("200000");
+    await approve(page, edge);
+    await page.locator('[data-step="countDrawer"]').click();
+    await expect(page.locator('[data-outcome="count-pending"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="money-refused"]')).toContainText("The count was not recorded");
+    await expect(drawerRow(page, "Bar till")).not.toContainText("Counted");
+  } finally {
+    await edge.stop();
+  }
+});
+
+// ADR-0204 for a handover: the outgoing count and close whose answers are lost are read again, and
+// the incoming cashier is shown the count the edge recorded (90,000₫ for one typed as 100,000₫, as
+// when another device's count reached it first), never the one typed; the incoming opening whose
+// answer is lost is found made as the shift that took the outgoing one over.
+test("a handover whose answers are lost goes on with the edge's count, never re-sent", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await openShift(page);
+    let sent = 0;
+    await page.route("**/api/shifts/*/count", async (route) => {
+      sent += 1;
+      const body = { ...route.request().postDataJSON(), counted_minor: 90000 };
+      await route.fetch({ postData: JSON.stringify(body) });
+      await route.abort("connectionreset");
+    });
+    await page.locator('[data-step="beginHandover"]').click();
+    await page.locator("#handover-out").fill("100000");
+    await page.locator('[data-step="handOut"]').click();
+    await expect(page.locator('[data-outcome="close-pending"]')).toBeVisible();
+    // The count's answer was lost, so the close was never sent: the re-read finds the shift counted.
+    await expect(page.locator('[data-outcome="money-refused"]')).toContainText("The shift was not closed");
+    await page.locator('[data-step="dismissRefusal"]').click();
+    await page.route("**/api/shifts/*/close", async (route) => {
+      await route.fetch();
+      await route.abort("connectionreset");
+    });
+    await page.locator('[data-step="handOut"]').click();
+    await expect(page.locator('[data-outcome="handover-closed"]')).toContainText("90,000₫");
+    expect(sent).toBe(1);
+
+    let opens = 0;
+    await page.route("**/api/shifts", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.fallback();
+        return;
+      }
+      opens += 1;
+      await route.fetch();
+      await route.abort("connectionreset");
+    });
+    await page.locator("#handover-incoming-code").fill(edge.staffCode);
+    await page.locator("#handover-incoming-pin").fill(edge.staffPin);
+    await page.locator('[data-step="handoverSignIn"]').click();
+    await page.locator("#handover-in").fill("90000");
+    await page.locator('[data-step="handIn"]').click();
+    await expect(page.locator('[data-outcome="open-pending"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="handover-done"]')).toContainText("0₫");
+    expect(opens).toBe(1);
   } finally {
     await edge.stop();
   }

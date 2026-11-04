@@ -14,20 +14,18 @@ import { PendingSettle } from "../components/PendingSettle";
 import { RefusalPanel } from "../components/RefusalPanel";
 import { useOwnShiftActs } from "../state/shift-acts";
 import { useMovementAct, useNoSaleAct } from "../state/cash-acts";
+import { useDrawerListAct } from "../state/drawer-list-acts";
 import { CashTotals } from "../components/ShiftCashLines";
 import type { ApproverRequest, DrawerEntry, DrawerOutcome, ShiftResponse } from "../api/schemas";
 import { t, type MessageKey } from "../i18n";
 import { WhyUnavailable } from "../components/StoreData";
 import { money, type Money } from "../lib/money";
 import {
-  closeDrawerShifts,
-  countDrawerShift,
   currencyExponent,
   drawerPerTill,
   formatAmount,
   loadDrawers,
   loadShift,
-  openDrawerShift,
   ownTill,
   parseAmount,
   reasonsFor,
@@ -35,7 +33,6 @@ import {
   storeCurrency,
 } from "../state/store";
 import { openingFloatMinor } from "../state/session";
-import { errorMessage, owedVariances } from "../lib/errors";
 import { printOutcomeKey } from "../lib/print";
 import { asksApprover, can } from "../state/permissions";
 import { overrideAsks } from "../state/drawer-access";
@@ -300,8 +297,6 @@ export function Shift() {
   const [listFloatTyped, setListFloatTyped] = createSignal(false);
   const [listCode, setListCode] = createSignal("");
   const [listPin, setListPin] = createSignal("");
-  const [listBusy, setListBusy] = createSignal(false);
-  const [listError, setListError] = createSignal<string | null>(null);
   const [startedDrawers, setStartedDrawers] = createSignal<{
     started: string[];
     missed: string[];
@@ -381,7 +376,7 @@ export function Shift() {
   const pickDrawer = (drawer: DrawerEntry) => {
     const key = tillKey(drawer);
     const current = pickedDrawers();
-    setListError(null);
+    listAct.dismiss();
     setStartedDrawers(null);
     setCountedDrawer(null);
     setClosedDrawers(null);
@@ -405,107 +400,91 @@ export function Shift() {
     setPicked(together ? [...current.map(tillKey), key] : [key]);
   };
 
-  // Runs one act on the list, and drops the approver after it whatever came of it, but for a close
-  // refused until its drawers have a reason, which the reason step sends again at once with it.
-  const onList = async (act: () => Promise<void>) => {
-    setListBusy(true);
-    setListError(null);
-    let owed: ShiftResponse[] | null = null;
-    try {
-      await act();
-    } catch (caught) {
-      owed = owedVariances(caught);
-      if (owed === null) {
-        setListError(errorMessage(caught, DRAWER_REASONS));
-      } else {
-        setOwedDrawers(owed);
+  // The list's acts are money acts (`../state/drawer-list-acts`). The approver is dropped after each
+  // whatever came of it, but for a close refused until its drawers have a reason, which the reason
+  // step sends again at once with it.
+  let closingNames = new Map<string, string>();
+  const [closedUnread, setClosedUnread] = createSignal(false);
+  const listAct = useDrawerListAct((done) => {
+    if ("started" in done) {
+      setStartedDrawers((was) => ({ started: [...(was?.started ?? []), done.started], missed: was?.missed ?? [], refusal: null }));
+    } else if ("counted" in done) {
+      setCountedDrawer(done.counted);
+      setPicked([]);
+      setListAmount("");
+    } else if ("owed" in done) {
+      setOwedDrawers(done.owed);
+      return;
+    } else {
+      setOwedDrawers([]);
+      setGivenReasons({});
+      setClosedUnread("closedRead" in done);
+      if ("closed" in done) {
+        const drawersClosed = done.closed.shifts.map((closedShift) => ({ name: closingNames.get(closedShift.shift_id) ?? "", shift: closedShift }));
+        setClosedDrawers({ drawers: drawersClosed, slip: done.closed.slip });
       }
-    } finally {
-      if (owed === null) {
-        setListCode("");
-        setListPin("");
-      }
-      setListBusy(false);
+      setPicked([]);
     }
-  };
+    setListCode("");
+    setListPin("");
+  }, DRAWER_REASONS);
+  const listBusy = () => listAct.pending() !== null;
 
   // Starts each drawer picked, one request each, so the edge records each start, the approver's
   // code and PIN going with each other till's. The first refusal stops it — a wrong PIN is not tried
-  // again against the lockout — and the screen says which started and which did not.
-  const startDrawers = () =>
-    onList(async () => {
-      const chosen = pickedDrawers();
-      const approval = listApproval();
-      const typed = chosen.length === 1 ? parseAmount(listFloatText()) : null;
-      const started: string[] = [];
-      let missed: DrawerEntry[] = [];
-      let refusal: string | null = null;
-      for (const [index, drawer] of chosen.entries()) {
-        const till = tillKey(drawer);
-        try {
-          await openDrawerShift(
-            till,
-            typed ?? drawer.default_float.amount_minor,
-            till === ownTill() ? undefined : approval,
-            till === ownTill() ? undefined : assignee(),
-          );
-          started.push(drawerName(drawer));
-        } catch (caught) {
-          refusal = errorMessage(caught, DRAWER_REASONS);
-          missed = chosen.slice(index);
-          break;
-        }
+  // again against the lockout — and so does one with no answer, which is checked before any other
+  // is sent; the screen says which started and which did not.
+  const startDrawers = async () => {
+    const chosen = pickedDrawers();
+    const approval = listApproval();
+    const typed = chosen.length === 1 ? parseAmount(listFloatText()) : null;
+    setStartedDrawers({ started: [], missed: [], refusal: null });
+    let missed: DrawerEntry[] = [];
+    for (const [index, drawer] of chosen.entries()) {
+      const till = tillKey(drawer);
+      const own = till === ownTill();
+      await listAct.start(till, drawerName(drawer), typed ?? drawer.default_float.amount_minor, own ? undefined : approval, own ? undefined : assignee());
+      if (!listAct.went()) {
+        missed = chosen.slice(listAct.phase() === "idle" ? index : index + 1);
+        break;
       }
-      setPicked(missed.map(tillKey));
-      setListAmount("");
-      setListFloatTyped(false);
-      setStartedDrawers({ started, missed: missed.map(drawerName), refusal });
-    });
+    }
+    setPicked(missed.map(tillKey));
+    setListAmount("");
+    setListFloatTyped(false);
+    setStartedDrawers((was) => ({ started: was?.started ?? [], missed: missed.map(drawerName), refusal: null }));
+    setListCode("");
+    setListPin("");
+  };
 
   // The blind count of the one open drawer picked: what it should hold is on screen only where the
   // read carries it, never worked out here.
-  const countDrawer = () =>
-    onList(async () => {
-      const [drawer] = pickedDrawers();
-      const value = parseAmount(listAmount());
-      if (drawer === undefined || drawer.shift === null || value === null) {
-        return;
-      }
-      await countDrawerShift(drawer.shift.shift_id, value, listApproval());
-      setCountedDrawer(drawerName(drawer));
-      setPicked([]);
-      setListAmount("");
-    });
+  const countDrawer = () => {
+    const [drawer] = pickedDrawers();
+    const value = parseAmount(listAmount());
+    if (drawer !== undefined && drawer.shift !== null && value !== null) {
+      void listAct.count(drawer.shift.shift_id, drawerName(drawer), value, listApproval());
+    }
+  };
 
   // Closes the counted drawers picked: one on its own, or several in one act, every one or none,
   // under one approver (decision 10). Each drawer's figures come back, with what printed.
-  const closeDrawers = () =>
-    onList(async () => {
-      const names = new Map<string, string>();
-      for (const drawer of pickedDrawers()) {
-        if (drawer.shift !== null) {
-          names.set(drawer.shift.shift_id, drawerName(drawer));
-        }
+  const closeDrawers = () => {
+    closingNames = new Map<string, string>();
+    for (const drawer of pickedDrawers()) {
+      if (drawer.shift !== null) {
+        closingNames.set(drawer.shift.shift_id, drawerName(drawer));
       }
-      const closed = await closeDrawerShifts([...names.keys()], listApproval(), givenReasons());
-      setOwedDrawers([]);
-      setGivenReasons({});
-      setClosedDrawers({
-        drawers: closed.shifts.map((closedShift) => ({
-          name: names.get(closedShift.shift_id) ?? "",
-          shift: closedShift,
-        })),
-        slip: closed.slip,
-      });
-      setPicked([]);
-    });
+    }
+    void listAct.close([...closingNames.keys()], listApproval(), givenReasons());
+  };
 
   // A reason for one drawer owed one; once each has its reason, the close goes again with them.
   const drawerVarianceReason = (shiftId: string, reasonCodeId: string) => {
     const given = { ...givenReasons(), [shiftId]: reasonCodeId };
     setGivenReasons(given);
     if (owedDrawers().every((owed) => given[owed.shift_id] !== undefined)) {
-      void closeDrawers();
+      closeDrawers();
     }
   };
   const owedName = (owed: ShiftResponse) => {
@@ -1029,7 +1008,7 @@ export function Shift() {
                     class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
                     disabled={!listReady() || parseAmount(listAmount()) === null}
                     data-step="countDrawer"
-                    onClick={() => void countDrawer()}
+                    onClick={() => countDrawer()}
                   >
                     {t("shift.enter_count")}
                   </button>
@@ -1043,7 +1022,7 @@ export function Shift() {
                     class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
                     disabled={!listReady()}
                     data-step="closeDrawers"
-                    onClick={() => void closeDrawers()}
+                    onClick={() => closeDrawers()}
                   >
                     {t("shift.close_drawers", { count: pickedDrawers().length })}
                   </button>
@@ -1095,12 +1074,14 @@ export function Shift() {
             )}
           </Show>
 
-          <Show when={listError()}>
-            {(message) => (
-              <p class="mt-3 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
-                {message()}
-              </p>
-            )}
+          <Show when={listAct.pending()}>
+            {(out) => <PendingSettle act={out().act} phase={out().phase} amount="" onLeave={() => navigate("/")} />}
+          </Show>
+          <RefusalPanel message={listAct.refusal()} onDismiss={listAct.dismiss} />
+          <Show when={closedUnread()}>
+            <p class="mt-3 text-sm text-ink-muted" role="status" data-outcome="drawers-closed-unread">
+              {t("shift.closed_unread")}
+            </p>
           </Show>
           <Show when={startedDrawers()}>
             {(done) => (
