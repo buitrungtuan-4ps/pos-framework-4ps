@@ -18,12 +18,15 @@ import {
   count,
   countingOut,
   difference,
+  dismiss,
   error,
   goTo,
   handIn,
   handOut,
   outgoing,
+  pending,
   printed,
+  refusal,
   setCount,
   setText,
   signInIncoming,
@@ -35,6 +38,8 @@ import { holdsOwn } from "../state/permissions";
 import { formatAmount, reasonsFor, storeCurrency } from "../state/store";
 import { ApproverFields } from "./ApproverFields";
 import { CountField } from "./CountField";
+import { PendingSettle } from "./PendingSettle";
+import { RefusalPanel } from "./RefusalPanel";
 
 export { handingOver } from "../state/handover";
 
@@ -54,7 +59,7 @@ function Act(props: { label: string; step: string; disabled: boolean; onClick: (
       data-step={props.step}
       onClick={() => props.onClick()}
     >
-      {busy() ? t("common.sending") : props.label}
+      {props.label}
     </button>
   );
 }
@@ -84,7 +89,7 @@ function HandOut() {
         label={t("handover.close_out")}
         step="handOut"
         disabled={countingOut() && typed() === null}
-        onClick={() => void handOut()}
+        onClick={() => handOut()}
       />
     </>
   );
@@ -102,7 +107,7 @@ function Reasons() {
               class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
               disabled={busy()}
               data-step="handoverReason"
-              onClick={() => void closeOut(reason.reason_code_id)}
+              onClick={() => closeOut(reason.reason_code_id)}
             >
               {reason.display_name}
             </button>
@@ -159,14 +164,14 @@ function HandIn() {
           </p>
         )}
       </Show>
-      <Act label={t("handover.open_in")} step="handIn" disabled={typed() === null} onClick={() => void handIn(false)} />
+      <Act label={t("handover.open_in")} step="handIn" disabled={typed() === null} onClick={() => handIn(false)} />
       <Show when={ask() === "confirm"}>
         <Act
           label={t("handover.confirm_in")}
           step="confirmHandIn"
           disabled={typed() === null}
           plain
-          onClick={() => void handIn(true)}
+          onClick={() => handIn(true)}
         />
       </Show>
     </>
@@ -215,6 +220,10 @@ export function Handover() {
           <div class="rounded-token border border-line bg-surface p-3">
             <h2 class="font-semibold">{t("handover.title")}</h2>
             <Dynamic component={STEPS[current()]} />
+            <Show when={pending()}>
+              {(out) => <PendingSettle act={out().act} phase={out().phase} amount="" onLeave={() => goTo(null)} />}
+            </Show>
+            <RefusalPanel message={refusal()} onDismiss={dismiss} />
             <Show when={error()}>
               {(message) => (
                 <p class="mt-3 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
