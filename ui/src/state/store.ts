@@ -7,6 +7,7 @@ import { createStore, produce, reconcile } from "solid-js/store";
 
 import { api } from "../api/client";
 import { adoptStoreLanguage } from "../i18n";
+import { editWrite } from "./edge-write";
 import { load, reload } from "./engine";
 import { ownOverride } from "./drawer-access";
 import { keptShift, shiftInfo } from "./shift-info";
@@ -1190,8 +1191,14 @@ export function holdWalkIn(orderId: string): void {
  * it the day's next queue number, and prices every line added to it at the order's own channel:
  * `channel` where the cashier asked the guest, and the store's walk-in channel otherwise.
  */
+//
+// An edge write (ADR-0196 decision 1): the draft walk-in on screen is its paint (`./draft-walk-in`),
+// a refusal leaves the draft as it was, and no answer reads the open orders again.
 export async function startWalkIn(channel?: string): Promise<string> {
-  const opened = await api.openOrder(channel);
+  const opened = await editWrite("sales.order.open", {
+    send: () => api.openOrder(channel),
+    reread: () => void loadLiveOrders(),
+  });
   holdWalkIn(opened.order_id);
   if (channel !== undefined) {
     setState("walkInChannels", opened.order_id, channel);
@@ -1705,19 +1712,6 @@ export async function loadSync(): Promise<void> {
   } catch {
     // Keep the last reading; the next poll tries again.
   }
-}
-
-// Changes how many of a line, while the kitchen has not been told about it.
-//
-// Sends a quantity and no money: the edge holds the unit price captured when the line was added and
-// extends the line itself, so this cannot quote the guest a total that does not follow from the
-// price on the menu they were shown.
-
-export async function fire(lineId: string): Promise<void> {
-  // The edge derives the fired line's station from the published routing (ADR-0072); the station we
-  // send is only the fallback it uses when the store has published no station plan yet.
-  const response = await api.fireLine(lineId, { station_id: state.defaultStation });
-  setState("lines", lineId, "state", response.state);
 }
 
 // Voids a bill before it settles. A bill is money whether or not the kitchen started, so it needs a

@@ -7,7 +7,7 @@ import { t } from "../i18n";
 import { reasonMessage } from "../lib/errors";
 import { PRECHECKED, WRITES_PENDING } from "../package/prechecks";
 import { type MoneyAct, type Recheck, useMoneyAct } from "./money-act";
-import { writesPending } from "./optimistic";
+import { writesPending } from "./edge-write";
 import { applySettled, settle, state } from "./store";
 
 const CHECKED = PRECHECKED["billing.bill.settle"] ?? [];

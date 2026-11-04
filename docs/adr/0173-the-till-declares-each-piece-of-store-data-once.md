@@ -5,6 +5,9 @@
 [ADR-0115](0115-reason-codes-are-a-managed-list.md),
 [ADR-0158](0158-the-till-enforces-each-persons-own-permissions.md),
 [ADR-0160](0160-everything-a-store-runs-differently-is-published-configuration.md)
+· **Amended by** [ADR-0196](0196-every-act-paints-first-and-money-waits-for-the-edge.md) — decision 4's
+allow-list is retired: every act the catalogue marks an edge write paints first and reconciles as
+decision 4 says, and money waits for the edge
 
 owner delegated approval 2026-10-14
 

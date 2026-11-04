@@ -43,7 +43,8 @@ import {
   type OrderLine,
   formatAmount,
 } from "../state/store";
-import { addItem, moveTable, setQuantity, writesPending } from "../state/optimistic";
+import { addItem, moveTable, setQuantity } from "../state/optimistic";
+import { writesPending } from "../state/edge-write";
 import { fireCourse, fireOrder, voidLine } from "../state/order-writes";
 import { releaseTable, setItemSoldOut } from "../state/floor-writes";
 import { errorMessage } from "../lib/errors";

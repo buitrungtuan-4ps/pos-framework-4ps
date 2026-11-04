@@ -7,7 +7,7 @@ import { useLocation } from "@solidjs/router";
 import { t, type MessageKey } from "../i18n";
 import { errorMessage } from "../lib/errors";
 import { notLoaded, retryFailing, storeReady, unavailable, waitingFor } from "../state/engine";
-import { writesPending } from "../state/optimistic";
+import { writesPending } from "../state/edge-write";
 import type { ScreenRead } from "../state/screen-read";
 
 // The screens that draw nothing of the store's: pairing, signing in and activating a box. A device
