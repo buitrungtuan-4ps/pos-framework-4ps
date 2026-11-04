@@ -8,7 +8,6 @@ import { can } from "../state/permissions";
 import { seatAtOnce, seatRefusal, seating, setSeatRefusal } from "../state/optimistic";
 import {
   areaIsPlaced,
-  clean,
   floorAreas,
   seatedAt,
   tableState,
@@ -16,6 +15,7 @@ import {
   type FloorArea,
   type TableCard,
 } from "../state/store";
+import { clean } from "../state/floor-writes";
 import { Takeaway } from "./Takeaway";
 import { errorMessage } from "../lib/errors";
 

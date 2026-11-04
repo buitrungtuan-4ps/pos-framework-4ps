@@ -11,7 +11,8 @@
 // is then null and the screen waits for the bill's own read, as before.
 
 import type { CheckResponse } from "../api/schemas";
-import { loadCheck, loadLiveOrders, openBill, openBillFor } from "./store";
+import { openBill } from "./floor-writes";
+import { loadCheck, loadLiveOrders, openBillFor } from "./store";
 
 export async function openForPay(
   tableId: string,
