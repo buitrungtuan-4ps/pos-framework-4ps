@@ -805,3 +805,17 @@ async fn a_heartbeat_reports_the_stores_package() {
         StatusCode::BAD_REQUEST
     );
 }
+
+/// Records a heartbeat's report in a fake's map, replacing the store's last, as the liveness row does.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "it answers for the fake's `ConfigTreeStore` methods, whose signature is the seam's"
+)]
+pub(crate) fn record_beat<V: Clone>(
+    map: &std::sync::Mutex<std::collections::HashMap<(pos_proto::ids::TenantId, StoreId), V>>,
+    key: (pos_proto::ids::TenantId, StoreId),
+    beat: &V,
+) -> Result<(), pos_cloud::config_tree::ConfigStoreError> {
+    map.lock().expect("lock").insert(key, beat.clone());
+    Ok(())
+}

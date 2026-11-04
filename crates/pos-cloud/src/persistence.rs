@@ -923,8 +923,7 @@ fn fleet_row(row: FleetStoreRow) -> Result<FleetRow, FleetStoreError> {
         // severity rather than the lower one.
         edge_placement: fleet_placement(row.edge_placement.as_deref()),
         region: stored_region(row.region_country.as_deref(), row.region_label.as_deref()),
-        // Here the narrowing also fails in the safe direction — a store whose handover cannot be
-        // read reports no handover, which is the state that shows *less* confidence rather than more.
+        // Fails safe too: an unreadable handover reports none, the state showing *less* confidence.
         superseded_generation: stored_count(row.superseded_generation),
         // An unreadable instant drops the retirement rather than inventing one, and that direction
         // is deliberate too: a handover reported as *not* retired is the reading that leaves an

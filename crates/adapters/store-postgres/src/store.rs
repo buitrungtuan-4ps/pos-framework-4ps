@@ -1472,10 +1472,11 @@ mod migration_wiring_tests {
     use std::fs;
     use std::path::Path;
 
-    /// This file's own text. A migration only runs if this file both **declares** it (an
-    /// `include_str!`) and **executes** it (a `batch_execute`), so reading the source catches both
-    /// ways one goes missing — and they are different mistakes, made months apart.
-    const SOURCE: &str = include_str!("store.rs");
+    /// The runner's text: this file and `migrations_late.rs`, which holds 0089 on. A migration only
+    /// runs if they both **declare** it (an `include_str!`) and **execute** it (a `batch_execute`),
+    /// so reading the source catches both ways one goes missing — different mistakes, made months
+    /// apart.
+    const SOURCE: &str = concat!(include_str!("store.rs"), include_str!("migrations_late.rs"));
 
     /// Every `.sql` file in the migrations directory, by stem.
     fn migration_stems() -> BTreeSet<String> {

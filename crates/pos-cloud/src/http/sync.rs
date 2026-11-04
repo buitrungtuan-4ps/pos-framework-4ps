@@ -225,27 +225,8 @@ where
             );
         }
     };
-    if report
-        .config_wake
-        .as_ref()
-        .is_some_and(|beat| !beat.is_bounded())
-    {
-        return api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "the heartbeat's config delivery report is not one an edge sends",
-            &[("config_wake", "INVALID_VALUE")],
-        );
-    }
-    if report
-        .package
-        .as_ref()
-        .is_some_and(|beat| !beat.is_bounded())
-    {
-        return api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "the heartbeat's package report carries text longer than an id or a reason",
-            &[("package", "INVALID_VALUE")],
-        );
+    if let Some(refused) = unbounded_report(&report) {
+        return refused;
     }
     // The tenant is the grant's, not the path's — a store reaches only its own tenant's liveness row.
     let now = app.clock.now();
@@ -280,6 +261,33 @@ where
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => config_store_error_response(&error),
     }
+}
+
+/// The refusal for a report no edge sends: a package report with text longer than an id or a
+/// reason, or a config delivery report past its bounds; `None` for one that fits.
+fn unbounded_report(report: &HeartbeatBody) -> Option<Response> {
+    if report
+        .config_wake
+        .as_ref()
+        .is_some_and(|beat| !beat.is_bounded())
+    {
+        return Some(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "the heartbeat's config delivery report is not one an edge sends",
+            &[("config_wake", "INVALID_VALUE")],
+        ));
+    }
+    report
+        .package
+        .as_ref()
+        .is_some_and(|beat| !beat.is_bounded())
+        .then(|| {
+            api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "the heartbeat's package report carries text longer than an id or a reason",
+                &[("package", "INVALID_VALUE")],
+            )
+        })
 }
 
 /// The most envelopes one `POST /sync/stores/{store_id}/events` may carry

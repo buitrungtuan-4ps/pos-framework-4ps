@@ -207,6 +207,7 @@ impl FleetStoreView {
     /// the held-vs-published comparison (a store that has published nothing, or holds nothing, is not
     /// "current" — there is a gap to close either way).
     pub(super) fn from_row(row: FleetRow, now_ms: i64) -> Self {
+        let (config_wake, config_wake_reported_at_ms) = config_wake_view(row.config_wake.as_ref());
         let last_seen_at_ms = row
             .last_seen_at
             .map(pos_proto::Timestamp::as_milliseconds_since_epoch);
@@ -267,11 +268,8 @@ impl FleetStoreView {
                 .package
                 .as_ref()
                 .map(|package| package.reported_at.as_milliseconds_since_epoch()),
-            config_wake: row.config_wake.as_ref().map(|wake| wake.beat.clone()),
-            config_wake_reported_at_ms: row
-                .config_wake
-                .as_ref()
-                .map(|wake| wake.reported_at.as_milliseconds_since_epoch()),
+            config_wake,
+            config_wake_reported_at_ms,
             lease_generation_held: row.lease_generation_held,
             lease_reported_at_ms: row
                 .lease_reported_at
@@ -307,4 +305,19 @@ impl FleetStoreView {
             retired_by: row.retired_by,
         }
     }
+}
+
+/// A store's config delivery report and its instant, as the view carries them (ADR-0195).
+fn config_wake_view(
+    wake: Option<&crate::fleet::ReportedConfigWake>,
+) -> (
+    Option<pos_cloud_config::config_tree::ConfigWakeBeat>,
+    Option<i64>,
+) {
+    wake.map_or((None, None), |wake| {
+        (
+            Some(wake.beat.clone()),
+            Some(wake.reported_at.as_milliseconds_since_epoch()),
+        )
+    })
 }
