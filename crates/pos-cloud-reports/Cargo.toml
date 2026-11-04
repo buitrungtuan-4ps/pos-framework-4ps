@@ -13,7 +13,8 @@ repository.workspace   = true
 [dependencies]
 pos-cloud-api = { path = "../pos-cloud-api" }
 pos-ports     = { path = "../pos-ports" }
-pos-proto     = { path = "../pos-proto" }
+# `openapi`: the custom-data summary returns a wire value, which needs its schema (ADR-0177).
+pos-proto     = { path = "../pos-proto", features = ["openapi"] }
 # The rollup table (ADR-0036). This crate implements its RollupStore for it, since a trait can be
 # implemented for another crate's type only where the trait is defined.
 store-postgres = { path = "../adapters/store-postgres" }

@@ -88,7 +88,7 @@ pub use config_trees::{
     StoredRetire, StoredSettle,
 };
 pub use connections::{ConnectionRow, PostgresConnections};
-pub use custom_values::{CustomValueWrite, PostgresCustomValues};
+pub use custom_values::{CustomValueWrite, PostgresCustomValues, SummaryScope};
 pub use data_migrations::PostgresDataMigrations;
 pub use devices::{DeviceProposalRow, PostgresDeviceProposals};
 pub use fee_rules::{FeeRuleRow, FeeRuleSlot, FeeRuleWrite, PostgresFeeRules};

@@ -26,6 +26,13 @@ use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::Open;
 
+mod summary;
+
+pub use summary::{
+    CustomValueSummary, FilterValue, SUMMARY_GROUPS_MAX, SummaryObject, SummaryQuery, ValueCount,
+    ValueSummary, summarise, summary_csv,
+};
+
 /// How many events one projection page reads.
 const PROJECT_PAGE: u32 = 512;
 
