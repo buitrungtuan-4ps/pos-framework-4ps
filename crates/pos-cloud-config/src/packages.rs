@@ -34,6 +34,11 @@ pub const PACKAGE_NODE_SINCE: &str = "0.14.1";
 
 /// The first release whose edge checks a package's data part (ADR-0194). A version that declares
 /// data needs at least it.
+///
+/// It reads "0.14.1" because no release has been tagged since 0.14.0, so the next one is the first
+/// to carry `pos_core::package::check_data`. **When the first release that carries `check_data` is
+/// tagged, set this to that release** if it is not 0.14.1. Otherwise an edge on an older release
+/// could be sent a version with data that it cannot check.
 pub const DATA_PART_SINCE: &str = "0.14.1";
 
 /// The most packages, and the most versions of all packages, the in-memory store holds.
