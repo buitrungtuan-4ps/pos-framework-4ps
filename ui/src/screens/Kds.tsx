@@ -16,12 +16,12 @@ import {
   loadLiveOrders,
   modifierNames,
   noteLost,
-  setItemSoldOut,
   state,
   type KitchenTicket,
 } from "../state/store";
 import { createBumper } from "../state/kitchen-writes";
 import { WriteRefused } from "../components/WriteRefused";
+import { setItemSoldOut } from "../state/floor-writes";
 import { queueNumberFor, refreshQueueNumbers } from "../state/queue-numbers";
 
 // The kitchen display: fired lines gathered into tickets — one per order, station and course, the

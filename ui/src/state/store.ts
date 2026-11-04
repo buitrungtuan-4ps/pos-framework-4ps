@@ -1112,7 +1112,7 @@ export function openBillCount(): number {
 // ---- commands (call the edge, update at once, let the fan-out reconcile) -----
 
 // Marks an item sold out, or back, in the price book this device holds.
-function setSoldOut(menuItemId: string, soldOut: boolean): void {
+export function setSoldOut(menuItemId: string, soldOut: boolean): void {
   const index = state.menu.findIndex((item) => item.menu_item_id === menuItemId);
   if (index >= 0) {
     setState("menu", index, { sold_out: soldOut, available: !soldOut });
@@ -1126,45 +1126,10 @@ function setSoldOut(menuItemId: string, soldOut: boolean): void {
   }
 }
 
-// Staff mark an item sold out at this store (86), or bring it back. The fan-out brings the same fact
-// to every other till; this device shows it at once.
-export async function setItemSoldOut(menuItemId: string, soldOut: boolean): Promise<void> {
-  await (soldOut ? api.markSoldOut(menuItemId) : api.restoreItem(menuItemId));
-  setSoldOut(menuItemId, soldOut);
-  if (!soldOut) {
-    void reload("menu");
-  }
-}
-
 // When this table's guests sat down, or undefined for a table nobody is sitting at.
 export function seatedAt(tableId: string): string | undefined {
   return state.seatedAt[tableId];
 }
-
-export async function clean(tableId: string): Promise<void> {
-  const response = await api.cleanTable(tableId);
-  setState("tableState", tableId, response.state);
-}
-
-// Gives a table seated by mistake straight back to the floor, while nothing is sold on it
-// (ADR-0163). The edge ends its order owing nothing; the fan-out brings the same to every other
-// device, and this one shows it at once.
-export async function releaseTable(tableId: string): Promise<void> {
-  const response = await api.releaseTable(tableId);
-  setState(
-    produce((draft) => {
-      draft.tableState[tableId] = response.state;
-      delete draft.seatedAt[tableId];
-      const order = draft.tableOrder[tableId];
-      if (order !== undefined) {
-        draft.liveOrders[order] = false;
-        delete draft.tableOrder[tableId];
-        delete draft.orderTable[order];
-      }
-    }),
-  );
-}
-
 
 /// The groups this item attaches, in the order it names them (ADR-0127).
 ///
@@ -1813,30 +1778,6 @@ export function applyVoided(billId: string): void {
       }
     }),
   );
-}
-
-export async function openBill(tableId: string): Promise<string> {
-  const existing = openBillFor(tableId);
-  if (existing !== undefined) {
-    return existing;
-  }
-  const response = await api.openBill(tableId);
-  setState(
-    produce((draft) => {
-      const open = draft.openBills[tableId] ?? [];
-      if (!open.includes(response.bill_id)) {
-        draft.openBills[tableId] = [...open, response.bill_id];
-      }
-      const order = draft.tableOrder[tableId];
-      if (order !== undefined) {
-        draft.billOrder[response.bill_id] = order;
-      }
-      if (response.table_state !== undefined) {
-        draft.tableState[tableId] = response.table_state;
-      }
-    }),
-  );
-  return response.bill_id;
 }
 
 // What one bill owes and the lines it covers — the pay screen's figure once a table can hold more

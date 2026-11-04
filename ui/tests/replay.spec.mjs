@@ -1872,6 +1872,148 @@ test("guests move to another table with their order, and every screen follows th
   }
 });
 
+// Marking a dish sold out paints first (ADR-0196 decision 1): it shows sold out before the edge
+// answers. A refusal puts it back with its sentence (substituted: the real edge marks any dish it
+// knows); a mark whose answer is lost is put back and the menu is read again, which finds it marked.
+test("a dish marked sold out shows at once, a refusal puts it back, a lost answer reads the menu", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await page.locator('[data-step="startMarking"]').click();
+    await page.locator("#menu-search").fill("iced");
+    const mark = page.locator('[data-step="toggleSoldOut"]');
+
+    await refusePost(page, "**/api/menu/*/sold-out", "TRANSITION_REFUSED");
+    await mark.click();
+    await expect(page.getByRole("alert").first()).toContainText("That is not possible right now");
+    await expect(page.locator('[data-outcome="item-sold-out"]')).toHaveCount(0);
+    await page.unroute("**/api/menu/*/sold-out");
+
+    const held = await holdPost(page, "**/api/menu/*/sold-out");
+    await mark.click();
+    await held.sent;
+    await expect(page.locator('[data-outcome="item-sold-out"]')).toHaveText("Sold out");
+    const answered = page.waitForResponse((response) => response.url().endsWith("/sold-out"));
+    held.release();
+    await answered;
+
+    let restores = 0;
+    await page.route("**/api/menu/*/restore", async (route) => {
+      restores += 1;
+      await route.fetch();
+      await route.abort("connectionreset");
+    });
+    await mark.click();
+    await expect(page.locator('[data-outcome="item-sold-out"]')).toHaveCount(0);
+    expect(restores).toBe(1);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// Clearing a table paints first: the card shows free at once. A clean whose answer never reached the
+// edge is put back and the floor is read again, which still needs cleaning; a lost answer is read
+// again and found made.
+test("a table cleared shows free at once, and a lost or unsent clean is read again", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await aSettledTable(page);
+    await navigateTo(page, "/");
+    const card = page.locator('[data-step="onCard"]', { hasText: "Table 1" });
+    await expect(card).toContainText("Needs cleaning");
+
+    await page.route("**/api/tables/*/clean", (route) => route.abort("connectionreset"));
+    await card.click();
+    await expect(page.getByRole("alert").first()).toBeVisible();
+    await expect(card).toContainText("Needs cleaning");
+    await page.unroute("**/api/tables/*/clean");
+
+    let cleans = 0;
+    await page.route("**/api/tables/*/clean", async (route) => {
+      cleans += 1;
+      await route.fetch();
+      await route.abort("connectionreset");
+    });
+    await card.click();
+    await expect(card).toContainText("Free");
+    expect(cleans).toBe(1);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// Giving a table back paints first: the floor holds it free at once. A refusal puts it back seated
+// with its sentence (substituted: the real edge releases any table with nothing sold); a release
+// whose answer is lost is read again and found made.
+test("a table given back shows free at once, a refusal keeps it seated, a lost answer is read again", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    const release = page.locator('[data-step="releaseTable"]');
+    await refusePost(page, "**/api/tables/*/release", "TRANSITION_REFUSED");
+    await release.click();
+    await expect(page.getByRole("alert").first()).toContainText("That is not possible right now");
+    await expect(page.locator('[data-outcome="order-open"]')).toBeVisible();
+    await page.unroute("**/api/tables/*/release");
+
+    let releases = 0;
+    await page.route("**/api/tables/*/release", async (route) => {
+      releases += 1;
+      await route.fetch();
+      await route.abort("connectionreset");
+    });
+    await release.click();
+    await navigateTo(page, "/");
+    await expect(page.locator('[data-step="onCard"]', { hasText: "Table 1" })).toContainText("Free");
+    expect(releases).toBe(1);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// Opening a bill paints first: the table waits for payment at once. An opening whose answer is lost
+// is read again and found made, so the next Take payment finds that bill rather than asking again.
+test("a bill opened whose answer is lost is read again, and is not opened twice", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    await sendOrder(page);
+    let opens = 0;
+    await page.route("**/api/tables/*/bill", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.fallback();
+        return;
+      }
+      opens += 1;
+      await route.fetch();
+      await route.abort("connectionreset");
+    });
+    await page.locator('[data-step="takePayment"]').click();
+    await expect(page.getByRole("alert").first()).toBeVisible();
+    await navigateTo(page, "/");
+    await expect(page.locator('[data-step="onCard"]', { hasText: "Table 1" })).toContainText("Awaiting payment");
+    await page.locator('[data-step="onCard"]', { hasText: "Table 1" }).click();
+    await page.locator('[data-step="takePayment"]').click();
+    await expect(page.locator('[data-step="payCash"]')).toBeEnabled();
+    expect(opens).toBe(1);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A table seated by mistake goes back to the floor, and every till follows (ADR-0163).
 //
 // Before this a seated table left the floor only by a bill, and a bill on nothing could never be
