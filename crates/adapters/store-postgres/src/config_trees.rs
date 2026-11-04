@@ -12,10 +12,12 @@
 //! Tenant isolation is the `(tenant_id, store_id)` key: a load names both, so it can only ever return
 //! the caller's own tenant's row (the migration also enables RLS as a second line for a query role).
 
+use std::sync::Arc;
+
 use deadpool_postgres::Pool;
 
 use pos_ports::PortError;
-use pos_proto::ids::{StoreId, TenantId};
+use pos_proto::ids::{ConfigVersionId, StoreId, TenantId};
 
 use crate::store::{RowUpdate, pool_unavailable, unavailable};
 
@@ -23,6 +25,36 @@ use crate::store::{RowUpdate, pool_unavailable, unavailable};
 #[derive(Clone, Debug)]
 pub struct PostgresConfigTrees {
     pool: Pool,
+    saved: Option<ConfigSaved>,
+}
+
+/// Told that a store's config tree was saved, after the write committed: the tenant, the store, and
+/// the version the saved tree now ends at
+/// ([ADR-0195](../../../../docs/adr/0195-the-cloud-wakes-a-store-to-pull-its-config.md): the cloud
+/// wakes the store).
+///
+/// A save is one autocommit statement on its own pooled connection ([`PostgresConfigTrees::save_state`]
+/// takes no transaction), so when the caller tells this, the row is committed and every other
+/// connection reads it. The hook must not block: it runs on the saving request's task.
+#[derive(Clone)]
+pub struct ConfigSaved(Arc<dyn Fn(TenantId, StoreId, ConfigVersionId) + Send + Sync>);
+
+impl ConfigSaved {
+    /// A hook calling `hook`.
+    pub fn new(hook: impl Fn(TenantId, StoreId, ConfigVersionId) + Send + Sync + 'static) -> Self {
+        Self(Arc::new(hook))
+    }
+
+    /// Tells the hook that `store`'s tree now ends at `version`.
+    pub fn notify(&self, tenant: TenantId, store: StoreId, version: ConfigVersionId) {
+        (self.0)(tenant, store, version);
+    }
+}
+
+impl core::fmt::Debug for ConfigSaved {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("ConfigSaved")
+    }
 }
 
 /// What a conditional bump did.
@@ -203,8 +235,15 @@ impl<'a> StoredRegionWrite<'a> {
 }
 
 impl PostgresConfigTrees {
-    pub(crate) fn new(pool: Pool) -> Self {
-        Self { pool }
+    pub(crate) const fn new(pool: Pool, saved: Option<ConfigSaved>) -> Self {
+        Self { pool, saved }
+    }
+
+    /// The hook a committed save is told to, if the cloud installed one
+    /// ([`PostgresStore::with_config_saved`](crate::PostgresStore::with_config_saved)).
+    #[must_use]
+    pub const fn saved(&self) -> Option<&ConfigSaved> {
+        self.saved.as_ref()
     }
 
     /// Loads a store's tree state as the raw JSON text of a `ConfigTreeState` **and the version the

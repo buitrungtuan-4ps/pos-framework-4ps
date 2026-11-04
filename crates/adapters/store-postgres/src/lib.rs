@@ -79,8 +79,8 @@ pub use catalog::{
 pub use claims::{ClaimBindRow, ClaimCollectRow, ClaimSlotRow, PostgresClaims};
 pub use config_releases::{NewReleaseRow, PostgresConfigReleases, ReleaseRow};
 pub use config_trees::{
-    BumpOutcome, PostgresConfigTrees, StoredBump, StoredRegionAcknowledgement, StoredRegionWrite,
-    StoredRetire, StoredSettle,
+    BumpOutcome, ConfigSaved, PostgresConfigTrees, StoredBump, StoredRegionAcknowledgement,
+    StoredRegionWrite, StoredRetire, StoredSettle,
 };
 pub use connections::{ConnectionRow, PostgresConnections};
 pub use data_migrations::PostgresDataMigrations;

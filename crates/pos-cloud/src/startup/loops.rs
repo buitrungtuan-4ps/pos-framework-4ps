@@ -3,7 +3,8 @@
 
 //! The cloud's background loops, each started by its own step, in the order `run` starts them:
 //! the ingest cursor, the rollup projector, the retention cron, the webhook dispatcher, the alert
-//! evaluator, the scheduled-publish activator, the people republisher, and the metrics heartbeat.
+//! evaluator, the scheduled-publish activator, the people republisher, the metrics heartbeat, and
+//! the config wake sender when `[nats]` is set.
 //! Each says at start whether it is on, and each drains on the process's shutdown.
 
 use core::time::Duration;
@@ -16,6 +17,7 @@ use pos_cloud::alerts::{self, AlertThresholds};
 use pos_cloud::archive_retention;
 use pos_cloud::audit::AuditRecorder;
 use pos_cloud::clock::SystemClock;
+use pos_cloud::config_wakes::{self, WakeQueue};
 use pos_cloud::people_republish;
 use pos_cloud::retention::{self, RetentionPolicy};
 use pos_cloud::webhook::{self, TlsWebhookSender};
@@ -36,6 +38,7 @@ pub(crate) struct Loops {
     scheduled_publish: JoinHandle<()>,
     people_republish: JoinHandle<()>,
     metrics: Option<JoinHandle<()>>,
+    config_wake: Option<JoinHandle<()>>,
 }
 
 impl Loops {
@@ -47,8 +50,12 @@ impl Loops {
         cloud: &Cloud<PostgresStore>,
         store: &PostgresStore,
         audit: &Arc<dyn AuditRecorder>,
+        wakes: Option<WakeQueue>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let (cursor, stream_probe) = ingest_cursor(config, cloud).await?;
+        let (cursor, stream_probe, consumer) = ingest_cursor(config, cloud).await?;
+        let config_wake = wakes
+            .zip(consumer)
+            .map(|(queue, consumer)| config_wake_sender(queue, &consumer, store));
         let projector = rollup_projector(config, store);
         let retention = retention_cron(config, store);
         let webhook = webhook_dispatcher(config, store);
@@ -65,6 +72,7 @@ impl Loops {
             scheduled_publish,
             people_republish,
             metrics,
+            config_wake,
         })
     }
 
@@ -98,6 +106,10 @@ impl Loops {
             task.abort();
             let _ = task.await;
         }
+        if let Some(task) = self.config_wake {
+            task.abort();
+            let _ = task.await;
+        }
     }
 }
 
@@ -110,6 +122,7 @@ pub(crate) async fn ingest_cursor(
     (
         Option<JoinHandle<Result<(), PortError>>>,
         Option<alerts::probe::CursorProbe>,
+        Option<Arc<NatsConsumer>>,
     ),
     Box<dyn std::error::Error>,
 > {
@@ -120,6 +133,7 @@ pub(crate) async fn ingest_cursor(
     // on the alert tick (ADR-0087 Amendment 2), and opening a second connection to ask the same
     // broker the same question would be a second thing to configure and to fail.
     let mut stream_probe = None;
+    let mut shared = None;
     let cursor_task = if let Some(nats) = config.nats.clone() {
         let consumer = Arc::new(
             NatsConsumer::connect(&nats.url, consumer_config(&nats))
@@ -138,6 +152,7 @@ pub(crate) async fn ingest_cursor(
             nats.max_messages,
             nats.max_bytes,
         ));
+        shared = Some(Arc::clone(&consumer));
         Some(tokio::spawn(cursor::run(
             consumer,
             cloud.clone(),
@@ -150,7 +165,30 @@ pub(crate) async fn ingest_cursor(
         );
         None
     };
-    Ok((cursor_task, stream_probe))
+    Ok((cursor_task, stream_probe, shared))
+}
+
+/// The config wake sender, on the cursor's own connection rather than a second one (ADR-0195).
+fn config_wake_sender(
+    queue: WakeQueue,
+    consumer: &NatsConsumer,
+    store: &PostgresStore,
+) -> JoinHandle<()> {
+    let client = consumer.client();
+    tracing::info!("config wakes enabled: a publish wakes its stores over NATS");
+    tokio::spawn(config_wakes::run(
+        queue,
+        move |store_id, wake| {
+            let client = client.clone();
+            async move { link_nats::publish_config_wake(&client, store_id, &wake).await }
+        },
+        (
+            store.task_health(),
+            SystemClock,
+            config_wakes::CONFIG_WAKE_TICK,
+        ),
+        shutdown_signal(),
+    ))
 }
 
 /// The rollup projector, the single writer of the materialised rollup the `/v1` dashboard reads.
@@ -483,6 +521,7 @@ mod tests {
             scheduled_publish: stuck("scheduled_publish", &stopped),
             people_republish: stuck("people_republish", &stopped),
             metrics: Some(stuck("metrics", &stopped)),
+            config_wake: Some(stuck("config_wake", &stopped)),
         };
         let archive_retention = Some(stuck("archive_retention", &stopped));
 
@@ -502,6 +541,7 @@ mod tests {
                 "scheduled_publish",
                 "people_republish",
                 "metrics",
+                "config_wake",
             ]
         );
     }
@@ -518,6 +558,7 @@ mod tests {
             scheduled_publish: stuck("scheduled_publish", &stopped),
             people_republish: stuck("people_republish", &stopped),
             metrics: None,
+            config_wake: None,
         };
 
         tokio::time::timeout(Duration::from_secs(10), loops.wind_down(None))
