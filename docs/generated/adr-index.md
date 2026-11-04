@@ -16,7 +16,6 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 - [ADR-0200](../adr/0200-six-business-type-templates-ship-with-the-framework.md) Six business-type templates ship with the framework
 - [ADR-0202](../adr/0202-cel-as-the-crate-and-the-spike-found-it.md) CEL as the crate and the spike found it
 - [ADR-0205](../adr/0205-a-refusal-any-act-can-meet-is-not-listed-per-act.md) A refusal any act can meet is not listed per act
-- [ADR-0206](../adr/0206-a-personal-custom-value-stays-on-its-store-and-expires-on-its-own-clock.md) A personal custom value stays on its store and expires on its own clock
 - [ADR-0207](../adr/0207-a-receipt-is-a-structured-template-per-store-and-channel.md) A receipt is a structured template, per store and per sales channel
 
 ## Citations of ADRs that do not exist
