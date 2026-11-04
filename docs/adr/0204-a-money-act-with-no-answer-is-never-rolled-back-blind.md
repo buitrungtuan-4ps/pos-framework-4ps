@@ -40,6 +40,10 @@ the drawer, and invites the cashier to take the payment again.
 4. **Never a second attempt.** While an act's answer is unknown, the till does not offer that act on
    its subject again. The edge stays the only writer (ADR-0196 decision 5), and nothing is queued or
    re-sent.
+5. **An act with no readable subject is said unconfirmed.** Where nothing the till can read shows
+   whether the act committed, such as the drawer opened without a sale, a missing answer neither
+   rolls back nor is re-sent: the till says the act is unconfirmed, and the operator, who can check
+   the drawer, dismisses it.
 
 ## Consequences accepted
 

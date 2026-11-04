@@ -11,7 +11,7 @@ import { holdsOwn } from "../state/permissions";
 import type { MoneyPhase } from "../state/money-act";
 
 /** What each act says while it is out, and once the store server cannot be reached. */
-export type PendingActKind = "settle" | "void" | "discount" | "waive" | "split" | "merge" | "open" | "count" | "close";
+export type PendingActKind = "settle" | "void" | "discount" | "waive" | "split" | "merge" | "open" | "count" | "close" | "paid_in" | "paid_out" | "safe_drop";
 
 const ACTS: Readonly<Record<PendingActKind, { doing: MessageKey; unreachable: MessageKey; outcome: string }>> = {
   settle: { doing: "pay.paying", unreachable: "pay.unreachable", outcome: "settle-pending" },
@@ -23,6 +23,9 @@ const ACTS: Readonly<Record<PendingActKind, { doing: MessageKey; unreachable: Me
   open: { doing: "shift.opening", unreachable: "shift.unreachable", outcome: "open-pending" },
   count: { doing: "shift.counting", unreachable: "shift.unreachable", outcome: "count-pending" },
   close: { doing: "shift.closing", unreachable: "shift.unreachable", outcome: "close-pending" },
+  paid_in: { doing: "shift.paying_in", unreachable: "shift.unreachable", outcome: "paid-in-pending" },
+  paid_out: { doing: "shift.paying_out", unreachable: "shift.unreachable", outcome: "paid-out-pending" },
+  safe_drop: { doing: "shift.dropping", unreachable: "shift.unreachable", outcome: "safe-drop-pending" },
 };
 
 export function PendingSettle(props: {

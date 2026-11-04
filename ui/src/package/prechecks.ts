@@ -22,4 +22,7 @@ export const PRECHECKED: Readonly<Partial<Record<ActionId, readonly string[]>>> 
   "billing.bill.merge": [WRITES_PENDING, "BILLS_ON_DIFFERENT_ORDERS"],
   "cash.shift.open": ["SHIFT_ALREADY_OPEN", "COUNT_DOES_NOT_ADD_UP"],
   "cash.shift.count": ["COUNT_DOES_NOT_ADD_UP"],
+  "cash.movement.paid_in": ["SHIFT_NOT_OPEN"],
+  "cash.movement.paid_out": ["SHIFT_NOT_OPEN"],
+  "cash.movement.safe_drop": ["SHIFT_NOT_OPEN", "COUNT_DOES_NOT_ADD_UP"],
 };
