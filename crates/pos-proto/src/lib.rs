@@ -71,6 +71,7 @@ pub mod tender_keys;
 pub mod text;
 pub mod time;
 pub mod ulid;
+pub mod wake;
 pub mod wire_enum;
 
 /// Schemas for the OpenAPI documents (ADR-0177 decision 3), behind the `openapi` feature.

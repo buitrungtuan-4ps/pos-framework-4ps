@@ -34,6 +34,6 @@ workspace = true
 
 [package.metadata.pos]
 layer = "port"
-purpose = "The twenty traits between the framework and the outside world."
+purpose = "The twenty-one traits between the framework and the outside world."
 adrs = [6, 13, 21, 26, 180]
 owners = ["@maintainers-architecture"]
