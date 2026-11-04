@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! In-memory implementations of all twenty ports (`pos_ports::PortName::ALL`).
+//! In-memory implementations of all twenty-one ports (`pos_ports::PortName::ALL`).
 //!
 //! # What this crate is for
 //!
@@ -14,7 +14,7 @@
 //! the suites are what make *swappable* a verified fact — but there is a circularity in that claim
 //! if the fakes are exempt: the domain suite runs against the fakes, so a fake that disagrees with
 //! the real store makes every domain test a test of the wrong thing. So these are held to exactly
-//! the same suites as `store-sqlite` will be. `tests/contract.rs` runs all twenty.
+//! the same suites as `store-sqlite` will be. `tests/contract.rs` runs all twenty-one.
 //!
 //! # Fixed capacities, on purpose
 //!
@@ -46,6 +46,7 @@ pub mod harness;
 pub mod infra;
 pub mod store;
 pub mod vendors;
+pub mod wake;
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -58,6 +59,7 @@ pub use infra::{
 };
 pub use store::{FakeStore, FakeTx};
 pub use vendors::{FakeDeliveryVendor, FakeErp, FakeFiscal, FakeIntake, FakeShipping};
+pub use wake::FakeStoreWake;
 
 /// Locks a mutex, recovering from poisoning instead of panicking.
 ///
