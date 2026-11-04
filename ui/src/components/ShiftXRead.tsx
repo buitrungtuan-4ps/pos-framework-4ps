@@ -15,6 +15,7 @@ import { printOutcomeKey } from "../lib/print";
 import { holdsOwn } from "../state/permissions";
 import { formatAmount, state } from "../state/store";
 import type { Money } from "../lib/money";
+import { createPrint } from "../state/print-writes";
 
 /** Whether the person signed in reads an X: by their own role, as the edge asks. */
 export function readsX(): boolean {
@@ -67,19 +68,11 @@ export function XFiguresList(props: { figures: XFigures }) {
 /** Prints an X, the shift's or the store's, and says what came of it. */
 function PrintX(props: { shiftId?: string }) {
   const [outcome, setOutcome] = createSignal<string | null>(null);
-  const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
-  const print = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      setOutcome((await api.printX(props.shiftId)).x_print);
-    } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const printer = createPrint(setError);
+  const busy = printer.printing;
+  const print = () =>
+    printer.run("reports.shift.print_x", () => api.printX(props.shiftId), (printed) => setOutcome(printed.x_print));
   return (
     <>
       <button

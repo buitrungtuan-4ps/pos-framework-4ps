@@ -48,6 +48,7 @@ import { fireCourse, fireOrder, voidLine } from "../state/order-writes";
 import { releaseTable, setItemSoldOut } from "../state/floor-writes";
 import { errorMessage } from "../lib/errors";
 import { useInFlight } from "../lib/in-flight";
+import { createPrint } from "../state/print-writes";
 import { printOutcomeKey } from "../lib/print";
 import { SendFirst } from "../components/SendFirst";
 import { createSendFirst, waitingByCourse } from "../state/unsent";
@@ -190,14 +191,12 @@ export function Order() {
   // opens, so the guests can check the total and still order dessert; a split table prints one per
   // open part. What each piece of paper came to, or null before the first press.
   const [preBill, setPreBill] = createSignal<readonly string[] | null>(null);
-  const printPreBill = () =>
-    guard(async () => {
-      setPreBill(null);
-      const printed = walkIn()
-        ? await api.printOrderCheck(params.id)
-        : await api.printTableCheck(params.id);
-      setPreBill(printed.prints);
-    });
+  const print = createPrint(setError);
+  const printPreBill = () => {
+    setPreBill(null);
+    const send = () => (walkIn() ? api.printOrderCheck(params.id) : api.printTableCheck(params.id));
+    return print.run("billing.check.print", send, (printed) => setPreBill(printed.prints));
+  };
   // One sentence per distinct outcome: two parts that both printed say so once.
   const preBillOutcome = (prints: readonly string[]) =>
     [...new Set(prints.map((outcome) => t(printOutcomeKey(outcome, "order.pre_bill_printed"))))].join(
@@ -663,9 +662,10 @@ export function Order() {
               class="min-h-touch whitespace-nowrap rounded-token border border-line px-3 text-sm text-ink-muted"
               classList={{ "ml-auto": !movable() }}
               data-step="printPreBill"
+              disabled={print.printing()}
               onClick={() => void printPreBill()}
             >
-              {t("order.pre_bill")}
+              {t(print.printing() ? "common.sending" : "order.pre_bill")}
             </button>
           </Show>
         </div>

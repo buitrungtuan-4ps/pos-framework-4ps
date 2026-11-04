@@ -8,7 +8,6 @@ import { Dynamic } from "solid-js/web";
 import { api } from "../api/client";
 import type { DrawerEntry } from "../api/schemas";
 import { t } from "../i18n";
-import { errorMessage } from "../lib/errors";
 import { money } from "../lib/money";
 import { printOutcomeKey } from "../lib/print";
 import {
@@ -40,6 +39,7 @@ import { ApproverFields } from "./ApproverFields";
 import { CountField } from "./CountField";
 import { PendingSettle } from "./PendingSettle";
 import { RefusalPanel } from "./RefusalPanel";
+import { createPrint } from "../state/print-writes";
 
 export { handingOver } from "../state/handover";
 
@@ -246,20 +246,14 @@ export function Handover() {
 export function ReprintSlip(props: { drawer?: DrawerEntry }) {
   const [outcome, setOutcome] = createSignal<string | null>(null);
   const [failed, setFailed] = createSignal<string | null>(null);
-  const [sending, setSending] = createSignal(false);
+  const printer = createPrint(setFailed);
   const shiftId = () =>
     props.drawer?.shift?.handed_over_from_shift_id === undefined ? undefined : props.drawer.shift.shift_id;
-  const print = async (id: string) => {
-    setSending(true);
-    setFailed(null);
-    try {
-      setOutcome((await api.reprintHandoverSlip(id)).handover_slip_print);
-    } catch (caught) {
-      setFailed(errorMessage(caught));
-    } finally {
-      setSending(false);
-    }
-  };
+  const sending = printer.printing;
+  const print = (id: string) =>
+    printer.run("reports.shift.print_handover", () => api.reprintHandoverSlip(id), (printed) =>
+      setOutcome(printed.handover_slip_print),
+    );
   return (
     <Show when={holdsOwn("reports.shift.read_x") && shiftId()}>
       {(id) => (

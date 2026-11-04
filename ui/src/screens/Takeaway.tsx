@@ -28,6 +28,7 @@ import { openCounterBill } from "../state/floor-writes";
 import { SendFirst } from "../components/SendFirst";
 import { counterKey, createSendFirst } from "../state/unsent";
 import { draftWalkIn } from "../state/draft-walk-in";
+import { createPrint } from "../state/print-writes";
 
 // The table pay screen's guard on the cash snap, kept in step with `Pay.tsx` by hand rather than
 // shared: this is its second use, and `docs/design-principles.md` extracts on the third. `Pay.tsx`
@@ -165,14 +166,9 @@ export function Takeaway() {
     void refresh();
   };
 
-  const printAgain = async (billId: string) => {
-    setError(null);
-    try {
-      setCopy(await api.reprintReceipt(billId));
-    } catch (caught) {
-      explain(caught);
-    }
-  };
+  const print = createPrint(setError);
+  const printAgain = (billId: string) =>
+    print.run("billing.receipt.reprint", () => api.reprintReceipt(billId), setCopy);
 
   // Open a bill on the order — or resume the one already open on it. Resuming matters: a screen that
   // reloaded mid-sale would otherwise ask for a second bill, which the edge refuses (409), and the
@@ -521,9 +517,10 @@ export function Takeaway() {
                     type="button"
                     class="mt-3 min-h-touch w-full rounded-token border border-line text-sm"
                     data-step="printAgain"
+                    disabled={print.printing()}
                     onClick={() => void printAgain(settled().bill_id)}
                   >
-                    {t("pay.print_again")}
+                    {t(print.printing() ? "common.sending" : "pay.print_again")}
                   </button>
                   </Show>
                   <Show when={copy()}>
