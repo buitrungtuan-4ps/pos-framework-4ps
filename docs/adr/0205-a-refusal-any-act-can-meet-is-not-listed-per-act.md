@@ -1,12 +1,12 @@
 # ADR-0205 — A refusal any act can meet is not listed per act
 
-**Status** Proposed · **Owner** @maintainers-architecture · **Date** 2026-11-04
+**Status** Accepted · **Owner** @maintainers-architecture · **Date** 2026-11-04
 · Amends [ADR-0191](0191-every-act-is-in-a-typed-catalogue.md) decision 1
 · Relates to [ADR-0196](0196-every-act-paints-first-and-money-waits-for-the-edge.md),
 [ADR-0158](0158-the-till-enforces-each-persons-own-permissions.md),
 [ADR-0173](0173-the-till-declares-each-piece-of-store-data-once.md)
 
-Proposed: it waits on the owner's acceptance.
+Accepted by the owner on 2026-11-05.
 
 ## Context
 

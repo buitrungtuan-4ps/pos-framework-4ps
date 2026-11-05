@@ -436,7 +436,7 @@ mod tests {
         assert!(screens.contains("icon: \"package\" },\n} as const satisfies"));
         let groups = screens.find("export const NAV_GROUPS").expect("groups");
         let item = screens
-            .find("\"alerts\", \"stockCount\"] },")
+            .find("\"customData\", \"stockCount\"] },")
             .expect("filed");
         assert!(groups < item);
         let app = contents(&planned, "dashboard/src/App.tsx");
