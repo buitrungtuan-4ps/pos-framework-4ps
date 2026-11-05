@@ -5,10 +5,11 @@
 //! ([ADR-0189](../../../../docs/adr/0189-a-store-runs-a-package-version-hq-pins.md) decisions 3
 //! and 6): the cloud checks it before a version is stored, and the edge again before it runs one.
 //!
-//! The parts (screens, flows, rules, data) add their own checks as they join the content: the data
-//! part's are [`super::data`]'s.
+//! The parts (screens, flows, rules, data) add their own checks as they join the content: the
+//! screens' are [`super::screens`]'s and the data part's [`super::data`]'s.
 
 use super::data::{DataRefusal, check_data};
+use super::screens::{ScreenRefusal, check_screens};
 use pos_proto::package::{
     LABEL_CHARS_MAX, PackageContent, SCHEDULES_PER_TIME_SLOT_MAX, TIME_SLOTS_MAX, TimeSlot,
 };
@@ -37,6 +38,8 @@ pub enum ContentRefusal {
     TimeSlotSchedules(usize),
     /// A window names no day, a minute outside the day, or starts where it ends.
     Schedule(usize),
+    /// A screen is refused ([ADR-0190](../../../../docs/adr/0190-a-screen-is-drawn-from-the-package.md)).
+    Screen(ScreenRefusal),
     /// The data part is refused ([ADR-0194](../../../../docs/adr/0194-custom-data-is-declared-and-personal-fields-are-kept-apart.md)).
     Data(DataRefusal),
 }
@@ -51,6 +54,7 @@ impl ContentRefusal {
             Self::TimeSlotId(_) | Self::DuplicateTimeSlot(_) => "time_slots.time_slot_id",
             Self::TimeSlotLabelKey(_) => "time_slots.label_key",
             Self::TimeSlotSchedules(_) | Self::Schedule(_) => "time_slots.schedules",
+            Self::Screen(_) => "screens",
             Self::Data(refusal) => refusal.field(),
         }
     }
@@ -63,6 +67,7 @@ impl ContentRefusal {
         match self {
             Self::Data(refusal) => refusal.code(),
             Self::VersionLabel
+            | Self::Screen(_)
             | Self::TooManyTimeSlots
             | Self::TimeSlotId(_)
             | Self::DuplicateTimeSlot(_)
@@ -100,6 +105,7 @@ impl core::fmt::Display for ContentRefusal {
                 "time slot {index}: a window names at least one day, minutes from 0 to 1439, and \
                  does not start where it ends"
             ),
+            Self::Screen(refusal) => write!(f, "screens: {refusal}"),
             Self::Data(refusal) => write!(f, "data: {refusal}"),
         }
     }
@@ -107,8 +113,8 @@ impl core::fmt::Display for ContentRefusal {
 
 impl core::error::Error for ContentRefusal {}
 
-/// Checks a version's content: its label, each time slot's id, name key and windows, and its data
-/// part.
+/// Checks a version's content: its label, each time slot's id, name key and windows, its screens
+/// and its data part.
 ///
 /// # Errors
 ///
@@ -132,6 +138,7 @@ pub fn check_content(content: &PackageContent) -> Result<(), ContentRefusal> {
             return Err(ContentRefusal::DuplicateTimeSlot(index));
         }
     }
+    check_screens(&content.screens, &content.time_slots).map_err(ContentRefusal::Screen)?;
     check_data(&content.data).map_err(ContentRefusal::Data)
 }
 
@@ -161,7 +168,7 @@ fn check_slot(index: usize, slot: &TimeSlot) -> Result<(), ContentRefusal> {
 }
 
 /// Whether `text` is 1 to `max` characters of `a`–`z`, `0`–`9` and what `also` allows.
-fn is_token(text: &str, max: usize, also: impl Fn(char) -> bool) -> bool {
+pub(super) fn is_token(text: &str, max: usize, also: impl Fn(char) -> bool) -> bool {
     !text.is_empty()
         && text.chars().count() <= max
         && text
