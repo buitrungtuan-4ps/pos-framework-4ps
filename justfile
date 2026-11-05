@@ -70,6 +70,14 @@ run-cloud:
 simulate:
     POS_EDGE_RELEASE_VERSION={{dev_edge_release}} cargo run -q -p pos-simulator
 
+# The till's 10 ms tap budget (ADR-0208): every act's tap to its frame ready to paint, p95, at a 2x
+# CPU throttle, against a release edge and a production till; a failing act is measured once more.
+# Set `POS_UI_CHROMIUM` to use a browser already on the machine.
+perf-gate:
+    cd ui && pnpm build
+    cargo build -p minimal-edge --release --locked
+    cd ui && POS_EDGE_BIN="${CARGO_TARGET_DIR:-$PWD/../target}/release/minimal-edge" node perf/gate.mjs
+
 # The edge's performance budgets at a large trading history (F2), in a release build. Ignored by
 # `just test`, because a timing assertion in a debug build on a shared runner measures the runner.
 # `POS_BENCH_HISTORY=<orders>` and `POS_BENCH_STORE=sqlite` pick the history and the store.
