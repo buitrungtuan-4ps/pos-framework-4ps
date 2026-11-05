@@ -74,11 +74,18 @@ function ActionButton(props: NodeProps): JSX.Element {
   );
 }
 
+const FRAME_CLASS: Readonly<Record<string, string>> = {
+  full: "p-4",
+  narrow: "mx-auto max-w-xl p-4",
+  medium: "mx-auto max-w-2xl p-4",
+  small: "mx-auto max-w-sm p-4",
+};
+
 /** A whole screen's frame. */
 function ScreenFrame(props: NodeProps): JSX.Element {
-  const narrow = () => textProperty(props.node, "width") === "narrow";
+  const width = () => FRAME_CLASS[textProperty(props.node, "width") ?? "full"] ?? FRAME_CLASS["full"];
   return (
-    <section class={narrow() ? "mx-auto max-w-xl p-4" : "p-4"}>
+    <section class={width()}>
       <Children {...props} />
     </section>
   );
@@ -120,4 +127,10 @@ export const IMPLEMENTATIONS: Implementations = {
   confirm_queue: region("confirm_queue"),
   counter_frame: region("counter_frame"),
   counter_flow: region("counter_flow"),
+  today_body: region("today_body"),
+  shift_screen: region("shift_screen"),
+  devices_body: region("devices_body"),
+  pair_body: region("pair_body"),
+  setup_body: region("setup_body"),
+  sign_in_screen: region("sign_in_screen"),
 };
