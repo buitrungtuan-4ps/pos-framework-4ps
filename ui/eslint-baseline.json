@@ -11,9 +11,6 @@
   "src/screens/Devices.tsx": {
     "max-lines-per-function": 312
   },
-  "src/screens/Floor.tsx": {
-    "max-lines-per-function": 114
-  },
   "src/screens/Kds.tsx": {
     "max-lines-per-function": 363
   },
