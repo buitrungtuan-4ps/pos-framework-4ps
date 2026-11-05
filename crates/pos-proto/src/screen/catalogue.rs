@@ -102,4 +102,35 @@ pub static CATALOGUE: &[Component] = &[
         summary: "A button that does one act on the order or table the screen is for.",
         ..BASE
     },
+    Component {
+        component_id: "screen_frame",
+        holds_children: true,
+        summary: "A whole screen's frame, its children inside the screen's margin.",
+        ..BASE
+    },
+    Component {
+        component_id: "page_header",
+        properties: &[Property {
+            name: "title_key",
+            kind: TranslationKey,
+            required: true,
+            ..PROPERTY
+        }],
+        summary: "A screen's heading.",
+        ..BASE
+    },
+    Component {
+        component_id: "floor_alerts",
+        reads: "floor",
+        summary: "Why the floor's last tap was refused, until the operator dismisses it.",
+        ..BASE
+    },
+    Component {
+        component_id: "floor_plan",
+        reads: "floor",
+        supplies: &["table_id"],
+        summary: "Every table of the floor by area, placed as the store drew it: a tap seats a free \
+                  table and opens it, opens a used one, or clears one that needs cleaning.",
+        ..BASE
+    },
 ];

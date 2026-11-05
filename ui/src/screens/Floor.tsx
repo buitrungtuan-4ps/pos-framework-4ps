@@ -1,7 +1,6 @@
-import { For, Show, createSignal, onCleanup } from "solid-js";
+import { For, Show, createContext, createSignal, onCleanup, useContext, type Accessor, type JSX } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 
-import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { tableStateKey } from "../i18n/labels";
 import { can } from "../state/permissions";
@@ -18,6 +17,7 @@ import {
 import { clean } from "../state/floor-writes";
 import { Takeaway } from "./Takeaway";
 import { errorMessage } from "../lib/errors";
+import { NO_ACTS, PackageScreen } from "../package/screen";
 
 const DOT: Record<string, string> = {
   TABLE_STATE_FREE: "bg-free",
@@ -107,27 +107,48 @@ function SeatRefused() {
   );
 }
 
-export function Floor() {
+// What the floor's components read (ADR-0203 decision 1): the floor screen's own state, which the
+// screen holds and the package's `floor_alerts` and `floor_plan` show.
+interface FloorView {
+  readonly error: Accessor<string | null>;
+  readonly setError: (message: string | null) => void;
+  readonly seatedMinutes: (tableId: string) => number | null;
+}
+
+const FloorContext = createContext<FloorView>();
+
+// `floor_alerts`: the last tap's refusal, and a seat the edge refused. Like every component that
+// reads a screen's context, it draws nothing on a screen that has none.
+export function FloorAlerts(): JSX.Element {
+  const view = useContext(FloorContext);
+  if (view === undefined) {
+    return null;
+  }
+  return (
+    <>
+      <Show when={view.error()}>
+        {(message) => (
+          <p class="mb-4 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
+            {message()}
+          </p>
+        )}
+      </Show>
+      <SeatRefused />
+    </>
+  );
+}
+
+// `floor_plan`: every table by area. A free table seats and opens, a used one opens, one needing
+// cleaning clears.
+export function FloorPlan(): JSX.Element {
   const navigate = useNavigate();
-  const [error, setError] = createSignal<string | null>(null);
-  // The floor's clock, for how long each table has been sitting. Every thirty seconds: the figure
-  // is in whole minutes, and one timer serves every card.
-  const [now, setNow] = createSignal(Date.now());
-  const clock = setInterval(() => setNow(Date.now()), 30_000);
-  onCleanup(() => clearInterval(clock));
-  // Whole minutes since the guests sat down, or null when nobody is sitting there. A device clock
-  // behind the edge's would read a fresh table as seated in the future; that is zero minutes.
-  const seatedMinutes = (tableId: string) => {
-    const since = seatedAt(tableId);
-    if (since === undefined || !SEATED_STATES.has(tableState(tableId))) {
-      return null;
-    }
-    const started = Date.parse(since);
-    return Number.isNaN(started) ? null : Math.max(0, Math.floor((now() - started) / 60_000));
-  };
+  const view = useContext(FloorContext);
+  if (view === undefined) {
+    return null;
+  }
 
   const onCard = async (tableId: string) => {
-    setError(null);
+    view.setError(null);
     const current = tableState(tableId);
     try {
       if (current === "TABLE_STATE_FREE") {
@@ -138,10 +159,9 @@ export function Floor() {
         navigate(`/table/${tableId}`);
       }
     } catch (caught) {
-      setError(errorMessage(caught));
+      view.setError(errorMessage(caught));
     }
   };
-
   // One table's card. Identical in both layouts — only where it is placed differs, so a server's
   // target never changes size or shape between a placed area and an unplaced one.
   //
@@ -191,7 +211,7 @@ export function Floor() {
         {/* How long the guests have been sitting, which a host reads to know who is due a check and
             who is about to leave. From when the order opened, as the edge recorded it, and from the
             first whole minute: "seated 0 min" on a table sat down a moment ago says nothing. */}
-        <Show when={seatedMinutes(table.id)}>
+        <Show when={view.seatedMinutes(table.id)}>
           {(minutes) => (
             <span class="text-sm tabular-nums text-ink-muted" data-outcome="table-seated">
               {t("floor.seated_for", { minutes: minutes() })}
@@ -224,28 +244,44 @@ export function Floor() {
     </section>
   );
 
+  // The floor drawn is what proves a sign-in took, so it carries the outcome mark for that task
+  // (ADR-0109). It is present whenever this screen renders, which is the claim.
+  return (
+    <div data-outcome="floor">
+      <For each={floorAreas()}>{area}</For>
+    </div>
+  );
+}
+
+export function Floor() {
+  const [error, setError] = createSignal<string | null>(null);
+  // The floor's clock, for how long each table has been sitting. Every thirty seconds: the figure
+  // is in whole minutes, and one timer serves every card.
+  const [now, setNow] = createSignal(Date.now());
+  const clock = setInterval(() => setNow(Date.now()), 30_000);
+  onCleanup(() => clearInterval(clock));
+  // Whole minutes since the guests sat down, or null when nobody is sitting there. A device clock
+  // behind the edge's would read a fresh table as seated in the future; that is zero minutes.
+  const seatedMinutes = (tableId: string) => {
+    const since = seatedAt(tableId);
+    if (since === undefined || !SEATED_STATES.has(tableState(tableId))) {
+      return null;
+    }
+    const started = Date.parse(since);
+    return Number.isNaN(started) ? null : Math.max(0, Math.floor((now() - started) / 60_000));
+  };
+
   // A shop with no tables gets the counter list, which is home for that role (ADR-0093). Checked
   // before anything else this screen does, so a counter store never renders a room it has not got.
   if (!tablesEnabled()) {
     return <Takeaway />;
   }
 
+  // Drawn from the default package's `floor` screen (ADR-0190): its frame and heading, then
+  // `floor_alerts` and `floor_plan` above, which read this screen's state.
   return (
-    <section class="p-4">
-      <PageHeader title={t("floor.title")} />
-      <Show when={error()}>
-        {(message) => (
-          <p class="mb-4 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
-            {message()}
-          </p>
-        )}
-      </Show>
-      <SeatRefused />
-      {/* The floor drawn is what proves a sign-in took, so it carries the outcome mark for that
-          task (ADR-0109). It is present whenever this screen renders, which is the claim. */}
-      <div data-outcome="floor">
-        <For each={floorAreas()}>{area}</For>
-      </div>
-    </section>
+    <FloorContext.Provider value={{ error, setError, seatedMinutes }}>
+      <PackageScreen screenId="floor" host={NO_ACTS} />
+    </FloorContext.Provider>
   );
 }

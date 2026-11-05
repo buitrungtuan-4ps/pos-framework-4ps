@@ -99,7 +99,7 @@ export function packageLabel(key: string | undefined): string {
 }
 
 /** What a node of a component this release lacks draws in its place. */
-function NeedsUpdate(): JSX.Element {
+export function NeedsUpdate(): JSX.Element {
   return (
     <p class="rounded-token border border-dashed border-line p-3 text-sm text-ink-muted" data-package-fallback>
       {t("package.needs_update")}
