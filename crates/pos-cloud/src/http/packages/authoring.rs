@@ -290,8 +290,10 @@ where
         version_label: request.version_label.trim().to_owned(),
         min_edge_version: ReleaseTag::new(""),
         time_slots: request.time_slots,
-        // A version is authored with no flows until the console designs them (ADR-0192, phase 4).
+        // A version is authored with no flows or screens until the console designs them (ADR-0192,
+        // ADR-0190, phase 4).
         flows: Vec::new(),
+        screens: Vec::new(),
         data: request.data,
     };
     content.min_edge_version = min_edge_version(&content);

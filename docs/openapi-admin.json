@@ -25963,6 +25963,29 @@
           }
         }
       },
+      "ActionBinding": {
+        "type": "object",
+        "description": "An action property: a catalogue act and the parameters the package fixes for it.",
+        "required": [
+          "action_id"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "string",
+            "description": "The act, by its catalogue id."
+          },
+          "params": {
+            "type": "object",
+            "description": "The parameters fixed here, by name. An amount and anything a person enters are never fixed\nby a package (ADR-0191 decision 2).",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ParamValue"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "AdminInvite": {
         "type": "object",
         "description": "A pending or accepted invitation, as listed ([ADR-0067](../../../../docs/adr/0067-multi-admin-console-rbac.md)).\nCarries no token — only its `SHA-256` is ever stored — so this is safe to serialise to the console.",
@@ -31625,6 +31648,13 @@
             "$ref": "#/components/schemas/PackageVersionId",
             "description": "This version. A published version never changes."
           },
+          "screens": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Variant_Screen"
+            },
+            "description": "The package's screens ([ADR-0190](../../../docs/adr/0190-a-screen-is-drawn-from-the-package.md)),\neach with its variants; the variants of one screen share its `screen_id`. A screen the\nversion does not declare is drawn from the release's default package."
+          },
           "time_slots": {
             "type": "array",
             "items": {
@@ -31963,6 +31993,27 @@
           }
         }
       },
+      "ParamValue": {
+        "oneOf": [
+          {
+            "type": "integer",
+            "format": "int64",
+            "description": "A count."
+          },
+          {
+            "type": "string",
+            "description": "An id, a token or text."
+          },
+          {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "A list of ids."
+          }
+        ],
+        "description": "A fixed parameter's value."
+      },
       "PermissionInfo": {
         "type": "object",
         "description": "One entry of the permission catalogue the console offers when authoring a role. Mirrors the\n`pos-core` [`Permission`] metadata (§9) so the console renders permissions grouped, with their\nrisk and PIN policy, from the framework's own source of truth rather than a hand-kept UI list.",
@@ -32170,6 +32221,28 @@
             "type": "string"
           }
         }
+      },
+      "PropertyValue": {
+        "oneOf": [
+          {
+            "type": "boolean",
+            "description": "A [`PropertyKind::Bool`]."
+          },
+          {
+            "type": "integer",
+            "format": "int64",
+            "description": "A [`PropertyKind::Int`]."
+          },
+          {
+            "type": "string",
+            "description": "A [`PropertyKind::TranslationKey`] or a [`PropertyKind::Token`]."
+          },
+          {
+            "$ref": "#/components/schemas/ActionBinding",
+            "description": "A [`PropertyKind::Action`]."
+          }
+        ],
+        "description": "A property's value: the literal itself, read by the kind the catalogue gives the property.\n\nUntagged, so `true`, `3` and `\"order.send\"` are the values themselves. A\n[`PropertyKind::TranslationKey`] and a [`PropertyKind::Token`] are both text."
       },
       "ProviderView": {
         "type": "object",
@@ -34524,6 +34597,36 @@
           "CONNECTION_SCOPE_STORE"
         ]
       },
+      "ScreenNode": {
+        "type": "object",
+        "description": "One node of a screen: a component and what the package gives it.",
+        "required": [
+          "component_id"
+        ],
+        "properties": {
+          "children": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScreenNode"
+            },
+            "description": "The nodes it holds, in order, when its component holds children."
+          },
+          "component_id": {
+            "type": "string",
+            "description": "The catalogue component it draws."
+          },
+          "properties": {
+            "type": "object",
+            "description": "Its properties, by name. Left off the wire while it gives none.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PropertyValue"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "SetDrawerRequest": {
         "type": "object",
         "description": "An operator marks an approved printer as having a cash drawer wired to it, or clears the mark.",
@@ -36621,6 +36724,37 @@
                   "$ref": "#/components/schemas/FlowStep"
                 },
                 "description": "The steps, at most [`STEPS_MAX`], in the order the till offers them when several are\navailable at once."
+              }
+            }
+          },
+          "selector": {
+            "$ref": "#/components/schemas/VariantSelector",
+            "description": "When the variant applies. Empty for the part's base variant."
+          }
+        }
+      },
+      "Variant_Screen": {
+        "type": "object",
+        "description": "One variant of a package part: what a till shows or runs when its selector is the one chosen.",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "object",
+            "description": "One screen of a package.",
+            "required": [
+              "screen_id",
+              "root"
+            ],
+            "properties": {
+              "root": {
+                "$ref": "#/components/schemas/ScreenNode",
+                "description": "The tree the screen is drawn from."
+              },
+              "screen_id": {
+                "type": "string",
+                "description": "The screen's id within its package, which an `ui.screen.open` act and a flow step name. Its\nvariants share it."
               }
             }
           },

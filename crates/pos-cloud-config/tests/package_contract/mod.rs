@@ -36,6 +36,7 @@ fn version(seed: u128, package: &PackageRecord, n: u128, label: &str) -> Package
             min_edge_version: ReleaseTag::new("0.14.1"),
             time_slots: Vec::new(),
             flows: Vec::new(),
+            screens: Vec::new(),
             data: pos_proto::package::PackageData::default(),
         },
         create_time: at(2_000),
