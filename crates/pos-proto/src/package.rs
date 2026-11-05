@@ -28,6 +28,7 @@ use crate::devices::DeviceClass;
 use crate::enums::SalesChannel;
 use crate::flow::Flow;
 use crate::ids::{DeviceId, PackageId, PackageVersionId};
+use crate::screen::Screen;
 use crate::text::{ReleaseTag, TranslationKey};
 use crate::ulid::Ulid;
 use crate::wire_enum;
@@ -122,6 +123,11 @@ pub struct PackageContent {
     /// each with its variants; the variants of one flow share its `flow_id`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub flows: Vec<Variant<Flow>>,
+    /// The package's screens ([ADR-0190](../../../docs/adr/0190-a-screen-is-drawn-from-the-package.md)),
+    /// each with its variants; the variants of one screen share its `screen_id`. A screen the
+    /// version does not declare is drawn from the release's default package.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub screens: Vec<Variant<Screen>>,
     /// The package's data part: custom fields, object types and lists
     /// ([ADR-0194](../../../docs/adr/0194-custom-data-is-declared-and-personal-fields-are-kept-apart.md)).
     /// Empty, and left off the wire, in a version that declares none.

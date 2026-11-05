@@ -49,6 +49,12 @@
 //! `frequency=`, `route=`, `permission=`, `refusal=` and `since=` may change, because the edge, not
 //! the package, holds what an act calls and what it needs.
 //!
+//! The component snapshot (`docs/snapshots/components.txt`) follows it too
+//! ([ADR-0190](../../../docs/adr/0190-a-screen-is-drawn-from-the-package.md) decision 2): a bare
+//! component id and its `property=`, `children=`, `supplies=` and `device_class=` lines are
+//! contracts — a published package names the component, gives it those properties and draws it on
+//! those classes — while its tabbed `reads=`, `fallback=` and `since=` may change.
+//!
 //! The route snapshot (`docs/snapshots/routes.txt`) has no mutable half at all: every
 //! line is `METHOD /path`, and every line is a contract
 //! ([ADR-0111](../../../docs/adr/0111-a-second-origin-may-address-the-edge.md)). A till
@@ -71,6 +77,7 @@ const SNAPSHOTS: &[&str] = &[
     "docs/snapshots/routes.txt",
     "docs/snapshots/settings.txt",
     "docs/snapshots/actions.txt",
+    "docs/snapshots/components.txt",
 ];
 
 /// Tab-prefixed metadata keys that may change or disappear without breaking a contract.
@@ -99,6 +106,10 @@ const MUTABLE_KEYS: &[&str] = &[
     "\troute=",
     "\tpermission=",
     "\trefusal=",
+    // What a component reads, what it falls back to: the till's, not a package's (ADR-0190
+    // decision 2).
+    "\treads=",
+    "\tfallback=",
 ];
 
 /// Lines whose disappearance is a deliberate change rather than a broken contract.
@@ -112,7 +123,11 @@ fn is_mutable(line: &str) -> bool {
 /// hint is the kind a reader skips. The remedy is the same in each case — deprecate in place —
 /// but *who breaks* differs, and naming them is what makes the remedy land.
 fn hint_for(path: &str) -> &'static str {
-    if path.ends_with("actions.txt") {
+    if path.ends_with("components.txt") {
+        "a published component is a contract: deprecate it, but do not rename or remove it, one \
+         of its properties or tokens, the parameters it supplies or a device class it is drawn on \
+         — a published package names it and gives it those properties (ADR-0190)"
+    } else if path.ends_with("actions.txt") {
         "a published act is a contract: deprecate it, but do not rename or remove it, change its \
          effect class or drop one of its parameters — a published package names it and binds its \
          parameters (ADR-0191)"
@@ -274,5 +289,18 @@ mod tests {
             "billing.bill.settle\troute=POST /api/bills/{id}/settle"
         ));
         assert!(is_mutable("billing.bill.settle\trefusal=DRAWER_COUNTED"));
+    }
+
+    #[test]
+    fn a_component_keeps_its_properties_and_classes_and_may_change_its_fallback() {
+        assert!(super::hint_for("docs/snapshots/components.txt").contains("component"));
+        assert!(!is_mutable(
+            "action_button\tproperty=action:PROPERTY_KIND_ACTION:required"
+        ));
+        assert!(!is_mutable("action_button\tsupplies=order_id"));
+        assert!(!is_mutable("stack\tdevice_class=DEVICE_CLASS_PHONE"));
+        assert!(is_mutable("action_button\treads=subject"));
+        assert!(is_mutable("text\tfallback=stack"));
+        assert!(is_mutable("text\tsince=0.14.1"));
     }
 }
