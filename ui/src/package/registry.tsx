@@ -28,6 +28,7 @@ import {
   OrderMove,
   OrderNotices,
 } from "./order-regions";
+import { PayBack, PayFlow } from "./pay-regions";
 import { actionProperty, Children, packageLabel, textProperty, useHost, type Implementations, type NodeProps } from "./render";
 
 /** Its children down the screen, or across it. */
@@ -86,8 +87,9 @@ function ActionButton(props: NodeProps): JSX.Element {
 
 /** A whole screen's frame. */
 function ScreenFrame(props: NodeProps): JSX.Element {
+  const narrow = () => textProperty(props.node, "width") === "narrow";
   return (
-    <section class="p-4">
+    <section class={narrow() ? "mx-auto max-w-xl p-4" : "p-4"}>
       <Children {...props} />
     </section>
   );
@@ -117,4 +119,6 @@ export const IMPLEMENTATIONS: Implementations = {
   menu_toolbar: MenuToolbar,
   menu_fields: MenuFields,
   menu_buttons: MenuButtons,
+  pay_back: PayBack,
+  pay_flow: PayFlow,
 };

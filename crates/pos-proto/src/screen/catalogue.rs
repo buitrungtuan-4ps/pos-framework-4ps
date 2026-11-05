@@ -104,8 +104,14 @@ pub static CATALOGUE: &[Component] = &[
     },
     Component {
         component_id: "screen_frame",
+        properties: &[Property {
+            name: "width",
+            tokens: &["full", "narrow"],
+            ..PROPERTY
+        }],
         holds_children: true,
-        summary: "A whole screen's frame, its children inside the screen's margin.",
+        summary: "A whole screen's frame, its children inside the screen's margin, across the \
+                  screen or in a narrow column at its centre.",
         ..BASE
     },
     Component {
@@ -191,6 +197,19 @@ pub static CATALOGUE: &[Component] = &[
         component_id: "menu_buttons",
         reads: "menu",
         summary: "The menu's buttons as the store arranged them, or what the search found.",
+        ..BASE
+    },
+    Component {
+        component_id: "pay_back",
+        reads: "bill",
+        summary: "The way back from taking payment to the order.",
+        ..BASE
+    },
+    Component {
+        component_id: "pay_flow",
+        reads: "bill",
+        summary: "Taking payment: the amount due and the bill's arithmetic, the tenders, splitting \
+                  and reductions, the settle and its answer, or what ended the bill.",
         ..BASE
     },
 ];
