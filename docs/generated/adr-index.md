@@ -18,6 +18,7 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 - [ADR-0203](../adr/0203-a-component-reads-its-own-data.md) A component reads its own data, and a package gives it only literals
 - [ADR-0205](../adr/0205-a-refusal-any-act-can-meet-is-not-listed-per-act.md) A refusal any act can meet is not listed per act
 - [ADR-0207](../adr/0207-a-receipt-is-a-structured-template-per-store-and-channel.md) A receipt is a structured template, per store and per sales channel
+- [ADR-0208](../adr/0208-a-tap-is-measured-to-its-frame-ready-and-gated-per-pull-request.md) A tap is measured to its frame ready to paint, and gated on every pull request
 
 ## Citations of ADRs that do not exist
 
