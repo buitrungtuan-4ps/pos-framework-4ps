@@ -29,6 +29,9 @@ import { SendFirst } from "../components/SendFirst";
 import { counterKey, createSendFirst } from "../state/unsent";
 import { draftWalkIn } from "../state/draft-walk-in";
 import { createPrint } from "../state/print-writes";
+import { Children } from "../package/render";
+import { RegionsContext, type Regions } from "../package/regions";
+import { NO_ACTS, PackageScreen } from "../package/screen";
 
 // The table pay screen's guard on the cash snap, kept in step with `Pay.tsx` by hand rather than
 // shared: this is its second use, and `docs/design-principles.md` extracts on the third. `Pay.tsx`
@@ -234,331 +237,332 @@ export function Takeaway() {
   const payCard = () => payExact("PAYMENT_METHOD_CARD");
   const payQr = () => payExact("PAYMENT_METHOD_QR");
 
-  return (
+  // The regions the default package's `counter` screen arranges (`../package/regions.tsx`).
+  const regions: Regions = {
     // The mark that proves this screen rendered, which is what a counter store's home must show
     // (`docs/ui-ux.md` §3). Named for the role rather than the screen: `/counter` is this list on
     // any store, and on a store with no tables it is also `/`.
-    <section class="mx-auto max-w-xl p-4" data-outcome="counter">
-      <Show
-        when={chosen()}
-        fallback={
-          <>
-            <PageHeader title={t("counter.title")} />
-            <Show when={voidedNote()}><p class="mb-3 text-sm text-ink-muted" role="status" data-outcome="bill-voided">{t("pay.void_done_hint")}</p></Show>
-            <Show when={can("sales.line.add")}>
-            <button
-              type="button"
-              class="mt-3 min-h-touch w-full rounded-token bg-primary px-4 text-primary-ink"
-              aria-expanded={walkInAsks() ? asking() : undefined}
-              data-step="newOrder"
-              onClick={() => newOrder()}
-            >
-              {t("counter.new_order")}
-            </button>
-            <Show when={walkInAsks() && asking()}>
-              <div class="mt-2 grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  class="min-h-money rounded-token border border-primary px-4 text-lg font-semibold text-ink"
-                  data-step="eatIn"
-                  onClick={() => void openWalkIn("SALES_CHANNEL_DINE_IN")}
-                >
-                  {t("counter.eat_in")}
-                </button>
-                <button
-                  type="button"
-                  class="min-h-money rounded-token border border-primary px-4 text-lg font-semibold text-ink"
-                  data-step="takeAway"
-                  onClick={() => void openWalkIn("SALES_CHANNEL_TAKEAWAY")}
-                >
-                  {t("counter.take_away")}
-                </button>
-              </div>
-            </Show>
-            </Show>
+    counter_frame: (props) => <section class="mx-auto max-w-xl p-4" data-outcome="counter"><Children {...props} /></section>,
+    counter_flow: () => <Show
+      when={chosen()}
+      fallback={
+        <>
+          <PageHeader title={t("counter.title")} />
+          <Show when={voidedNote()}><p class="mb-3 text-sm text-ink-muted" role="status" data-outcome="bill-voided">{t("pay.void_done_hint")}</p></Show>
+          <Show when={can("sales.line.add")}>
+          <button
+            type="button"
+            class="mt-3 min-h-touch w-full rounded-token bg-primary px-4 text-primary-ink"
+            aria-expanded={walkInAsks() ? asking() : undefined}
+            data-step="newOrder"
+            onClick={() => newOrder()}
+          >
+            {t("counter.new_order")}
+          </button>
+          <Show when={walkInAsks() && asking()}>
+            <div class="mt-2 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                class="min-h-money rounded-token border border-primary px-4 text-lg font-semibold text-ink"
+                data-step="eatIn"
+                onClick={() => void openWalkIn("SALES_CHANNEL_DINE_IN")}
+              >
+                {t("counter.eat_in")}
+              </button>
+              <button
+                type="button"
+                class="min-h-money rounded-token border border-primary px-4 text-lg font-semibold text-ink"
+                data-step="takeAway"
+                onClick={() => void openWalkIn("SALES_CHANNEL_TAKEAWAY")}
+              >
+                {t("counter.take_away")}
+              </button>
+            </div>
+          </Show>
+          </Show>
 
-            <Show when={error()}>
-              {(message) => (
-                <p class="mt-3 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
-                  {message()}
+          <Show when={error()}>
+            {(message) => (
+              <p class="mt-3 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
+                {message()}
+              </p>
+            )}
+          </Show>
+          <SendFirst gate={sendFirst} />
+          <ReadFailed read={listRead} />
+
+          <Show
+            when={(orders()?.length ?? 0) > 0}
+            fallback={
+              <Show when={orders() !== null}>
+                <p class="mt-6 text-ink-muted">{t("counter.empty")}</p>
+                <p class="mt-1 text-sm text-ink-muted">{t("counter.empty_hint")}</p>
+              </Show>
+            }
+          >
+            <ul class="mt-4 flex list-none flex-col gap-2 p-0">
+              <For each={orders() ?? []}>
+                {(order) => (
+                  <li>
+                    <button
+                      type="button"
+                      class="min-h-touch w-full rounded-token border border-line bg-surface p-3 text-left disabled:opacity-50"
+                      disabled={order.bill_id === undefined && !can("billing.bill.open")}
+                      data-step="charge"
+                      onClick={() => void charge(order)}
+                    >
+                      <span class="flex items-baseline justify-between gap-3">
+                        <span class="text-lg font-semibold tabular-nums">
+                          {order.queue_number === undefined
+                            ? t("counter.no_queue_number")
+                            : t("counter.queue_number", { number: order.queue_number })}
+                        </span>
+                        <span class="text-lg font-semibold tabular-nums">
+                          {formatAmount(order.total_due)}
+                        </span>
+                      </span>
+                      <span class="mt-1 block text-sm text-ink-muted">
+                        {order.items
+                          .map((line) => `${line.quantity.milli / 1000} × ${line.display_name}`)
+                          .join(", ")}
+                      </span>
+                      <Show when={order.bill_id !== undefined}>
+                        <span class="mt-1 block text-sm text-accent">{t("counter.resume")}</span>
+                      </Show>
+                    </button>
+                  </li>
+                )}
+              </For>
+            </ul>
+          </Show>
+        </>
+      }
+    >
+      {(order) => (
+        <>
+          <button
+            type="button"
+            class="min-h-touch border-0 bg-transparent p-0 text-sm text-ink-muted hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded-token"
+            aria-label={t("counter.back")}
+            onClick={() => back()}
+          >
+            {t("counter.back")}
+          </button>
+
+          <Show
+            when={done()}
+            fallback={
+              <>
+                <p class="mt-4 text-sm text-ink-muted">
+                  {order().queue_number === undefined
+                    ? t("counter.no_queue_number")
+                    : t("counter.queue_number", { number: order().queue_number ?? 0 })}
                 </p>
-              )}
-            </Show>
-            <SendFirst gate={sendFirst} />
-            <ReadFailed read={listRead} />
+                <p class="text-2xl font-semibold tabular-nums">{formatAmount(order().total_due)}</p>
 
-            <Show
-              when={(orders()?.length ?? 0) > 0}
-              fallback={
-                <Show when={orders() !== null}>
-                  <p class="mt-6 text-ink-muted">{t("counter.empty")}</p>
-                  <p class="mt-1 text-sm text-ink-muted">{t("counter.empty_hint")}</p>
-                </Show>
-              }
-            >
-              <ul class="mt-4 flex list-none flex-col gap-2 p-0">
-                <For each={orders() ?? []}>
-                  {(order) => (
-                    <li>
-                      <button
-                        type="button"
-                        class="min-h-touch w-full rounded-token border border-line bg-surface p-3 text-left disabled:opacity-50"
-                        disabled={order.bill_id === undefined && !can("billing.bill.open")}
-                        data-step="charge"
-                        onClick={() => void charge(order)}
-                      >
-                        <span class="flex items-baseline justify-between gap-3">
-                          <span class="text-lg font-semibold tabular-nums">
-                            {order.queue_number === undefined
-                              ? t("counter.no_queue_number")
-                              : t("counter.queue_number", { number: order.queue_number })}
-                          </span>
-                          <span class="text-lg font-semibold tabular-nums">
-                            {formatAmount(order.total_due)}
-                          </span>
-                        </span>
-                        <span class="mt-1 block text-sm text-ink-muted">
-                          {order.items
-                            .map((line) => `${line.quantity.milli / 1000} × ${line.display_name}`)
-                            .join(", ")}
-                        </span>
-                        <Show when={order.bill_id !== undefined}>
-                          <span class="mt-1 block text-sm text-accent">{t("counter.resume")}</span>
-                        </Show>
-                      </button>
-                    </li>
+                <Show when={error()}>
+                  {(message) => (
+                    <p
+                      class="mt-3 rounded-token border border-danger px-3 py-2 text-danger"
+                      role="alert"
+                    >
+                      {message()}
+                    </p>
                   )}
-                </For>
-              </ul>
-            </Show>
-          </>
-        }
-      >
-        {(order) => (
-          <>
-            <button
-              type="button"
-              class="min-h-touch border-0 bg-transparent p-0 text-sm text-ink-muted hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded-token"
-              aria-label={t("counter.back")}
-              onClick={() => back()}
-            >
-              {t("counter.back")}
-            </button>
+                </Show>
 
-            <Show
-              when={done()}
-              fallback={
-                <>
-                  <p class="mt-4 text-sm text-ink-muted">
-                    {order().queue_number === undefined
-                      ? t("counter.no_queue_number")
-                      : t("counter.queue_number", { number: order().queue_number ?? 0 })}
-                  </p>
-                  <p class="text-2xl font-semibold tabular-nums">{formatAmount(order().total_due)}</p>
-
-                  <Show when={error()}>
-                    {(message) => (
-                      <p
-                        class="mt-3 rounded-token border border-danger px-3 py-2 text-danger"
-                        role="alert"
-                      >
-                        {message()}
-                      </p>
-                    )}
-                  </Show>
-
-                  {/* The tip and the tenders are taking payment (ADR-0158). */}
-                  <Show when={can("billing.payment.take")}>
-                  {/* No tip key left to offer, and the row is not drawn, as on the table pay screen:
-                      with no amount to type, a lone "No tip" would offer nothing. */}
-                  <Show when={tipsEnabled() && tipPercents().length > 0}>
-                    <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">{t("pay.tip")}</h2>
-                    <div class="grid grid-cols-4 gap-2">
-                      <button
-                        type="button"
-                        class="min-h-touch rounded-token border border-line bg-surface"
-                        classList={{ "border-accent": tip() === 0 }}
-                        onClick={() => setTip(0)}
-                      >
-                        {t("pay.tip_none")}
-                      </button>
-                      <For each={tipKeys()}>
-                        {(amount) => (
-                          <button
-                            type="button"
-                            class="min-h-touch rounded-token border border-line bg-surface tabular-nums"
-                            classList={{ "border-accent": tip() === amount && amount > 0 }}
-                            data-step="setTip"
-                            onClick={() => setTip(amount)}
-                          >
-                            {formatAmount(money(currency(), amount))}
-                          </button>
-                        )}
-                      </For>
-                    </div>
-                  </Show>
-
-                  <Show when={tenderAccepted("PAYMENT_METHOD_CASH")}>
-                  <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">{t("pay.cash")}</h2>
-                  <div class="grid grid-cols-2 gap-2">
-                    <For each={quickCash()}>
+                {/* The tip and the tenders are taking payment (ADR-0158). */}
+                <Show when={can("billing.payment.take")}>
+                {/* No tip key left to offer, and the row is not drawn, as on the table pay screen:
+                    with no amount to type, a lone "No tip" would offer nothing. */}
+                <Show when={tipsEnabled() && tipPercents().length > 0}>
+                  <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">{t("pay.tip")}</h2>
+                  <div class="grid grid-cols-4 gap-2">
+                    <button
+                      type="button"
+                      class="min-h-touch rounded-token border border-line bg-surface"
+                      classList={{ "border-accent": tip() === 0 }}
+                      onClick={() => setTip(0)}
+                    >
+                      {t("pay.tip_none")}
+                    </button>
+                    <For each={tipKeys()}>
                       {(amount) => (
                         <button
                           type="button"
                           class="min-h-touch rounded-token border border-line bg-surface tabular-nums"
-                          classList={{ "border-accent": !typing() && tender() === amount }}
-                          data-step="setTender"
-                          onClick={() => {
-                            setTyping(false);
-                            setTender(amount);
-                          }}
+                          classList={{ "border-accent": tip() === amount && amount > 0 }}
+                          data-step="setTip"
+                          onClick={() => setTip(amount)}
                         >
-                          {amount === total()
-                            ? t("pay.exact")
-                            : formatAmount(money(currency(), amount))}
+                          {formatAmount(money(currency(), amount))}
                         </button>
                       )}
                     </For>
+                  </div>
+                </Show>
+
+                <Show when={tenderAccepted("PAYMENT_METHOD_CASH")}>
+                <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">{t("pay.cash")}</h2>
+                <div class="grid grid-cols-2 gap-2">
+                  <For each={quickCash()}>
+                    {(amount) => (
+                      <button
+                        type="button"
+                        class="min-h-touch rounded-token border border-line bg-surface tabular-nums"
+                        classList={{ "border-accent": !typing() && tender() === amount }}
+                        data-step="setTender"
+                        onClick={() => {
+                          setTyping(false);
+                          setTender(amount);
+                        }}
+                      >
+                        {amount === total()
+                          ? t("pay.exact")
+                          : formatAmount(money(currency(), amount))}
+                      </button>
+                    )}
+                  </For>
+                  <button
+                    type="button"
+                    class="min-h-touch rounded-token border border-line bg-surface"
+                    classList={{ "border-accent": typing() }}
+                    aria-expanded={typing()}
+                    data-step="typeTender"
+                    onClick={() => typeTender()}
+                  >
+                    {t("pay.other_amount")}
+                  </button>
+                </div>
+                <Show when={typing()}>
+                  <p class="mt-3 text-sm text-ink-muted">{t("pay.tendered")}</p>
+                  <p class="text-2xl font-semibold tabular-nums" data-outcome="typed-tender">
+                    {typedTender() === null
+                      ? "—"
+                      : formatAmount(money(currency(), typedTender() ?? 0))}
+                  </p>
+                  <Keypad value={typedText()} onChange={setTypedText} data-step="tenderKeypad" />
+                  <Show when={shortBy()}>
+                    {(gap) => (
+                      <p class="mt-2 text-sm text-danger" role="status">
+                        {t("pay.short_by", { amount: formatAmount(money(currency(), gap())) })}
+                      </p>
+                    )}
+                  </Show>
+                </Show>
+                <p class="mt-2 text-sm text-ink-muted">
+                  {t("pay.change")}:{" "}
+                  <span class="tabular-nums">{formatAmount(money(currency(), change()))}</span>
+                </p>
+                </Show>
+
+                <div class="mt-4 flex flex-col gap-2">
+                  <Show when={tenderAccepted("PAYMENT_METHOD_CASH")}>
+                    <button
+                      type="button"
+                      class="min-h-money rounded-token bg-primary text-lg font-semibold text-primary-ink disabled:opacity-50"
+                      disabled={typedTenderInvalid()}
+                      data-step="payCash"
+                      onClick={() => payCash()}
+                    >
+                      {t("pay.take_cash")}
+                    </button>
+                  </Show>
+                  <Show when={tenderAccepted("PAYMENT_METHOD_CARD")}>
                     <button
                       type="button"
                       class="min-h-touch rounded-token border border-line bg-surface"
-                      classList={{ "border-accent": typing() }}
-                      aria-expanded={typing()}
-                      data-step="typeTender"
-                      onClick={() => typeTender()}
+                      data-step="payCard"
+                      onClick={() => payCard()}
                     >
-                      {t("pay.other_amount")}
+                      {t("pay.card")}
                     </button>
-                  </div>
-                  <Show when={typing()}>
-                    <p class="mt-3 text-sm text-ink-muted">{t("pay.tendered")}</p>
-                    <p class="text-2xl font-semibold tabular-nums" data-outcome="typed-tender">
-                      {typedTender() === null
-                        ? "—"
-                        : formatAmount(money(currency(), typedTender() ?? 0))}
-                    </p>
-                    <Keypad value={typedText()} onChange={setTypedText} data-step="tenderKeypad" />
-                    <Show when={shortBy()}>
-                      {(gap) => (
-                        <p class="mt-2 text-sm text-danger" role="status">
-                          {t("pay.short_by", { amount: formatAmount(money(currency(), gap())) })}
-                        </p>
-                      )}
-                    </Show>
                   </Show>
-                  <p class="mt-2 text-sm text-ink-muted">
-                    {t("pay.change")}:{" "}
-                    <span class="tabular-nums">{formatAmount(money(currency(), change()))}</span>
+                  <Show when={tenderAccepted("PAYMENT_METHOD_QR")}>
+                    <button
+                      type="button"
+                      class="min-h-touch rounded-token border border-line bg-surface"
+                      data-step="payQr"
+                      onClick={() => payQr()}
+                    >
+                      {t("pay.qr")}
+                    </button>
+                    <p class="text-sm text-ink-muted">{t("pay.qr_hint")}</p>
+                  </Show>
+                </div>
+                </Show>
+                {/* Money off and the void, as on the table's pay screen (UX-10). A voided bill
+                    leaves the order open to charge again, so the pad goes back to the list. */}
+                <BillReductions billId={() => order().bill_id ?? null} currency={currency} report={setError} onApplied={(totals) => setChosen({ ...order(), total_due: totals.total_due })} onVoided={() => back(true)} />
+              </>
+            }
+          >
+            {(settled) => (
+              <>
+                <p class="mt-4 text-lg font-semibold" data-outcome="settled">
+                  {t("pay.settled")}
+                </p>
+                <Show when={settled().receipt_number}>
+                  {(number) => (
+                    <p class="tabular-nums">{t("pay.receipt", { number: number() })}</p>
+                  )}
+                </Show>
+                {/* The change is what the cashier acts on next, so it is the largest figure (UX-15). */}
+                <Show when={change() > 0}>
+                  <p class="mt-3 text-sm text-ink-muted">{t("pay.change")}<span class="block text-4xl font-semibold text-ink tabular-nums" data-outcome="change-due">{formatAmount(money(currency(), change()))}</span></p>
+                </Show>
+                <Show when={settled().drawer_open === "DRAWER_UNAVAILABLE"}>
+                  <p class="mt-1 text-sm text-danger" role="status" data-outcome="drawer-unavailable">
+                    {t("pay.drawer_unavailable")}
                   </p>
-                  </Show>
-
-                  <div class="mt-4 flex flex-col gap-2">
-                    <Show when={tenderAccepted("PAYMENT_METHOD_CASH")}>
-                      <button
-                        type="button"
-                        class="min-h-money rounded-token bg-primary text-lg font-semibold text-primary-ink disabled:opacity-50"
-                        disabled={typedTenderInvalid()}
-                        data-step="payCash"
-                        onClick={() => payCash()}
-                      >
-                        {t("pay.take_cash")}
-                      </button>
-                    </Show>
-                    <Show when={tenderAccepted("PAYMENT_METHOD_CARD")}>
-                      <button
-                        type="button"
-                        class="min-h-touch rounded-token border border-line bg-surface"
-                        data-step="payCard"
-                        onClick={() => payCard()}
-                      >
-                        {t("pay.card")}
-                      </button>
-                    </Show>
-                    <Show when={tenderAccepted("PAYMENT_METHOD_QR")}>
-                      <button
-                        type="button"
-                        class="min-h-touch rounded-token border border-line bg-surface"
-                        data-step="payQr"
-                        onClick={() => payQr()}
-                      >
-                        {t("pay.qr")}
-                      </button>
-                      <p class="text-sm text-ink-muted">{t("pay.qr_hint")}</p>
-                    </Show>
-                  </div>
-                  </Show>
-                  {/* Money off and the void, as on the table's pay screen (UX-10). A voided bill
-                      leaves the order open to charge again, so the pad goes back to the list. */}
-                  <BillReductions billId={() => order().bill_id ?? null} currency={currency} report={setError} onApplied={(totals) => setChosen({ ...order(), total_due: totals.total_due })} onVoided={() => back(true)} />
-                </>
-              }
-            >
-              {(settled) => (
-                <>
-                  <p class="mt-4 text-lg font-semibold" data-outcome="settled">
-                    {t("pay.settled")}
-                  </p>
-                  <Show when={settled().receipt_number}>
-                    {(number) => (
-                      <p class="tabular-nums">{t("pay.receipt", { number: number() })}</p>
-                    )}
-                  </Show>
-                  {/* The change is what the cashier acts on next, so it is the largest figure (UX-15). */}
-                  <Show when={change() > 0}>
-                    <p class="mt-3 text-sm text-ink-muted">{t("pay.change")}<span class="block text-4xl font-semibold text-ink tabular-nums" data-outcome="change-due">{formatAmount(money(currency(), change()))}</span></p>
-                  </Show>
-                  <Show when={settled().drawer_open === "DRAWER_UNAVAILABLE"}>
-                    <p class="mt-1 text-sm text-danger" role="status" data-outcome="drawer-unavailable">
-                      {t("pay.drawer_unavailable")}
+                </Show>
+                <Show when={can("billing.receipt.reprint")}>
+                <button
+                  type="button"
+                  class="mt-3 min-h-touch w-full rounded-token border border-line text-sm"
+                  data-step="printAgain"
+                  disabled={print.printing()}
+                  onClick={() => void printAgain(settled().bill_id)}
+                >
+                  {t(print.printing() ? "common.sending" : "pay.print_again")}
+                </button>
+                </Show>
+                <Show when={copy()}>
+                  {(printed) => (
+                    <p
+                      class="mt-1 text-sm text-ink-muted"
+                      role="status"
+                      data-outcome="receipt-reprinted"
+                    >
+                      {t(printOutcomeKey(printed().receipt_print, "pay.copy_printed"), {
+                        number: printed().copy_number,
+                      })}
                     </p>
-                  </Show>
-                  <Show when={can("billing.receipt.reprint")}>
-                  <button
-                    type="button"
-                    class="mt-3 min-h-touch w-full rounded-token border border-line text-sm"
-                    data-step="printAgain"
-                    disabled={print.printing()}
-                    onClick={() => void printAgain(settled().bill_id)}
-                  >
-                    {t(print.printing() ? "common.sending" : "pay.print_again")}
-                  </button>
-                  </Show>
-                  <Show when={copy()}>
-                    {(printed) => (
-                      <p
-                        class="mt-1 text-sm text-ink-muted"
-                        role="status"
-                        data-outcome="receipt-reprinted"
-                      >
-                        {t(printOutcomeKey(printed().receipt_print, "pay.copy_printed"), {
-                          number: printed().copy_number,
-                        })}
-                      </p>
-                    )}
-                  </Show>
-                  <Show when={error()}>
-                    {(message) => (
-                      <p
-                        class="mt-3 rounded-token border border-danger px-3 py-2 text-danger"
-                        role="alert"
-                      >
-                        {message()}
-                      </p>
-                    )}
-                  </Show>
-                  <button
-                    type="button"
-                    class="mt-4 min-h-touch w-full rounded-token border border-line bg-surface"
-                    onClick={() => back()}
-                  >
-                    {t("counter.next")}
-                  </button>
-                </>
-              )}
-            </Show>
-          </>
-        )}
-      </Show>
-    </section>
-  );
+                  )}
+                </Show>
+                <Show when={error()}>
+                  {(message) => (
+                    <p
+                      class="mt-3 rounded-token border border-danger px-3 py-2 text-danger"
+                      role="alert"
+                    >
+                      {message()}
+                    </p>
+                  )}
+                </Show>
+                <button
+                  type="button"
+                  class="mt-4 min-h-touch w-full rounded-token border border-line bg-surface"
+                  onClick={() => back()}
+                >
+                  {t("counter.next")}
+                </button>
+              </>
+            )}
+          </Show>
+        </>
+      )}
+    </Show>,
+  };
+  return <RegionsContext.Provider value={regions}><PackageScreen screenId="counter" host={NO_ACTS} /></RegionsContext.Provider>;
 }

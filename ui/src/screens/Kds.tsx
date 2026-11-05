@@ -23,6 +23,9 @@ import { createBumper } from "../state/kitchen-writes";
 import { WriteRefused } from "../components/WriteRefused";
 import { setItemSoldOut } from "../state/floor-writes";
 import { queueNumberFor, refreshQueueNumbers } from "../state/queue-numbers";
+import { Children } from "../package/render";
+import { RegionsContext, type Regions } from "../package/regions";
+import { NO_ACTS, PackageScreen } from "../package/screen";
 
 // The kitchen display: fired lines gathered into tickets — one per order, station and course, the
 // unit a cook makes together — large, on a dark panel, oldest first. Bumping a ticket records the
@@ -266,273 +269,278 @@ export function Kds() {
   const bringBack = (item: MenuItemResponse) =>
     void guardSoldOut(() => setItemSoldOut(item.menu_item_id, false));
 
-  return (
-    <section class="p-4" onPointerDown={() => wake()}>
-      <div class="flex items-start justify-between gap-3">
-        <PageHeader title={t("kds.title")} size="xl" />
-        <div class="flex shrink-0 flex-wrap justify-end gap-2">
-          <Show when={can("sales.item.mark_unavailable")}>
+  // The regions the default package's `kds` screen arranges (`../package/regions.tsx`).
+  const regions: Regions = {
+    kds_frame: (props) => <section class="p-4" onPointerDown={() => wake()}><Children {...props} /></section>,
+    kds_header: () => <div class="flex items-start justify-between gap-3">
+      <PageHeader title={t("kds.title")} size="xl" />
+      <div class="flex shrink-0 flex-wrap justify-end gap-2">
+        <Show when={can("sales.item.mark_unavailable")}>
+        <button
+          type="button"
+          class="min-h-touch rounded-token border border-line bg-surface px-3 text-sm"
+          aria-expanded={marking()}
+          data-step="openSoldOut"
+          onClick={() => openSoldOut()}
+        >
+          {t("kds.sold_out")}
+        </button>
+        </Show>
+        <button
+          type="button"
+          class="min-h-touch rounded-token border border-line bg-surface px-3 text-sm"
+          aria-pressed={sound()}
+          data-outcome="kds-sound"
+          onClick={() => toggleSound()}
+        >
+          {sound() ? t("kds.sound_on") : t("kds.sound_off")}
+        </button>
+      </div>
+    </div>,
+    kds_notices: () => <>
+    <WriteRefused message={bumper.refused()} outcome="kds-bump-refused" />
+    <Show when={marking()}>
+      <section
+        class="mb-4 rounded-token border border-line bg-surface p-4"
+        aria-label={t("kds.sold_out_title")}
+      >
+        <div class="flex items-center justify-between gap-3">
+          <h2 class="text-lg font-semibold">{t("kds.sold_out_title")}</h2>
           <button
             type="button"
-            class="min-h-touch rounded-token border border-line bg-surface px-3 text-sm"
-            aria-expanded={marking()}
-            data-step="openSoldOut"
-            onClick={() => openSoldOut()}
+            class="min-h-touch rounded-token border border-line px-3 text-sm font-semibold"
+            onClick={() => setMarking(false)}
           >
-            {t("kds.sold_out")}
-          </button>
-          </Show>
-          <button
-            type="button"
-            class="min-h-touch rounded-token border border-line bg-surface px-3 text-sm"
-            aria-pressed={sound()}
-            data-outcome="kds-sound"
-            onClick={() => toggleSound()}
-          >
-            {sound() ? t("kds.sound_on") : t("kds.sound_off")}
+            {t("kds.sold_out_done")}
           </button>
         </div>
-      </div>
-      <WriteRefused message={bumper.refused()} outcome="kds-bump-refused" />
-      <Show when={marking()}>
-        <section
-          class="mb-4 rounded-token border border-line bg-surface p-4"
-          aria-label={t("kds.sold_out_title")}
-        >
-          <div class="flex items-center justify-between gap-3">
-            <h2 class="text-lg font-semibold">{t("kds.sold_out_title")}</h2>
-            <button
-              type="button"
-              class="min-h-touch rounded-token border border-line px-3 text-sm font-semibold"
-              onClick={() => setMarking(false)}
-            >
-              {t("kds.sold_out_done")}
-            </button>
-          </div>
-          <Show when={soldOutError()}>
-            {(message) => (
-              <p class="mt-3 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
-                {message()}
-              </p>
-            )}
-          </Show>
-          {/* What is off now, first: the question a cook asks before marking anything is whether
-              somebody already has, and the answer is also the list to bring back from. */}
-          <h3 class="mt-3 text-sm font-semibold text-ink-muted">{t("kds.sold_out_now")}</h3>
-          <div class="mt-2 flex flex-wrap gap-2">
-            <For
-              each={soldOutNow()}
-              fallback={<p class="text-sm text-ink-muted">{t("kds.sold_out_none")}</p>}
-            >
-              {(item) => (
-                <button
-                  type="button"
-                  class="flex min-h-touch items-center gap-2 rounded-token border-2 border-danger bg-surface-raised px-3 text-left"
-                  data-step="bringBack"
-                  onClick={() => bringBack(item)}
-                >
-                  <span class="font-semibold line-through" data-outcome="kds-sold-out">
-                    {item.display_name}
-                  </span>
-                  <span class="text-sm text-ink-muted">{t("kds.bring_back")}</span>
-                </button>
-              )}
-            </For>
-          </div>
-          <label class="mt-4 block">
-            <span class="text-sm text-ink-muted">{t("kds.sold_out_find")}</span>
-            <input
-              id="kds-sold-out-search"
-              type="search"
-              class="mt-1 min-h-touch w-full rounded-token border border-line bg-surface px-3"
-              value={soldOutQuery()}
-              onInput={(event) => setSoldOutQuery(event.currentTarget.value)}
-            />
-          </label>
-          <div class="mt-3 grid grid-cols-2 gap-2 tablet:grid-cols-3 terminal:grid-cols-4">
-            <For
-              each={markable()}
-              fallback={<p class="text-sm text-ink-muted">{t("kds.sold_out_no_match")}</p>}
-            >
-              {(item) => (
-                <button
-                  type="button"
-                  class="min-h-touch rounded-token border border-line bg-surface-raised px-3 text-left"
-                  data-step="markSoldOut"
-                  onClick={() => markSoldOut(item)}
-                >
-                  {item.display_name}
-                </button>
-              )}
-            </For>
-          </div>
-        </section>
-      </Show>
-      <Show when={sound() && !soundLive()}>
-        <p class="mb-3 text-sm text-ink-muted">{t("kds.sound_tap")}</p>
-      </Show>
-      <Show when={state.stations.length > 1}>
-        <div class="-mx-1 mb-3 flex gap-2 overflow-x-auto px-1 pb-1" role="tablist" aria-label={t("kds.stations")}>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={station() === ""}
-            class="min-h-touch shrink-0 rounded-token border px-3 text-sm"
-            classList={{
-              "border-primary bg-selected text-selected-ink font-semibold": station() === "",
-              "border-line bg-surface text-ink": station() !== "",
-            }}
-            onClick={() => setParams({ station: undefined })}
+        <Show when={soldOutError()}>
+          {(message) => (
+            <p class="mt-3 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
+              {message()}
+            </p>
+          )}
+        </Show>
+        {/* What is off now, first: the question a cook asks before marking anything is whether
+            somebody already has, and the answer is also the list to bring back from. */}
+        <h3 class="mt-3 text-sm font-semibold text-ink-muted">{t("kds.sold_out_now")}</h3>
+        <div class="mt-2 flex flex-wrap gap-2">
+          <For
+            each={soldOutNow()}
+            fallback={<p class="text-sm text-ink-muted">{t("kds.sold_out_none")}</p>}
           >
-            {t("kds.all_stations")}
-          </button>
-          <For each={state.stations}>
-            {(option) => (
+            {(item) => (
               <button
                 type="button"
-                role="tab"
-                aria-selected={station() === option.id}
-                class="min-h-touch shrink-0 rounded-token border px-3 text-sm"
-                classList={{
-                  "border-primary bg-selected text-selected-ink font-semibold": station() === option.id,
-                  "border-line bg-surface text-ink": station() !== option.id,
-                }}
-                onClick={() => setParams({ station: option.id })}
+                class="flex min-h-touch items-center gap-2 rounded-token border-2 border-danger bg-surface-raised px-3 text-left"
+                data-step="bringBack"
+                onClick={() => bringBack(item)}
               >
-                {option.name}
+                <span class="font-semibold line-through" data-outcome="kds-sold-out">
+                  {item.display_name}
+                </span>
+                <span class="text-sm text-ink-muted">{t("kds.bring_back")}</span>
               </button>
             )}
           </For>
         </div>
-      </Show>
-      <BumpNotAllowed tickets={shownKeys().length} />
-      <div class="grid grid-cols-1 gap-3 tablet:grid-cols-2 terminal:grid-cols-4">
-        <For
-          each={shownKeys()}
-          fallback={
-            <p class="text-ink-muted" data-outcome="board-clear">
-              {t("kds.empty")}
-            </p>
-          }
-        >
-          {(key) => {
-            const ticket = () => byKey().get(key);
-            const waited = () => waitedSeconds(ticket()?.firedTime, now());
-            // How long is too long is a fact about the kitchen, not about this screen: each station
-            // publishes its own threshold (ADR-0160 decision 2), so a ticket is late by its own
-            // station's, whichever station's board or "all stations" shows it.
-            const late = () => {
-              const seconds = waited();
-              return seconds !== null && seconds >= lateAfterSeconds(ticket()?.stationId);
-            };
-            return (
-              <Show when={ticket()}>
-                {(current) => (
-                  <button
-                    type="button"
-                    class="flex min-h-money flex-col items-start gap-1 rounded-token border bg-surface-raised p-4 text-left"
-                    classList={{ "border-line": !late(), "border-danger": late() }}
-                    // The ticket stays on the board for a person who may not bump it, and answers
-                    // no tap (ADR-0158).
-                    disabled={!can("sales.ticket.bump")}
-                    data-step="onBump"
-                    data-outcome={late() ? "ticket-late" : "ticket-waiting"}
-                    onClick={() => onBump(current())}
-                  >
-                    <span class="flex w-full items-baseline justify-between gap-3">
-                      <span class="text-sm text-ink-muted">
-                        {current().tableLabel === ""
-                          ? counterLabel(current().orderId)
-                          : t("common.table", { label: current().tableLabel })}
-                        <Show when={station() === "" && stationName(current().stationId) !== ""}>
-                          {" · "}
-                          {stationName(current().stationId)}
-                        </Show>
-                      </span>
-                      {/* How long the kitchen has had it — the one question a board exists to
-                          answer, and the reason a cook can pick the oldest of eight tickets without
-                          reading every one. Always the number, never colour alone: a red card says
-                          "late" only to somebody who knows the convention and can see red, while
-                          "11:48" says it to everybody. The colour is the glance; the number is the
-                          fact. Counted from the ticket's oldest line. */}
-                      <Show when={waited() !== null}>
-                        <span
-                          class="text-lg font-semibold tabular-nums"
-                          classList={{ "text-ink-muted": !late(), "text-danger": late() }}
-                          data-outcome="ticket-waited"
-                        >
-                          {formatWaited(waited() ?? 0)}
-                        </span>
-                      </Show>
-                    </span>
-                    <ul class="flex w-full flex-col gap-1">
-                      <For each={current().lineIds}>
-                        {(lineId) => {
-                          const line = () => state.lines[lineId];
-                          const modifiers = () => {
-                            const held = line();
-                            return held === undefined ? [] : modifierNames(held);
-                          };
-                          const lost = () => {
-                            const held = line();
-                            return held !== undefined && noteLost(held);
-                          };
-                          return (
-                            <li>
-                              <span class="text-xl font-semibold">
-                                <Show when={(line()?.quantityMilli ?? 1000) !== 1000}>
-                                  <span class="tabular-nums">
-                                    {formatQuantity(line()?.quantityMilli ?? 1000)}
-                                    {"× "}
-                                  </span>
-                                </Show>
-                                {line()?.name ?? ""}
-                              </span>
-                              {/* What was chosen, under the dish (ADR-0127). A board showing only
-                                  "Margherita" could not tell a 25cm from a 30cm, and the cook is the
-                                  person the choice was recorded for. Indented and one size down, so
-                                  a cook scanning the board still reads *what* before *how* — the
-                                  same order the printed ticket uses. */}
-                              <Show when={modifiers().length > 0}>
-                                <ul class="text-base text-ink-muted" data-outcome="ticket-modifiers">
-                                  <For each={modifiers()}>{(modifier) => <li>+ {modifier}</li>}</For>
-                                </ul>
-                              </Show>
-                              {/* The guest's note, last and the loudest thing under the dish, because
-                                  it is the part of a ticket most often about somebody's health
-                                  (ADR-0157). One the edge lost to a restart says so in the danger
-                                  colour and in words: a cook who reads nothing makes the dish as the
-                                  menu describes it. */}
-                              <Show when={line()?.note}>
-                                {(text) => (
-                                  <p class="text-base font-semibold" data-outcome="ticket-note">
-                                    ! {text()}
-                                  </p>
-                                )}
-                              </Show>
-                              <Show when={lost()}>
-                                <p class="text-base font-semibold text-danger" data-outcome="ticket-note-lost">
-                                  {t("kds.note_lost")}
-                                </p>
-                              </Show>
-                            </li>
-                          );
-                        }}
-                      </For>
-                    </ul>
-                    <Show when={can("sales.ticket.bump")}>
-                      <span class="mt-1 text-sm text-ink-muted">{t("kds.bump")}</span>
-                    </Show>
-                  </button>
-                )}
-              </Show>
-            );
+        <label class="mt-4 block">
+          <span class="text-sm text-ink-muted">{t("kds.sold_out_find")}</span>
+          <input
+            id="kds-sold-out-search"
+            type="search"
+            class="mt-1 min-h-touch w-full rounded-token border border-line bg-surface px-3"
+            value={soldOutQuery()}
+            onInput={(event) => setSoldOutQuery(event.currentTarget.value)}
+          />
+        </label>
+        <div class="mt-3 grid grid-cols-2 gap-2 tablet:grid-cols-3 terminal:grid-cols-4">
+          <For
+            each={markable()}
+            fallback={<p class="text-sm text-ink-muted">{t("kds.sold_out_no_match")}</p>}
+          >
+            {(item) => (
+              <button
+                type="button"
+                class="min-h-touch rounded-token border border-line bg-surface-raised px-3 text-left"
+                data-step="markSoldOut"
+                onClick={() => markSoldOut(item)}
+              >
+                {item.display_name}
+              </button>
+            )}
+          </For>
+        </div>
+      </section>
+    </Show>
+    <Show when={sound() && !soundLive()}>
+      <p class="mb-3 text-sm text-ink-muted">{t("kds.sound_tap")}</p>
+    </Show>
+    </>,
+    kds_stations: () => <Show when={state.stations.length > 1}>
+      <div class="-mx-1 mb-3 flex gap-2 overflow-x-auto px-1 pb-1" role="tablist" aria-label={t("kds.stations")}>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={station() === ""}
+          class="min-h-touch shrink-0 rounded-token border px-3 text-sm"
+          classList={{
+            "border-primary bg-selected text-selected-ink font-semibold": station() === "",
+            "border-line bg-surface text-ink": station() !== "",
           }}
+          onClick={() => setParams({ station: undefined })}
+        >
+          {t("kds.all_stations")}
+        </button>
+        <For each={state.stations}>
+          {(option) => (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={station() === option.id}
+              class="min-h-touch shrink-0 rounded-token border px-3 text-sm"
+              classList={{
+                "border-primary bg-selected text-selected-ink font-semibold": station() === option.id,
+                "border-line bg-surface text-ink": station() !== option.id,
+              }}
+              onClick={() => setParams({ station: option.id })}
+            >
+              {option.name}
+            </button>
+          )}
         </For>
       </div>
-      <Show when={shownLineCount() > 0}>
-        <p class="mt-4 text-sm text-ink-muted">{t("kds.count", { count: shownLineCount() })}</p>
-      </Show>
-    </section>
-  );
+    </Show>,
+    kds_tickets: () => <>
+    <BumpNotAllowed tickets={shownKeys().length} />
+    <div class="grid grid-cols-1 gap-3 tablet:grid-cols-2 terminal:grid-cols-4">
+      <For
+        each={shownKeys()}
+        fallback={
+          <p class="text-ink-muted" data-outcome="board-clear">
+            {t("kds.empty")}
+          </p>
+        }
+      >
+        {(key) => {
+          const ticket = () => byKey().get(key);
+          const waited = () => waitedSeconds(ticket()?.firedTime, now());
+          // How long is too long is a fact about the kitchen, not about this screen: each station
+          // publishes its own threshold (ADR-0160 decision 2), so a ticket is late by its own
+          // station's, whichever station's board or "all stations" shows it.
+          const late = () => {
+            const seconds = waited();
+            return seconds !== null && seconds >= lateAfterSeconds(ticket()?.stationId);
+          };
+          return (
+            <Show when={ticket()}>
+              {(current) => (
+                <button
+                  type="button"
+                  class="flex min-h-money flex-col items-start gap-1 rounded-token border bg-surface-raised p-4 text-left"
+                  classList={{ "border-line": !late(), "border-danger": late() }}
+                  // The ticket stays on the board for a person who may not bump it, and answers
+                  // no tap (ADR-0158).
+                  disabled={!can("sales.ticket.bump")}
+                  data-step="onBump"
+                  data-outcome={late() ? "ticket-late" : "ticket-waiting"}
+                  onClick={() => onBump(current())}
+                >
+                  <span class="flex w-full items-baseline justify-between gap-3">
+                    <span class="text-sm text-ink-muted">
+                      {current().tableLabel === ""
+                        ? counterLabel(current().orderId)
+                        : t("common.table", { label: current().tableLabel })}
+                      <Show when={station() === "" && stationName(current().stationId) !== ""}>
+                        {" · "}
+                        {stationName(current().stationId)}
+                      </Show>
+                    </span>
+                    {/* How long the kitchen has had it — the one question a board exists to
+                        answer, and the reason a cook can pick the oldest of eight tickets without
+                        reading every one. Always the number, never colour alone: a red card says
+                        "late" only to somebody who knows the convention and can see red, while
+                        "11:48" says it to everybody. The colour is the glance; the number is the
+                        fact. Counted from the ticket's oldest line. */}
+                    <Show when={waited() !== null}>
+                      <span
+                        class="text-lg font-semibold tabular-nums"
+                        classList={{ "text-ink-muted": !late(), "text-danger": late() }}
+                        data-outcome="ticket-waited"
+                      >
+                        {formatWaited(waited() ?? 0)}
+                      </span>
+                    </Show>
+                  </span>
+                  <ul class="flex w-full flex-col gap-1">
+                    <For each={current().lineIds}>
+                      {(lineId) => {
+                        const line = () => state.lines[lineId];
+                        const modifiers = () => {
+                          const held = line();
+                          return held === undefined ? [] : modifierNames(held);
+                        };
+                        const lost = () => {
+                          const held = line();
+                          return held !== undefined && noteLost(held);
+                        };
+                        return (
+                          <li>
+                            <span class="text-xl font-semibold">
+                              <Show when={(line()?.quantityMilli ?? 1000) !== 1000}>
+                                <span class="tabular-nums">
+                                  {formatQuantity(line()?.quantityMilli ?? 1000)}
+                                  {"× "}
+                                </span>
+                              </Show>
+                              {line()?.name ?? ""}
+                            </span>
+                            {/* What was chosen, under the dish (ADR-0127). A board showing only
+                                "Margherita" could not tell a 25cm from a 30cm, and the cook is the
+                                person the choice was recorded for. Indented and one size down, so
+                                a cook scanning the board still reads *what* before *how* — the
+                                same order the printed ticket uses. */}
+                            <Show when={modifiers().length > 0}>
+                              <ul class="text-base text-ink-muted" data-outcome="ticket-modifiers">
+                                <For each={modifiers()}>{(modifier) => <li>+ {modifier}</li>}</For>
+                              </ul>
+                            </Show>
+                            {/* The guest's note, last and the loudest thing under the dish, because
+                                it is the part of a ticket most often about somebody's health
+                                (ADR-0157). One the edge lost to a restart says so in the danger
+                                colour and in words: a cook who reads nothing makes the dish as the
+                                menu describes it. */}
+                            <Show when={line()?.note}>
+                              {(text) => (
+                                <p class="text-base font-semibold" data-outcome="ticket-note">
+                                  ! {text()}
+                                </p>
+                              )}
+                            </Show>
+                            <Show when={lost()}>
+                              <p class="text-base font-semibold text-danger" data-outcome="ticket-note-lost">
+                                {t("kds.note_lost")}
+                              </p>
+                            </Show>
+                          </li>
+                        );
+                      }}
+                    </For>
+                  </ul>
+                  <Show when={can("sales.ticket.bump")}>
+                    <span class="mt-1 text-sm text-ink-muted">{t("kds.bump")}</span>
+                  </Show>
+                </button>
+              )}
+            </Show>
+          );
+        }}
+      </For>
+    </div>
+    <Show when={shownLineCount() > 0}>
+      <p class="mt-4 text-sm text-ink-muted">{t("kds.count", { count: shownLineCount() })}</p>
+    </Show>
+    </>,
+  };
+  return <RegionsContext.Provider value={regions}><PackageScreen screenId="kds" host={NO_ACTS} /></RegionsContext.Provider>;
 }
