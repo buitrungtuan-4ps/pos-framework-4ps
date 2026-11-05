@@ -16,6 +16,18 @@ import { Show, type JSX } from "solid-js";
 
 import { PageHeader } from "../components/ui";
 import { FloorAlerts, FloorPlan } from "../screens/Floor";
+import {
+  MenuButtons,
+  MenuFields,
+  MenuToolbar,
+  OrderBill,
+  OrderColumn,
+  OrderHeader,
+  OrderLayout,
+  OrderMenu,
+  OrderMove,
+  OrderNotices,
+} from "./order-regions";
 import { actionProperty, Children, packageLabel, textProperty, useHost, type Implementations, type NodeProps } from "./render";
 
 /** Its children down the screen, or across it. */
@@ -95,4 +107,14 @@ export const IMPLEMENTATIONS: Implementations = {
   page_header: Header,
   floor_alerts: FloorAlerts,
   floor_plan: FloorPlan,
+  order_layout: OrderLayout,
+  order_column: OrderColumn,
+  order_header: OrderHeader,
+  order_notices: OrderNotices,
+  order_move: OrderMove,
+  order_bill: OrderBill,
+  order_menu: OrderMenu,
+  menu_toolbar: MenuToolbar,
+  menu_fields: MenuFields,
+  menu_buttons: MenuButtons,
 };

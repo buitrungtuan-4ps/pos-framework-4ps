@@ -6,9 +6,59 @@
         "root": {
           "component_id": "screen_frame",
           "children": [
-            { "component_id": "page_header", "properties": { "title_key": "floor.title" } },
-            { "component_id": "floor_alerts" },
-            { "component_id": "floor_plan" }
+            {
+              "component_id": "page_header",
+              "properties": {
+                "title_key": "floor.title"
+              }
+            },
+            {
+              "component_id": "floor_alerts"
+            },
+            {
+              "component_id": "floor_plan"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "body": {
+        "screen_id": "order",
+        "root": {
+          "component_id": "order_layout",
+          "children": [
+            {
+              "component_id": "order_column",
+              "children": [
+                {
+                  "component_id": "order_header"
+                },
+                {
+                  "component_id": "order_notices"
+                },
+                {
+                  "component_id": "order_move"
+                },
+                {
+                  "component_id": "order_bill"
+                }
+              ]
+            },
+            {
+              "component_id": "order_menu",
+              "children": [
+                {
+                  "component_id": "menu_toolbar"
+                },
+                {
+                  "component_id": "menu_fields"
+                },
+                {
+                  "component_id": "menu_buttons"
+                }
+              ]
+            }
           ]
         }
       }

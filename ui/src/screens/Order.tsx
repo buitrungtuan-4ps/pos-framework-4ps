@@ -48,6 +48,8 @@ import { writesPending } from "../state/edge-write";
 import { fireCourse, fireOrder, voidLine } from "../state/order-writes";
 import { releaseTable, setItemSoldOut } from "../state/floor-writes";
 import { errorMessage } from "../lib/errors";
+import { OrderContext, type OrderRegions } from "../package/order-regions";
+import { NO_ACTS, PackageScreen } from "../package/screen";
 import { useInFlight } from "../lib/in-flight";
 import { createPrint } from "../state/print-writes";
 import { printOutcomeKey } from "../lib/print";
@@ -612,929 +614,913 @@ export function Order() {
     const item = menuItemMap().get(button.menu_item_id);
     return <Show when={item}>{(found) => sellButton(found(), button.label)}</Show>;
   };
-
-  return (
-    <section class="grid gap-4 p-4 terminal:grid-cols-[1fr_20rem]">
-      {/* `min-w-0` on both grid items, or neither can shrink below its content and the column runs
-          wider than a phone: a grid item's `min-width` is `auto`, not `0`.
-
-          On a tablet this column's own box is dissolved (`contents`): its header becomes a row of
-          the screen above the menu, and its body becomes the panel at the bottom. */}
-      <div class="min-w-0 tablet:contents terminal:block">
-        {/* Wraps rather than squeezes: on a narrow phone, in a longer language, the move button goes
-            to a line of its own instead of breaking every word in the row onto two. */}
-        <div class="mb-3 flex flex-wrap items-center gap-3">
-          <a
-            href={walkIn() ? "/counter" : "/"}
-            class="inline-flex min-h-touch items-center text-sm text-ink-muted no-underline"
+  const regions: OrderRegions = {
+    header: () => <div class="mb-3 flex flex-wrap items-center gap-3">
+        <a
+          href={walkIn() ? "/counter" : "/"}
+          class="inline-flex min-h-touch items-center text-sm text-ink-muted no-underline"
+        >
+          {walkIn() ? t("common.back_counter") : t("common.back_floor")}
+        </a>
+        {/* Seating a table, or starting a walk-in, ends here (ADR-0109, ADR-0146). */}
+        <h1 class="text-lg font-semibold" data-outcome="order-open">
+          {walkIn() ? t("order.walk_in") : t("common.table", { label: label() })}
+        </h1>
+        {/* What the guest answered, where the store asks each walk-in (ADR-0160 decision 2). */}
+        <Show when={walkIn() && walkInAsks() && eatenIn(params.id) !== undefined}>
+          <span
+            class="rounded-token bg-surface-muted px-2 text-sm font-semibold"
+            data-outcome="walk-in-channel"
           >
-            {walkIn() ? t("common.back_counter") : t("common.back_floor")}
-          </a>
-          {/* Seating a table, or starting a walk-in, ends here (ADR-0109, ADR-0146). */}
-          <h1 class="text-lg font-semibold" data-outcome="order-open">
-            {walkIn() ? t("order.walk_in") : t("common.table", { label: label() })}
-          </h1>
-          {/* What the guest answered, where the store asks each walk-in (ADR-0160 decision 2). */}
-          <Show when={walkIn() && walkInAsks() && eatenIn(params.id) !== undefined}>
-            <span
-              class="rounded-token bg-surface-muted px-2 text-sm font-semibold"
-              data-outcome="walk-in-channel"
-            >
-              {t(eatenIn(params.id) ? "counter.eat_in" : "counter.take_away")}
-            </span>
-          </Show>
-          <Show when={!walkIn()}>
-            <span class="text-sm text-ink-muted">{t(tableStateKey(tableState(params.id)))}</span>
-          </Show>
-          <Show when={movable()}>
-            <button
-              type="button"
-              class="ml-auto min-h-touch whitespace-nowrap rounded-token border border-line px-3 text-sm text-ink-muted"
-              aria-expanded={moving()}
-              data-step="openMove"
-              onClick={() => openMove()}
-            >
-              {t("order.move_table")}
-            </button>
-          </Show>
-          <Show when={billCount() > 0 && can("billing.bill.open")}>
-            <button
-              type="button"
-              class="min-h-touch whitespace-nowrap rounded-token border border-line px-3 text-sm text-ink-muted"
-              classList={{ "ml-auto": !movable() }}
-              data-step="printPreBill"
-              disabled={print.printing()}
-              onClick={() => void printPreBill()}
-            >
-              {t(print.printing() ? "common.sending" : "order.pre_bill")}
-            </button>
-          </Show>
-        </div>
-
-        <Show when={preBill()}>
-          {(prints) => (
-            <p class="mb-3 text-sm text-ink-muted" role="status" data-outcome="pre-bill-print">
-              {preBillOutcome(prints())}
-            </p>
-          )}
+            {t(eatenIn(params.id) ? "counter.eat_in" : "counter.take_away")}
+          </span>
         </Show>
-
-        {/* The guests' new table says where they came from, once, on the screen they land on. */}
-        <Show when={!walkIn() && search.moved_from}>
-          {(from) => (
-            <p class="mb-3 text-sm text-ok" role="status" data-outcome="table-moved">
-              {t("order.moved_from", { label: labelOf(from()) })}
-            </p>
-          )}
+        <Show when={!walkIn()}>
+          <span class="text-sm text-ink-muted">{t(tableStateKey(tableState(params.id)))}</span>
         </Show>
-
-        {/* The free tables the guests can move to. A tap moves them, with their order, and opens
-            the new table; the table they leave waits to be cleared. */}
-        <Show when={moving() && movable()}>
-          <div class="mb-3 rounded-token border border-line bg-surface p-3">
-            <div class="mb-1 flex items-center justify-between gap-2">
-              <h2 class="font-semibold">{t("order.move_title", { label: label() })}</h2>
-              <button
-                type="button"
-                class="min-h-touch rounded-token border border-line px-3 text-sm"
-                onClick={() => setMoving(false)}
-              >
-                {t("common.cancel")}
-              </button>
-            </div>
-            <p class="mb-2 text-sm text-ink-muted">{t("order.move_hint")}</p>
-            <Show when={moveError()}>
-              {(message) => (
-                <p class="mb-2 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
-                  {message()}
-                </p>
-              )}
-            </Show>
-            <Show
-              when={freeTables().length > 0}
-              fallback={<p class="text-sm text-ink-muted">{t("order.move_none_free")}</p>}
-            >
-              <div class="grid grid-cols-3 gap-2 tablet:grid-cols-6 terminal:grid-cols-4">
-                <For each={freeTables()}>
-                  {(table) => (
-                    <button
-                      type="button"
-                      class="min-h-touch rounded-token border border-line px-2 py-2 font-semibold"
-                      data-step="moveTo"
-                      onClick={() => void moveTo(table.id)}
-                    >
-                      {t("common.table", { label: table.label })}
-                    </button>
-                  )}
-                </For>
-              </div>
-            </Show>
-          </div>
-        </Show>
-
-        {/*
-          The bill. A phone and a terminal draw it in the column, as they always did. A tablet slides
-          it up from the bottom of the screen: closed, it shows the bar saying what is on it, the
-          seat row, and the two buttons that end the screen, so sending and paying stay one tap
-          away; open, it is the whole bill, over the menu, with the bar at its top to close it.
-        */}
-        <div class="tablet:fixed tablet:inset-x-0 tablet:bottom-0 tablet:z-10 tablet:max-h-[85dvh] tablet:overflow-y-auto tablet:rounded-t-token tablet:border-t tablet:border-line tablet:bg-canvas tablet:px-4 tablet:pb-4 tablet:shadow-overlay terminal:static terminal:z-auto terminal:max-h-none terminal:overflow-visible terminal:rounded-none terminal:border-0 terminal:bg-transparent terminal:p-0 terminal:shadow-none">
+        <Show when={movable()}>
           <button
             type="button"
-            class="mb-3 hidden min-h-touch w-full items-center justify-between gap-3 bg-canvas py-2 text-left tablet:sticky tablet:top-0 tablet:flex terminal:hidden"
-            aria-expanded={billOpen()}
-            data-outcome="bill-bar"
-            onClick={() => setBillOpen((open) => !open)}
+            class="ml-auto min-h-touch whitespace-nowrap rounded-token border border-line px-3 text-sm text-ink-muted"
+            aria-expanded={moving()}
+            data-step="openMove"
+            onClick={() => openMove()}
           >
-            {/* One string, the total inside it: the bar is on the page on every device, hidden
-                off a tablet, and a figure of its own would be a second copy of the bill's total. */}
-            <span class="text-lg font-semibold tabular-nums">
-              {t("order.bill_summary", { count: billCount(), total: billTotal() })}
-            </span>
-            <span aria-hidden="true">{billOpen() ? "▾" : "▴"}</span>
+            {t("order.move_table")}
           </button>
+        </Show>
+        <Show when={billCount() > 0 && can("billing.bill.open")}>
+          <button
+            type="button"
+            class="min-h-touch whitespace-nowrap rounded-token border border-line px-3 text-sm text-ink-muted"
+            classList={{ "ml-auto": !movable() }}
+            data-step="printPreBill"
+            disabled={print.printing()}
+            onClick={() => void printPreBill()}
+          >
+            {t(print.printing() ? "common.sending" : "order.pre_bill")}
+          </button>
+        </Show>
+      </div>,
+    notices: () => <>
+      <Show when={preBill()}>
+        {(prints) => (
+          <p class="mb-3 text-sm text-ink-muted" role="status" data-outcome="pre-bill-print">
+            {preBillOutcome(prints())}
+          </p>
+        )}
+      </Show>
 
-          {/* A refusal, directly under the table's header on a phone and a terminal, where the bar
-              above it is not drawn. A tablet draws it under the bar, so it is seen whether the bill
-              is open or closed: the open bill covers the top of a tablet's screen. While a dish's
-              choices are open it shows in the picker instead, beside the button that drew it. */}
-          <Show when={choosing() ? null : error()}>
+      {/* The guests' new table says where they came from, once, on the screen they land on. */}
+      <Show when={!walkIn() && search.moved_from}>
+        {(from) => (
+          <p class="mb-3 text-sm text-ok" role="status" data-outcome="table-moved">
+            {t("order.moved_from", { label: labelOf(from()) })}
+          </p>
+        )}
+      </Show>
+      </>,
+    move: () => <Show when={moving() && movable()}>
+        <div class="mb-3 rounded-token border border-line bg-surface p-3">
+          <div class="mb-1 flex items-center justify-between gap-2">
+            <h2 class="font-semibold">{t("order.move_title", { label: label() })}</h2>
+            <button
+              type="button"
+              class="min-h-touch rounded-token border border-line px-3 text-sm"
+              onClick={() => setMoving(false)}
+            >
+              {t("common.cancel")}
+            </button>
+          </div>
+          <p class="mb-2 text-sm text-ink-muted">{t("order.move_hint")}</p>
+          <Show when={moveError()}>
             {(message) => (
-              <p class="mb-3 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
+              <p class="mb-2 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
                 {message()}
               </p>
             )}
           </Show>
-          <ul class="flex flex-col gap-2" classList={{ "tablet:hidden terminal:flex": !billOpen() }}>
-            <For
-              each={linesForTable(key())}
-              fallback={<li class="text-ink-muted">{t("order.empty")}</li>}
-            >
-              {(line) => (
-                <li
-                  class="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-token border border-line bg-surface p-3 tablet:flex-nowrap"
-                  data-outcome="line-added"
-                >
-                  {/* A voided line stays on the order, struck through. Removing the row would make a
-                      mis-tapped void invisible to the person who made it — the guest is not charged
-                      either way, and seeing what was cancelled is how the mistake gets noticed. */}
-                  {/* The name takes the whole first row on a phone and the controls wrap under it
-                      (F7): squeezed into one row at 390px the name broke a word per line, the seat
-                      chip sat on top of it and the stepper ran off the right edge. */}
-                  <span class="flex min-w-0 basis-full flex-col tablet:basis-auto tablet:flex-1">
-                    <span classList={{ "line-through text-ink-muted": voided(line) }}>
-                      {line.name}
-                    </span>
-                    {/* What was chosen, under the item it was chosen for (ADR-0127). The price already
-                        included it and the caption did not, so this row read "Margherita" whether the
-                        server picked 25cm or 30cm — and a server checking an order back to a guest had
-                        nothing to check against. Struck through with the line, because a voided
-                        line's choices are cancelled with it. */}
-                    <Show when={modifierNames(line).length > 0}>
-                      <span
-                        class="text-sm text-ink-muted"
-                        classList={{ "line-through": voided(line) }}
-                        data-outcome="line-modifiers"
-                      >
-                        {modifierNames(line).join(" · ")}
-                      </span>
-                    </Show>
-                    {/* The guest's note, which the kitchen reads on its board and its ticket
-                        (ADR-0157). A note the edge lost to a restart says so, because a server who
-                        sees nothing assumes nothing was asked for. */}
-                    <Show when={line.note}>
-                      {(text) => (
-                        <span class="text-sm font-semibold text-ink" data-outcome="line-note">
-                          {t("order.note", { note: text() })}
-                        </span>
-                      )}
-                    </Show>
-                    <Show when={noteLost(line)}>
-                      <span class="text-sm text-danger" data-outcome="line-note-lost">
-                        {t("order.note_lost")}
-                      </span>
-                    </Show>
-                  </span>
-                  {/* How many, and the two taps that change it. Only while the line is still
-                      editable: once the kitchen has the ticket the number is settled, and the edge
-                      refuses an amend from its state machine rather than from a permission.
-
-                      Minus stops at one rather than reaching zero. Zero is not a smaller order, it is
-                      no order — that is a void, which carries a reason and, after a fire, a manager.
-                      Letting the stepper walk into it would give that act a second, quieter spelling. */}
-                  <Show when={line.state === "ORDER_LINE_STATE_ADDED" && can("sales.line.add") && !provisional(line)}>
-                    <span class="inline-flex items-center gap-1">
-                      <button
-                        type="button"
-                        class="min-h-touch w-11 rounded-token border border-line text-lg text-ink disabled:opacity-40"
-                        disabled={line.quantityMilli <= 1000}
-                        aria-label={t("order.fewer", { item: line.name })}
-                        onClick={() =>
-                          void guard(() => setQuantity(line.orderLineId, line.quantityMilli - 1000))
-                        }
-                      >
-                        {"−"}
-                      </button>
-                      <span class="w-8 text-center tabular-nums" data-outcome="line-quantity">
-                        {formatQuantity(line.quantityMilli)}
-                      </span>
-                      <button
-                        type="button"
-                        class="min-h-touch w-11 rounded-token border border-line text-lg text-ink"
-                        aria-label={t("order.more", { item: line.name })}
-                        data-step="setQuantity"
-                        onClick={() =>
-                          void guard(() => setQuantity(line.orderLineId, line.quantityMilli + 1000))
-                        }
-                      >
-                        {"+"}
-                      </button>
-                    </span>
-                  </Show>
-                  {/* A line already with the kitchen shows its count without the controls, and so does
-                      every line for a person who may not change one. */}
-                  <Show
-                    when={
-                      (line.state !== "ORDER_LINE_STATE_ADDED" || !can("sales.line.add")) &&
-                      line.quantityMilli !== 1000
-                    }
-                  >
-                    <span class="tabular-nums text-ink-muted">
-                      {formatQuantity(line.quantityMilli)}
-                    </span>
-                  </Show>
-                  {/* Which seat it was ordered for, on the line that carries it. A line with none is
-                      the table's, and says nothing rather than saying "no seat". */}
-                  <Show when={line.seat !== undefined}>
-                    <span class="rounded-token bg-surface-muted px-2 text-sm tabular-nums text-ink-muted" data-outcome="line-seat">
-                      {t("order.seat_short", { seat: line.seat ?? 0 })}
-                    </span>
-                  </Show>
-                  {/* No figure until the edge's own: a line sending shows that it is (ADR-0173). */}
-                  <span class="tabular-nums" classList={{ "text-ink-muted": voided(line) || line.pending }} data-outcome={line.pending ? "line-sending" : undefined}>
-                    {line.pending ? t("order.sending") : formatAmount(line.lineTotal)}
-                  </span>
-                  {/* A line waiting to be sent says so and nothing more: the Send button below acts on
-                      every one of them at once, so a control per row would be one tap out of six
-                      doing what one tap now does for all. */}
-                  <Show when={line.state === "ORDER_LINE_STATE_ADDED"}>
-                    {/* Marked, because "still waiting" is a state a gate has to be able to see. The
-                        row's own `line-added` marks every line whatever its state, so it cannot say
-                        which of them the kitchen has not been told about — and a fire-by-course that
-                        sent the whole order would look identical through it. */}
-                    <span class="text-sm text-ink-muted" data-outcome="line-unsent">
-                      {t("order.unsent")}
-                    </span>
-                  </Show>
-                  <Show when={line.state === "ORDER_LINE_STATE_FIRED"}>
-                    <span class="text-sm text-ok" data-outcome="line-fired">
-                      {t("order.fired")}
-                    </span>
-                  </Show>
-                  {/* The void control (ADR-0115, §11 item 2). Disabled while the store's reason list
-                      has not loaded: the edge falls back to the framework's own set when nothing is
-                      published, so an empty list here means the read has not landed, never that the
-                      store has no reasons — and a picker opening on nothing would be a dead end. */}
-                  <Show
-                    when={!voided(line)}
-                    fallback={
-                      <span class="text-sm text-ink-muted" data-outcome="line-voided">
-                        {t("order.voided")}
-                      </span>
-                    }
-                  >
-                    <Show when={canVoid(line) && !provisional(line)}>
-                    <button
-                      type="button"
-                      class="min-h-touch rounded-token border border-line px-3 text-sm text-ink-muted disabled:opacity-50"
-                      disabled={reasonsFor(VOID_LINE).length === 0}
-                      aria-describedby="why-reasons"
-                      data-step="askVoid"
-                      onClick={() => askVoid(line)}
-                    >
-                      {t("order.void")}
-                    </button>
-                    </Show>
-                  </Show>
-                </li>
-              )}
-            </For>
-          </ul>
-          <WhyUnavailable entry="reason_codes" id="why-reasons" />
-
-          {/*
-            The reason picker (ADR-0115). Every entry it offers declares `REASON_ACTION_VOID_LINE`, so
-            what a member of staff can cite is what the store published for voiding — the same question
-            the edge asks before it writes the event, which is why the list can never offer a reason
-            that would be refused.
-
-            A fired line adds the manager block above it. The badge and PIN are typed, not tapped, so
-            the void still costs the two taps `docs/ui-ux.md` §6 allows a rare action; the second tap
-            is disabled until both are filled rather than sending a request that can only come back
-            `403`.
-          */}
-          <Show when={voiding()}>
-            {(line) => (
-              <div class="mt-4 rounded-token border border-line bg-surface p-3">
-                <h2 class="font-semibold">{t("order.void_title", { item: line().name })}</h2>
-
-                <Show when={needsApproval(line())}>
-                  <p class="mt-1 text-sm text-ink-muted">{t("order.void_manager")}</p>
-                  <ApproverFields
-                    id="void-line-approver"
-                    code={approverCode()}
-                    pin={approverPin()}
-                    onCode={setApproverCode}
-                    onPin={setApproverPin}
-                    codeLabel={t("order.approver_code")}
-                    pinLabel={t("order.approver_pin")}
-                  />
-                </Show>
-
-                <p class="mt-3 text-sm text-ink-muted">{t("order.void_reason")}</p>
-                <div class="mt-2 grid grid-cols-2 gap-2">
-                  <For each={reasonsFor(VOID_LINE)}>
-                    {(reason) => (
-                      <button
-                        type="button"
-                        class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
-                        disabled={!readyToVoid(line())}
-                        data-step="voidReason"
-                        onClick={() => void voidReason(line(), reason.reason_code_id)}
-                      >
-                        {reason.display_name}
-                      </button>
-                    )}
-                  </For>
-                </div>
-
-                <button
-                  type="button"
-                  class="mt-3 min-h-touch rounded-token border border-line px-3 text-sm"
-                  onClick={() => closeVoid()}
-                >
-                  {t("common.cancel")}
-                </button>
-              </div>
-            )}
-          </Show>
-
-          {/*
-            The choices an item needs before it can be sold (ADR-0127, `docs/ui-ux.md` §3's "required
-            modifier groups open immediately").
-
-            It opens on the item tap and not behind a button of its own, which is what keeps the
-            common case at one tap: an item attaching no group never opens this at all. An item that
-            does costs one tap per choice plus the confirm, and is declared as its own task rather
-            than folded into "Add an item" — the reason the seat and the tipped settle are separate.
-
-            The confirm is disabled until every required group is satisfied, running the same
-            arithmetic the edge runs. The edge is still the authority; this only keeps a refusal off a
-            guest's eyeline.
-          */}
-          <Show when={choosing()}>
-            {(item) => (
-              <>
-                {/*
-                  Where the picker opens depends on where the menu is. On a phone or a tablet the menu
-                  is below the bill, and the picker, drawn in the bill's column, opened off-screen: a
-                  server tapped the pizza and saw nothing happen. There it is a sheet from the bottom
-                  of the screen, where the thumb that tapped is, over the menu washed out behind it,
-                  and a tap on the washed-out menu cancels, as Cancel does. A terminal draws the bill
-                  beside the menu, so there the picker stays in the bill's column, where it always was.
-                */}
-                <div
-                  class="fixed inset-0 z-20 bg-canvas/70 terminal:hidden"
-                  aria-hidden="true"
-                  onClick={() => closeChoosing()}
-                />
-                <div
-                  class="fixed inset-x-0 bottom-0 z-30 flex max-h-[85dvh] flex-col rounded-t-token border-t border-line bg-surface shadow-overlay terminal:static terminal:z-auto terminal:mb-3 terminal:block terminal:max-h-none terminal:rounded-token terminal:border terminal:shadow-none"
-                  role="dialog"
-                  aria-label={t("order.choose_title", { item: item().display_name })}
-                >
-                  {/* The choices scroll inside the sheet and the two buttons under them do not, so a
-                      phone on its side, a screen shorter than the choices, still shows Add. */}
-                  <div class="min-h-0 overflow-y-auto p-4 pb-0 terminal:overflow-visible terminal:p-3 terminal:pb-0">
-                    <h2 class="font-semibold">
-                      {t("order.choose_title", { item: item().display_name })}
-                    </h2>
-                    <For each={groupsFor(item(), menuGroups())}>
-                      {(group) => (
-                        <div class="mt-3">
-                          <p class="text-sm text-ink-muted">
-                            {group.min_select >= 1
-                              ? t("order.choose_required", { group: group.display_name })
-                              : t("order.choose_optional", { group: group.display_name })}
-                          </p>
-                          <div class="mt-2 grid grid-cols-2 gap-2">
-                            <For each={group.member_menu_item_ids}>
-                              {(memberId) => (
-                                <Show when={menuItemMap().get(memberId)}>
-                                  {(member) => (
-                                    <button
-                                      type="button"
-                                      class="flex min-h-touch items-center justify-between rounded-token border border-line px-3 text-left disabled:opacity-50"
-                                      classList={{
-                                        "bg-primary text-primary-ink": chosen().includes(memberId),
-                                        "bg-surface text-ink": !chosen().includes(memberId),
-                                      }}
-                                      // A choice the kitchen has run out of, or the console withdrew,
-                                      // cannot be made: the edge refuses a line that asks for it. One
-                                      // already chosen stays tappable, so it can still be taken off.
-                                      disabled={!member().available && !chosen().includes(memberId)}
-                                      aria-pressed={chosen().includes(memberId)}
-                                      data-step="chooseModifier"
-                                      onClick={() => chooseModifier(group, memberId)}
-                                    >
-                                      <span classList={{ "line-through": member().sold_out === true }}>
-                                        {member().display_name}
-                                      </span>
-                                      <Show
-                                        when={member().available}
-                                        fallback={
-                                          <span class="text-sm text-ink-muted">
-                                            {member().sold_out === true
-                                              ? t("order.sold_out")
-                                              : t("order.unavailable")}
-                                          </span>
-                                        }
-                                      >
-                                        {/* A modifier is an ordinary item with its own price, which is
-                                            how a large costs more than a small. A free choice says
-                                            nothing rather than saying zero. */}
-                                        <Show when={member().unit_price.amount_minor > 0}>
-                                          <span class="tabular-nums text-ink-muted">
-                                            {"+ "}
-                                            {formatAmount(member().unit_price)}
-                                          </span>
-                                        </Show>
-                                      </Show>
-                                    </button>
-                                  )}
-                                </Show>
-                              )}
-                            </For>
-                          </div>
-                        </div>
-                      )}
-                    </For>
-                    <Show when={error()}>
-                      {(message) => (
-                        <p
-                          class="mt-3 rounded-token border border-danger px-3 py-2 text-danger"
-                          role="alert"
-                        >
-                          {message()}
-                        </p>
-                      )}
-                    </Show>
-                  </div>
-                  <div class="p-4 pt-0 terminal:p-3 terminal:pt-0">
-                    <button
-                      type="button"
-                      class="mt-4 min-h-money w-full rounded-token bg-primary px-4 font-semibold text-primary-ink disabled:opacity-50"
-                      disabled={!modifiersSatisfied(item(), chosen(), menuGroups())}
-                      data-step="confirmItem"
-                      onClick={() => void confirmItem(item())}
-                    >
-                      {t("order.choose_add")}
-                    </button>
-                    <button
-                      type="button"
-                      class="mt-2 min-h-touch w-full rounded-token border border-line px-3 text-sm"
-                      onClick={() => closeChoosing()}
-                    >
-                      {t("common.cancel")}
-                    </button>
-                  </div>
-                </div>
-              </>
-            )}
-          </Show>
-
-          {/* Whose dish the next items are. Chosen before the items, as `docs/ui-ux.md` §3 asks, and
-              sticky: a server orders a whole seat's worth at once, so making it per-item would be one
-              extra tap per dish. Tapping the chosen seat again clears it, which is how "this one is
-              for the table" is said without a second control.
-
-              Absent entirely unless the store assigns seats — the edge refuses a seat when the
-              capability is off, and offering an act that can only be refused teaches an operator the
-              till is unreliable. */}
-          <Show when={showSeats()}>
-            <div class="mb-3 flex flex-wrap items-center gap-2">
-              <span class="text-sm text-ink-muted">{t("order.seat_for")}</span>
-              <For each={Array.from({ length: seatCount() }, (_, index) => index + 1)}>
-                {(seat) => (
+          <Show
+            when={freeTables().length > 0}
+            fallback={<p class="text-sm text-ink-muted">{t("order.move_none_free")}</p>}
+          >
+            <div class="grid grid-cols-3 gap-2 tablet:grid-cols-6 terminal:grid-cols-4">
+              <For each={freeTables()}>
+                {(table) => (
                   <button
                     type="button"
-                    class="min-h-touch w-11 rounded-token border border-line tabular-nums"
-                    classList={{
-                      "bg-primary text-primary-ink": seatFor(params.id) === seat,
-                      "text-ink": seatFor(params.id) !== seat,
-                    }}
-                    aria-pressed={seatFor(params.id) === seat}
-                    data-step="chooseSeat"
-                    onClick={() => chooseSeat(params.id, seat)}
+                    class="min-h-touch rounded-token border border-line px-2 py-2 font-semibold"
+                    data-step="moveTo"
+                    onClick={() => void moveTo(table.id)}
                   >
-                    {seat}
+                    {t("common.table", { label: table.label })}
                   </button>
                 )}
               </For>
             </div>
           </Show>
-
-          {/*
-            What the table owes, on the screen the order is taken on. `docs/ui-ux.md` §8 asks for the
-            total to be the largest thing on a money screen; until now this screen carried no figure at
-            all, and the only way to read one was to press Take payment — which opens a bill. Asking a
-            guest's question should not change the order's state.
-
-            The three lines are the edge's, not a sum this app made: one calculation, in the domain
-            (ADR-0028). A read that has not landed shows a dash rather than a zero, because a zero is a
-            number and "I do not know yet" is not.
-          */}
-          <div
-            class="mt-4 rounded-token border border-line bg-surface p-3"
-            classList={{ "tablet:hidden terminal:block": !billOpen() }}
-            data-outcome="check-total"
-          >
-            <Show
-              when={check()}
-              fallback={<p class="text-right text-2xl font-semibold tabular-nums">{"—"}</p>}
-            >
-              {(totals) => (
-                <>
-                  <div class="flex justify-between text-sm text-ink-muted">
-                    <span>{t("order.subtotal")}</span>
-                    <span class="tabular-nums">{formatAmount(totals().subtotal)}</span>
-                  </div>
-                  {/* Each fee under its own name, as the receipt prints it (ADR-0159): one that
-                      charged nothing is left off, as it is on paper. A fee its rule lets staff
-                      waive carries **Waive** once a bill is open to waive it on (decision 5). */}
-                  <For
-                    each={(totals().fee_lines ?? []).filter(
-                      (fee) => fee.amount.amount_minor !== 0,
-                    )}
-                  >
-                    {(fee) => (
-                      <div
-                        class="flex items-center justify-between gap-2 text-sm text-ink-muted"
-                        data-outcome="check-fee"
-                      >
-                        <span>{fee.display_name}</span>
-                        <span class="flex items-center gap-2">
-                          <span class="tabular-nums">{formatAmount(fee.amount)}</span>
-                          <Show when={canWaive(fee) && waiving() === null}>
-                            <button
-                              type="button"
-                              class="min-h-touch rounded-token border border-line px-3 text-sm"
-                              data-step="askWaiveFee"
-                              onClick={() => askWaiveFee(fee)}
-                            >
-                              {t("order.waive_fee")}
-                            </button>
-                          </Show>
-                        </span>
-                      </div>
-                    )}
-                  </For>
-                  <div class="flex justify-between text-sm text-ink-muted">
-                    <span>{t("order.tax")}</span>
-                    <span class="tabular-nums">{formatAmount(totals().tax_total)}</span>
-                  </div>
-                  <div class="mt-1 flex items-baseline justify-between">
-                    <span class="text-sm font-semibold">{t("order.total")}</span>
-                    <span class="text-2xl font-semibold tabular-nums">
-                      {formatAmount(totals().total_due)}
-                    </span>
-                  </div>
-                </>
-              )}
-            </Show>
-          </div>
-
-          {/*
-            Waiving a fee (ADR-0159 decision 5): the reasons the store publishes for a waive, and
-            the manager's badge and PIN where the person needs an approver, the reasons disabled
-            until it is typed — the void's shape, beside the check it changes.
-          */}
-          <Show when={waiving()}>
-            {(fee) => (
-              <div class="mt-3 rounded-token border border-line bg-surface p-3">
-                <h2 class="font-semibold">{t("order.waive_title", { fee: fee().display_name })}</h2>
-                <Show when={waiveAsks()}>
-                  <p class="mt-1 text-sm text-ink-muted">{t("order.waive_manager")}</p>
-                  <ApproverFields
-                    id="waive-fee-approver"
-                    code={approverCode()}
-                    pin={approverPin()}
-                    onCode={setApproverCode}
-                    onPin={setApproverPin}
-                    codeLabel={t("order.approver_code")}
-                    pinLabel={t("order.approver_pin")}
-                  />
-                </Show>
-                <p class="mt-3 text-sm text-ink-muted">{t("order.waive_reason")}</p>
-                <div class="mt-2 grid grid-cols-2 gap-2">
-                  <For each={reasonsFor(WAIVE_FEE)}>
-                    {(reason) => (
-                      <button
-                        type="button"
-                        class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
-                        disabled={!readyToWaive()}
-                        data-step="waiveFeeReason"
-                        onClick={() => void waiveFeeReason(fee(), reason.reason_code_id)}
-                      >
-                        {reason.display_name}
-                      </button>
-                    )}
-                  </For>
-                </div>
-                <button
-                  type="button"
-                  class="mt-3 min-h-touch rounded-token border border-line px-3 text-sm"
-                  onClick={() => closeWaive()}
-                >
-                  {t("common.cancel")}
-                </button>
-              </div>
-            )}
-          </Show>
-          <Show when={waivedFee()}>
-            {(name) => (
-              <p class="mt-1 text-sm text-ink-muted" role="status" data-outcome="check-fee-waived">
-                {t("order.fee_waived", { fee: name() })}
-              </p>
-            )}
-          </Show>
-
-          {/*
-            The two acts that end this screen, anchored to the bottom of a phone.
-
-            `docs/ui-ux.md` §1 principle 9 asks for exactly this — *"Phone: single column, primary
-            action anchored at the bottom within thumb reach"* — and until now they simply sat after
-            the check total, which on a handheld puts them below however many lines the table has
-            ordered. A server taking a large table's order had to scroll to send it.
-
-            Sticky rather than fixed: fixed would take the buttons out of the flow and float them over
-            the last line of the order, and the line under your thumb is the one you were reading. On
-            a tablet and a terminal the whole column fits, so the anchor is released and they sit
-            where they always did — which is why this is `tablet:static` rather than a media query
-            asking the phone for something special.
-          */}
-          <div class="sticky bottom-0 -mx-4 mt-4 border-t border-line bg-canvas px-4 pb-4 pt-3 tablet:static tablet:mx-0 tablet:grid tablet:grid-cols-2 tablet:gap-3 tablet:border-0 tablet:bg-transparent tablet:p-0 terminal:block">
-            {/*
-              Send one course at a time, above the button that sends everything (ADR-0130).
-
-              Only the courses that still have food waiting: a "Send desserts" button on a table whose
-              desserts have already gone is a control that does nothing, and an operator who presses a
-              few of those stops trusting the row. Drawn in the store's published service order and
-              never re-sorted here — the sequence is the whole meaning of a course, and a screen that
-              rebuilt it from what it happened to be showing is how one till ends up disagreeing with
-              another about what comes first.
-
-              Absent entirely on a store with courses off, because the edge refuses a fire-by-course
-              there: offering it would be an act the store will not honour, which is the rule
-              `tips_enabled` and `seats_enabled` already follow.
-            */}
-            <Show when={unsentCourses().length > 0 && can("sales.line.fire")}>
-              <div
-                class="mb-3 tablet:col-span-2"
-                classList={{ "tablet:hidden terminal:block": !billOpen() }}
-              >
-                <h3 class="mb-2 text-sm font-semibold text-ink-muted">{t("order.courses")}</h3>
-                <div class="flex flex-wrap gap-2">
-                  <For each={unsentCourses()}>
-                    {(course) => {
-                      const waiting = () => courseWaitingCounts().get(course.course_id) ?? 0;
-                      return (
-                        <button
-                          type="button"
-                          class="min-h-touch flex-1 rounded-token border border-primary px-3 text-base font-semibold text-ink"
-                          data-step="fireCourse"
-                          onClick={() => void guard(() => fireCourse(key(), course.course_id))}
-                        >
-                          {t("order.send_course_count", {
-                            course: course.display_name,
-                            count: waiting(),
-                          })}
-                        </button>
-                      );
-                    }}
-                  </For>
-                </div>
-              </div>
-            </Show>
-
-            <Show when={can("sales.line.fire")}>
-            <button
-              type="button"
-              class="min-h-money w-full rounded-token bg-primary px-4 text-lg font-semibold text-primary-ink disabled:opacity-50"
-              disabled={unfired().length === 0 || sending.busy() !== null}
-              data-step="fireOrder"
-              onClick={() => void sending.run("send", () => fireOrder(key()))}
-            >
-              {t(sending.busy() !== null ? "order.sending" : unfired().length === 0 ? "order.send" : "order.send_count", { count: unfired().length })}
-            </button>
-            </Show>
-
-            {/* Take payment opens the bill unless one is open already, and releasing clears the
-                table: `billing.bill.open` and `sales.table.manage` (ADR-0158). */}
-            <Show
-              when={releasable()}
-              fallback={
-                <Show when={billed() || can("billing.bill.open")}>
-                <button
-                  type="button"
-                  class="mt-3 min-h-money w-full rounded-token border border-primary px-4 text-lg font-semibold text-ink disabled:opacity-50 tablet:mt-0 terminal:mt-3"
-                  disabled={writesPending()}
-                  aria-describedby="why-pending"
-                  data-step="takePayment"
-                  onClick={() => void takePayment()}
-                >
-                  {t("order.take_payment")}
-                </button>
-                <WritesPendingNote />
-                <SendFirst gate={sendFirst} />
-                </Show>
-              }
-            >
-              <Show when={can("sales.table.manage")}>
-              <button
-                type="button"
-                class="mt-3 min-h-money w-full rounded-token border border-primary px-4 text-lg font-semibold text-ink tablet:mt-0 terminal:mt-3"
-                data-step="releaseTable"
-                onClick={() =>
-                  void guard(async () => {
-                    await releaseTable(params.id);
-                    navigate("/");
-                  })
-                }
-              >
-                {t("order.release_table")}
-              </button>
-              </Show>
-            </Show>
-          </div>
         </div>
-      </div>
-
-      {/* On a tablet the menu is the screen, with room at its foot for the closed panel. */}
-      <aside class="min-w-0 tablet:pb-56 terminal:pb-0">
-        <div class="mb-2 flex items-center justify-between gap-2">
-          <h2 class="text-sm font-semibold text-ink-muted">{t("order.menu")}</h2>
-          <Show
-            when={marking()}
-            fallback={
-              <Show when={can("sales.item.mark_unavailable")}>
-              <button
-                type="button"
-                class="min-h-touch rounded-token border border-line px-3 text-sm text-ink-muted"
-                data-step="startMarking"
-                onClick={() => startMarking()}
-              >
-                {t("order.mark_sold_out")}
-              </button>
-              </Show>
-            }
-          >
-            <button
-              type="button"
-              class="min-h-touch rounded-token border border-line px-3 text-sm font-semibold"
-              onClick={() => setMarking(false)}
-            >
-              {t("order.mark_sold_out_done")}
-            </button>
-          </Show>
-        </div>
-        <Show when={marking()}>
-          <p class="mb-3 text-sm text-ink-muted" role="status">
-            {t("order.mark_sold_out_hint")}
-          </p>
-        </Show>
-        {/* The bill is open, so the menu sells nothing: said here, where the tap would have gone,
-            with the way to order more. Marking a dish sold out has nothing to do with the bill and
-            stays available. */}
-        <Show when={billed() && !marking()}>
-          <p
-            class="mb-3 rounded-token border border-line bg-surface px-3 py-2 text-sm"
-            role="status"
-            data-outcome="bill-open-locked"
-          >
-            {t("order.bill_open_locked")}
-          </p>
-        </Show>
-        {/*
-          The box that makes a long menu usable. `type="search"` rather than `text` so the browser
-          gives the operator its own clear affordance — one control fewer to draw, and the one every
-          other search box on their phone already has.
-
-          No `data-step`: typing is not a tap (`docs/ui-ux.md` §6), which is exactly why this is
-          worth having — it finds an item in a two-hundred-line book without costing the flow the
-          tap the grid costs. The id is how the browser gate reaches it in a precondition, the same
-          way it reaches the shift float.
-        */}
-        <label class="mb-3 block">
-          <span class="sr-only">{t("order.search")}</span>
-          <input
-            id="menu-search"
-            type="search"
-            class="min-h-touch w-full rounded-token border border-line bg-surface px-3 text-ink"
-            placeholder={t("order.search")}
-            value={query()}
-            onInput={(event) => setQuery(event.currentTarget.value)}
-          />
-        </label>
-        {/* The note rides with the next item added and then clears. 200 characters is the edge's
-            limit; the field stops there rather than letting the edge refuse the add. */}
-        <label class="mb-3 block">
-          <span class="text-sm text-ink-muted">{t("order.note_for_next")}</span>
-          <input
-            id="line-note"
-            type="text"
-            maxLength={200}
-            class="min-h-touch w-full rounded-token border border-line bg-surface px-3 text-ink"
-            aria-describedby="line-note-hint"
-            value={note()}
-            disabled={billed() || marking() || !can("sales.line.add")}
-            onInput={(event) => setNote(event.currentTarget.value)}
-          />
-          <span id="line-note-hint" class="text-xs text-ink-muted">
-            {t("order.note_hint")}
+      </Show>,
+    bill: () => <div class="tablet:fixed tablet:inset-x-0 tablet:bottom-0 tablet:z-10 tablet:max-h-[85dvh] tablet:overflow-y-auto tablet:rounded-t-token tablet:border-t tablet:border-line tablet:bg-canvas tablet:px-4 tablet:pb-4 tablet:shadow-overlay terminal:static terminal:z-auto terminal:max-h-none terminal:overflow-visible terminal:rounded-none terminal:border-0 terminal:bg-transparent terminal:p-0 terminal:shadow-none">
+        <button
+          type="button"
+          class="mb-3 hidden min-h-touch w-full items-center justify-between gap-3 bg-canvas py-2 text-left tablet:sticky tablet:top-0 tablet:flex terminal:hidden"
+          aria-expanded={billOpen()}
+          data-outcome="bill-bar"
+          onClick={() => setBillOpen((open) => !open)}
+        >
+          {/* One string, the total inside it: the bar is on the page on every device, hidden
+              off a tablet, and a figure of its own would be a second copy of the bill's total. */}
+          <span class="text-lg font-semibold tabular-nums">
+            {t("order.bill_summary", { count: billCount(), total: billTotal() })}
           </span>
-        </label>
+          <span aria-hidden="true">{billOpen() ? "▾" : "▴"}</span>
+        </button>
 
-        <Show when={!searching()} fallback={searchResults()}>
-          {/*
-            Two ways to draw the same price book. When the console has arranged buttons on the
-            `layout` node (ADR-0066, C4) the till groups by the categories it authored, in the order
-            it authored them; when it has arranged nothing, the flat list is the honest fallback and
-            is what the till drew before that node had a reader.
-          */}
-          <Show
-            when={arranged().length > 0}
-            fallback={
-              <div class="grid grid-cols-2 gap-2 tablet:grid-cols-3 terminal:grid-cols-1">
-                <For
-                  each={headlineItems()}
-                  fallback={<p class="text-ink-muted">{t("order.menu_empty")}</p>}
-                >
-                  {(item) => sellButton(item, item.display_name)}
-                </For>
-              </div>
-            }
+        {/* A refusal, directly under the table's header on a phone and a terminal, where the bar
+            above it is not drawn. A tablet draws it under the bar, so it is seen whether the bill
+            is open or closed: the open bill covers the top of a tablet's screen. While a dish's
+            choices are open it shows in the picker instead, beside the button that drew it. */}
+        <Show when={choosing() ? null : error()}>
+          {(message) => (
+            <p class="mb-3 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
+              {message()}
+            </p>
+          )}
+        </Show>
+        <ul class="flex flex-col gap-2" classList={{ "tablet:hidden terminal:flex": !billOpen() }}>
+          <For
+            each={linesForTable(key())}
+            fallback={<li class="text-ink-muted">{t("order.empty")}</li>}
           >
-            <Show when={arranged().length > 1}>
-              <div
-                class="-mx-1 mb-3 flex gap-2 overflow-x-auto px-1 pb-1"
-                role="tablist"
-                aria-label={t("order.categories")}
+            {(line) => (
+              <li
+                class="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-token border border-line bg-surface p-3 tablet:flex-nowrap"
+                data-outcome="line-added"
               >
-                <For each={arranged()}>
-                  {(category) => (
+                {/* A voided line stays on the order, struck through. Removing the row would make a
+                    mis-tapped void invisible to the person who made it — the guest is not charged
+                    either way, and seeing what was cancelled is how the mistake gets noticed. */}
+                {/* The name takes the whole first row on a phone and the controls wrap under it
+                    (F7): squeezed into one row at 390px the name broke a word per line, the seat
+                    chip sat on top of it and the stepper ran off the right edge. */}
+                <span class="flex min-w-0 basis-full flex-col tablet:basis-auto tablet:flex-1">
+                  <span classList={{ "line-through text-ink-muted": voided(line) }}>
+                    {line.name}
+                  </span>
+                  {/* What was chosen, under the item it was chosen for (ADR-0127). The price already
+                      included it and the caption did not, so this row read "Margherita" whether the
+                      server picked 25cm or 30cm — and a server checking an order back to a guest had
+                      nothing to check against. Struck through with the line, because a voided
+                      line's choices are cancelled with it. */}
+                  <Show when={modifierNames(line).length > 0}>
+                    <span
+                      class="text-sm text-ink-muted"
+                      classList={{ "line-through": voided(line) }}
+                      data-outcome="line-modifiers"
+                    >
+                      {modifierNames(line).join(" · ")}
+                    </span>
+                  </Show>
+                  {/* The guest's note, which the kitchen reads on its board and its ticket
+                      (ADR-0157). A note the edge lost to a restart says so, because a server who
+                      sees nothing assumes nothing was asked for. */}
+                  <Show when={line.note}>
+                    {(text) => (
+                      <span class="text-sm font-semibold text-ink" data-outcome="line-note">
+                        {t("order.note", { note: text() })}
+                      </span>
+                    )}
+                  </Show>
+                  <Show when={noteLost(line)}>
+                    <span class="text-sm text-danger" data-outcome="line-note-lost">
+                      {t("order.note_lost")}
+                    </span>
+                  </Show>
+                </span>
+                {/* How many, and the two taps that change it. Only while the line is still
+                    editable: once the kitchen has the ticket the number is settled, and the edge
+                    refuses an amend from its state machine rather than from a permission.
+
+                    Minus stops at one rather than reaching zero. Zero is not a smaller order, it is
+                    no order — that is a void, which carries a reason and, after a fire, a manager.
+                    Letting the stepper walk into it would give that act a second, quieter spelling. */}
+                <Show when={line.state === "ORDER_LINE_STATE_ADDED" && can("sales.line.add") && !provisional(line)}>
+                  <span class="inline-flex items-center gap-1">
                     <button
                       type="button"
-                      role="tab"
-                      aria-selected={isShown(category)}
-                      class="min-h-touch shrink-0 rounded-token border px-3 text-sm"
-                      classList={{
-                        "border-primary bg-selected text-selected-ink font-semibold": isShown(category),
-                        "border-line bg-surface text-ink": !isShown(category),
-                      }}
-                      onClick={() => setPickedCategory(category.display_category_id)}
+                      class="min-h-touch w-11 rounded-token border border-line text-lg text-ink disabled:opacity-40"
+                      disabled={line.quantityMilli <= 1000}
+                      aria-label={t("order.fewer", { item: line.name })}
+                      onClick={() =>
+                        void guard(() => setQuantity(line.orderLineId, line.quantityMilli - 1000))
+                      }
                     >
-                      {category.name}
+                      {"−"}
+                    </button>
+                    <span class="w-8 text-center tabular-nums" data-outcome="line-quantity">
+                      {formatQuantity(line.quantityMilli)}
+                    </span>
+                    <button
+                      type="button"
+                      class="min-h-touch w-11 rounded-token border border-line text-lg text-ink"
+                      aria-label={t("order.more", { item: line.name })}
+                      data-step="setQuantity"
+                      onClick={() =>
+                        void guard(() => setQuantity(line.orderLineId, line.quantityMilli + 1000))
+                      }
+                    >
+                      {"+"}
+                    </button>
+                  </span>
+                </Show>
+                {/* A line already with the kitchen shows its count without the controls, and so does
+                    every line for a person who may not change one. */}
+                <Show
+                  when={
+                    (line.state !== "ORDER_LINE_STATE_ADDED" || !can("sales.line.add")) &&
+                    line.quantityMilli !== 1000
+                  }
+                >
+                  <span class="tabular-nums text-ink-muted">
+                    {formatQuantity(line.quantityMilli)}
+                  </span>
+                </Show>
+                {/* Which seat it was ordered for, on the line that carries it. A line with none is
+                    the table's, and says nothing rather than saying "no seat". */}
+                <Show when={line.seat !== undefined}>
+                  <span class="rounded-token bg-surface-muted px-2 text-sm tabular-nums text-ink-muted" data-outcome="line-seat">
+                    {t("order.seat_short", { seat: line.seat ?? 0 })}
+                  </span>
+                </Show>
+                {/* No figure until the edge's own: a line sending shows that it is (ADR-0173). */}
+                <span class="tabular-nums" classList={{ "text-ink-muted": voided(line) || line.pending }} data-outcome={line.pending ? "line-sending" : undefined}>
+                  {line.pending ? t("order.sending") : formatAmount(line.lineTotal)}
+                </span>
+                {/* A line waiting to be sent says so and nothing more: the Send button below acts on
+                    every one of them at once, so a control per row would be one tap out of six
+                    doing what one tap now does for all. */}
+                <Show when={line.state === "ORDER_LINE_STATE_ADDED"}>
+                  {/* Marked, because "still waiting" is a state a gate has to be able to see. The
+                      row's own `line-added` marks every line whatever its state, so it cannot say
+                      which of them the kitchen has not been told about — and a fire-by-course that
+                      sent the whole order would look identical through it. */}
+                  <span class="text-sm text-ink-muted" data-outcome="line-unsent">
+                    {t("order.unsent")}
+                  </span>
+                </Show>
+                <Show when={line.state === "ORDER_LINE_STATE_FIRED"}>
+                  <span class="text-sm text-ok" data-outcome="line-fired">
+                    {t("order.fired")}
+                  </span>
+                </Show>
+                {/* The void control (ADR-0115, §11 item 2). Disabled while the store's reason list
+                    has not loaded: the edge falls back to the framework's own set when nothing is
+                    published, so an empty list here means the read has not landed, never that the
+                    store has no reasons — and a picker opening on nothing would be a dead end. */}
+                <Show
+                  when={!voided(line)}
+                  fallback={
+                    <span class="text-sm text-ink-muted" data-outcome="line-voided">
+                      {t("order.voided")}
+                    </span>
+                  }
+                >
+                  <Show when={canVoid(line) && !provisional(line)}>
+                  <button
+                    type="button"
+                    class="min-h-touch rounded-token border border-line px-3 text-sm text-ink-muted disabled:opacity-50"
+                    disabled={reasonsFor(VOID_LINE).length === 0}
+                    aria-describedby="why-reasons"
+                    data-step="askVoid"
+                    onClick={() => askVoid(line)}
+                  >
+                    {t("order.void")}
+                  </button>
+                  </Show>
+                </Show>
+              </li>
+            )}
+          </For>
+        </ul>
+        <WhyUnavailable entry="reason_codes" id="why-reasons" />
+
+        {/*
+          The reason picker (ADR-0115). Every entry it offers declares `REASON_ACTION_VOID_LINE`, so
+          what a member of staff can cite is what the store published for voiding — the same question
+          the edge asks before it writes the event, which is why the list can never offer a reason
+          that would be refused.
+
+          A fired line adds the manager block above it. The badge and PIN are typed, not tapped, so
+          the void still costs the two taps `docs/ui-ux.md` §6 allows a rare action; the second tap
+          is disabled until both are filled rather than sending a request that can only come back
+          `403`.
+        */}
+        <Show when={voiding()}>
+          {(line) => (
+            <div class="mt-4 rounded-token border border-line bg-surface p-3">
+              <h2 class="font-semibold">{t("order.void_title", { item: line().name })}</h2>
+
+              <Show when={needsApproval(line())}>
+                <p class="mt-1 text-sm text-ink-muted">{t("order.void_manager")}</p>
+                <ApproverFields
+                  id="void-line-approver"
+                  code={approverCode()}
+                  pin={approverPin()}
+                  onCode={setApproverCode}
+                  onPin={setApproverPin}
+                  codeLabel={t("order.approver_code")}
+                  pinLabel={t("order.approver_pin")}
+                />
+              </Show>
+
+              <p class="mt-3 text-sm text-ink-muted">{t("order.void_reason")}</p>
+              <div class="mt-2 grid grid-cols-2 gap-2">
+                <For each={reasonsFor(VOID_LINE)}>
+                  {(reason) => (
+                    <button
+                      type="button"
+                      class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
+                      disabled={!readyToVoid(line())}
+                      data-step="voidReason"
+                      onClick={() => void voidReason(line(), reason.reason_code_id)}
+                    >
+                      {reason.display_name}
                     </button>
                   )}
                 </For>
               </div>
-            </Show>
-            <For each={shownCategories()}>
-              {(category) => (
-                <section class="mb-4">
-                  <h3 class="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-muted">
-                    {category.name}
-                  </h3>
-                  <div class="grid grid-cols-2 gap-2 tablet:grid-cols-3 terminal:grid-cols-1">
-                    <For each={category.buttons}>{(button) => arrangedButton(button)}</For>
-                  </div>
-                  <For each={category.subcategories}>
-                    {(subcategory) => (
+
+              <button
+                type="button"
+                class="mt-3 min-h-touch rounded-token border border-line px-3 text-sm"
+                onClick={() => closeVoid()}
+              >
+                {t("common.cancel")}
+              </button>
+            </div>
+          )}
+        </Show>
+
+        {/*
+          The choices an item needs before it can be sold (ADR-0127, `docs/ui-ux.md` §3's "required
+          modifier groups open immediately").
+
+          It opens on the item tap and not behind a button of its own, which is what keeps the
+          common case at one tap: an item attaching no group never opens this at all. An item that
+          does costs one tap per choice plus the confirm, and is declared as its own task rather
+          than folded into "Add an item" — the reason the seat and the tipped settle are separate.
+
+          The confirm is disabled until every required group is satisfied, running the same
+          arithmetic the edge runs. The edge is still the authority; this only keeps a refusal off a
+          guest's eyeline.
+        */}
+        <Show when={choosing()}>
+          {(item) => (
+            <>
+              {/*
+                Where the picker opens depends on where the menu is. On a phone or a tablet the menu
+                is below the bill, and the picker, drawn in the bill's column, opened off-screen: a
+                server tapped the pizza and saw nothing happen. There it is a sheet from the bottom
+                of the screen, where the thumb that tapped is, over the menu washed out behind it,
+                and a tap on the washed-out menu cancels, as Cancel does. A terminal draws the bill
+                beside the menu, so there the picker stays in the bill's column, where it always was.
+              */}
+              <div
+                class="fixed inset-0 z-20 bg-canvas/70 terminal:hidden"
+                aria-hidden="true"
+                onClick={() => closeChoosing()}
+              />
+              <div
+                class="fixed inset-x-0 bottom-0 z-30 flex max-h-[85dvh] flex-col rounded-t-token border-t border-line bg-surface shadow-overlay terminal:static terminal:z-auto terminal:mb-3 terminal:block terminal:max-h-none terminal:rounded-token terminal:border terminal:shadow-none"
+                role="dialog"
+                aria-label={t("order.choose_title", { item: item().display_name })}
+              >
+                {/* The choices scroll inside the sheet and the two buttons under them do not, so a
+                    phone on its side, a screen shorter than the choices, still shows Add. */}
+                <div class="min-h-0 overflow-y-auto p-4 pb-0 terminal:overflow-visible terminal:p-3 terminal:pb-0">
+                  <h2 class="font-semibold">
+                    {t("order.choose_title", { item: item().display_name })}
+                  </h2>
+                  <For each={groupsFor(item(), menuGroups())}>
+                    {(group) => (
                       <div class="mt-3">
-                        <h4 class="mb-2 text-xs text-ink-muted">{subcategory.name}</h4>
-                        <div class="grid grid-cols-2 gap-2 tablet:grid-cols-3 terminal:grid-cols-1">
-                          <For each={subcategory.buttons}>{(button) => arrangedButton(button)}</For>
+                        <p class="text-sm text-ink-muted">
+                          {group.min_select >= 1
+                            ? t("order.choose_required", { group: group.display_name })
+                            : t("order.choose_optional", { group: group.display_name })}
+                        </p>
+                        <div class="mt-2 grid grid-cols-2 gap-2">
+                          <For each={group.member_menu_item_ids}>
+                            {(memberId) => (
+                              <Show when={menuItemMap().get(memberId)}>
+                                {(member) => (
+                                  <button
+                                    type="button"
+                                    class="flex min-h-touch items-center justify-between rounded-token border border-line px-3 text-left disabled:opacity-50"
+                                    classList={{
+                                      "bg-primary text-primary-ink": chosen().includes(memberId),
+                                      "bg-surface text-ink": !chosen().includes(memberId),
+                                    }}
+                                    // A choice the kitchen has run out of, or the console withdrew,
+                                    // cannot be made: the edge refuses a line that asks for it. One
+                                    // already chosen stays tappable, so it can still be taken off.
+                                    disabled={!member().available && !chosen().includes(memberId)}
+                                    aria-pressed={chosen().includes(memberId)}
+                                    data-step="chooseModifier"
+                                    onClick={() => chooseModifier(group, memberId)}
+                                  >
+                                    <span classList={{ "line-through": member().sold_out === true }}>
+                                      {member().display_name}
+                                    </span>
+                                    <Show
+                                      when={member().available}
+                                      fallback={
+                                        <span class="text-sm text-ink-muted">
+                                          {member().sold_out === true
+                                            ? t("order.sold_out")
+                                            : t("order.unavailable")}
+                                        </span>
+                                      }
+                                    >
+                                      {/* A modifier is an ordinary item with its own price, which is
+                                          how a large costs more than a small. A free choice says
+                                          nothing rather than saying zero. */}
+                                      <Show when={member().unit_price.amount_minor > 0}>
+                                        <span class="tabular-nums text-ink-muted">
+                                          {"+ "}
+                                          {formatAmount(member().unit_price)}
+                                        </span>
+                                      </Show>
+                                    </Show>
+                                  </button>
+                                )}
+                              </Show>
+                            )}
+                          </For>
                         </div>
                       </div>
                     )}
                   </For>
-                </section>
+                  <Show when={error()}>
+                    {(message) => (
+                      <p
+                        class="mt-3 rounded-token border border-danger px-3 py-2 text-danger"
+                        role="alert"
+                      >
+                        {message()}
+                      </p>
+                    )}
+                  </Show>
+                </div>
+                <div class="p-4 pt-0 terminal:p-3 terminal:pt-0">
+                  <button
+                    type="button"
+                    class="mt-4 min-h-money w-full rounded-token bg-primary px-4 font-semibold text-primary-ink disabled:opacity-50"
+                    disabled={!modifiersSatisfied(item(), chosen(), menuGroups())}
+                    data-step="confirmItem"
+                    onClick={() => void confirmItem(item())}
+                  >
+                    {t("order.choose_add")}
+                  </button>
+                  <button
+                    type="button"
+                    class="mt-2 min-h-touch w-full rounded-token border border-line px-3 text-sm"
+                    onClick={() => closeChoosing()}
+                  >
+                    {t("common.cancel")}
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+        </Show>
+
+        {/* Whose dish the next items are. Chosen before the items, as `docs/ui-ux.md` §3 asks, and
+            sticky: a server orders a whole seat's worth at once, so making it per-item would be one
+            extra tap per dish. Tapping the chosen seat again clears it, which is how "this one is
+            for the table" is said without a second control.
+
+            Absent entirely unless the store assigns seats — the edge refuses a seat when the
+            capability is off, and offering an act that can only be refused teaches an operator the
+            till is unreliable. */}
+        <Show when={showSeats()}>
+          <div class="mb-3 flex flex-wrap items-center gap-2">
+            <span class="text-sm text-ink-muted">{t("order.seat_for")}</span>
+            <For each={Array.from({ length: seatCount() }, (_, index) => index + 1)}>
+              {(seat) => (
+                <button
+                  type="button"
+                  class="min-h-touch w-11 rounded-token border border-line tabular-nums"
+                  classList={{
+                    "bg-primary text-primary-ink": seatFor(params.id) === seat,
+                    "text-ink": seatFor(params.id) !== seat,
+                  }}
+                  aria-pressed={seatFor(params.id) === seat}
+                  data-step="chooseSeat"
+                  onClick={() => chooseSeat(params.id, seat)}
+                >
+                  {seat}
+                </button>
               )}
             </For>
-          </Show>
+          </div>
         </Show>
-      </aside>
-    </section>
+
+        {/*
+          What the table owes, on the screen the order is taken on. `docs/ui-ux.md` §8 asks for the
+          total to be the largest thing on a money screen; until now this screen carried no figure at
+          all, and the only way to read one was to press Take payment — which opens a bill. Asking a
+          guest's question should not change the order's state.
+
+          The three lines are the edge's, not a sum this app made: one calculation, in the domain
+          (ADR-0028). A read that has not landed shows a dash rather than a zero, because a zero is a
+          number and "I do not know yet" is not.
+        */}
+        <div
+          class="mt-4 rounded-token border border-line bg-surface p-3"
+          classList={{ "tablet:hidden terminal:block": !billOpen() }}
+          data-outcome="check-total"
+        >
+          <Show
+            when={check()}
+            fallback={<p class="text-right text-2xl font-semibold tabular-nums">{"—"}</p>}
+          >
+            {(totals) => (
+              <>
+                <div class="flex justify-between text-sm text-ink-muted">
+                  <span>{t("order.subtotal")}</span>
+                  <span class="tabular-nums">{formatAmount(totals().subtotal)}</span>
+                </div>
+                {/* Each fee under its own name, as the receipt prints it (ADR-0159): one that
+                    charged nothing is left off, as it is on paper. A fee its rule lets staff
+                    waive carries **Waive** once a bill is open to waive it on (decision 5). */}
+                <For
+                  each={(totals().fee_lines ?? []).filter(
+                    (fee) => fee.amount.amount_minor !== 0,
+                  )}
+                >
+                  {(fee) => (
+                    <div
+                      class="flex items-center justify-between gap-2 text-sm text-ink-muted"
+                      data-outcome="check-fee"
+                    >
+                      <span>{fee.display_name}</span>
+                      <span class="flex items-center gap-2">
+                        <span class="tabular-nums">{formatAmount(fee.amount)}</span>
+                        <Show when={canWaive(fee) && waiving() === null}>
+                          <button
+                            type="button"
+                            class="min-h-touch rounded-token border border-line px-3 text-sm"
+                            data-step="askWaiveFee"
+                            onClick={() => askWaiveFee(fee)}
+                          >
+                            {t("order.waive_fee")}
+                          </button>
+                        </Show>
+                      </span>
+                    </div>
+                  )}
+                </For>
+                <div class="flex justify-between text-sm text-ink-muted">
+                  <span>{t("order.tax")}</span>
+                  <span class="tabular-nums">{formatAmount(totals().tax_total)}</span>
+                </div>
+                <div class="mt-1 flex items-baseline justify-between">
+                  <span class="text-sm font-semibold">{t("order.total")}</span>
+                  <span class="text-2xl font-semibold tabular-nums">
+                    {formatAmount(totals().total_due)}
+                  </span>
+                </div>
+              </>
+            )}
+          </Show>
+        </div>
+
+        {/*
+          Waiving a fee (ADR-0159 decision 5): the reasons the store publishes for a waive, and
+          the manager's badge and PIN where the person needs an approver, the reasons disabled
+          until it is typed — the void's shape, beside the check it changes.
+        */}
+        <Show when={waiving()}>
+          {(fee) => (
+            <div class="mt-3 rounded-token border border-line bg-surface p-3">
+              <h2 class="font-semibold">{t("order.waive_title", { fee: fee().display_name })}</h2>
+              <Show when={waiveAsks()}>
+                <p class="mt-1 text-sm text-ink-muted">{t("order.waive_manager")}</p>
+                <ApproverFields
+                  id="waive-fee-approver"
+                  code={approverCode()}
+                  pin={approverPin()}
+                  onCode={setApproverCode}
+                  onPin={setApproverPin}
+                  codeLabel={t("order.approver_code")}
+                  pinLabel={t("order.approver_pin")}
+                />
+              </Show>
+              <p class="mt-3 text-sm text-ink-muted">{t("order.waive_reason")}</p>
+              <div class="mt-2 grid grid-cols-2 gap-2">
+                <For each={reasonsFor(WAIVE_FEE)}>
+                  {(reason) => (
+                    <button
+                      type="button"
+                      class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
+                      disabled={!readyToWaive()}
+                      data-step="waiveFeeReason"
+                      onClick={() => void waiveFeeReason(fee(), reason.reason_code_id)}
+                    >
+                      {reason.display_name}
+                    </button>
+                  )}
+                </For>
+              </div>
+              <button
+                type="button"
+                class="mt-3 min-h-touch rounded-token border border-line px-3 text-sm"
+                onClick={() => closeWaive()}
+              >
+                {t("common.cancel")}
+              </button>
+            </div>
+          )}
+        </Show>
+        <Show when={waivedFee()}>
+          {(name) => (
+            <p class="mt-1 text-sm text-ink-muted" role="status" data-outcome="check-fee-waived">
+              {t("order.fee_waived", { fee: name() })}
+            </p>
+          )}
+        </Show>
+
+        {/*
+          The two acts that end this screen, anchored to the bottom of a phone.
+
+          `docs/ui-ux.md` §1 principle 9 asks for exactly this — *"Phone: single column, primary
+          action anchored at the bottom within thumb reach"* — and until now they simply sat after
+          the check total, which on a handheld puts them below however many lines the table has
+          ordered. A server taking a large table's order had to scroll to send it.
+
+          Sticky rather than fixed: fixed would take the buttons out of the flow and float them over
+          the last line of the order, and the line under your thumb is the one you were reading. On
+          a tablet and a terminal the whole column fits, so the anchor is released and they sit
+          where they always did — which is why this is `tablet:static` rather than a media query
+          asking the phone for something special.
+        */}
+        <div class="sticky bottom-0 -mx-4 mt-4 border-t border-line bg-canvas px-4 pb-4 pt-3 tablet:static tablet:mx-0 tablet:grid tablet:grid-cols-2 tablet:gap-3 tablet:border-0 tablet:bg-transparent tablet:p-0 terminal:block">
+          {/*
+            Send one course at a time, above the button that sends everything (ADR-0130).
+
+            Only the courses that still have food waiting: a "Send desserts" button on a table whose
+            desserts have already gone is a control that does nothing, and an operator who presses a
+            few of those stops trusting the row. Drawn in the store's published service order and
+            never re-sorted here — the sequence is the whole meaning of a course, and a screen that
+            rebuilt it from what it happened to be showing is how one till ends up disagreeing with
+            another about what comes first.
+
+            Absent entirely on a store with courses off, because the edge refuses a fire-by-course
+            there: offering it would be an act the store will not honour, which is the rule
+            `tips_enabled` and `seats_enabled` already follow.
+          */}
+          <Show when={unsentCourses().length > 0 && can("sales.line.fire")}>
+            <div
+              class="mb-3 tablet:col-span-2"
+              classList={{ "tablet:hidden terminal:block": !billOpen() }}
+            >
+              <h3 class="mb-2 text-sm font-semibold text-ink-muted">{t("order.courses")}</h3>
+              <div class="flex flex-wrap gap-2">
+                <For each={unsentCourses()}>
+                  {(course) => {
+                    const waiting = () => courseWaitingCounts().get(course.course_id) ?? 0;
+                    return (
+                      <button
+                        type="button"
+                        class="min-h-touch flex-1 rounded-token border border-primary px-3 text-base font-semibold text-ink"
+                        data-step="fireCourse"
+                        onClick={() => void guard(() => fireCourse(key(), course.course_id))}
+                      >
+                        {t("order.send_course_count", {
+                          course: course.display_name,
+                          count: waiting(),
+                        })}
+                      </button>
+                    );
+                  }}
+                </For>
+              </div>
+            </div>
+          </Show>
+
+          <Show when={can("sales.line.fire")}>
+          <button
+            type="button"
+            class="min-h-money w-full rounded-token bg-primary px-4 text-lg font-semibold text-primary-ink disabled:opacity-50"
+            disabled={unfired().length === 0 || sending.busy() !== null}
+            data-step="fireOrder"
+            onClick={() => void sending.run("send", () => fireOrder(key()))}
+          >
+            {t(sending.busy() !== null ? "order.sending" : unfired().length === 0 ? "order.send" : "order.send_count", { count: unfired().length })}
+          </button>
+          </Show>
+
+          {/* Take payment opens the bill unless one is open already, and releasing clears the
+              table: `billing.bill.open` and `sales.table.manage` (ADR-0158). */}
+          <Show
+            when={releasable()}
+            fallback={
+              <Show when={billed() || can("billing.bill.open")}>
+              <button
+                type="button"
+                class="mt-3 min-h-money w-full rounded-token border border-primary px-4 text-lg font-semibold text-ink disabled:opacity-50 tablet:mt-0 terminal:mt-3"
+                disabled={writesPending()}
+                aria-describedby="why-pending"
+                data-step="takePayment"
+                onClick={() => void takePayment()}
+              >
+                {t("order.take_payment")}
+              </button>
+              <WritesPendingNote />
+              <SendFirst gate={sendFirst} />
+              </Show>
+            }
+          >
+            <Show when={can("sales.table.manage")}>
+            <button
+              type="button"
+              class="mt-3 min-h-money w-full rounded-token border border-primary px-4 text-lg font-semibold text-ink tablet:mt-0 terminal:mt-3"
+              data-step="releaseTable"
+              onClick={() =>
+                void guard(async () => {
+                  await releaseTable(params.id);
+                  navigate("/");
+                })
+              }
+            >
+              {t("order.release_table")}
+            </button>
+            </Show>
+          </Show>
+        </div>
+      </div>,
+    menuToolbar: () => <>
+      <div class="mb-2 flex items-center justify-between gap-2">
+        <h2 class="text-sm font-semibold text-ink-muted">{t("order.menu")}</h2>
+        <Show
+          when={marking()}
+          fallback={
+            <Show when={can("sales.item.mark_unavailable")}>
+            <button
+              type="button"
+              class="min-h-touch rounded-token border border-line px-3 text-sm text-ink-muted"
+              data-step="startMarking"
+              onClick={() => startMarking()}
+            >
+              {t("order.mark_sold_out")}
+            </button>
+            </Show>
+          }
+        >
+          <button
+            type="button"
+            class="min-h-touch rounded-token border border-line px-3 text-sm font-semibold"
+            onClick={() => setMarking(false)}
+          >
+            {t("order.mark_sold_out_done")}
+          </button>
+        </Show>
+      </div>
+      <Show when={marking()}>
+        <p class="mb-3 text-sm text-ink-muted" role="status">
+          {t("order.mark_sold_out_hint")}
+        </p>
+      </Show>
+      {/* The bill is open, so the menu sells nothing: said here, where the tap would have gone,
+          with the way to order more. Marking a dish sold out has nothing to do with the bill and
+          stays available. */}
+      <Show when={billed() && !marking()}>
+        <p
+          class="mb-3 rounded-token border border-line bg-surface px-3 py-2 text-sm"
+          role="status"
+          data-outcome="bill-open-locked"
+        >
+          {t("order.bill_open_locked")}
+        </p>
+      </Show>
+      </>,
+    menuFields: () => <>
+      {/*
+        The box that makes a long menu usable. `type="search"` rather than `text` so the browser
+        gives the operator its own clear affordance — one control fewer to draw, and the one every
+        other search box on their phone already has.
+
+        No `data-step`: typing is not a tap (`docs/ui-ux.md` §6), which is exactly why this is
+        worth having — it finds an item in a two-hundred-line book without costing the flow the
+        tap the grid costs. The id is how the browser gate reaches it in a precondition, the same
+        way it reaches the shift float.
+      */}
+      <label class="mb-3 block">
+        <span class="sr-only">{t("order.search")}</span>
+        <input
+          id="menu-search"
+          type="search"
+          class="min-h-touch w-full rounded-token border border-line bg-surface px-3 text-ink"
+          placeholder={t("order.search")}
+          value={query()}
+          onInput={(event) => setQuery(event.currentTarget.value)}
+        />
+      </label>
+      {/* The note rides with the next item added and then clears. 200 characters is the edge's
+          limit; the field stops there rather than letting the edge refuse the add. */}
+      <label class="mb-3 block">
+        <span class="text-sm text-ink-muted">{t("order.note_for_next")}</span>
+        <input
+          id="line-note"
+          type="text"
+          maxLength={200}
+          class="min-h-touch w-full rounded-token border border-line bg-surface px-3 text-ink"
+          aria-describedby="line-note-hint"
+          value={note()}
+          disabled={billed() || marking() || !can("sales.line.add")}
+          onInput={(event) => setNote(event.currentTarget.value)}
+        />
+        <span id="line-note-hint" class="text-xs text-ink-muted">
+          {t("order.note_hint")}
+        </span>
+      </label>
+      </>,
+    menuButtons: () => <Show when={!searching()} fallback={searchResults()}>
+        {/*
+          Two ways to draw the same price book. When the console has arranged buttons on the
+          `layout` node (ADR-0066, C4) the till groups by the categories it authored, in the order
+          it authored them; when it has arranged nothing, the flat list is the honest fallback and
+          is what the till drew before that node had a reader.
+        */}
+        <Show
+          when={arranged().length > 0}
+          fallback={
+            <div class="grid grid-cols-2 gap-2 tablet:grid-cols-3 terminal:grid-cols-1">
+              <For
+                each={headlineItems()}
+                fallback={<p class="text-ink-muted">{t("order.menu_empty")}</p>}
+              >
+                {(item) => sellButton(item, item.display_name)}
+              </For>
+            </div>
+          }
+        >
+          <Show when={arranged().length > 1}>
+            <div
+              class="-mx-1 mb-3 flex gap-2 overflow-x-auto px-1 pb-1"
+              role="tablist"
+              aria-label={t("order.categories")}
+            >
+              <For each={arranged()}>
+                {(category) => (
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={isShown(category)}
+                    class="min-h-touch shrink-0 rounded-token border px-3 text-sm"
+                    classList={{
+                      "border-primary bg-selected text-selected-ink font-semibold": isShown(category),
+                      "border-line bg-surface text-ink": !isShown(category),
+                    }}
+                    onClick={() => setPickedCategory(category.display_category_id)}
+                  >
+                    {category.name}
+                  </button>
+                )}
+              </For>
+            </div>
+          </Show>
+          <For each={shownCategories()}>
+            {(category) => (
+              <section class="mb-4">
+                <h3 class="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-muted">
+                  {category.name}
+                </h3>
+                <div class="grid grid-cols-2 gap-2 tablet:grid-cols-3 terminal:grid-cols-1">
+                  <For each={category.buttons}>{(button) => arrangedButton(button)}</For>
+                </div>
+                <For each={category.subcategories}>
+                  {(subcategory) => (
+                    <div class="mt-3">
+                      <h4 class="mb-2 text-xs text-ink-muted">{subcategory.name}</h4>
+                      <div class="grid grid-cols-2 gap-2 tablet:grid-cols-3 terminal:grid-cols-1">
+                        <For each={subcategory.buttons}>{(button) => arrangedButton(button)}</For>
+                      </div>
+                    </div>
+                  )}
+                </For>
+              </section>
+            )}
+          </For>
+        </Show>
+      </Show>,
+  };
+
+  return (
+    <OrderContext.Provider value={regions}>
+      <PackageScreen screenId="order" host={NO_ACTS} />
+    </OrderContext.Provider>
   );
 }
