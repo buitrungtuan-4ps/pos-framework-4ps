@@ -1,11 +1,11 @@
 # ADR-0204 — A money act with no answer is never rolled back blind
 
-**Status** Proposed · **Owner** @maintainers-architecture · **Date** 2026-11-03
+**Status** Accepted · **Owner** @maintainers-architecture · **Date** 2026-11-03
 · Amends [ADR-0196](0196-every-act-paints-first-and-money-waits-for-the-edge.md) decision 1
 · Relates to [ADR-0173](0173-the-till-declares-each-piece-of-store-data-once.md),
 [ADR-0028](0028-settlement-and-payment-invariant.md)
 
-Proposed: it waits on the owner's acceptance.
+Accepted by the owner on 2026-11-05.
 
 ## Context
 
