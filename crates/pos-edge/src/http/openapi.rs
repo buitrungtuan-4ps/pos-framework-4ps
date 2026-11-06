@@ -123,6 +123,13 @@ use utoipa::{Modify, OpenApi};
         super::print_jobs::claim_print_jobs,
         super::print_jobs::acknowledge_print_job,
         super::printers::test_printer,
+        super::custom_data::object_custom_fields,
+        super::custom_data::set_custom_fields,
+        super::custom_data::list_custom_records,
+        super::custom_data::create_custom_record,
+        super::custom_data::custom_record,
+        super::custom_data::change_custom_record,
+        super::custom_data::read_subject,
     ),
     modifiers(&TillSession),
     tags(
@@ -155,6 +162,9 @@ use utoipa::{Modify, OpenApi};
                                              ADR-0148)."),
         (name = "printing", description = "Binding a terminal's print agent, the agent's own job queue, \
                                            and a printer's test page (ADR-0112)."),
+        (name = "custom data", description = "Custom fields on an order, line, bill, table or shift, \
+                                              records of a package's object types, and one subject's \
+                                              personal values, kept on the store (ADR-0194, ADR-0206)."),
     )
 )]
 pub(crate) struct EdgeApiDoc;

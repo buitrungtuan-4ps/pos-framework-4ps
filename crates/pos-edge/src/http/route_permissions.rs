@@ -26,8 +26,9 @@
 //! ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 //! decision 2), a shift's X and the store's
 //! ([ADR-0187](../../../../docs/adr/0187-a-shift-is-handed-over-at-the-till-and-read-there.md)), and which of the store's terminals this device or another holds, which the till's
-//! binding screen reads ([ADR-0112](../../../../docs/adr/0112-print-agents.md)). Every other read
-//! changes nothing, and the signed-in gate covers it.
+//! binding screen reads ([ADR-0112](../../../../docs/adr/0112-print-agents.md)), and one subject's
+//! personal values ([ADR-0206](../../../../docs/adr/0206-a-personal-custom-value-stays-on-its-store-and-expires-on-its-own-clock.md)
+//! decision 5). Every other read changes nothing, and the signed-in gate covers it.
 
 use pos_core::permission::Permission;
 
@@ -61,6 +62,10 @@ pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
     (
         "GET /api/shifts:x",
         RouteGate::Person(&[Permission::ViewTakings, Permission::ReadShiftX]),
+    ),
+    (
+        "GET /api/subjects/{subject_id}",
+        RouteGate::Person(&[Permission::ReadPersonalData]),
     ),
     (
         "POST /api/activate",
@@ -112,6 +117,24 @@ pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
             Permission::VoidSettledBill,
             Permission::OverrideDrawerAssignment,
         ]),
+    ),
+    (
+        "POST /api/custom-fields",
+        RouteGate::Person(&[
+            Permission::WriteDataRecord,
+            Permission::AddLine,
+            Permission::OpenBill,
+            Permission::ManageTables,
+            Permission::OpenShift,
+        ]),
+    ),
+    (
+        "POST /api/custom-records",
+        RouteGate::Person(&[Permission::WriteDataRecord]),
+    ),
+    (
+        "POST /api/custom-records/{id}/values",
+        RouteGate::Person(&[Permission::WriteDataRecord]),
     ),
     (
         "POST /api/drawer/open",
@@ -345,14 +368,6 @@ pub const NOT_ON_A_ROUTE: &[(Permission, &str)] = &[
     (
         Permission::ChoosePackage,
         "a store's package version is chosen in the console (ADR-0189)",
-    ),
-    (
-        Permission::WriteDataRecord,
-        "the edge's custom-data routes are the next slice (ADR-0206 decision 7)",
-    ),
-    (
-        Permission::ReadPersonalData,
-        "the edge's per-subject read is the next slice (ADR-0206 decision 5)",
     ),
     (Permission::ManageTenant, "cloud-only administration"),
     (Permission::ManageStaff, "cloud-only administration"),

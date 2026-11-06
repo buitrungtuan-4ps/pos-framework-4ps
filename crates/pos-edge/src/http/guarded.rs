@@ -17,8 +17,8 @@ use pos_ports::subject_store::SubjectStore;
 
 use super::revalidated;
 use super::{
-    bills, cash_movements, check, floor, integrations, kds, layout, lines, live, locale, menu,
-    package, printers, qr, reason_codes, reports, shift_x, shifts, sync, tables,
+    bills, cash_movements, check, custom_data, floor, integrations, kds, layout, lines, live,
+    locale, menu, package, printers, qr, reason_codes, reports, shift_x, shifts, sync, tables,
 };
 use crate::app::Edge;
 
@@ -34,6 +34,36 @@ where
         .merge(bill_routes::<S>())
         .merge(shift_routes::<S>())
         .merge(store_routes::<S>())
+        .merge(custom_data_routes::<S>())
+}
+
+/// Custom data (ADR-0194, ADR-0206): fields on an existing object, records of a package's object
+/// types, and the per-subject read of personal values, which has no list and no search.
+fn custom_data_routes<S>() -> Router<Arc<Edge<S>>>
+where
+    S: EventStore + SubjectStore + Send + Sync + 'static,
+{
+    Router::new()
+        .route(
+            "/api/custom-fields",
+            get(custom_data::object_custom_fields::<S>).post(custom_data::set_custom_fields::<S>),
+        )
+        .route(
+            "/api/custom-records",
+            get(custom_data::list_custom_records::<S>).post(custom_data::create_custom_record::<S>),
+        )
+        .route(
+            "/api/custom-records/{id}",
+            get(custom_data::custom_record::<S>),
+        )
+        .route(
+            "/api/custom-records/{id}/values",
+            post(custom_data::change_custom_record::<S>),
+        )
+        .route(
+            "/api/subjects/{subject_id}",
+            get(custom_data::read_subject::<S>),
+        )
 }
 
 /// What the store published, read for the till, and the 86 that marks an item sold out.

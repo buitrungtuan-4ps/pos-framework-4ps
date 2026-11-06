@@ -273,6 +273,41 @@ cash.shift.open	refusal=NOT_THE_SHIFT_HANDED_OVER
 cash.shift.open	refusal=SHIFT_ALREADY_OPEN
 cash.shift.open	route=POST /api/shifts
 cash.shift.open	since=0.14.1
+data.custom_field.set
+data.custom_field.set	effect=ACTION_EFFECT_EDGE_WRITE
+data.custom_field.set	frequency=ACTION_FREQUENCY_RARE
+data.custom_field.set	param=object:ACTION_PARAM_KIND_TOKEN:required
+data.custom_field.set	param=object_id:ACTION_PARAM_KIND_ID:required
+data.custom_field.set	param=values:ACTION_PARAM_KIND_ENTERED:required
+data.custom_field.set	permission=billing.bill.open
+data.custom_field.set	permission=cash.shift.open
+data.custom_field.set	permission=data.record.write
+data.custom_field.set	permission=sales.line.add
+data.custom_field.set	permission=sales.table.manage
+data.custom_field.set	refusal=CUSTOM_ENTRY_REFUSED
+data.custom_field.set	refusal=UNKNOWN_OBJECT
+data.custom_field.set	route=POST /api/custom-fields
+data.custom_field.set	since=0.14.1
+data.custom_record.change
+data.custom_record.change	effect=ACTION_EFFECT_EDGE_WRITE
+data.custom_record.change	frequency=ACTION_FREQUENCY_RARE
+data.custom_record.change	param=custom_record_id:ACTION_PARAM_KIND_ID:required
+data.custom_record.change	param=object_type_id:ACTION_PARAM_KIND_ID:required
+data.custom_record.change	param=values:ACTION_PARAM_KIND_ENTERED:required
+data.custom_record.change	permission=data.record.write
+data.custom_record.change	refusal=CUSTOM_ENTRY_REFUSED
+data.custom_record.change	refusal=UNKNOWN_CUSTOM_RECORD
+data.custom_record.change	route=POST /api/custom-records/{id}/values
+data.custom_record.change	since=0.14.1
+data.custom_record.create
+data.custom_record.create	effect=ACTION_EFFECT_EDGE_WRITE
+data.custom_record.create	frequency=ACTION_FREQUENCY_RARE
+data.custom_record.create	param=object_type_id:ACTION_PARAM_KIND_ID:required
+data.custom_record.create	param=values:ACTION_PARAM_KIND_ENTERED:required
+data.custom_record.create	permission=data.record.write
+data.custom_record.create	refusal=CUSTOM_ENTRY_REFUSED
+data.custom_record.create	route=POST /api/custom-records
+data.custom_record.create	since=0.14.1
 reports.shift.print_handover
 reports.shift.print_handover	effect=ACTION_EFFECT_EDGE_WRITE
 reports.shift.print_handover	frequency=ACTION_FREQUENCY_RARE

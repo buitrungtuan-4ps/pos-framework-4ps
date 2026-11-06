@@ -20,6 +20,7 @@ pub mod bills;
 mod cash_movements;
 pub mod check;
 mod counter;
+mod custom_data;
 pub mod floor;
 mod guarded;
 pub mod health;
@@ -594,6 +595,7 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
         AppError::CustomEntryRefused(_) => "CUSTOM_ENTRY_REFUSED",
         AppError::UnknownObject => "UNKNOWN_OBJECT",
         AppError::UnknownCustomRecord => "UNKNOWN_CUSTOM_RECORD",
+        AppError::UnknownSubject => "UNKNOWN_SUBJECT",
         AppError::AlreadyFired => "ALREADY_FIRED",
         AppError::ApprovalRequired => "APPROVAL_REQUIRED",
         AppError::ApprovalRefused => "APPROVAL_REFUSED",
@@ -659,6 +661,7 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::ItemNotSellable
         | AppError::UnknownObject
         | AppError::UnknownCustomRecord
+        | AppError::UnknownSubject
         | AppError::AlreadyFired
         | AppError::FlowPrerequisiteUnmet { .. } => {
             refusal(StatusCode::CONFLICT, reason, error.to_string())

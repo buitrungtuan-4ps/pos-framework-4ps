@@ -24,6 +24,12 @@ From [`docs/openapi-edge.json`](../openapi-edge.json).
 | POST | `/api/bills/{id}/void` | `void_bill` | `till_session` | `billing.bill.void` | [`crates/pos-edge/src/http/bills.rs`](../../crates/pos-edge/src/http/bills.rs) |
 | POST | `/api/bills/{id}/void_settled` | `void_settled_bill` | `till_session` | `billing.bill.void_settled`, `cash.drawer.override_assignment` | [`crates/pos-edge/src/http/void_settled.rs`](../../crates/pos-edge/src/http/void_settled.rs) |
 | GET | `/api/claim` | `claim_status` | public: nothing: only a box that belongs to no store yet serves it | — | [`crates/pos-edge/src/claim.rs`](../../crates/pos-edge/src/claim.rs) |
+| GET | `/api/custom-fields` | `object_custom_fields` | `till_session` | — | [`crates/pos-edge/src/http/custom_data.rs`](../../crates/pos-edge/src/http/custom_data.rs) |
+| POST | `/api/custom-fields` | `set_custom_fields` | `till_session` | `data.record.write`, `sales.line.add`, `billing.bill.open`, `sales.table.manage`, `cash.shift.open` | [`crates/pos-edge/src/http/custom_data.rs`](../../crates/pos-edge/src/http/custom_data.rs) |
+| GET | `/api/custom-records` | `list_custom_records` | `till_session` | — | [`crates/pos-edge/src/http/custom_data.rs`](../../crates/pos-edge/src/http/custom_data.rs) |
+| POST | `/api/custom-records` | `create_custom_record` | `till_session` | `data.record.write` | [`crates/pos-edge/src/http/custom_data.rs`](../../crates/pos-edge/src/http/custom_data.rs) |
+| GET | `/api/custom-records/{id}` | `custom_record` | `till_session` | — | [`crates/pos-edge/src/http/custom_data.rs`](../../crates/pos-edge/src/http/custom_data.rs) |
+| POST | `/api/custom-records/{id}/values` | `change_custom_record` | `till_session` | `data.record.write` | [`crates/pos-edge/src/http/custom_data.rs`](../../crates/pos-edge/src/http/custom_data.rs) |
 | POST | `/api/drawer/open` | `open_drawer` | `till_session` | `cash.drawer.open_no_sale`, `cash.drawer.override_assignment` | [`crates/pos-edge/src/http/cash_movements.rs`](../../crates/pos-edge/src/http/cash_movements.rs) |
 | GET | `/api/floor` | `floor_plan` | `till_session` | — | [`crates/pos-edge/src/http/floor.rs`](../../crates/pos-edge/src/http/floor.rs) |
 | GET | `/api/integrations` | `list_integrations` | `till_session` | — | [`crates/pos-edge/src/http/integrations.rs`](../../crates/pos-edge/src/http/integrations.rs) |
@@ -80,6 +86,7 @@ From [`docs/openapi-edge.json`](../openapi-edge.json).
 | POST | `/api/shifts:batch_close` | `batch_close_shifts` | `till_session` | `cash.shift.close`, `cash.shift.manage_other_till`, `cash.drawer.override_assignment` | [`crates/pos-edge/src/http/shifts.rs`](../../crates/pos-edge/src/http/shifts.rs) |
 | POST | `/api/shifts:print_x` | `print_x` | `till_session` | `reports.takings.view`, `reports.shift.read_x` | [`crates/pos-edge/src/http/shift_x.rs`](../../crates/pos-edge/src/http/shift_x.rs) |
 | GET | `/api/shifts:x` | `store_x` | `till_session` | `reports.takings.view`, `reports.shift.read_x` | [`crates/pos-edge/src/http/shift_x.rs`](../../crates/pos-edge/src/http/shift_x.rs) |
+| GET | `/api/subjects/{subject_id}` | `read_subject` | `till_session` | `data.personal.read` | [`crates/pos-edge/src/http/custom_data.rs`](../../crates/pos-edge/src/http/custom_data.rs) |
 | GET | `/api/sync` | `sync_status` | `till_session` | — | [`crates/pos-edge/src/http/sync.rs`](../../crates/pos-edge/src/http/sync.rs) |
 | GET | `/api/tables/{id}` | `table_state` | `till_session` | — | [`crates/pos-edge/src/http/tables.rs`](../../crates/pos-edge/src/http/tables.rs) |
 | POST | `/api/tables/{id}/bill` | `open_table_bill` | `till_session` | `billing.bill.open` | [`crates/pos-edge/src/http/bills.rs`](../../crates/pos-edge/src/http/bills.rs) |

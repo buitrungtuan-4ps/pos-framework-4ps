@@ -302,3 +302,80 @@ async fn a_restarted_edge_holds_the_same_records() {
     assert_eq!(restarted.custom_record(id), Some(saved.clone()));
     assert_eq!(restarted.custom_records(reservation(), 10), vec![saved]);
 }
+
+#[tokio::test]
+async fn a_subject_is_read_back_only_with_data_personal_read() {
+    let edge = edge_over(FakeStore::default());
+    let saved = edge
+        .save_custom_record(
+            actor(),
+            reservation(),
+            None,
+            &entries(4, Some("demo note")),
+            &consent(),
+        )
+        .await
+        .expect("saves");
+    let subject_id = saved.subject_id.expect("a subject");
+
+    let read = edge.read_subject(actor(), subject_id).await.expect("reads");
+    let fields = read.map(|record| record.fields).unwrap_or_default();
+    assert_eq!(fields.get(CONTACT).map(String::as_str), Some("demo note"));
+
+    let mut session = (*edge.session()).clone();
+    session.granted = PermissionSet::EMPTY.with(pos_core::permission::Permission::WriteDataRecord);
+    edge.apply_session(session);
+    let denied = edge.read_subject(actor(), subject_id).await;
+    assert!(
+        matches!(denied, Err(AppError::Domain(_))),
+        "entering a personal value does not let the person read it back"
+    );
+    edge.save_custom_record(
+        actor(),
+        reservation(),
+        None,
+        &entries(2, Some("another")),
+        &consent(),
+    )
+    .await
+    .expect("entering still works without data.personal.read");
+}
+
+#[tokio::test]
+async fn concurrent_first_writes_to_one_order_share_one_subject() {
+    let mut data = package();
+    let mut note = data.data.object_types[0].fields[1].clone();
+    note.object = pos_proto::Open::from_known(DataObject::Order);
+    data.data.custom_fields.push(note);
+    let mut session = EdgeSession::bootstrap();
+    session.package = Some(Arc::new(data));
+    let edge = Arc::new(
+        Edge::new(
+            FakeStore::default(),
+            identity(),
+            session,
+            Arc::new(InMemoryReceipts::new()),
+        )
+        .expect("seeds"),
+    );
+    let order_id = a_counter_order(&edge).await.as_ulid();
+    let write = |text: &'static str| {
+        let edge = Arc::clone(&edge);
+        async move {
+            let entry = [Entry {
+                custom_field_id: field(CONTACT),
+                value: EnteredValue::Text(PersonalText::new(text)),
+            }];
+            edge.set_custom_fields(actor(), DataObject::Order, order_id, &entry, &consent())
+                .await
+                .expect("sets")
+                .subject_id
+        }
+    };
+    let (first, second) = tokio::join!(write("demo a"), write("demo b"));
+    assert!(first.is_some());
+    assert_eq!(
+        first, second,
+        "the second write found the first one's subject"
+    );
+}

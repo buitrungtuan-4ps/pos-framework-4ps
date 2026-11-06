@@ -30,6 +30,8 @@ const ADD_LINE: &[&str] = &["sales.line.add"];
 const MANAGE_TABLES: &[&str] = &["sales.table.manage"];
 /// Opening a bill, and printing the check of what is on it.
 const OPEN_BILL: &[&str] = &["billing.bill.open"];
+/// Entering custom records and custom field values (ADR-0206 decision 7).
+const DATA_RECORD_WRITE: &[&str] = &["data.record.write"];
 /// Pairing and terminals.
 const MANAGE_DEVICES: &[&str] = &["admin.device.manage"];
 /// A cash movement into or out of a drawer, somebody else's with the override.
@@ -626,6 +628,56 @@ pub const CATALOGUE: &[Action] = &[
         routes: &["POST /api/printers/{id}/test"],
         permissions: MANAGE_DEVICES,
         summary: "Print a test page on a printer",
+        ..BASE
+    },
+    // ---- Custom data (ADR-0194, ADR-0206) ----
+    // Each takes its values as a person enters them on the act's own screen, so a package never
+    // binds them and a reaction cannot fill in a custom value, personal or not.
+    Action {
+        action_id: "data.custom_field.set",
+        effect: EdgeWrite,
+        frequency: Rare,
+        params: &[
+            required("object", Token),
+            required("object_id", Id),
+            required("values", Entered),
+        ],
+        routes: &["POST /api/custom-fields"],
+        permissions: &[
+            "data.record.write",
+            "sales.line.add",
+            "billing.bill.open",
+            "sales.table.manage",
+            "cash.shift.open",
+        ],
+        refusals: &["UNKNOWN_OBJECT", "CUSTOM_ENTRY_REFUSED"],
+        summary: "Set custom fields on an order, line, bill, table or shift",
+        ..BASE
+    },
+    Action {
+        action_id: "data.custom_record.create",
+        effect: EdgeWrite,
+        frequency: Rare,
+        params: &[required("object_type_id", Id), required("values", Entered)],
+        routes: &["POST /api/custom-records"],
+        permissions: DATA_RECORD_WRITE,
+        refusals: &["CUSTOM_ENTRY_REFUSED"],
+        summary: "Create a record of a package's object type",
+        ..BASE
+    },
+    Action {
+        action_id: "data.custom_record.change",
+        effect: EdgeWrite,
+        frequency: Rare,
+        params: &[
+            required("custom_record_id", Id),
+            required("object_type_id", Id),
+            required("values", Entered),
+        ],
+        routes: &["POST /api/custom-records/{id}/values"],
+        permissions: DATA_RECORD_WRITE,
+        refusals: &["UNKNOWN_CUSTOM_RECORD", "CUSTOM_ENTRY_REFUSED"],
+        summary: "Change a custom record's values",
         ..BASE
     },
 ];
