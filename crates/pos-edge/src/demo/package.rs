@@ -21,6 +21,10 @@ fn guests_required() -> bool {
 /// A package version, locked, whose `dine_in` flow asks the guest count as a required step before a
 /// table's first line, which the edge re-checks from the order's own count (ADR-0192 decision 4).
 /// Fake ids; published as JSON, as the floor is, so it goes through the checks a cloud's node does.
+///
+/// Its minimum edge release is this binary's own: a build nobody stamped is release `0.0.0`
+/// ([`crate::version`]), as the browser gate's is, and a fixed minimum above that refused the
+/// version on apply, so the store ran the default package and the till never asked for the count.
 fn guests_required_package() -> serde_json::Value {
     let version = Ulid::from_u128(401).to_string();
     serde_json::json!({
@@ -30,7 +34,7 @@ fn guests_required_package() -> serde_json::Value {
             "package_id": Ulid::from_u128(400).to_string(),
             "package_version_id": version,
             "version_label": "Demo: guest count required",
-            "min_edge_version": "0.0.1",
+            "min_edge_version": crate::version::VERSION,
             "flows": [{ "body": {
                 "flow_id": "dine_in",
                 "start_action_id": "sales.table.seat",
@@ -58,5 +62,31 @@ fn guests_required_package() -> serde_json::Value {
 pub(super) fn publish_on_its_profile(document: &mut serde_json::Value) {
     if let Some(object) = document.as_object_mut().filter(|_| guests_required()) {
         object.insert("package".to_owned(), guests_required_package());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The profile's version runs on this binary, stamped or not: applied, it is the store's
+    /// package, with its flow.
+    #[test]
+    fn the_profiles_version_runs_on_any_build() {
+        let mut document = serde_json::json!({});
+        if let Some(object) = document.as_object_mut() {
+            object.insert("package".to_owned(), super::guests_required_package());
+        }
+        for release in ["0.0.0", "0.14.1"] {
+            let edge = pos_core::ota::ReleaseVersion::parse(release);
+            let mut stamped = document.clone();
+            stamped["package"]["content"]["min_edge_version"] = serde_json::json!(release);
+            let content = crate::config_client::checked_package(&stamped, edge)
+                .expect("runs here")
+                .expect("a package");
+            assert_eq!(content.flows.len(), 1, "{release}");
+        }
+        assert_eq!(
+            document["package"]["content"]["min_edge_version"],
+            crate::version::VERSION
+        );
     }
 }
