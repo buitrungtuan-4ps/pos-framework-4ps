@@ -283,6 +283,9 @@ pub struct Edge<S> {
     package: PackageStanding,
     /// How configuration reaches the store and how fast (ADR-0195).
     config_wake: ConfigWakeStanding,
+    /// The tenant's translation grid, pulled whole beside the configuration (ADR-0043). Empty until
+    /// a pull or the copy kept on disk lands.
+    labels: RwLock<Arc<crate::labels::LabelGrid>>,
 }
 
 /// What [`Edge::open_inbound_order`] opened, and the one acceptance fact the caller must not work

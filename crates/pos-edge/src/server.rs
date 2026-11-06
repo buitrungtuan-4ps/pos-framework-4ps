@@ -994,6 +994,7 @@ where
                 origins: &origins,
                 revocations: &revocations,
                 backup,
+                grid_file: state_dir.join(crate::grid_client::GRID_FILE_NAME),
             },
             nats.as_ref(),
             Lifecycle {
@@ -1131,6 +1132,8 @@ struct CloudWiring<'a, S, Q, L, P> {
     origins: &'a Arc<crate::origins::Origins>,
     revocations: &'a Arc<DeviceRevocations>,
     backup: Option<BackupPlan>,
+    /// Where the store keeps its copy of the tenant's translation grid (ADR-0043).
+    grid_file: std::path::PathBuf,
 }
 
 /// Composes the cloud surface onto `app` for a store that has a `cloud_url` (ADR-0086): the vault

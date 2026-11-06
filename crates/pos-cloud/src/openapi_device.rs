@@ -50,6 +50,7 @@ use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorResponse};
     ),
     paths(
         crate::http::edge_config_sync,
+        crate::http::serve_store_grid,
         crate::http::edge_heartbeat,
         crate::http::edge_publish_events,
         crate::http::edge_events_hello,
@@ -71,8 +72,9 @@ use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorResponse};
     modifiers(&DeviceCredential),
     tags(
         (name = "configuration", description = "The store's published configuration, pulled as \
-                                                a snapshot or a delta, and its liveness heartbeat \
-                                                (ADR-0039, ADR-0068)."),
+                                                a snapshot or a delta, its tenant's translation \
+                                                grid, pulled whole, and its liveness heartbeat \
+                                                (ADR-0039, ADR-0043, ADR-0068)."),
         (name = "events", description = "The store's own events, published over HTTPS after a \
                                          protocol hello, and the reconciliation that finds what \
                                          the cloud is missing (ADR-0143, ADR-0024, ADR-0078)."),

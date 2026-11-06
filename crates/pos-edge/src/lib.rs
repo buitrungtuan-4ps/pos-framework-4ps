@@ -51,6 +51,7 @@ pub mod discovery;
 pub mod drain_status;
 pub mod error;
 pub mod event_publish;
+pub mod grid_client;
 pub mod heartbeat_client;
 pub mod http;
 pub mod installer;
@@ -74,8 +75,8 @@ pub mod version;
 // Moved into pos-edge-app (ADR-0170 decision 4); re-exported under their old paths, so
 // `crate::app`, `pos_edge::auth` and the rest resolve as before.
 pub use pos_edge_app::{
-    app, auth, clock, durable_auth, fanout, idgen, lease_state, line_notes, queue, receipt, sntp,
-    sync_status,
+    app, auth, clock, durable_auth, fanout, idgen, labels, lease_state, line_notes, queue, receipt,
+    sntp, sync_status,
 };
 // Moved into pos-edge-printing, and re-exported the same way.
 pub use pos_edge_printing::{paper_labels, print_agent, print_queue, print_wake, printing};

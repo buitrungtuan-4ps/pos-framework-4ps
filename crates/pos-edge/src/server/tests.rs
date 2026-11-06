@@ -225,6 +225,7 @@ async fn surface_over(
             origins: &origins,
             revocations: &revocations,
             backup,
+            grid_file: state_dir.join("translations-test.json"),
         },
         None,
         super::Lifecycle {

@@ -7,6 +7,7 @@
 //! decision 6). Read-only: a store's package is chosen in the console, never here (roadmap-v3
 //! D18), so this is what the edge's diagnostics show (B7.5).
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::Json;
@@ -53,6 +54,11 @@ pub(crate) struct RunningPackage {
     /// a reaction sends as any other. Left out when the version has none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     reactions: Vec<Variant<Reaction>>,
+    /// The tenant's labels for the translation keys this version names, `key → { locale → text }`,
+    /// from the grid the store pulled (ADR-0043): every key with `en`. A key the grid lacks is not
+    /// here. Left out when there are none.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    labels: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 /// A configuration refused for its package; the store kept the one before it.
@@ -85,6 +91,7 @@ pub(crate) async fn package_standing<S>(State(edge): State<Arc<Edge<S>>>) -> Res
 where
     S: EventStore + Send + Sync + 'static,
 {
+    let grid = edge.label_grid();
     let running = edge
         .session()
         .package
@@ -95,6 +102,16 @@ where
             min_edge_version: content.min_edge_version.to_string(),
             flows: content.flows.clone(),
             reactions: content.reactions.clone(),
+            labels: if grid.is_empty() {
+                BTreeMap::new()
+            } else {
+                let mut named = Vec::new();
+                strings_in(
+                    &serde_json::to_value(content.as_ref()).unwrap_or_default(),
+                    &mut named,
+                );
+                grid.subset(named.iter().map(String::as_str))
+            },
         });
     let refused = edge
         .package_standing()
@@ -105,6 +122,18 @@ where
             reason: refused.refusal.reason(),
         });
     (StatusCode::OK, Json(PackageResponse { running, refused })).into_response()
+}
+
+/// Every string `value` holds, at any depth: what a version can name a translation key with.
+fn strings_in(value: &serde_json::Value, found: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(text) => found.push(text.clone()),
+        serde_json::Value::Array(items) => items.iter().for_each(|item| strings_in(item, found)),
+        serde_json::Value::Object(fields) => {
+            fields.values().for_each(|field| strings_in(field, found));
+        }
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {}
+    }
 }
 
 #[cfg(test)]
@@ -251,5 +280,44 @@ mod tests {
         let answer = body(edge).await;
         assert_eq!(answer["running"]["reactions"], reactions);
         assert!(answer["running"].get("flows").is_none());
+    }
+
+    /// A store holding its tenant's grid answers the labels of the keys the version names, and no
+    /// other.
+    #[tokio::test]
+    async fn the_route_answers_the_labels_the_version_names() {
+        let mut session = EdgeSession::bootstrap();
+        session.package = Some(Arc::new(
+            serde_json::from_value::<PackageContent>(serde_json::json!({
+                "package_id": "01J00000000000000000000P01",
+                "package_version_id": V1,
+                "version_label": "March",
+                "min_edge_version": "0.14.1",
+                "data": {"object_types": [{"object_type_id": "01J00000000000000000000B01",
+                    "label_key": "data.reservation", "fields": []}]},
+            }))
+            .expect("content"),
+        ));
+        let edge = Arc::new(
+            Edge::new(
+                FakeStore::default(),
+                StoreIdentity::for_store(pos_proto::ids::StoreId::new(
+                    pos_proto::ulid::Ulid::from_u128(7),
+                )),
+                session,
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("an edge"),
+        );
+        let grid = serde_json::from_value(serde_json::json!({
+            "data.reservation": {"en": "Reservation", "vi": "Đặt bàn"},
+            "menu.item.unused": {"en": "Not named by the version"},
+        }))
+        .expect("a grid");
+        edge.apply_grid(crate::labels::LabelGrid::bounded(grid).expect("within bounds"));
+        assert_eq!(
+            body(edge).await["running"]["labels"],
+            serde_json::json!({"data.reservation": {"en": "Reservation", "vi": "Đặt bàn"}})
+        );
     }
 }

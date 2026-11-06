@@ -63,6 +63,26 @@ impl<S> Edge<S> {
             .expect("session lock is not poisoned") = Arc::new(session);
     }
 
+    /// Holds `grid` as the tenant's translation grid (ADR-0043), replacing the one held.
+    pub fn apply_grid(&self, grid: crate::labels::LabelGrid) {
+        *self
+            .labels
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::new(grid);
+    }
+
+    /// The tenant's translation grid as this store holds it: empty until one is pulled or read
+    /// back from disk.
+    #[must_use]
+    pub fn label_grid(&self) -> Arc<crate::labels::LabelGrid> {
+        Arc::clone(
+            &self
+                .labels
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+
     /// The lease standing this box is acting on
     /// ([ADR-0123](../../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)).
     ///
@@ -152,6 +172,7 @@ impl<S: EventStore> Edge<S> {
             pin_lockout: Arc::new(Lockout::new()),
             package: PackageStanding::default(),
             config_wake: ConfigWakeStanding::default(),
+            labels: RwLock::new(Arc::new(crate::labels::LabelGrid::default())),
         })
     }
 

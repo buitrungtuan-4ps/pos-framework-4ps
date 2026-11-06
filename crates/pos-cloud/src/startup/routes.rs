@@ -232,6 +232,12 @@ fn device_routes(deps: &RouteDeps<'_>) -> Router {
             SystemClock,
             Arc::clone(audit),
         ))
+        // A store pulls its tenant's grid whole beside its config, behind its own key (ADR-0043).
+        .merge(http::store_grid_router(
+            store.api_keys(),
+            SystemClock,
+            store.translations(),
+        ))
         // A named cell issues codes with its id as their prefix, and answers a prefix naming
         // another cell from its directory (ADR-0181).
         .merge(pos_cloud_devices::routes::activation_router_in_cell(

@@ -19,8 +19,8 @@ use super::{
 };
 use crate::app::Edge;
 use crate::cloud_http::{
-    CloudHttpClient, ConfigHttpTransport, HeartbeatHttpTransport, OtaHttpTransport,
-    RelayHttpTransport,
+    CloudHttpClient, ConfigHttpTransport, GridHttpTransport, HeartbeatHttpTransport,
+    OtaHttpTransport, RelayHttpTransport,
 };
 use crate::config_client::ConfigClient;
 use crate::device_revocations::DeviceRevocations;
@@ -73,6 +73,7 @@ where
         origins,
         revocations,
         backup,
+        grid_file,
     } = wiring;
     let client = sync_client(cloud_url, cloud_roots, sync_key)?;
     let config_client = config_client(
@@ -92,6 +93,18 @@ where
     };
     let heartbeat = spawn_heartbeat(&client, store_id, edge, lease, agents, shutdown_rx, drained);
     spawn_relay(&client, store_id, edge, queue, shutdown_rx);
+    // The tenant's labels, pulled whole beside the configuration (ADR-0043).
+    tokio::spawn(
+        crate::grid_client::GridClient::new(
+            GridHttpTransport::new(client.clone(), store_id),
+            Arc::clone(edge),
+            grid_file,
+        )
+        .run(
+            crate::grid_client::GRID_POLL_INTERVAL,
+            wait_for_shutdown(shutdown_rx.clone()),
+        ),
+    );
     if let Some(plan) = backup {
         spawn_archiver(&client, store_id, edge, plan, shutdown_rx);
     }
