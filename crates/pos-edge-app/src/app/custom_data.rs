@@ -95,6 +95,7 @@ impl<S: EventStore + SubjectStore> Edge<S> {
         let ctx = self.decision_ctx(actor)?;
         ctx.require(Permission::WriteDataRecord)?;
         ctx.require(object_permission(object))?;
+        let _serialised = self.custom_writes.lock().await;
         if !self.knows_object(object, object_id) {
             return Err(AppError::UnknownObject);
         }
@@ -145,6 +146,7 @@ impl<S: EventStore + SubjectStore> Edge<S> {
     ) -> Result<CustomDataView, AppError> {
         let ctx = self.decision_ctx(actor)?;
         ctx.require(Permission::WriteDataRecord)?;
+        let _serialised = self.custom_writes.lock().await;
         let held = match custom_record_id {
             Some(id) => {
                 let projection = self.lock_projection();
@@ -215,6 +217,36 @@ impl<S: EventStore + SubjectStore> Edge<S> {
             .iter()
             .map(|(id, held)| CustomDataView::of(Some((*id, object_type_id)), held))
             .collect()
+    }
+
+    /// One subject's record, for a person holding `data.personal.read` (ADR-0206 decision 5): on
+    /// a till, to show a saved personal value again, or to answer an access request. There is no
+    /// list and no search.
+    ///
+    /// Every call writes an audit entry: a line with the target `audit` naming the person, the
+    /// device, the subject and the action, never a value. It is in the store's own log only, and
+    /// is not sent to the cloud.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::Domain`] without `data.personal.read`, or [`AppError::Port`] if the store cannot
+    /// be read.
+    pub async fn read_subject(
+        &self,
+        actor: Actor,
+        subject_id: SubjectId,
+    ) -> Result<Option<SubjectRecord>, AppError> {
+        let ctx = self.decision_ctx(actor)?;
+        ctx.require(Permission::ReadPersonalData)?;
+        tracing::info!(
+            target: "audit",
+            action = "data.subject.read",
+            employee_id = %actor.employee_id,
+            device_id = %actor.device_id,
+            subject_id = %subject_id,
+            "a subject was read"
+        );
+        Ok(self.store.fetch(self.identity.store_id, subject_id).await?)
     }
 
     /// The package the store runs, whose declarations an entry follows.

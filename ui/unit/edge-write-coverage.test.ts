@@ -16,6 +16,9 @@ const EXEMPT: Readonly<Record<string, string>> = {
   "admin.print_agent.claim": "store administration on Devices: which terminal is held is the edge's to say",
   "admin.print_agent.revoke": "store administration on Devices: which terminal is held is the edge's to say",
   "admin.printer.test": "store administration on Devices: the test page's outcome is the printer's to say",
+  "data.custom_field.set": "no till screen sends it yet: the custom-data form is the next change (ADR-0206)",
+  "data.custom_record.create": "no till screen sends it yet: the custom-data form is the next change (ADR-0206)",
+  "data.custom_record.change": "no till screen sends it yet: the custom-data form is the next change (ADR-0206)",
 };
 
 // The till's own source as text, the generated API types left out.

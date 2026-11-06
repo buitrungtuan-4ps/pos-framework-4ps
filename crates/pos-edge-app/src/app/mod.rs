@@ -286,6 +286,9 @@ pub struct Edge<S> {
     /// The tenant's translation grid, pulled whole beside the configuration (ADR-0043). Empty until
     /// a pull or the copy kept on disk lands.
     labels: RwLock<Arc<crate::labels::LabelGrid>>,
+    /// Held by a custom-data write from reading the object's subject to folding its event, so two
+    /// writes to one object cannot each start a subject for it (ADR-0206).
+    custom_writes: tokio::sync::Mutex<()>,
 }
 
 /// What [`Edge::open_inbound_order`] opened, and the one acceptance fact the caller must not work
