@@ -589,7 +589,7 @@ test("a send whose answer is lost is read again, and the lines show fired, sent 
     await expect(page.locator('[data-outcome="line-fired"]')).toHaveCount(1);
     await expect(page.locator('[data-outcome="line-sending"]')).toHaveCount(0);
     await expect(page.locator('[data-outcome="line-unsent"]')).toHaveCount(0);
-    expect(fires).toBe(1);
+    await expect.poll(() => fires).toBe(1);
   } finally {
     await edge.stop();
   }
@@ -1985,7 +1985,7 @@ test("a dish marked sold out shows at once, a refusal puts it back, a lost answe
     await expect(page.locator('[data-outcome="item-sold-out"]')).toHaveCount(0);
     // The request leaves after the frame that shows the change (ADR-0208), and only once.
     await answerLost;
-    expect(restores).toBe(1);
+    await expect.poll(() => restores).toBe(1);
   } finally {
     await edge.stop();
   }
@@ -2018,7 +2018,10 @@ test("a table cleared shows free at once, and a lost or unsent clean is read aga
     });
     await card.click();
     await expect(card).toContainText("Free");
-    expect(cleans).toBe(1);
+    // The request leaves after the frame that paints the change (ADR-0208), so it is counted once
+    // it has left, and the floor is read again after its answer is lost.
+    await expect.poll(() => cleans).toBe(1);
+    await expect(card).toContainText("Free");
   } finally {
     await edge.stop();
   }
@@ -2051,7 +2054,7 @@ test("a table given back shows free at once, a refusal keeps it seated, a lost a
     await release.click();
     await navigateTo(page, "/");
     await expect(page.locator('[data-step="onCard"]', { hasText: "Table 1" })).toContainText("Free");
-    expect(releases).toBe(1);
+    await expect.poll(() => releases).toBe(1);
   } finally {
     await edge.stop();
   }
@@ -2084,7 +2087,7 @@ test("a bill opened whose answer is lost is read again, and is not opened twice"
     await page.locator('[data-step="onCard"]', { hasText: "Table 1" }).click();
     await page.locator('[data-step="takePayment"]').click();
     await expect(page.locator('[data-step="payCash"]')).toBeEnabled();
-    expect(opens).toBe(1);
+    await expect.poll(() => opens).toBe(1);
   } finally {
     await edge.stop();
   }
@@ -2221,7 +2224,7 @@ test("a pre-bill says it is printing at once, holds no payment, a refusal says w
     });
     await button.click();
     await expect(page.getByRole("alert").first()).toContainText("The print is not confirmed");
-    expect(prints).toBe(1);
+    await expect.poll(() => prints).toBe(1);
   } finally {
     await edge.stop();
   }
@@ -2245,7 +2248,7 @@ test("a receipt copy whose answer is lost is said not confirmed, and the edge's 
     });
     await page.locator('[data-step="printAgain"]').click();
     await expect(page.getByRole("alert").first()).toContainText("The print is not confirmed");
-    expect(reprints).toBe(1);
+    await expect.poll(() => reprints).toBe(1);
     await page.unroute("**/receipt/reprint");
 
     await navigateTo(page, "/today");
@@ -3523,7 +3526,7 @@ test("a guest's order confirmed or refused leaves the queue at once, and a refus
     await expect(cards).toHaveCount(1);
     answer();
     await expect(cards).toHaveCount(1);
-    expect(confirms).toBe(1);
+    await expect.poll(() => confirms).toBe(1);
 
     // A refusal (to the kitchen) whose answer never came back from a store that made it: the order
     // comes back for a moment, and the queue's read takes it off again. Sent once.
@@ -3536,7 +3539,9 @@ test("a guest's order confirmed or refused leaves the queue at once, and a refus
     await cards.first().getByRole("button", { name: "Refuse" }).click();
     await page.getByRole("button", { name: "Kitchen closed" }).click();
     await expect(page.getByText("No guest orders are waiting.")).toBeVisible();
-    expect(rejects).toBe(1);
+    // The request leaves after the frame that paints the change (ADR-0208).
+    await expect.poll(() => rejects).toBe(1);
+    await expect(page.getByText("No guest orders are waiting.")).toBeVisible();
   } finally {
     await edge.stop();
   }
@@ -3576,7 +3581,7 @@ test("a ticket bumped leaves the board at once, a refusal brings it back, a lost
     await ticket.click();
     await expect(board.locator('[data-outcome="kds-bump-refused"]')).toBeVisible();
     await expect(ticket).toHaveCount(0);
-    expect(bumps).toBe(1);
+    await expect.poll(() => bumps).toBe(1);
   } finally {
     await edge.stop();
   }
@@ -4268,10 +4273,10 @@ test("a new counter order is opened by its first item, and leaving before then l
     await startWalkIn(page);
     await addItem(page);
     await expect(page).toHaveURL(/\/order\/[0-9A-Z]{26}$/);
-    expect(opened).toBe(1);
+    await expect.poll(() => opened).toBe(1);
     await addItem(page);
     await expect(page.locator('[data-outcome="line-added"]')).toHaveCount(2);
-    expect(opened).toBe(1);
+    await expect.poll(() => opened).toBe(1);
     await sendOrder(page);
     await page.locator('a[href="/counter"]').first().click();
     await expect(page.locator('[data-step="charge"]')).toHaveCount(1);
@@ -5844,7 +5849,7 @@ test("a start and a batch close from the list whose answers are lost are checked
     await expect(page.locator('[data-outcome="close-pending"]')).toBeVisible();
     await expect(page.locator('[data-outcome="drawers-closed-unread"]')).toContainText("read it on the shift's report");
     await expect(drawerRow(page, "Bar till")).toContainText("Closed");
-    expect(closes).toBe(1);
+    await expect.poll(() => closes).toBe(1);
   } finally {
     await edge.stop();
   }
@@ -5904,7 +5909,7 @@ test("a handover whose answers are lost goes on with the edge's count, never re-
     });
     await page.locator('[data-step="handOut"]').click();
     await expect(page.locator('[data-outcome="handover-closed"]')).toContainText("90,000₫");
-    expect(sent).toBe(1);
+    await expect.poll(() => sent).toBe(1);
 
     let opens = 0;
     await page.route("**/api/shifts", async (route) => {
@@ -5923,7 +5928,7 @@ test("a handover whose answers are lost goes on with the edge's count, never re-
     await page.locator('[data-step="handIn"]').click();
     await expect(page.locator('[data-outcome="open-pending"]')).toBeVisible();
     await expect(page.locator('[data-outcome="handover-done"]')).toContainText("0₫");
-    expect(opens).toBe(1);
+    await expect.poll(() => opens).toBe(1);
   } finally {
     await edge.stop();
   }
@@ -6835,7 +6840,7 @@ test("a double tap on Send or on a tender sends one request, and the button says
     await expect(page.locator('[data-outcome="settle-pending"]')).toContainText("Taking payment…");
     settle.release();
     await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
-    expect(settles).toBe(1);
+    await expect.poll(() => settles).toBe(1);
   } finally {
     await edge.stop();
   }
@@ -6995,7 +7000,7 @@ test("the cash keys wait for the amount, and a tap before it sends nothing", asy
     await page.locator('[data-step="setTender"]').first().click();
     await page.locator('[data-step="payCash"]').click();
     await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
-    expect(settles).toBe(1);
+    await expect.poll(() => settles).toBe(1);
   } finally {
     await edge.stop();
   }
@@ -7557,7 +7562,7 @@ test("a drawer opening with no answer is said unconfirmed, never sent again", as
       "The drawer opening is not confirmed: check the drawer before opening it again.",
     );
     await page.locator('[data-step="dismissRefusal"]').click();
-    expect(opens).toBe(1);
+    await expect.poll(() => opens).toBe(1);
     await expect(page.locator('[data-outcome="drawer-opened"]')).toHaveCount(0);
   } finally {
     await edge.stop();
