@@ -134,6 +134,24 @@ page_header	device_class=DEVICE_CLASS_TABLET
 page_header	device_class=DEVICE_CLASS_TERMINAL
 page_header	property=title_key:PROPERTY_KIND_TRANSLATION_KEY:required
 page_header	since=0.14.1
+pay_back
+pay_back	children=false
+pay_back	device_class=DEVICE_CLASS_KIOSK
+pay_back	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+pay_back	device_class=DEVICE_CLASS_PHONE
+pay_back	device_class=DEVICE_CLASS_TABLET
+pay_back	device_class=DEVICE_CLASS_TERMINAL
+pay_back	reads=bill
+pay_back	since=0.14.1
+pay_flow
+pay_flow	children=false
+pay_flow	device_class=DEVICE_CLASS_KIOSK
+pay_flow	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+pay_flow	device_class=DEVICE_CLASS_PHONE
+pay_flow	device_class=DEVICE_CLASS_TABLET
+pay_flow	device_class=DEVICE_CLASS_TERMINAL
+pay_flow	reads=bill
+pay_flow	since=0.14.1
 screen_frame
 screen_frame	children=true
 screen_frame	device_class=DEVICE_CLASS_KIOSK
@@ -141,6 +159,9 @@ screen_frame	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
 screen_frame	device_class=DEVICE_CLASS_PHONE
 screen_frame	device_class=DEVICE_CLASS_TABLET
 screen_frame	device_class=DEVICE_CLASS_TERMINAL
+screen_frame	property=width:PROPERTY_KIND_TOKEN:optional
+screen_frame	property=width:token=full
+screen_frame	property=width:token=narrow
 screen_frame	since=0.14.1
 stack
 stack	children=true

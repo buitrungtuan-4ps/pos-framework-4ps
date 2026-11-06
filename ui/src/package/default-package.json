@@ -62,6 +62,25 @@
           ]
         }
       }
+    },
+    {
+      "body": {
+        "screen_id": "pay",
+        "root": {
+          "component_id": "screen_frame",
+          "properties": {
+            "width": "narrow"
+          },
+          "children": [
+            {
+              "component_id": "pay_back"
+            },
+            {
+              "component_id": "pay_flow"
+            }
+          ]
+        }
+      }
     }
   ]
 }
