@@ -22,7 +22,7 @@ serde_json.workspace = true
 # reconnection) is the "genuinely hard and general" infrastructure ADR-0007 says to buy, and the link
 # is load-bearing — every sale eventually travels it — so this is the one adapter that carries a real
 # client dependency.
-async-nats = "0.50"
+async-nats = "0.51"
 # The consumer iterates a JetStream batch, which async-nats delivers as a `Stream`; `StreamExt::next`
 # drives it. Already in the tree via the async stack; no new version.
 futures-util = "0.3"
