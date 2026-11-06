@@ -2,9 +2,10 @@ import { Show, createSignal } from "solid-js";
 import { useNavigate, useSearchParams } from "@solidjs/router";
 
 import { ApiError, api } from "../api/client";
-import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { errorMessage } from "../lib/errors";
+import { RegionsContext, type Regions } from "../package/regions";
+import { NO_ACTS, PackageScreen } from "../package/screen";
 
 // What a refused code tells the operator. The edge answers `403` for a code that is wrong, spent or
 // expired, alike on purpose (ADR-0030), and `429` after too many wrong ones. Both used to reach the
@@ -47,50 +48,48 @@ export function Pairing() {
     }
   };
 
-  return (
-    <section class="mx-auto max-w-sm p-4">
-      <PageHeader title={t("pair.title")} />
-
-      <Show
-        when={!paired()}
-        fallback={
-          <div class="rounded-token border border-line bg-surface p-4">
-            <p class="font-semibold text-ok">{t("pair.paired")}</p>
-            <p class="mt-1 text-ink-muted">{t("pair.paired_hint")}</p>
-          </div>
-        }
-      >
-        <p class="text-ink-muted">{t("pair.hint")}</p>
-        <input
-          id="pair-code"
-          inputmode="numeric"
-          maxLength={6}
-          autocomplete="one-time-code"
-          class="mt-3 w-full rounded-token border border-line bg-surface p-3 text-center text-xl tracking-[0.4em] tabular-nums"
-          value={code()}
-          onInput={(event) => setCode(event.currentTarget.value.replace(/\D/g, ""))}
-        />
-        <Show when={error()}>
-          {(message) => (
-            <p class="mt-3 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
-              {message()}
-            </p>
-          )}
-        </Show>
-        {/* Ids, not a `data-step`: pairing is not one of the selling flows the step budget measures
-            (`ui/scripts/step-tasks.mjs`), and giving it a step attribute would put it in a
-            vocabulary it is not part of. The browser harness reaches this screen by id, the way any
-            other tool would. */}
-        <button
-          id="pair-submit"
-          type="button"
-          class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
-          disabled={code().length !== 6}
-          onClick={() => void submit()}
-        >
-          {t("pair.submit")}
-        </button>
+  // The regions the default package's `pair` screen arranges (`../package/regions.tsx`).
+  const regions: Regions = {
+    pair_body: () => <Show
+      when={!paired()}
+      fallback={
+        <div class="rounded-token border border-line bg-surface p-4">
+          <p class="font-semibold text-ok">{t("pair.paired")}</p>
+          <p class="mt-1 text-ink-muted">{t("pair.paired_hint")}</p>
+        </div>
+      }
+    >
+      <p class="text-ink-muted">{t("pair.hint")}</p>
+      <input
+        id="pair-code"
+        inputmode="numeric"
+        maxLength={6}
+        autocomplete="one-time-code"
+        class="mt-3 w-full rounded-token border border-line bg-surface p-3 text-center text-xl tracking-[0.4em] tabular-nums"
+        value={code()}
+        onInput={(event) => setCode(event.currentTarget.value.replace(/\D/g, ""))}
+      />
+      <Show when={error()}>
+        {(message) => (
+          <p class="mt-3 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
+            {message()}
+          </p>
+        )}
       </Show>
-    </section>
-  );
+      {/* Ids, not a `data-step`: pairing is not one of the selling flows the step budget measures
+          (`ui/scripts/step-tasks.mjs`), and giving it a step attribute would put it in a
+          vocabulary it is not part of. The browser harness reaches this screen by id, the way any
+          other tool would. */}
+      <button
+        id="pair-submit"
+        type="button"
+        class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
+        disabled={code().length !== 6}
+        onClick={() => void submit()}
+      >
+        {t("pair.submit")}
+      </button>
+    </Show>,
+  };
+  return <RegionsContext.Provider value={regions}><PackageScreen screenId="pair" host={NO_ACTS} /></RegionsContext.Provider>;
 }

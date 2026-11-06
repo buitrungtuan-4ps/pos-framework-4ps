@@ -37,6 +37,8 @@ import { printOutcomeKey } from "../lib/print";
 import { asksApprover, can } from "../state/permissions";
 import { overrideAsks } from "../state/drawer-access";
 import { EMPTY_COUNT, fieldAmount } from "../state/cash-count";
+import { RegionsContext, type Regions } from "../package/regions";
+import { NO_ACTS, PackageScreen } from "../package/screen";
 
 // The reason list's three acts for the drawer (ADR-0115), as `/api/reason-codes` spells them.
 const PAID_IN = "REASON_ACTION_CASH_PAID_IN";
@@ -492,296 +494,188 @@ export function Shift() {
     return listed === undefined ? "" : drawerName(listed);
   };
 
-  return (
-    <section
-      class="mx-auto max-w-md p-4"
-      classList={{
-        "tablet:grid tablet:max-w-5xl tablet:grid-cols-2 tablet:items-start tablet:gap-6":
-          listShown(),
-      }}
-    >
-      {/* This device's own drawer, and beside it on a tablet every till's (ADR-0167). */}
-      <div>
-      <PageHeader title={t("shift.title")} />
-      <DayClosed />
+  // The regions the default package's `shift` screen arranges (`../package/regions.tsx`).
+  const regions: Regions = {
+    shift_screen: () => <>
+  <section
+    class="mx-auto max-w-md p-4"
+    classList={{
+      "tablet:grid tablet:max-w-5xl tablet:grid-cols-2 tablet:items-start tablet:gap-6":
+        listShown(),
+    }}
+  >
+    {/* This device's own drawer, and beside it on a tablet every till's (ADR-0167). */}
+    <div>
+    <PageHeader title={t("shift.title")} />
+    <DayClosed />
 
-      {/* Worded for each way, since a store may change either way and waits all the same. */}
-      <Show when={waiting()}>
-        {(model) => (
-          <p
-            class="mb-3 rounded-token border border-awaiting px-3 py-2 text-ink"
-            role="status"
-            data-outcome="model-waiting"
-          >
-            {t(
-              model() === "DRAWER_MODEL_PER_TERMINAL"
-                ? "shift.waiting_per_till"
-                : "shift.waiting_per_store",
-            )}
-          </p>
-        )}
-      </Show>
-
-      <Show when={noTill()}>
+    {/* Worded for each way, since a store may change either way and waits all the same. */}
+    <Show when={waiting()}>
+      {(model) => (
         <p
           class="mb-3 rounded-token border border-awaiting px-3 py-2 text-ink"
           role="status"
-          data-outcome="no-till"
+          data-outcome="model-waiting"
         >
-          {t("shift.not_a_till")}
+          {t(
+            model() === "DRAWER_MODEL_PER_TERMINAL"
+              ? "shift.waiting_per_till"
+              : "shift.waiting_per_store",
+          )}
         </p>
-      </Show>
+      )}
+    </Show>
 
-      <Show when={ownDrawer()?.name}>
-        {(name) => (
-          <h2 class="mb-3 font-semibold" data-outcome="own-drawer">
-            {t("shift.own_drawer", { name: name() })}
-          </h2>
-        )}
-      </Show>
-
-      <DrawerOwner own approver />
-
-      {/* Still open once the business day it opened on has ended (decision 11). */}
-      <Show when={shift()?.dayEnded === true && phase() !== "SHIFT_STATE_CLOSED"}>
-        <p
-          class="mb-3 rounded-token border border-awaiting px-3 py-2 text-ink"
-          role="status"
-          data-outcome="day-ended"
-        >
-          {t("shift.day_ended")}
-        </p>
-      </Show>
-
-      <Show when={acts.pending() ?? movements.pending()}>
-        {(out) => <PendingSettle act={out().act} phase={out().phase} amount="" onLeave={() => navigate("/")} />}
-      </Show>
-      <RefusalPanel message={acts.refusal() ?? movements.refusal()} onDismiss={() => (acts.dismiss(), movements.dismiss())} />
-      <Show when={acts.unread()}>
-        <p class="mb-3 text-sm text-ink-muted" role="status" data-outcome="shift-closed-unread">
-          {t("shift.closed_unread")}
-        </p>
-      </Show>
-      {/* After a close, its card comes first, above the next opening (UX-14). */}
-      <Show when={phase() === "SHIFT_STATE_CLOSED" && !handingOver() && shift()?.variance}>
-        {(variance) => (
-          <div data-outcome="shift-closed">
-            <ClosedCard shift={shift() ?? { shiftId: "", state: "" }} variance={variance()} />
-          </div>
-        )}
-      </Show>
-
-      <Show
-        when={
-          (phase() === "NONE" || phase() === "SHIFT_STATE_CLOSED") &&
-          !handingOver() &&
-          can("cash.shift.open") &&
-          !noTill()
-        }
+    <Show when={noTill()}>
+      <p
+        class="mb-3 rounded-token border border-awaiting px-3 py-2 text-ink"
+        role="status"
+        data-outcome="no-till"
       >
-        <CountField
-          id="float"
-          label={t("shift.float_label", { currency: storeCurrency() })}
-          text={floatText()}
-          onText={typeFloat}
-          count={counted()}
-          onCount={setCounted}
-          step="floatKeypad"
-          target={floatMinor() > 0 ? money(storeCurrency(), floatMinor()) : undefined}
-        />
-        <button
-          type="button"
-          class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
-          disabled={floatParsed() === null || ownBusy()}
-          data-step="openShift"
-          onClick={() => openShift()}
-        >
-          {t("shift.open")}
-        </button>
-      </Show>
+        {t("shift.not_a_till")}
+      </p>
+    </Show>
 
-      <Show when={phase() === "SHIFT_STATE_OPEN"}>
-        <p class="text-ink-muted" data-outcome="shift-open">
-          {t(shift()?.expected ? "shift.open_hint_not_blind" : "shift.open_hint")}
-        </p>
+    <Show when={ownDrawer()?.name}>
+      {(name) => (
+        <h2 class="mb-3 font-semibold" data-outcome="own-drawer">
+          {t("shift.own_drawer", { name: name() })}
+        </h2>
+      )}
+    </Show>
 
-        {/*
-          Cash in and out of the drawer outside a sale (ADR-0165). The amount comes first, so the
-          two taps after it are the whole act: which way, and why.
-        */}
-        <Show when={can("cash.movement.record")}>
-        <div class="mt-4 rounded-token border border-line bg-surface p-3">
-          <h2 class="font-semibold">{t("shift.cash_title")}</h2>
-          <label class="mt-2 block text-sm text-ink-muted" for="movement-amount">
-            {t("shift.cash_amount_label", { currency: storeCurrency() })}
-          </label>
-          <input
-            id="movement-amount"
-            inputmode="numeric"
-            class="mt-1 w-full rounded-token border border-line bg-surface p-3 tabular-nums"
-            value={movementAmount()}
-            onInput={(event) => setMovementAmount(event.currentTarget.value)}
-          />
-          {/* At once, with the field (UX-14): the amount is the first thing typed. */}
-          <Keypad value={movementAmount()} onChange={setMovementAmount} notes data-step="movementKeypad" />
-          <div class="mt-3 grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              class="min-h-touch rounded-token border border-line bg-surface font-semibold disabled:opacity-50"
-              classList={{ "border-primary": direction() === "in" }}
-              disabled={movementParsed() === null || reasonsFor(PAID_IN).length === 0}
-              aria-describedby="why-movement-reasons"
-              data-step="askPaidIn"
-              onClick={() => askPaidIn()}
-            >
-              {t("shift.paid_in")}
-            </button>
-            <button
-              type="button"
-              class="min-h-touch rounded-token border border-line bg-surface font-semibold disabled:opacity-50"
-              classList={{ "border-primary": direction() === "out" }}
-              disabled={movementParsed() === null || reasonsFor(PAID_OUT).length === 0}
-              aria-describedby="why-movement-reasons"
-              data-step="askPaidOut"
-              onClick={() => askPaidOut()}
-            >
-              {t("shift.paid_out")}
-            </button>
-            <SafeDrop
-              busy={ownBusy()}
-              dropped={drops()}
-              onDrop={(minor, breakdown, reasonCodeId) => {
-                const current = shift();
-                if (current) movements.drop(current.shiftId, minor, breakdown, reasonCodeId);
-              }}
-            />
-          </div>
-          <WhyUnavailable entry="reason_codes" id="why-movement-reasons" />
-          <Show when={direction()}>
-            {(way) => (
-              <>
-                <p class="mt-3 text-sm text-ink-muted">
-                  {t(way() === "in" ? "shift.paid_in_reason" : "shift.paid_out_reason")}
-                </p>
-                <div class="mt-2 grid grid-cols-2 gap-2">
-                  <For each={reasonsFor(way() === "in" ? PAID_IN : PAID_OUT)}>
-                    {(reason) => (
-                      <button
-                        type="button"
-                        class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
-                        disabled={movementParsed() === null || ownBusy()}
-                        data-step="movementReason"
-                        onClick={() => movementReason(reason.reason_code_id)}
-                      >
-                        {reason.display_name}
-                      </button>
-                    )}
-                  </For>
-                </div>
-                <button
-                  type="button"
-                  class="mt-3 min-h-touch rounded-token border border-line px-3 text-sm"
-                  onClick={() => setDirection(null)}
-                >
-                  {t("common.cancel")}
-                </button>
-              </>
-            )}
-          </Show>
-          <Show when={moved()}>
-            {(done) => (
-              <p class="mt-3 text-sm" role="status" data-outcome="cash-moved">
-                {t(done().key, { amount: formatAmount(done().amount) })}
-              </p>
-            )}
-          </Show>
-          <Show when={movementDrawer()}>
-            {(outcome) => (
-              <p
-                class="mt-1 text-sm"
-                classList={{
-                  "text-ink-muted": outcome() !== "DRAWER_UNAVAILABLE",
-                  "text-danger": outcome() === "DRAWER_UNAVAILABLE",
-                }}
-                role="status"
-                data-outcome="movement-drawer"
-              >
-                {t(drawerKey(outcome()))}
-              </p>
-            )}
-          </Show>
-          <CashTotals paidIn={shift()?.paidIn} paidOut={shift()?.paidOut} dropped={shift()?.dropped} />
+    <DrawerOwner own approver />
+
+    {/* Still open once the business day it opened on has ended (decision 11). */}
+    <Show when={shift()?.dayEnded === true && phase() !== "SHIFT_STATE_CLOSED"}>
+      <p
+        class="mb-3 rounded-token border border-awaiting px-3 py-2 text-ink"
+        role="status"
+        data-outcome="day-ended"
+      >
+        {t("shift.day_ended")}
+      </p>
+    </Show>
+
+    <Show when={acts.pending() ?? movements.pending()}>
+      {(out) => <PendingSettle act={out().act} phase={out().phase} amount="" onLeave={() => navigate("/")} />}
+    </Show>
+    <RefusalPanel message={acts.refusal() ?? movements.refusal()} onDismiss={() => (acts.dismiss(), movements.dismiss())} />
+    <Show when={acts.unread()}>
+      <p class="mb-3 text-sm text-ink-muted" role="status" data-outcome="shift-closed-unread">
+        {t("shift.closed_unread")}
+      </p>
+    </Show>
+    {/* After a close, its card comes first, above the next opening (UX-14). */}
+    <Show when={phase() === "SHIFT_STATE_CLOSED" && !handingOver() && shift()?.variance}>
+      {(variance) => (
+        <div data-outcome="shift-closed">
+          <ClosedCard shift={shift() ?? { shiftId: "", state: "" }} variance={variance()} />
         </div>
-        </Show>
+      )}
+    </Show>
 
-        <Show when={can("cash.shift.close")}>
-        <CountField
-          id="count"
-          label={t("shift.count_label", { currency: storeCurrency() })}
-          text={amount()}
-          onText={setAmount}
-          count={counted()}
-          onCount={setCounted}
-          step="countKeypad"
-        >
-          {/* Only where the store's count is not blind: a blind store is sent no expectation. */}
-          <Show when={shift()?.expected}>
-            {(expected) => (
-              <p class="mt-1 text-sm tabular-nums" data-outcome="shift-expected">
-                {t("shift.expected_now", { amount: formatAmount(expected()) })}
-              </p>
-            )}
-          </Show>
-        </CountField>
-        <button
-          type="button"
-          class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
-          disabled={parsed() === null || ownBusy()}
-          data-step="countShift"
-          onClick={() => countShift()}
-        >
-          {t("shift.enter_count")}
-        </button>
-        </Show>
-      </Show>
+    <Show
+      when={
+        (phase() === "NONE" || phase() === "SHIFT_STATE_CLOSED") &&
+        !handingOver() &&
+        can("cash.shift.open") &&
+        !noTill()
+      }
+    >
+      <CountField
+        id="float"
+        label={t("shift.float_label", { currency: storeCurrency() })}
+        text={floatText()}
+        onText={typeFloat}
+        count={counted()}
+        onCount={setCounted}
+        step="floatKeypad"
+        target={floatMinor() > 0 ? money(storeCurrency(), floatMinor()) : undefined}
+      />
+      <button
+        type="button"
+        class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
+        disabled={floatParsed() === null || ownBusy()}
+        data-step="openShift"
+        onClick={() => openShift()}
+      >
+        {t("shift.open")}
+      </button>
+    </Show>
 
-      <Show when={phase() === "SHIFT_STATE_COUNTED"}>
-        <p class="text-ink-muted" data-outcome="shift-counted">
-          {t("shift.counted_hint")}
-        </p>
-        <Show when={can("cash.shift.close")}>
-        <button
-          type="button"
-          class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
-          disabled={ownBusy()}
-          data-step="closeShift"
-          onClick={() => closeShift()}
-        >
-          {t("shift.close")}
-        </button>
-        </Show>
-        <Show when={owedHere()}>
-          {(owed) => (
-            <div class="mt-3 rounded-token border border-line bg-surface p-3" data-outcome="variance-owed">
-              <p class="font-semibold">{t("shift.variance_reason")}</p>
-              <p class="mt-1 text-sm text-ink-muted tabular-nums">
-                {t("shift.drawer_figures", {
-                  expected: amountOf(owed().expected_amount),
-                  counted: amountOf(owed().counted_amount),
-                })}
-              </p>
-              <p class="text-danger tabular-nums">
-                {t("shift.variance")} {amountOf(owed().variance)}
+    <Show when={phase() === "SHIFT_STATE_OPEN"}>
+      <p class="text-ink-muted" data-outcome="shift-open">
+        {t(shift()?.expected ? "shift.open_hint_not_blind" : "shift.open_hint")}
+      </p>
+
+      {/*
+        Cash in and out of the drawer outside a sale (ADR-0165). The amount comes first, so the
+        two taps after it are the whole act: which way, and why.
+      */}
+      <Show when={can("cash.movement.record")}>
+      <div class="mt-4 rounded-token border border-line bg-surface p-3">
+        <h2 class="font-semibold">{t("shift.cash_title")}</h2>
+        <label class="mt-2 block text-sm text-ink-muted" for="movement-amount">
+          {t("shift.cash_amount_label", { currency: storeCurrency() })}
+        </label>
+        <input
+          id="movement-amount"
+          inputmode="numeric"
+          class="mt-1 w-full rounded-token border border-line bg-surface p-3 tabular-nums"
+          value={movementAmount()}
+          onInput={(event) => setMovementAmount(event.currentTarget.value)}
+        />
+        {/* At once, with the field (UX-14): the amount is the first thing typed. */}
+        <Keypad value={movementAmount()} onChange={setMovementAmount} notes data-step="movementKeypad" />
+        <div class="mt-3 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            class="min-h-touch rounded-token border border-line bg-surface font-semibold disabled:opacity-50"
+            classList={{ "border-primary": direction() === "in" }}
+            disabled={movementParsed() === null || reasonsFor(PAID_IN).length === 0}
+            aria-describedby="why-movement-reasons"
+            data-step="askPaidIn"
+            onClick={() => askPaidIn()}
+          >
+            {t("shift.paid_in")}
+          </button>
+          <button
+            type="button"
+            class="min-h-touch rounded-token border border-line bg-surface font-semibold disabled:opacity-50"
+            classList={{ "border-primary": direction() === "out" }}
+            disabled={movementParsed() === null || reasonsFor(PAID_OUT).length === 0}
+            aria-describedby="why-movement-reasons"
+            data-step="askPaidOut"
+            onClick={() => askPaidOut()}
+          >
+            {t("shift.paid_out")}
+          </button>
+          <SafeDrop
+            busy={ownBusy()}
+            dropped={drops()}
+            onDrop={(minor, breakdown, reasonCodeId) => {
+              const current = shift();
+              if (current) movements.drop(current.shiftId, minor, breakdown, reasonCodeId);
+            }}
+          />
+        </div>
+        <WhyUnavailable entry="reason_codes" id="why-movement-reasons" />
+        <Show when={direction()}>
+          {(way) => (
+            <>
+              <p class="mt-3 text-sm text-ink-muted">
+                {t(way() === "in" ? "shift.paid_in_reason" : "shift.paid_out_reason")}
               </p>
               <div class="mt-2 grid grid-cols-2 gap-2">
-                <For each={reasonsFor(CASH_VARIANCE)}>
+                <For each={reasonsFor(way() === "in" ? PAID_IN : PAID_OUT)}>
                   {(reason) => (
                     <button
                       type="button"
                       class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
-                      disabled={ownBusy()}
-                      data-step="varianceReason"
-                      onClick={() => varianceReason(reason.reason_code_id)}
+                      disabled={movementParsed() === null || ownBusy()}
+                      data-step="movementReason"
+                      onClick={() => movementReason(reason.reason_code_id)}
                     >
                       {reason.display_name}
                     </button>
@@ -791,367 +685,479 @@ export function Shift() {
               <button
                 type="button"
                 class="mt-3 min-h-touch rounded-token border border-line px-3 text-sm"
-                onClick={() => acts.clearOwed()}
+                onClick={() => setDirection(null)}
               >
                 {t("common.cancel")}
               </button>
-            </div>
+            </>
           )}
         </Show>
-      </Show>
-
-      {/* The handover, one flow from the outgoing count to the incoming opening (ADR-0187). */}
-      <Show
-        when={
-          (phase() === "SHIFT_STATE_OPEN" || phase() === "SHIFT_STATE_COUNTED" || handingOver()) &&
-          can("cash.shift.close") &&
-          can("cash.shift.open") &&
-          !noTill()
-        }
-      >
-        <Handover />
-      </Show>
-      <ReprintSlip drawer={drawers().find((entry) => entry.shift?.shift_id === shift()?.shiftId)} />
-      <ShiftXButton />
-
-      {/*
-        The drawer opened without a sale (ADR-0165 decision 3), in every state of the shift: it moves
-        no cash, so it needs no open shift. A manager's code and PIN, then the reason.
-      */}
-      <div class="mt-6">
-        <Show
-          when={openingDrawer()}
-          fallback={
-            <Show when={can("cash.drawer.open_no_sale") && !noTill()}>
-            <button
-              type="button"
-              class="min-h-touch w-full rounded-token border border-line text-sm disabled:opacity-50"
-              disabled={reasonsFor(DRAWER_OPEN).length === 0}
-              aria-describedby="why-drawer-reasons"
-              data-step="askOpenDrawer"
-              onClick={() => askOpenDrawer()}
+        <Show when={moved()}>
+          {(done) => (
+            <p class="mt-3 text-sm" role="status" data-outcome="cash-moved">
+              {t(done().key, { amount: formatAmount(done().amount) })}
+            </p>
+          )}
+        </Show>
+        <Show when={movementDrawer()}>
+          {(outcome) => (
+            <p
+              class="mt-1 text-sm"
+              classList={{
+                "text-ink-muted": outcome() !== "DRAWER_UNAVAILABLE",
+                "text-danger": outcome() === "DRAWER_UNAVAILABLE",
+              }}
+              role="status"
+              data-outcome="movement-drawer"
             >
-              {t("shift.open_drawer")}
-            </button>
-            <WhyUnavailable entry="reason_codes" id="why-drawer-reasons" />
-            </Show>
-          }
-        >
-          <div class="rounded-token border border-line bg-surface p-3">
-            <h2 class="font-semibold">{t("shift.open_drawer_title")}</h2>
-            <Show when={drawerAsks()}>
-            <p class="mt-1 text-sm text-ink-muted">{t("shift.open_drawer_manager")}</p>
-            <ApproverFields
-              id="no-sale-approver"
-              code={approverCode()}
-              pin={approverPin()}
-              onCode={setApproverCode}
-              onPin={setApproverPin}
-              codeLabel={t("shift.approver_code")}
-              pinLabel={t("shift.approver_pin")}
-            />
-            </Show>
-            <p class="mt-3 text-sm text-ink-muted">{t("shift.open_drawer_reason")}</p>
+              {t(drawerKey(outcome()))}
+            </p>
+          )}
+        </Show>
+        <CashTotals paidIn={shift()?.paidIn} paidOut={shift()?.paidOut} dropped={shift()?.dropped} />
+      </div>
+      </Show>
+
+      <Show when={can("cash.shift.close")}>
+      <CountField
+        id="count"
+        label={t("shift.count_label", { currency: storeCurrency() })}
+        text={amount()}
+        onText={setAmount}
+        count={counted()}
+        onCount={setCounted}
+        step="countKeypad"
+      >
+        {/* Only where the store's count is not blind: a blind store is sent no expectation. */}
+        <Show when={shift()?.expected}>
+          {(expected) => (
+            <p class="mt-1 text-sm tabular-nums" data-outcome="shift-expected">
+              {t("shift.expected_now", { amount: formatAmount(expected()) })}
+            </p>
+          )}
+        </Show>
+      </CountField>
+      <button
+        type="button"
+        class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
+        disabled={parsed() === null || ownBusy()}
+        data-step="countShift"
+        onClick={() => countShift()}
+      >
+        {t("shift.enter_count")}
+      </button>
+      </Show>
+    </Show>
+
+    <Show when={phase() === "SHIFT_STATE_COUNTED"}>
+      <p class="text-ink-muted" data-outcome="shift-counted">
+        {t("shift.counted_hint")}
+      </p>
+      <Show when={can("cash.shift.close")}>
+      <button
+        type="button"
+        class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
+        disabled={ownBusy()}
+        data-step="closeShift"
+        onClick={() => closeShift()}
+      >
+        {t("shift.close")}
+      </button>
+      </Show>
+      <Show when={owedHere()}>
+        {(owed) => (
+          <div class="mt-3 rounded-token border border-line bg-surface p-3" data-outcome="variance-owed">
+            <p class="font-semibold">{t("shift.variance_reason")}</p>
+            <p class="mt-1 text-sm text-ink-muted tabular-nums">
+              {t("shift.drawer_figures", {
+                expected: amountOf(owed().expected_amount),
+                counted: amountOf(owed().counted_amount),
+              })}
+            </p>
+            <p class="text-danger tabular-nums">
+              {t("shift.variance")} {amountOf(owed().variance)}
+            </p>
             <div class="mt-2 grid grid-cols-2 gap-2">
-              <For each={reasonsFor(DRAWER_OPEN)}>
+              <For each={reasonsFor(CASH_VARIANCE)}>
                 {(reason) => (
                   <button
                     type="button"
                     class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
-                    disabled={!approverReady()}
-                    data-step="drawerReason"
-                    onClick={() => drawerReason(reason.reason_code_id)}
+                    disabled={ownBusy()}
+                    data-step="varianceReason"
+                    onClick={() => varianceReason(reason.reason_code_id)}
                   >
                     {reason.display_name}
                   </button>
                 )}
               </For>
             </div>
-            <Show when={noSale.sending()}>
-              <p class="mt-2 text-sm" role="status" data-outcome="no-sale-pending">{t("shift.opening_drawer")}</p>
-            </Show>
-            <RefusalPanel message={noSale.refusal()} onDismiss={noSale.dismiss} />
             <button
               type="button"
               class="mt-3 min-h-touch rounded-token border border-line px-3 text-sm"
-              onClick={() => closeDrawerPanel()}
+              onClick={() => acts.clearOwed()}
             >
               {t("common.cancel")}
             </button>
           </div>
-        </Show>
-        <Show when={drawer()}>
-          {(outcome) => (
-            <p
-              class="mt-2 text-sm"
-              classList={{
-                "text-ink-muted": outcome() !== "DRAWER_UNAVAILABLE",
-                "text-danger": outcome() === "DRAWER_UNAVAILABLE",
-              }}
-              role="status"
-              data-outcome="drawer-opened"
-            >
-              {t(drawerKey(outcome()))}
-            </p>
-          )}
-        </Show>
-      </div>
-      </div>
+        )}
+      </Show>
+    </Show>
 
-      <Show when={listShown()}>
-        <div class="mt-6 tablet:mt-0" data-outcome="drawers">
-          <h2 class="font-semibold">{t("shift.drawers_title")}</h2>
-          <p class="mt-1 text-sm text-ink-muted">{t("shift.drawers_hint")}</p>
-          <div class="mt-2 grid grid-cols-1 gap-2">
-            <For each={drawers()}>
-              {(drawer) => (
+    {/* The handover, one flow from the outgoing count to the incoming opening (ADR-0187). */}
+    <Show
+      when={
+        (phase() === "SHIFT_STATE_OPEN" || phase() === "SHIFT_STATE_COUNTED" || handingOver()) &&
+        can("cash.shift.close") &&
+        can("cash.shift.open") &&
+        !noTill()
+      }
+    >
+      <Handover />
+    </Show>
+    <ReprintSlip drawer={drawers().find((entry) => entry.shift?.shift_id === shift()?.shiftId)} />
+    <ShiftXButton />
+
+    {/*
+      The drawer opened without a sale (ADR-0165 decision 3), in every state of the shift: it moves
+      no cash, so it needs no open shift. A manager's code and PIN, then the reason.
+    */}
+    <div class="mt-6">
+      <Show
+        when={openingDrawer()}
+        fallback={
+          <Show when={can("cash.drawer.open_no_sale") && !noTill()}>
+          <button
+            type="button"
+            class="min-h-touch w-full rounded-token border border-line text-sm disabled:opacity-50"
+            disabled={reasonsFor(DRAWER_OPEN).length === 0}
+            aria-describedby="why-drawer-reasons"
+            data-step="askOpenDrawer"
+            onClick={() => askOpenDrawer()}
+          >
+            {t("shift.open_drawer")}
+          </button>
+          <WhyUnavailable entry="reason_codes" id="why-drawer-reasons" />
+          </Show>
+        }
+      >
+        <div class="rounded-token border border-line bg-surface p-3">
+          <h2 class="font-semibold">{t("shift.open_drawer_title")}</h2>
+          <Show when={drawerAsks()}>
+          <p class="mt-1 text-sm text-ink-muted">{t("shift.open_drawer_manager")}</p>
+          <ApproverFields
+            id="no-sale-approver"
+            code={approverCode()}
+            pin={approverPin()}
+            onCode={setApproverCode}
+            onPin={setApproverPin}
+            codeLabel={t("shift.approver_code")}
+            pinLabel={t("shift.approver_pin")}
+          />
+          </Show>
+          <p class="mt-3 text-sm text-ink-muted">{t("shift.open_drawer_reason")}</p>
+          <div class="mt-2 grid grid-cols-2 gap-2">
+            <For each={reasonsFor(DRAWER_OPEN)}>
+              {(reason) => (
                 <button
                   type="button"
-                  class="min-h-touch rounded-token border border-line bg-surface p-3 text-left"
-                  classList={{ "border-primary": picked().includes(tillKey(drawer)) }}
-                  aria-pressed={picked().includes(tillKey(drawer))}
-                  data-step="pickDrawer"
-                  onClick={() => pickDrawer(drawer)}
+                  class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
+                  disabled={!approverReady()}
+                  data-step="drawerReason"
+                  onClick={() => drawerReason(reason.reason_code_id)}
                 >
-                  <span class="flex items-baseline justify-between gap-2">
-                    <span class="font-semibold">{drawerName(drawer)}</span>
-                    <Show when={drawer.terminal_device_id === ownTill()}>
-                      <span class="text-sm text-ink-muted">{t("shift.drawer_this_till")}</span>
-                    </Show>
-                  </span>
-                  <span class="block text-sm text-ink-muted">{drawerState(drawer)}</span>
-                  <span class="block text-sm text-ink-muted tabular-nums">
-                    {t("shift.drawer_float", {
-                      amount: formatAmount(drawer.shift?.opening_float ?? drawer.default_float),
-                    })}
-                  </span>
-                  {/* Only where the read carries it: never worked out here. */}
-                  <Show when={drawer.shift?.expected_amount}>
-                    {(expected) => (
-                      <span class="block text-sm tabular-nums">
-                        {t("shift.expected_now", { amount: formatAmount(expected()) })}
-                      </span>
-                    )}
-                  </Show>
-                  <DrawerOwner assignee={drawer.shift?.assigned_employee_id} />
-                  <Show when={drawer.shift?.day_ended === true}>
-                    <span class="mt-1 block text-sm font-semibold text-danger" data-outcome="drawer-day-ended">
-                      {t("shift.drawer_day_ended")}
-                    </span>
-                  </Show>
+                  {reason.display_name}
                 </button>
               )}
             </For>
           </div>
-
-          <Show when={pickedPhase()}>
-            {(picking) => (
-              <div class="mt-3 rounded-token border border-line bg-surface p-3">
-                <Show when={picking() === "closed" && pickedDrawers().length === 1}>
-                  <label class="block text-sm text-ink-muted" for="drawer-float">
-                    {t("shift.float_label", { currency: storeCurrency() })}
-                  </label>
-                  <input
-                    id="drawer-float"
-                    inputmode="numeric"
-                    class="mt-1 w-full rounded-token border border-line bg-surface p-3 tabular-nums"
-                    value={listFloatText()}
-                    onInput={(event) => typeListFloat(event.currentTarget.value)}
-                  />
-                  <Keypad value={listFloatText()} onChange={typeListFloat} />
-                </Show>
-                <Show when={picking() === "closed" && pickedDrawers().length > 1}>
-                  <p class="text-sm text-ink-muted">{t("shift.drawers_own_floats")}</p>
-                </Show>
-                <Show when={picking() === "open"}>
-                  <label class="block text-sm text-ink-muted" for="drawer-count">
-                    {t("shift.count_label", { currency: storeCurrency() })}
-                  </label>
-                  <input
-                    id="drawer-count"
-                    inputmode="numeric"
-                    class="mt-1 w-full rounded-token border border-line bg-surface p-3 tabular-nums"
-                    value={listAmount()}
-                    onInput={(event) => setListAmount(event.currentTarget.value)}
-                  />
-                  <Keypad value={listAmount()} onChange={setListAmount} />
-                </Show>
-                <Show when={picking() === "closed" && othersPicked()}>
-                  <AssigneeField value={assignee()} onChange={setAssignee} />
-                </Show>
-                <Show when={listAsks()}>
-                  <p class="mt-3 text-sm text-ink-muted">{t("shift.other_till_manager")}</p>
-                  <ApproverFields
-                    id="drawer-approver"
-                    code={listCode()}
-                    pin={listPin()}
-                    onCode={setListCode}
-                    onPin={setListPin}
-                    codeLabel={t("shift.approver_code")}
-                    pinLabel={t("shift.approver_pin")}
-                  />
-                </Show>
-                <Show when={picking() === "closed"}>
-                  <button
-                    type="button"
-                    class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
-                    disabled={!startReady()}
-                    data-step="startDrawers"
-                    onClick={() => void startDrawers()}
-                  >
-                    {t("shift.start_drawers", { count: pickedDrawers().length })}
-                  </button>
-                </Show>
-                <Show when={picking() === "open"}>
-                  <button
-                    type="button"
-                    class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
-                    disabled={!listReady() || parseAmount(listAmount()) === null}
-                    data-step="countDrawer"
-                    onClick={() => countDrawer()}
-                  >
-                    {t("shift.enter_count")}
-                  </button>
-                </Show>
-                <Show when={picking() !== "closed" && pickedDrawers().length === 1}>
-                  <ReprintSlip drawer={pickedDrawers()[0]} />
-                </Show>
-                <Show when={picking() === "counted"}>
-                  <button
-                    type="button"
-                    class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
-                    disabled={!listReady()}
-                    data-step="closeDrawers"
-                    onClick={() => closeDrawers()}
-                  >
-                    {t("shift.close_drawers", { count: pickedDrawers().length })}
-                  </button>
-                </Show>
-                <Show when={picking() === "counted" && owedDrawers().length > 0}>
-                  <div class="mt-3" data-outcome="drawers-variance-owed">
-                    <p class="font-semibold">{t("shift.variance_reason")}</p>
-                    <For each={owedDrawers()}>
-                      {(owed) => (
-                        <div class="mt-3 tabular-nums" data-outcome="drawer-variance-owed">
-                          <p class="font-semibold">{owedName(owed)}</p>
-                          <p class="text-sm text-ink-muted">
-                            {t("shift.drawer_figures", {
-                              expected: amountOf(owed.expected_amount),
-                              counted: amountOf(owed.counted_amount),
-                            })}
-                          </p>
-                          <p class="text-danger">
-                            {t("shift.variance")} {amountOf(owed.variance)}
-                          </p>
-                          <div class="mt-2 grid grid-cols-2 gap-2">
-                            <For each={reasonsFor(CASH_VARIANCE)}>
-                              {(reason) => (
-                                <button
-                                  type="button"
-                                  class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
-                                  classList={{
-                                    "border-primary":
-                                      givenReasons()[owed.shift_id] === reason.reason_code_id,
-                                  }}
-                                  aria-pressed={givenReasons()[owed.shift_id] === reason.reason_code_id}
-                                  disabled={listBusy()}
-                                  data-step="drawerVarianceReason"
-                                  onClick={() =>
-                                    drawerVarianceReason(owed.shift_id, reason.reason_code_id)
-                                  }
-                                >
-                                  {reason.display_name}
-                                </button>
-                              )}
-                            </For>
-                          </div>
-                        </div>
-                      )}
-                    </For>
-                  </div>
-                </Show>
-              </div>
-            )}
+          <Show when={noSale.sending()}>
+            <p class="mt-2 text-sm" role="status" data-outcome="no-sale-pending">{t("shift.opening_drawer")}</p>
           </Show>
-
-          <Show when={listAct.pending()}>
-            {(out) => <PendingSettle act={out().act} phase={out().phase} amount="" onLeave={() => navigate("/")} />}
-          </Show>
-          <RefusalPanel message={listAct.refusal()} onDismiss={listAct.dismiss} />
-          <Show when={closedUnread()}>
-            <p class="mt-3 text-sm text-ink-muted" role="status" data-outcome="drawers-closed-unread">
-              {t("shift.closed_unread")}
-            </p>
-          </Show>
-          <Show when={startedDrawers()}>
-            {(done) => (
-              <div class="mt-3 text-sm" role="status">
-                <Show when={done().started.length > 0}>
-                  <p data-outcome="drawers-started">
-                    {t("shift.drawers_started", { names: done().started.join(", ") })}
-                  </p>
-                </Show>
-                <Show when={done().missed.length > 0}>
-                  <p class="text-danger" data-outcome="drawers-not-started">
-                    {t("shift.drawers_not_started", { names: done().missed.join(", ") })}
-                  </p>
-                </Show>
-                <Show when={done().refusal}>{(refusal) => <p class="text-danger">{refusal()}</p>}</Show>
-              </div>
-            )}
-          </Show>
-          <Show when={countedDrawer()}>
-            {(name) => (
-              <p class="mt-3 text-sm" role="status" data-outcome="drawer-counted">
-                {t("shift.drawer_counted_done", { name: name() })}
-              </p>
-            )}
-          </Show>
-          <Show when={closedDrawers()}>
-            {(done) => (
-              <div class="mt-3 rounded-token border border-line bg-surface p-4" data-outcome="drawers-closed">
-                <p class="font-semibold">{t("shift.drawers_closed", { count: done().drawers.length })}</p>
-                <For each={done().drawers}>
-                  {(closed) => (
-                    <div class="mt-3 tabular-nums" data-outcome="drawer-closed">
-                      <p class="font-semibold">{closed.name}</p>
-                      <p class="text-ink-muted">
-                        {t("shift.drawer_figures", {
-                          expected: amountOf(closed.shift.expected_amount),
-                          counted: amountOf(closed.shift.counted_amount),
-                        })}
-                      </p>
-                      <p
-                        classList={{
-                          "text-danger": (closed.shift.variance?.amount_minor ?? 0) !== 0,
-                          "text-ok": (closed.shift.variance?.amount_minor ?? 0) === 0,
-                        }}
-                      >
-                        {t("shift.variance")} {amountOf(closed.shift.variance)}
-                      </p>
-                      <Show when={closed.shift.shift_report_print}>
-                        {(outcome) => (
-                          <p class="text-sm text-ink-muted" role="status">
-                            {t(printOutcomeKey(outcome(), "shift.report_printed"))}
-                          </p>
-                        )}
-                      </Show>
-                    </div>
-                  )}
-                </For>
-                {/* One slip for them all, where the store's close report combines them. */}
-                <Show when={done().slip}>
-                  {(slip) => (
-                    <p class="mt-3 text-sm text-ink-muted" role="status" data-outcome="drawers-slip">
-                      {t(printOutcomeKey(slip(), "shift.combined_printed"))}
-                    </p>
-                  )}
-                </Show>
-              </div>
-            )}
-          </Show>
+          <RefusalPanel message={noSale.refusal()} onDismiss={noSale.dismiss} />
+          <button
+            type="button"
+            class="mt-3 min-h-touch rounded-token border border-line px-3 text-sm"
+            onClick={() => closeDrawerPanel()}
+          >
+            {t("common.cancel")}
+          </button>
         </div>
       </Show>
-    </section>
-  );
+      <Show when={drawer()}>
+        {(outcome) => (
+          <p
+            class="mt-2 text-sm"
+            classList={{
+              "text-ink-muted": outcome() !== "DRAWER_UNAVAILABLE",
+              "text-danger": outcome() === "DRAWER_UNAVAILABLE",
+            }}
+            role="status"
+            data-outcome="drawer-opened"
+          >
+            {t(drawerKey(outcome()))}
+          </p>
+        )}
+      </Show>
+    </div>
+    </div>
+
+    <Show when={listShown()}>
+      <div class="mt-6 tablet:mt-0" data-outcome="drawers">
+        <h2 class="font-semibold">{t("shift.drawers_title")}</h2>
+        <p class="mt-1 text-sm text-ink-muted">{t("shift.drawers_hint")}</p>
+        <div class="mt-2 grid grid-cols-1 gap-2">
+          <For each={drawers()}>
+            {(drawer) => (
+              <button
+                type="button"
+                class="min-h-touch rounded-token border border-line bg-surface p-3 text-left"
+                classList={{ "border-primary": picked().includes(tillKey(drawer)) }}
+                aria-pressed={picked().includes(tillKey(drawer))}
+                data-step="pickDrawer"
+                onClick={() => pickDrawer(drawer)}
+              >
+                <span class="flex items-baseline justify-between gap-2">
+                  <span class="font-semibold">{drawerName(drawer)}</span>
+                  <Show when={drawer.terminal_device_id === ownTill()}>
+                    <span class="text-sm text-ink-muted">{t("shift.drawer_this_till")}</span>
+                  </Show>
+                </span>
+                <span class="block text-sm text-ink-muted">{drawerState(drawer)}</span>
+                <span class="block text-sm text-ink-muted tabular-nums">
+                  {t("shift.drawer_float", {
+                    amount: formatAmount(drawer.shift?.opening_float ?? drawer.default_float),
+                  })}
+                </span>
+                {/* Only where the read carries it: never worked out here. */}
+                <Show when={drawer.shift?.expected_amount}>
+                  {(expected) => (
+                    <span class="block text-sm tabular-nums">
+                      {t("shift.expected_now", { amount: formatAmount(expected()) })}
+                    </span>
+                  )}
+                </Show>
+                <DrawerOwner assignee={drawer.shift?.assigned_employee_id} />
+                <Show when={drawer.shift?.day_ended === true}>
+                  <span class="mt-1 block text-sm font-semibold text-danger" data-outcome="drawer-day-ended">
+                    {t("shift.drawer_day_ended")}
+                  </span>
+                </Show>
+              </button>
+            )}
+          </For>
+        </div>
+
+        <Show when={pickedPhase()}>
+          {(picking) => (
+            <div class="mt-3 rounded-token border border-line bg-surface p-3">
+              <Show when={picking() === "closed" && pickedDrawers().length === 1}>
+                <label class="block text-sm text-ink-muted" for="drawer-float">
+                  {t("shift.float_label", { currency: storeCurrency() })}
+                </label>
+                <input
+                  id="drawer-float"
+                  inputmode="numeric"
+                  class="mt-1 w-full rounded-token border border-line bg-surface p-3 tabular-nums"
+                  value={listFloatText()}
+                  onInput={(event) => typeListFloat(event.currentTarget.value)}
+                />
+                <Keypad value={listFloatText()} onChange={typeListFloat} />
+              </Show>
+              <Show when={picking() === "closed" && pickedDrawers().length > 1}>
+                <p class="text-sm text-ink-muted">{t("shift.drawers_own_floats")}</p>
+              </Show>
+              <Show when={picking() === "open"}>
+                <label class="block text-sm text-ink-muted" for="drawer-count">
+                  {t("shift.count_label", { currency: storeCurrency() })}
+                </label>
+                <input
+                  id="drawer-count"
+                  inputmode="numeric"
+                  class="mt-1 w-full rounded-token border border-line bg-surface p-3 tabular-nums"
+                  value={listAmount()}
+                  onInput={(event) => setListAmount(event.currentTarget.value)}
+                />
+                <Keypad value={listAmount()} onChange={setListAmount} />
+              </Show>
+              <Show when={picking() === "closed" && othersPicked()}>
+                <AssigneeField value={assignee()} onChange={setAssignee} />
+              </Show>
+              <Show when={listAsks()}>
+                <p class="mt-3 text-sm text-ink-muted">{t("shift.other_till_manager")}</p>
+                <ApproverFields
+                  id="drawer-approver"
+                  code={listCode()}
+                  pin={listPin()}
+                  onCode={setListCode}
+                  onPin={setListPin}
+                  codeLabel={t("shift.approver_code")}
+                  pinLabel={t("shift.approver_pin")}
+                />
+              </Show>
+              <Show when={picking() === "closed"}>
+                <button
+                  type="button"
+                  class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
+                  disabled={!startReady()}
+                  data-step="startDrawers"
+                  onClick={() => void startDrawers()}
+                >
+                  {t("shift.start_drawers", { count: pickedDrawers().length })}
+                </button>
+              </Show>
+              <Show when={picking() === "open"}>
+                <button
+                  type="button"
+                  class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
+                  disabled={!listReady() || parseAmount(listAmount()) === null}
+                  data-step="countDrawer"
+                  onClick={() => countDrawer()}
+                >
+                  {t("shift.enter_count")}
+                </button>
+              </Show>
+              <Show when={picking() !== "closed" && pickedDrawers().length === 1}>
+                <ReprintSlip drawer={pickedDrawers()[0]} />
+              </Show>
+              <Show when={picking() === "counted"}>
+                <button
+                  type="button"
+                  class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
+                  disabled={!listReady()}
+                  data-step="closeDrawers"
+                  onClick={() => closeDrawers()}
+                >
+                  {t("shift.close_drawers", { count: pickedDrawers().length })}
+                </button>
+              </Show>
+              <Show when={picking() === "counted" && owedDrawers().length > 0}>
+                <div class="mt-3" data-outcome="drawers-variance-owed">
+                  <p class="font-semibold">{t("shift.variance_reason")}</p>
+                  <For each={owedDrawers()}>
+                    {(owed) => (
+                      <div class="mt-3 tabular-nums" data-outcome="drawer-variance-owed">
+                        <p class="font-semibold">{owedName(owed)}</p>
+                        <p class="text-sm text-ink-muted">
+                          {t("shift.drawer_figures", {
+                            expected: amountOf(owed.expected_amount),
+                            counted: amountOf(owed.counted_amount),
+                          })}
+                        </p>
+                        <p class="text-danger">
+                          {t("shift.variance")} {amountOf(owed.variance)}
+                        </p>
+                        <div class="mt-2 grid grid-cols-2 gap-2">
+                          <For each={reasonsFor(CASH_VARIANCE)}>
+                            {(reason) => (
+                              <button
+                                type="button"
+                                class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
+                                classList={{
+                                  "border-primary":
+                                    givenReasons()[owed.shift_id] === reason.reason_code_id,
+                                }}
+                                aria-pressed={givenReasons()[owed.shift_id] === reason.reason_code_id}
+                                disabled={listBusy()}
+                                data-step="drawerVarianceReason"
+                                onClick={() =>
+                                  drawerVarianceReason(owed.shift_id, reason.reason_code_id)
+                                }
+                              >
+                                {reason.display_name}
+                              </button>
+                            )}
+                          </For>
+                        </div>
+                      </div>
+                    )}
+                  </For>
+                </div>
+              </Show>
+            </div>
+          )}
+        </Show>
+
+        <Show when={listAct.pending()}>
+          {(out) => <PendingSettle act={out().act} phase={out().phase} amount="" onLeave={() => navigate("/")} />}
+        </Show>
+        <RefusalPanel message={listAct.refusal()} onDismiss={listAct.dismiss} />
+        <Show when={closedUnread()}>
+          <p class="mt-3 text-sm text-ink-muted" role="status" data-outcome="drawers-closed-unread">
+            {t("shift.closed_unread")}
+          </p>
+        </Show>
+        <Show when={startedDrawers()}>
+          {(done) => (
+            <div class="mt-3 text-sm" role="status">
+              <Show when={done().started.length > 0}>
+                <p data-outcome="drawers-started">
+                  {t("shift.drawers_started", { names: done().started.join(", ") })}
+                </p>
+              </Show>
+              <Show when={done().missed.length > 0}>
+                <p class="text-danger" data-outcome="drawers-not-started">
+                  {t("shift.drawers_not_started", { names: done().missed.join(", ") })}
+                </p>
+              </Show>
+              <Show when={done().refusal}>{(refusal) => <p class="text-danger">{refusal()}</p>}</Show>
+            </div>
+          )}
+        </Show>
+        <Show when={countedDrawer()}>
+          {(name) => (
+            <p class="mt-3 text-sm" role="status" data-outcome="drawer-counted">
+              {t("shift.drawer_counted_done", { name: name() })}
+            </p>
+          )}
+        </Show>
+        <Show when={closedDrawers()}>
+          {(done) => (
+            <div class="mt-3 rounded-token border border-line bg-surface p-4" data-outcome="drawers-closed">
+              <p class="font-semibold">{t("shift.drawers_closed", { count: done().drawers.length })}</p>
+              <For each={done().drawers}>
+                {(closed) => (
+                  <div class="mt-3 tabular-nums" data-outcome="drawer-closed">
+                    <p class="font-semibold">{closed.name}</p>
+                    <p class="text-ink-muted">
+                      {t("shift.drawer_figures", {
+                        expected: amountOf(closed.shift.expected_amount),
+                        counted: amountOf(closed.shift.counted_amount),
+                      })}
+                    </p>
+                    <p
+                      classList={{
+                        "text-danger": (closed.shift.variance?.amount_minor ?? 0) !== 0,
+                        "text-ok": (closed.shift.variance?.amount_minor ?? 0) === 0,
+                      }}
+                    >
+                      {t("shift.variance")} {amountOf(closed.shift.variance)}
+                    </p>
+                    <Show when={closed.shift.shift_report_print}>
+                      {(outcome) => (
+                        <p class="text-sm text-ink-muted" role="status">
+                          {t(printOutcomeKey(outcome(), "shift.report_printed"))}
+                        </p>
+                      )}
+                    </Show>
+                  </div>
+                )}
+              </For>
+              {/* One slip for them all, where the store's close report combines them. */}
+              <Show when={done().slip}>
+                {(slip) => (
+                  <p class="mt-3 text-sm text-ink-muted" role="status" data-outcome="drawers-slip">
+                    {t(printOutcomeKey(slip(), "shift.combined_printed"))}
+                  </p>
+                )}
+              </Show>
+            </div>
+          )}
+        </Show>
+      </div>
+    </Show>
+  </section>
+    </>,
+  };
+  return <RegionsContext.Provider value={regions}><PackageScreen screenId="shift" host={NO_ACTS} /></RegionsContext.Provider>;
 }

@@ -10,13 +10,14 @@ import type {
 } from "../api/schemas";
 import { QrCode } from "../components/QrCode";
 import { ReadFailed } from "../components/StoreData";
-import { PageHeader } from "../components/ui";
 import { type MessageKey, locale, t } from "../i18n";
 import { errorMessage } from "../lib/errors";
 import { printOutcomeKey } from "../lib/print";
 import { can } from "../state/permissions";
 import { createScreenRead, onStatus } from "../state/screen-read";
 import { loadDrawers, loadShift, loadSync, state } from "../state/store";
+import { RegionsContext, type Regions } from "../package/regions";
+import { NO_ACTS, PackageScreen } from "../package/screen";
 
 // Retiring a till (ADR-0091, production-readiness O1). `POST /api/pair/revoke` and
 // `GET /api/pair/devices` have been mounted since the durable-auth slice and nothing called either,
@@ -453,247 +454,248 @@ export function Devices() {
     }
   };
 
-  return (
-    <section class="mx-auto max-w-2xl p-4">
-      <PageHeader title={t("devices.title")} />
-      <p class="text-ink-muted">{t("devices.hint")}</p>
+  // The regions the default package's `devices` screen arranges (`../package/regions.tsx`).
+  const regions: Regions = {
+    devices_body: () => <>
+    <p class="text-ink-muted">{t("devices.hint")}</p>
 
-      <Show when={!durable()}>
-        <p class="mt-3 rounded-token border border-awaiting px-3 py-2 text-ink" role="status">
-          {t("devices.not_durable")}
+    <Show when={!durable()}>
+      <p class="mt-3 rounded-token border border-awaiting px-3 py-2 text-ink" role="status">
+        {t("devices.not_durable")}
+      </p>
+    </Show>
+
+    <Show when={error()}>
+      {(message) => (
+        <p class="mt-3 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
+          {message()}
         </p>
-      </Show>
+      )}
+    </Show>
+    <ReadFailed read={devicesRead} />
+    <ReadFailed read={printersRead} />
+    <ReadFailed read={integrationsRead} />
 
-      <Show when={error()}>
-        {(message) => (
-          <p class="mt-3 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
-            {message()}
-          </p>
-        )}
-      </Show>
-      <ReadFailed read={devicesRead} />
-      <ReadFailed read={printersRead} />
-      <ReadFailed read={integrationsRead} />
-
-      <ul class="mt-4 flex flex-col gap-2">
-        <For
-          each={devices()}
-          fallback={<li class="text-ink-muted">{t("devices.none")}</li>}
-        >
-          {(device) => (
-            <li class="rounded-token border border-line bg-surface p-3">
-              <div class="flex flex-wrap items-baseline justify-between gap-2">
-                <span class="font-semibold text-ink">
-                  {device.this_device ? t("devices.this_device") : t("devices.a_device")}
+    <ul class="mt-4 flex flex-col gap-2">
+      <For
+        each={devices()}
+        fallback={<li class="text-ink-muted">{t("devices.none")}</li>}
+      >
+        {(device) => (
+          <li class="rounded-token border border-line bg-surface p-3">
+            <div class="flex flex-wrap items-baseline justify-between gap-2">
+              <span class="font-semibold text-ink">
+                {device.this_device ? t("devices.this_device") : t("devices.a_device")}
+              </span>
+              <span class="text-sm text-ink-muted">
+                {t("devices.paired_at", { moment: pairedAt(device.paired_at_ms) })}
+              </span>
+            </div>
+            <p class="mt-1 break-all font-mono text-xs text-ink-muted">{device.device_id}</p>
+            <Show when={manages()}>
+            <Show
+              when={confirming() === device.device_id}
+              fallback={
+                <button
+                  type="button"
+                  class="mt-2 min-h-touch rounded-token border border-line px-3 text-ink disabled:opacity-50"
+                  disabled={busy()}
+                  onClick={() => setConfirming(device.device_id)}
+                >
+                  {t("devices.retire")}
+                </button>
+              }
+            >
+              <div class="mt-2 flex flex-wrap items-center gap-2">
+                <span class="text-sm text-ink">
+                  {device.this_device ? t("devices.confirm_self") : t("devices.confirm")}
                 </span>
-                <span class="text-sm text-ink-muted">
-                  {t("devices.paired_at", { moment: pairedAt(device.paired_at_ms) })}
-                </span>
+                <button
+                  type="button"
+                  class="min-h-touch rounded-token bg-danger px-3 font-semibold text-danger-ink disabled:opacity-50"
+                  disabled={busy()}
+                  onClick={() => void retire(device.device_id)}
+                >
+                  {t("devices.retire_confirm")}
+                </button>
+                <button
+                  type="button"
+                  class="min-h-touch rounded-token border border-line px-3 text-ink"
+                  onClick={() => setConfirming(null)}
+                >
+                  {t("common.cancel")}
+                </button>
               </div>
-              <p class="mt-1 break-all font-mono text-xs text-ink-muted">{device.device_id}</p>
-              <Show when={manages()}>
-              <Show
-                when={confirming() === device.device_id}
-                fallback={
-                  <button
-                    type="button"
-                    class="mt-2 min-h-touch rounded-token border border-line px-3 text-ink disabled:opacity-50"
-                    disabled={busy()}
-                    onClick={() => setConfirming(device.device_id)}
-                  >
-                    {t("devices.retire")}
-                  </button>
-                }
-              >
-                <div class="mt-2 flex flex-wrap items-center gap-2">
-                  <span class="text-sm text-ink">
-                    {device.this_device ? t("devices.confirm_self") : t("devices.confirm")}
-                  </span>
-                  <button
-                    type="button"
-                    class="min-h-touch rounded-token bg-danger px-3 font-semibold text-danger-ink disabled:opacity-50"
-                    disabled={busy()}
-                    onClick={() => void retire(device.device_id)}
-                  >
-                    {t("devices.retire_confirm")}
-                  </button>
-                  <button
-                    type="button"
-                    class="min-h-touch rounded-token border border-line px-3 text-ink"
-                    onClick={() => setConfirming(null)}
-                  >
-                    {t("common.cancel")}
-                  </button>
-                </div>
-              </Show>
-              </Show>
-            </li>
-          )}
-        </For>
-      </ul>
+            </Show>
+            </Show>
+          </li>
+        )}
+      </For>
+    </ul>
 
-      <Show when={manages()}>
-      <div class="mt-6 rounded-token border border-line p-3">
-        <p class="font-semibold text-ink">{t("devices.add_title")}</p>
-        <p class="mt-1 text-sm text-ink-muted">{t("devices.add_hint")}</p>
-        <Show
-          when={minted()}
-          fallback={
+    <Show when={manages()}>
+    <div class="mt-6 rounded-token border border-line p-3">
+      <p class="font-semibold text-ink">{t("devices.add_title")}</p>
+      <p class="mt-1 text-sm text-ink-muted">{t("devices.add_hint")}</p>
+      <Show
+        when={minted()}
+        fallback={
+          <button
+            type="button"
+            class="mt-2 min-h-touch w-full rounded-token border border-line font-semibold text-ink disabled:opacity-50"
+            disabled={busy()}
+            onClick={() => void mint()}
+          >
+            {t("devices.add_button")}
+          </button>
+        }
+      >
+        {(code) => (
+          <div class="mt-2">
+            {/* Tracked wide and large: this is read aloud across a counter, or typed by somebody
+                holding a second tablet. `select-all` so one tap copies it. */}
+            <p class="select-all text-center font-mono text-3xl tracking-[0.35em] text-ink">
+              {code().code}
+            </p>
+            <p class="mt-2 text-sm text-ink-muted">
+              {t("devices.add_expires", { moment: pairedAt(code().expires_at_ms) })}
+            </p>
+            <p class="mt-1 text-sm text-ink-muted">{t("devices.add_open")}</p>
+            {/* The link as a QR code, so the tablet being added scans it rather than typing an
+                address, a port and six digits against a five-minute clock (ADR-0139). */}
+            <div class="mt-3">
+              <QrCode text={pairingUrl(code().code)} label={t("devices.add_qr")} />
+            </div>
+            <Show when={onLoopback()}>
+              <p class="mt-2 rounded-token border border-awaiting px-3 py-2 text-sm text-ink" role="status">
+                {t("devices.add_qr_loopback")}
+              </p>
+            </Show>
+            <p class="mt-2 select-all break-all font-mono text-xs text-ink-muted">
+              {pairingUrl(code().code)}
+            </p>
+            <p class="mt-2 text-sm text-ink-muted">{t("devices.add_replaced")}</p>
             <button
               type="button"
-              class="mt-2 min-h-touch w-full rounded-token border border-line font-semibold text-ink disabled:opacity-50"
+              class="mt-2 min-h-touch w-full rounded-token border border-line text-ink disabled:opacity-50"
               disabled={busy()}
               onClick={() => void mint()}
             >
               {t("devices.add_button")}
             </button>
-          }
+          </div>
+        )}
+      </Show>
+    </div>
+    </Show>
+
+    <Show when={manages()}>
+      <ThisDevice />
+    </Show>
+
+    <div class="mt-6 rounded-token border border-line p-3">
+      <p class="font-semibold text-ink">{t("devices.printers_title")}</p>
+      <p class="mt-1 text-sm text-ink-muted">{t("devices.printers_hint")}</p>
+      <ul class="mt-2 flex flex-col gap-2">
+        <For
+          each={printers()}
+          fallback={<li class="text-sm text-ink-muted">{t("devices.printers_none")}</li>}
         >
-          {(code) => (
-            <div class="mt-2">
-              {/* Tracked wide and large: this is read aloud across a counter, or typed by somebody
-                  holding a second tablet. `select-all` so one tap copies it. */}
-              <p class="select-all text-center font-mono text-3xl tracking-[0.35em] text-ink">
-                {code().code}
-              </p>
-              <p class="mt-2 text-sm text-ink-muted">
-                {t("devices.add_expires", { moment: pairedAt(code().expires_at_ms) })}
-              </p>
-              <p class="mt-1 text-sm text-ink-muted">{t("devices.add_open")}</p>
-              {/* The link as a QR code, so the tablet being added scans it rather than typing an
-                  address, a port and six digits against a five-minute clock (ADR-0139). */}
-              <div class="mt-3">
-                <QrCode text={pairingUrl(code().code)} label={t("devices.add_qr")} />
-              </div>
-              <Show when={onLoopback()}>
-                <p class="mt-2 rounded-token border border-awaiting px-3 py-2 text-sm text-ink" role="status">
-                  {t("devices.add_qr_loopback")}
-                </p>
-              </Show>
-              <p class="mt-2 select-all break-all font-mono text-xs text-ink-muted">
-                {pairingUrl(code().code)}
-              </p>
-              <p class="mt-2 text-sm text-ink-muted">{t("devices.add_replaced")}</p>
-              <button
-                type="button"
-                class="mt-2 min-h-touch w-full rounded-token border border-line text-ink disabled:opacity-50"
-                disabled={busy()}
-                onClick={() => void mint()}
-              >
-                {t("devices.add_button")}
-              </button>
-            </div>
+          {(printer) => (
+            <li class="flex flex-wrap items-center justify-between gap-2">
+              <span class="text-ink">{printer.name}</span>
+              <span class="flex flex-wrap items-center gap-2">
+                <Show when={tested()[printer.device_id]}>
+                  {(outcome) => (
+                    <span class="text-sm text-ink-muted" role="status" data-outcome="test-print">
+                      {t(printOutcomeKey(outcome(), "devices.test_printed"))}
+                    </span>
+                  )}
+                </Show>
+                <Show when={manages()}>
+                <button
+                  type="button"
+                  class="min-h-touch rounded-token border border-line px-3 text-ink disabled:opacity-50"
+                  disabled={busy()}
+                  onClick={() => void testPrint(printer.device_id)}
+                >
+                  {t("devices.test_print")}
+                </button>
+                </Show>
+              </span>
+            </li>
           )}
-        </Show>
-      </div>
-      </Show>
+        </For>
+      </ul>
+    </div>
 
-      <Show when={manages()}>
-        <ThisDevice />
-      </Show>
-
-      <div class="mt-6 rounded-token border border-line p-3">
-        <p class="font-semibold text-ink">{t("devices.printers_title")}</p>
-        <p class="mt-1 text-sm text-ink-muted">{t("devices.printers_hint")}</p>
-        <ul class="mt-2 flex flex-col gap-2">
-          <For
-            each={printers()}
-            fallback={<li class="text-sm text-ink-muted">{t("devices.printers_none")}</li>}
-          >
-            {(printer) => (
-              <li class="flex flex-wrap items-center justify-between gap-2">
-                <span class="text-ink">{printer.name}</span>
-                <span class="flex flex-wrap items-center gap-2">
-                  <Show when={tested()[printer.device_id]}>
-                    {(outcome) => (
-                      <span class="text-sm text-ink-muted" role="status" data-outcome="test-print">
-                        {t(printOutcomeKey(outcome(), "devices.test_printed"))}
-                      </span>
-                    )}
-                  </Show>
-                  <Show when={manages()}>
-                  <button
-                    type="button"
-                    class="min-h-touch rounded-token border border-line px-3 text-ink disabled:opacity-50"
-                    disabled={busy()}
-                    onClick={() => void testPrint(printer.device_id)}
-                  >
-                    {t("devices.test_print")}
-                  </button>
-                  </Show>
-                </span>
-              </li>
-            )}
-          </For>
-        </ul>
-      </div>
-
-      <div class="mt-6 rounded-token border border-line p-3" data-outcome="integrations">
-        <p class="font-semibold text-ink">{t("devices.integrations_title")}</p>
-        <p class="mt-1 text-sm text-ink-muted">{t("devices.integrations_hint")}</p>
-        <ul class="mt-2 flex flex-col gap-1">
-          <For
-            each={integrations()}
-            fallback={<li class="text-sm text-ink-muted">{t("devices.integrations_none")}</li>}
-          >
-            {(integration) => (
-              <li class="flex flex-wrap items-baseline justify-between gap-2">
-                <span class="text-ink">{integration.display_name}</span>
-                <span class="text-sm text-ink-muted">{t(familyKey(integration.family))}</span>
-              </li>
-            )}
-          </For>
-        </ul>
-      </div>
-
-      <div class="mt-6 rounded-token border border-line p-3">
-        <p class="font-semibold text-ink">{t("devices.clock_title")}</p>
-        <p class="mt-1 text-sm text-ink-muted">{t("devices.clock_hint")}</p>
-        <Show
-          when={clock()}
-          fallback={<p class="mt-2 text-sm text-ink-muted">{t("devices.clock_unmeasured")}</p>}
+    <div class="mt-6 rounded-token border border-line p-3" data-outcome="integrations">
+      <p class="font-semibold text-ink">{t("devices.integrations_title")}</p>
+      <p class="mt-1 text-sm text-ink-muted">{t("devices.integrations_hint")}</p>
+      <ul class="mt-2 flex flex-col gap-1">
+        <For
+          each={integrations()}
+          fallback={<li class="text-sm text-ink-muted">{t("devices.integrations_none")}</li>}
         >
-          {(reading) => (
-            <>
-              <p class="mt-2 tabular-nums text-ink">
-                {t(clockOffsetKey(reading().offsetMs), { offset: Math.abs(reading().offsetMs) })}
-              </p>
-              <p class="text-sm text-ink-muted">
-                {t("devices.clock_checked", { moment: pairedAt(reading().measuredMs) })}
-              </p>
-              <Show when={reading().alarm}>
-                <p class="mt-2 rounded-token border border-danger px-3 py-2 text-danger" role="status">
-                  {t("devices.clock_alarm", { limit: reading().limitMs })}
-                </p>
-              </Show>
-            </>
+          {(integration) => (
+            <li class="flex flex-wrap items-baseline justify-between gap-2">
+              <span class="text-ink">{integration.display_name}</span>
+              <span class="text-sm text-ink-muted">{t(familyKey(integration.family))}</span>
+            </li>
           )}
-        </Show>
-      </div>
+        </For>
+      </ul>
+    </div>
 
-      <Show when={manages()}>
-      <div class="mt-6 rounded-token border border-danger p-3">
-        <p class="font-semibold text-ink">{t("devices.all_title")}</p>
-        <p class="mt-1 text-sm text-ink-muted">{t("devices.all_hint")}</p>
-        <label class="mt-2 block text-sm text-ink-muted" for="retire-all-confirm">
-          {t("devices.all_type", { word: CONFIRM_ALL })}
-        </label>
-        <input
-          id="retire-all-confirm"
-          class="mt-1 w-full rounded-token border border-line bg-surface p-2 text-ink"
-          value={confirmAll()}
-          onInput={(event) => setConfirmAll(event.currentTarget.value)}
-        />
-        <button
-          type="button"
-          class="mt-2 min-h-touch w-full rounded-token bg-danger font-semibold text-danger-ink disabled:opacity-50"
-          disabled={busy() || confirmAll().trim().toUpperCase() !== CONFIRM_ALL}
-          onClick={() => void retire(null)}
-        >
-          {t("devices.all_confirm")}
-        </button>
-      </div>
+    <div class="mt-6 rounded-token border border-line p-3">
+      <p class="font-semibold text-ink">{t("devices.clock_title")}</p>
+      <p class="mt-1 text-sm text-ink-muted">{t("devices.clock_hint")}</p>
+      <Show
+        when={clock()}
+        fallback={<p class="mt-2 text-sm text-ink-muted">{t("devices.clock_unmeasured")}</p>}
+      >
+        {(reading) => (
+          <>
+            <p class="mt-2 tabular-nums text-ink">
+              {t(clockOffsetKey(reading().offsetMs), { offset: Math.abs(reading().offsetMs) })}
+            </p>
+            <p class="text-sm text-ink-muted">
+              {t("devices.clock_checked", { moment: pairedAt(reading().measuredMs) })}
+            </p>
+            <Show when={reading().alarm}>
+              <p class="mt-2 rounded-token border border-danger px-3 py-2 text-danger" role="status">
+                {t("devices.clock_alarm", { limit: reading().limitMs })}
+              </p>
+            </Show>
+          </>
+        )}
       </Show>
-    </section>
-  );
+    </div>
+
+    <Show when={manages()}>
+    <div class="mt-6 rounded-token border border-danger p-3">
+      <p class="font-semibold text-ink">{t("devices.all_title")}</p>
+      <p class="mt-1 text-sm text-ink-muted">{t("devices.all_hint")}</p>
+      <label class="mt-2 block text-sm text-ink-muted" for="retire-all-confirm">
+        {t("devices.all_type", { word: CONFIRM_ALL })}
+      </label>
+      <input
+        id="retire-all-confirm"
+        class="mt-1 w-full rounded-token border border-line bg-surface p-2 text-ink"
+        value={confirmAll()}
+        onInput={(event) => setConfirmAll(event.currentTarget.value)}
+      />
+      <button
+        type="button"
+        class="mt-2 min-h-touch w-full rounded-token bg-danger font-semibold text-danger-ink disabled:opacity-50"
+        disabled={busy() || confirmAll().trim().toUpperCase() !== CONFIRM_ALL}
+        onClick={() => void retire(null)}
+      >
+        {t("devices.all_confirm")}
+      </button>
+    </div>
+    </Show>
+    </>,
+  };
+  return <RegionsContext.Provider value={regions}><PackageScreen screenId="devices" host={NO_ACTS} /></RegionsContext.Provider>;
 }

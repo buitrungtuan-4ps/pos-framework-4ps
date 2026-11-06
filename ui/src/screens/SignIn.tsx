@@ -8,6 +8,8 @@ import { adoptStoreLanguage, t } from "../i18n";
 import { signedInAs } from "../state/session";
 import { loadStore } from "../state/registry";
 import { errorMessage } from "../lib/errors";
+import { RegionsContext, type Regions } from "../package/regions";
+import { NO_ACTS, PackageScreen } from "../package/screen";
 
 // A device already signed in has no business on the sign-in screen; a device not paired must pair
 // first. Both are resolved by asking the edge who is signed in, so a manual visit or a reload lands
@@ -124,72 +126,76 @@ export function SignIn() {
     }
   };
 
-  return (
+  // The regions the default package's `sign_in` screen arranges (`../package/regions.tsx`).
+  const regions: Regions = {
     // Two columns on a terminal, the fields beside the pad: stacked, the pad's digit row sat below the
     // fold of a 1366x768 till, the commonest Windows POS screen, so a PIN needed a scroll first.
-    <section class="mx-auto max-w-sm p-4 terminal:grid terminal:max-w-4xl terminal:grid-cols-2 terminal:items-start terminal:gap-8">
-      <div>
-      <PageHeader title={t("signin.title")} />
-      <p class="text-ink-muted">{t("signin.hint")}</p>
-      <Show when={unstaffed()}>
-        <p id="signin-no-staff" class="mt-3 rounded-token border border-awaiting px-3 py-2 text-ink" role="status">
-          {t("signin.no_staff")}
+    sign_in_screen: () => <>
+  <section class="mx-auto max-w-sm p-4 terminal:grid terminal:max-w-4xl terminal:grid-cols-2 terminal:items-start terminal:gap-8">
+    <div>
+    <PageHeader title={t("signin.title")} />
+    <p class="text-ink-muted">{t("signin.hint")}</p>
+    <Show when={unstaffed()}>
+      <p id="signin-no-staff" class="mt-3 rounded-token border border-awaiting px-3 py-2 text-ink" role="status">
+        {t("signin.no_staff")}
+      </p>
+    </Show>
+
+    <label class="mt-3 block text-ink-muted" for="signin-code">
+      {t("signin.code")}
+    </label>
+    <input
+      id="signin-code"
+      autocomplete="username"
+      class="mt-1 w-full rounded-token border border-line bg-surface p-3 text-lg"
+      value={code()}
+      onFocus={() => setFilling("code")}
+      onInput={(event) => setCode(event.currentTarget.value)}
+    />
+
+    <label class="mt-3 block text-ink-muted" for="signin-pin">
+      {t("signin.pin")}
+    </label>
+    <input
+      id="signin-pin"
+      ref={pinField}
+      type="password"
+      inputmode="numeric"
+      autocomplete="current-password"
+      class="mt-1 w-full rounded-token border border-line bg-surface p-3 text-center text-xl tracking-[0.4em] tabular-nums"
+      value={pin()}
+      onFocus={() => setFilling("pin")}
+      onInput={(event) => setPin(event.currentTarget.value.replace(/\D/g, ""))}
+    />
+
+    <Show when={error()}>
+      {(message) => (
+        <p class="mt-3 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
+          {message()}
         </p>
-      </Show>
+      )}
+    </Show>
 
-      <label class="mt-3 block text-ink-muted" for="signin-code">
-        {t("signin.code")}
-      </label>
-      <input
-        id="signin-code"
-        autocomplete="username"
-        class="mt-1 w-full rounded-token border border-line bg-surface p-3 text-lg"
-        value={code()}
-        onFocus={() => setFilling("code")}
-        onInput={(event) => setCode(event.currentTarget.value)}
-      />
+    <button
+      type="button"
+      class="mt-4 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
+      disabled={busy() || code().trim().length === 0 || pin().length === 0}
+      data-step="submit"
+      onClick={() => void submit()}
+    >
+      {t("signin.submit")}
+    </button>
+    </div>
 
-      <label class="mt-3 block text-ink-muted" for="signin-pin">
-        {t("signin.pin")}
-      </label>
-      <input
-        id="signin-pin"
-        ref={pinField}
-        type="password"
-        inputmode="numeric"
-        autocomplete="current-password"
-        class="mt-1 w-full rounded-token border border-line bg-surface p-3 text-center text-xl tracking-[0.4em] tabular-nums"
-        value={pin()}
-        onFocus={() => setFilling("pin")}
-        onInput={(event) => setPin(event.currentTarget.value.replace(/\D/g, ""))}
-      />
-
-      <Show when={error()}>
-        {(message) => (
-          <p class="mt-3 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
-            {message()}
-          </p>
-        )}
-      </Show>
-
-      <button
-        type="button"
-        class="mt-4 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
-        disabled={busy() || code().trim().length === 0 || pin().length === 0}
-        data-step="submit"
-        onClick={() => void submit()}
-      >
-        {t("signin.submit")}
-      </button>
-      </div>
-
-      <CodePad
-        id="signin-pad"
-        value={padValue()}
-        onChange={padChange}
-        mode={filling() === "code" ? "text" : "digits"}
-        label={filling() === "code" ? t("signin.pad_code") : t("signin.pad_pin")}
-      />
-    </section>
-  );
+    <CodePad
+      id="signin-pad"
+      value={padValue()}
+      onChange={padChange}
+      mode={filling() === "code" ? "text" : "digits"}
+      label={filling() === "code" ? t("signin.pad_code") : t("signin.pad_pin")}
+    />
+  </section>
+    </>,
+  };
+  return <RegionsContext.Provider value={regions}><PackageScreen screenId="sign_in" host={NO_ACTS} /></RegionsContext.Provider>;
 }

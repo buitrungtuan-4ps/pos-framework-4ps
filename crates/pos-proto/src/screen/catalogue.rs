@@ -106,12 +106,12 @@ pub static CATALOGUE: &[Component] = &[
         component_id: "screen_frame",
         properties: &[Property {
             name: "width",
-            tokens: &["full", "narrow"],
+            tokens: &["full", "narrow", "medium", "small"],
             ..PROPERTY
         }],
         holds_children: true,
         summary: "A whole screen's frame, its children inside the screen's margin, across the \
-                  screen or in a narrow column at its centre.",
+                  screen or in a column at its centre: narrow, medium or small.",
         ..BASE
     },
     Component {
@@ -271,6 +271,42 @@ pub static CATALOGUE: &[Component] = &[
         component_id: "counter_flow",
         reads: "counter",
         summary: "The counter: a new order, how each guest is asked, and the open counter orders, or the one chosen.",
+        ..BASE
+    },
+    Component {
+        component_id: "today_body",
+        reads: "takings",
+        summary: "Today's takings and the bills to reprint from.",
+        ..BASE
+    },
+    Component {
+        component_id: "shift_screen",
+        reads: "drawer",
+        summary: "The drawer's shift: opening, cash in and out, counting and closing, and every till's drawer beside it.",
+        ..BASE
+    },
+    Component {
+        component_id: "devices_body",
+        reads: "devices",
+        summary: "The store's devices, printers and connections, and pairing a new one.",
+        ..BASE
+    },
+    Component {
+        component_id: "pair_body",
+        reads: "pairing",
+        summary: "Pairing this device with a code from the store server.",
+        ..BASE
+    },
+    Component {
+        component_id: "setup_body",
+        reads: "setup",
+        summary: "Setting the store server up: claiming it and checking how it is reached.",
+        ..BASE
+    },
+    Component {
+        component_id: "sign_in_screen",
+        reads: "sign_in",
+        summary: "Signing in with a badge code and PIN, and the pad to type them on.",
         ..BASE
     },
 ];
