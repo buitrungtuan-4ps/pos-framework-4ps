@@ -99,6 +99,10 @@ jobs:
         # Single-threaded: every case shares the one database and truncates between
         # cases (see the crate's tests/integration.rs).
         run: cargo test -p store-postgres --features integration --locked -- --test-threads=1
+      - name: package store against a real PostgreSQL
+        # `PostgresPackages` holds the `PackageStore` contract on the same database, and a published
+        # version's rows refuse to change for the tenant role (crates/pos-cloud-config/tests/packages_postgres.rs).
+        run: cargo test -p pos-cloud-config --features integration --locked --test packages_postgres -- --test-threads=1
       - name: start Garage
         # The S3 server the fork actually deploys (`deploy/compose.yml`), at the same version, so
         # the hand-rolled SigV4 is proven against the thing production runs rather than against a
