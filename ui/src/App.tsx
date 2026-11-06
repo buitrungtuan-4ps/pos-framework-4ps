@@ -6,6 +6,7 @@ import { MINIMUM_EDGE_VERSION, edgeIsBehind, edgeVersion } from "./api/edgeVersi
 import { edgeIsSuperseded, edgeLeaseIsAhead } from "./api/leaseStanding";
 import { LiveLink } from "./api/live";
 import { IdleLock } from "./components/IdleLock";
+import { ScreenReactions } from "./components/ScreenReactions";
 import { StatusBar } from "./components/StatusBar";
 import { t } from "./i18n";
 import { Devices } from "./screens/Devices";
@@ -102,6 +103,7 @@ function Shell(props: ParentProps) {
     <>
       <div class="flex min-h-full flex-col" inert={locked() ? true : undefined}>
         <StatusBar />
+        <ScreenReactions />
         <Superseded />
         <LeaseAhead />
         <VersionDrift />

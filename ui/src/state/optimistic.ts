@@ -22,7 +22,8 @@ import type { LineRequest, MenuItemResponse, OrderLineRequest } from "../api/sch
 import { type Money, addMoney } from "../lib/money";
 import { errorMessage } from "../lib/errors";
 import { editWrite } from "./edge-write";
-import { forgetGuests, recordGuests } from "./flows";
+import { forgetGuests, recordGuests, seatSteps, tableFacts } from "./flows";
+import { hasReactions, react } from "./reactions";
 import { load } from "./engine";
 import { PENDING, type OrderLine, loadLiveOrders, moveOrder, state, updateStore, walkInOrder } from "./store";
 
@@ -104,6 +105,12 @@ export function seatAtOnce(tableId: string, refused: () => void, guestCount?: nu
         draft.tableState[tableId] = response.state;
       });
       settled(tableId);
+      tableReacts("REACTION_TRIGGER_ORDER_OPENED", tableId);
+      if (guestCount !== undefined) {
+        for (const step of seatSteps()) {
+          tableReacts("REACTION_TRIGGER_STEP_COMPLETED", tableId, step);
+        }
+      }
     },
     reread: rereadOrders,
   }).then(
@@ -197,6 +204,32 @@ function addConfirmed(
     };
   });
   awaitEvent(response.order_line_id);
+  if (walkIn === undefined) {
+    tableReacts("REACTION_TRIGGER_LINE_ADDED", tableId);
+  }
+}
+
+/**
+ * Fires a package reaction's trigger for a table's order, once the edge confirmed the act
+ * (`./reactions.ts`): never on the tap, which the edge's answer always follows.
+ */
+export function tableReacts(
+  trigger: string,
+  tableId: string,
+  extra: { readonly flowId?: string; readonly stepId?: string; readonly screenId?: string; readonly billId?: string } = {},
+): void {
+  if (!hasReactions()) {
+    return;
+  }
+  const orderId = state.tableOrder[tableId];
+  const lines = Object.values(state.lines).filter((line) => line.orderId === orderId).length;
+  react(trigger, {
+    ...extra,
+    tableId,
+    orderId: orderId?.startsWith(PENDING) === true ? undefined : orderId,
+    channel: "SALES_CHANNEL_DINE_IN",
+    facts: tableFacts(tableId, lines),
+  });
 }
 
 // One of the dish at the table's price book: its own price plus each chosen modifier's, which is

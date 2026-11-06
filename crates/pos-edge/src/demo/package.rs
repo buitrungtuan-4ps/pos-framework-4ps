@@ -57,11 +57,90 @@ fn guests_required_package() -> serde_json::Value {
     })
 }
 
+/// Whether this demo store's package reacts on the till — `POS_DEMO_PROFILE=reactions`.
+///
+/// That profile publishes a version with two reactions (ADR-0193 decision 5): a bill opened on an
+/// order with a line prints its check, and a table seated prints an X report. The store enforces
+/// permissions, and the demo employee holds every one but the X report's, so the second reaction is
+/// never run: the browser gate drives one reaction that runs and one the person may not.
+fn reactions() -> bool {
+    std::env::var("POS_DEMO_PROFILE").is_ok_and(|profile| profile.eq_ignore_ascii_case("reactions"))
+}
+
+/// The X report's permissions, which the `reactions` profile's employee does not hold.
+const WITHHELD: [&str; 2] = ["reports.shift.read_x", "reports.takings.view"];
+
+/// A package version, locked, with a reaction the person may run and one they may not, and the
+/// default package's optional guest step. Fake ids.
+fn reactions_package() -> serde_json::Value {
+    let version = Ulid::from_u128(403).to_string();
+    serde_json::json!({
+        "mode": "PACKAGE_MODE_LOCKED",
+        "locked_version_id": version,
+        "content": {
+            "package_id": Ulid::from_u128(402).to_string(),
+            "package_version_id": version,
+            "version_label": "Demo: reactions",
+            "min_edge_version": crate::version::VERSION,
+            // The default package's guest step, optional, so a table is seated as on every store.
+            "flows": [{ "body": {
+                "flow_id": "dine_in",
+                "start_action_id": "sales.table.seat",
+                "steps": [{
+                    "step_id": "guests",
+                    "action_id": "sales.table.seat",
+                    "kind": "STEP_KIND_OPTIONAL",
+                }],
+            }}],
+            "reactions": [
+                { "body": {
+                    "reaction_id": "check_on_bill",
+                    "when": "REACTION_TRIGGER_BILL_OPENED",
+                    "if": "order.line_count >= 1",
+                    "then": { "action_id": "billing.check.print" },
+                }},
+                { "body": {
+                    "reaction_id": "x_on_seat",
+                    "when": "REACTION_TRIGGER_ORDER_OPENED",
+                    "then": { "action_id": "reports.shift.print_x" },
+                }},
+            ],
+        },
+    })
+}
+
 /// Publishes the package on its own profile; every other profile runs the release's default
-/// package.
+/// package. The `reactions` profile also enforces permissions and withholds the X report's.
 pub(super) fn publish_on_its_profile(document: &mut serde_json::Value) {
     if let Some(object) = document.as_object_mut().filter(|_| guests_required()) {
         object.insert("package".to_owned(), guests_required_package());
+    }
+    if reactions() {
+        withhold_x_report(document);
+        if let Some(object) = document.as_object_mut() {
+            object.insert("package".to_owned(), reactions_package());
+        }
+    }
+}
+
+/// Turns enforcement on and takes the X report's permissions from every employee.
+fn withhold_x_report(document: &mut serde_json::Value) {
+    if let Some(permissions) = document
+        .get_mut("permissions")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        permissions.insert("enforced".to_owned(), serde_json::Value::Bool(true));
+        let staff = permissions
+            .get_mut("staff")
+            .and_then(serde_json::Value::as_array_mut);
+        for employee in staff.into_iter().flatten() {
+            if let Some(held) = employee
+                .get_mut("permissions")
+                .and_then(serde_json::Value::as_array_mut)
+            {
+                held.retain(|id| !id.as_str().is_some_and(|id| WITHHELD.contains(&id)));
+            }
+        }
     }
 }
 
@@ -87,6 +166,24 @@ mod tests {
         assert_eq!(
             document["package"]["content"]["min_edge_version"],
             crate::version::VERSION
+        );
+    }
+
+    /// The reactions profile's version runs here, and its employee no longer holds the X report.
+    #[test]
+    fn the_reactions_profile_runs_and_withholds_the_x_report() {
+        let mut document = serde_json::json!({
+            "package": super::reactions_package(),
+            "permissions": { "staff": [{ "permissions": ["billing.bill.open", "reports.shift.read_x"] }] },
+        });
+        let content = crate::config_client::checked_package(&document, crate::version::released())
+            .expect("runs here")
+            .expect("a package");
+        assert_eq!(content.reactions.len(), 2);
+        super::withhold_x_report(&mut document);
+        assert_eq!(
+            document["permissions"],
+            serde_json::json!({ "enforced": true, "staff": [{ "permissions": ["billing.bill.open"] }] })
         );
     }
 }

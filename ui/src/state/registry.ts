@@ -30,6 +30,7 @@ import { configApplied, load, loadAll, register, type Entry } from "./engine";
 import { readLiveOrders, type LiveOrdersRead } from "./live-orders-read";
 import { takeSession } from "./session";
 import { applyPackage } from "./flows";
+import { applyReactions } from "./reactions";
 import { bootTillRules } from "../rules/boot";
 import { applyCountDenominations } from "./cash-count";
 import {
@@ -103,12 +104,16 @@ const ENTRIES: readonly Entry[] = [
     drawStale: true,
   },
   {
-    // The running package version's flows, which the till runs (ADR-0192 decision 3,
-    // `./flows.ts`). A store on the default package is answered `running: null`.
+    // The running package version's flows and reactions, which the till runs (ADR-0192 decision 3,
+    // `./flows.ts`; ADR-0193 decision 5, `./reactions.ts`). A store on the default package is
+    // answered `running: null`.
     key: "package",
     kind: "configuration",
     path: () => "/api/package",
-    apply: applyPackage,
+    apply: (body) => {
+      applyPackage(body);
+      applyReactions(body);
+    },
     required: false,
     nodes: ["package"],
     // Steps and conditions, and no price: drawn from the snapshot until the edge confirms it.

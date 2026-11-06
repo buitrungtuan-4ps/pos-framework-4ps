@@ -6224,6 +6224,10 @@
         "type": "string",
         "description": "A `PaymentMethod` token: PAYMENT_METHOD_UNSPECIFIED, PAYMENT_METHOD_CASH, PAYMENT_METHOD_CARD, PAYMENT_METHOD_QR, PAYMENT_METHOD_VOUCHER, PAYMENT_METHOD_GIFT_CARD, PAYMENT_METHOD_OTHER, or one a newer build sent, which is kept as it arrived"
       },
+      "OpenReactionTrigger_ReactionTrigger": {
+        "type": "string",
+        "description": "A `ReactionTrigger` token: REACTION_TRIGGER_UNSPECIFIED, REACTION_TRIGGER_SCREEN_ENTERED, REACTION_TRIGGER_STEP_COMPLETED, REACTION_TRIGGER_LINE_ADDED, REACTION_TRIGGER_ORDER_OPENED, REACTION_TRIGGER_BILL_OPENED, or one a newer build sent, which is kept as it arrived"
+      },
       "OpenReceiptLanguage_ReceiptLanguage": {
         "type": "string",
         "description": "A `ReceiptLanguage` token: RECEIPT_LANGUAGE_UNSPECIFIED, RECEIPT_LANGUAGE_DISPLAY, RECEIPT_LANGUAGE_COUNTRY, RECEIPT_LANGUAGE_VI, RECEIPT_LANGUAGE_EN, or one a newer build sent, which is kept as it arrived"
@@ -6903,6 +6907,29 @@
         },
         "additionalProperties": false
       },
+      "ReactionAct": {
+        "type": "object",
+        "description": "The act a reaction runs, with parameters fixed in the package. An id parameter left out is the\nsubject's own on the till (the order, table or bill the trigger fired for), as for a button.",
+        "required": [
+          "action_id"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "string",
+            "description": "A catalogue act whose effect is UI or an edge write."
+          },
+          "params": {
+            "type": "object",
+            "description": "Its parameters by name, each as text. Every required parameter is here.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "ReasonCodeId": {
         "type": "string",
         "description": "A `ReasonCodeId`: a ULID, 26 Crockford base-32 characters",
@@ -7094,6 +7121,13 @@
           },
           "package_version_id": {
             "type": "string"
+          },
+          "reactions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Variant_Reaction"
+            },
+            "description": "The version's reactions, every variant of each in the version's order, for the till to run\nunder the signed-in person's permissions (ADR-0193 decision 5); the edge checks each command\na reaction sends as any other. Left out when the version has none."
           },
           "version_label": {
             "type": "string",
@@ -7956,6 +7990,58 @@
                   "$ref": "#/components/schemas/FlowStep"
                 },
                 "description": "The steps, at most [`STEPS_MAX`], in the order the till offers them when several are\navailable at once."
+              }
+            }
+          },
+          "selector": {
+            "$ref": "#/components/schemas/VariantSelector",
+            "description": "When the variant applies. Empty for the part's base variant."
+          }
+        }
+      },
+      "Variant_Reaction": {
+        "type": "object",
+        "description": "One variant of a package part: what a till shows or runs when its selector is the one chosen.",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "object",
+            "description": "One reaction of a package.",
+            "required": [
+              "reaction_id",
+              "when",
+              "then"
+            ],
+            "properties": {
+              "flow_id": {
+                "type": "string",
+                "description": "The flow of the step whose completion fires it: present exactly for\n`REACTION_TRIGGER_STEP_COMPLETED`."
+              },
+              "if": {
+                "type": "string",
+                "description": "When it runs at all, over the till's views. Absent: whenever it fires."
+              },
+              "reaction_id": {
+                "type": "string",
+                "description": "The reaction's id within its package. Its variants share it."
+              },
+              "screen_id": {
+                "type": "string",
+                "description": "The screen whose showing fires it: present exactly for `REACTION_TRIGGER_SCREEN_ENTERED`."
+              },
+              "step_id": {
+                "type": "string",
+                "description": "The step whose completion fires it, with `flow_id`."
+              },
+              "then": {
+                "$ref": "#/components/schemas/ReactionAct",
+                "description": "The act it runs."
+              },
+              "when": {
+                "$ref": "#/components/schemas/OpenReactionTrigger_ReactionTrigger",
+                "description": "What fires it."
               }
             }
           },
