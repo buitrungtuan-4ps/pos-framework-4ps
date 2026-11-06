@@ -15,8 +15,8 @@
     "max-lines-per-function": 363
   },
   "src/screens/Order.tsx": {
-    "max-lines": 1201,
-    "max-lines-per-function": 1142
+    "max-lines": 1197,
+    "max-lines-per-function": 1137
   },
   "src/screens/Pay.tsx": {
     "max-lines": 1078,

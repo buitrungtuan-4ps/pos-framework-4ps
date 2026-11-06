@@ -133,4 +133,64 @@ pub static CATALOGUE: &[Component] = &[
                   table and opens it, opens a used one, or clears one that needs cleaning.",
         ..BASE
     },
+    Component {
+        component_id: "order_layout",
+        holds_children: true,
+        summary: "The order screen's two halves: its column and its menu, side by side on a terminal, the menu as the screen on a tablet.",
+        ..BASE
+    },
+    Component {
+        component_id: "order_column",
+        holds_children: true,
+        summary: "The order's own column: its header and its bill; on a tablet its body is a panel over the menu's foot.",
+        ..BASE
+    },
+    Component {
+        component_id: "order_header",
+        reads: "order",
+        summary: "The order's heading: the way back, the table or counter order, its state, moving the table and printing its pre-bill.",
+        ..BASE
+    },
+    Component {
+        component_id: "order_notices",
+        reads: "order",
+        summary: "What the last pre-bill print and table move said.",
+        ..BASE
+    },
+    Component {
+        component_id: "order_move",
+        reads: "order",
+        summary: "The free tables the order's guests can move to, while the operator is moving them.",
+        ..BASE
+    },
+    Component {
+        component_id: "order_bill",
+        reads: "order",
+        summary: "The order's lines, choices, seats, fees and totals, and the acts that send it and take payment.",
+        ..BASE
+    },
+    Component {
+        component_id: "order_menu",
+        holds_children: true,
+        summary: "The menu's side of the order screen.",
+        ..BASE
+    },
+    Component {
+        component_id: "menu_toolbar",
+        reads: "menu",
+        summary: "The menu's heading, marking a dish sold out, and why the menu sells nothing while the bill is open.",
+        ..BASE
+    },
+    Component {
+        component_id: "menu_fields",
+        reads: "menu",
+        summary: "The menu's search and the note that rides with the next dish.",
+        ..BASE
+    },
+    Component {
+        component_id: "menu_buttons",
+        reads: "menu",
+        summary: "The menu's buttons as the store arranged them, or what the search found.",
+        ..BASE
+    },
 ];

@@ -38,6 +38,93 @@ floor_plan	device_class=DEVICE_CLASS_TERMINAL
 floor_plan	reads=floor
 floor_plan	since=0.14.1
 floor_plan	supplies=table_id
+menu_buttons
+menu_buttons	children=false
+menu_buttons	device_class=DEVICE_CLASS_KIOSK
+menu_buttons	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+menu_buttons	device_class=DEVICE_CLASS_PHONE
+menu_buttons	device_class=DEVICE_CLASS_TABLET
+menu_buttons	device_class=DEVICE_CLASS_TERMINAL
+menu_buttons	reads=menu
+menu_buttons	since=0.14.1
+menu_fields
+menu_fields	children=false
+menu_fields	device_class=DEVICE_CLASS_KIOSK
+menu_fields	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+menu_fields	device_class=DEVICE_CLASS_PHONE
+menu_fields	device_class=DEVICE_CLASS_TABLET
+menu_fields	device_class=DEVICE_CLASS_TERMINAL
+menu_fields	reads=menu
+menu_fields	since=0.14.1
+menu_toolbar
+menu_toolbar	children=false
+menu_toolbar	device_class=DEVICE_CLASS_KIOSK
+menu_toolbar	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+menu_toolbar	device_class=DEVICE_CLASS_PHONE
+menu_toolbar	device_class=DEVICE_CLASS_TABLET
+menu_toolbar	device_class=DEVICE_CLASS_TERMINAL
+menu_toolbar	reads=menu
+menu_toolbar	since=0.14.1
+order_bill
+order_bill	children=false
+order_bill	device_class=DEVICE_CLASS_KIOSK
+order_bill	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+order_bill	device_class=DEVICE_CLASS_PHONE
+order_bill	device_class=DEVICE_CLASS_TABLET
+order_bill	device_class=DEVICE_CLASS_TERMINAL
+order_bill	reads=order
+order_bill	since=0.14.1
+order_column
+order_column	children=true
+order_column	device_class=DEVICE_CLASS_KIOSK
+order_column	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+order_column	device_class=DEVICE_CLASS_PHONE
+order_column	device_class=DEVICE_CLASS_TABLET
+order_column	device_class=DEVICE_CLASS_TERMINAL
+order_column	since=0.14.1
+order_header
+order_header	children=false
+order_header	device_class=DEVICE_CLASS_KIOSK
+order_header	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+order_header	device_class=DEVICE_CLASS_PHONE
+order_header	device_class=DEVICE_CLASS_TABLET
+order_header	device_class=DEVICE_CLASS_TERMINAL
+order_header	reads=order
+order_header	since=0.14.1
+order_layout
+order_layout	children=true
+order_layout	device_class=DEVICE_CLASS_KIOSK
+order_layout	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+order_layout	device_class=DEVICE_CLASS_PHONE
+order_layout	device_class=DEVICE_CLASS_TABLET
+order_layout	device_class=DEVICE_CLASS_TERMINAL
+order_layout	since=0.14.1
+order_menu
+order_menu	children=true
+order_menu	device_class=DEVICE_CLASS_KIOSK
+order_menu	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+order_menu	device_class=DEVICE_CLASS_PHONE
+order_menu	device_class=DEVICE_CLASS_TABLET
+order_menu	device_class=DEVICE_CLASS_TERMINAL
+order_menu	since=0.14.1
+order_move
+order_move	children=false
+order_move	device_class=DEVICE_CLASS_KIOSK
+order_move	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+order_move	device_class=DEVICE_CLASS_PHONE
+order_move	device_class=DEVICE_CLASS_TABLET
+order_move	device_class=DEVICE_CLASS_TERMINAL
+order_move	reads=order
+order_move	since=0.14.1
+order_notices
+order_notices	children=false
+order_notices	device_class=DEVICE_CLASS_KIOSK
+order_notices	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+order_notices	device_class=DEVICE_CLASS_PHONE
+order_notices	device_class=DEVICE_CLASS_TABLET
+order_notices	device_class=DEVICE_CLASS_TERMINAL
+order_notices	reads=order
+order_notices	since=0.14.1
 page_header
 page_header	children=false
 page_header	device_class=DEVICE_CLASS_KIOSK
