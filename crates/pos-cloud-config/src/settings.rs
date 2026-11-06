@@ -841,7 +841,10 @@ mod setting_value_schema_tests {
             .iter()
             .filter_map(|shape| shape["type"].as_str())
             .collect();
-        assert_eq!(shapes, ["string", "integer", "boolean", "null", "array"]);
+        assert_eq!(
+            shapes,
+            ["string", "integer", "boolean", "null", "array", "object"]
+        );
         for setting in pos_proto::settings::register() {
             let values = std::iter::once(setting.default_value()).chain(setting.preset_value());
             for value in values {
@@ -851,7 +854,8 @@ mod setting_value_schema_tests {
                     serde_json::Value::Bool(_) => "boolean",
                     serde_json::Value::Null => "null",
                     serde_json::Value::Array(_) => "array",
-                    _ => "none",
+                    serde_json::Value::Object(_) => "object",
+                    serde_json::Value::Number(_) => "none",
                 };
                 assert!(
                     shapes.contains(&shape),

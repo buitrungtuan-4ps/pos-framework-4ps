@@ -82,6 +82,15 @@ struct SettingsState<St, Rg, Grp, Cfg, A, C> {
     receipt: receipt::ReceiptChecks,
 }
 
+/// What the settings routes check a value against beyond the register.
+#[derive(Debug)]
+pub struct SettingsRules<Tr> {
+    /// Every country compiled into the cloud.
+    pub countries: CountryRegistry,
+    /// The tenants' translation grids.
+    pub translations: Tr,
+}
+
 /// Builds the settings sub-router
 /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 /// decision 3).
@@ -92,17 +101,12 @@ struct SettingsState<St, Rg, Grp, Cfg, A, C> {
 /// publishes on the Store layer. Reads are behind [`ConsolePermission::Read`](crate::auth::console_rbac::ConsolePermission::Read); a write publishes, so
 /// it is behind [`ConsolePermission::PublishConfig`](crate::auth::console_rbac::ConsolePermission::PublishConfig), like every node publish.
 ///
-/// `countries` is the compiled registry: a new store's values take its country pack's setting
-/// defaults before the register's presets (ADR-0183), and a receipt template may not turn off a
-/// section one of them requires (ADR-0207). `translations` is the tenant grid a receipt template's
-/// keys must be in.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each collaborator is its own store, handed in once where the cloud is composed"
-)]
+/// `rules` holds what a value is checked against beyond the register: the compiled countries, whose
+/// packs give a new store's values before the register's presets (ADR-0183) and whose required
+/// sections a receipt template may not turn off, and the tenant grid a receipt template's keys must
+/// be in (ADR-0207).
 pub fn settings_router<St, Rg, Grp, Cfg, A, C, Tr>(
-    countries: &CountryRegistry,
-    translations: Tr,
+    rules: SettingsRules<Tr>,
     settings: St,
     registry: Rg,
     groups: Grp,
@@ -161,8 +165,8 @@ where
             admin,
             clock,
             audit,
-            country_values: Arc::new(country_setting_values(countries)),
-            receipt: receipt::ReceiptChecks::new(countries, translations),
+            country_values: Arc::new(country_setting_values(&rules.countries)),
+            receipt: receipt::ReceiptChecks::new(&rules.countries, rules.translations),
         })
 }
 

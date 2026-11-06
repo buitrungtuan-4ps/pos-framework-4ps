@@ -22,6 +22,25 @@ use crate::{
     put_with_etag, tenant, text_body,
 };
 
+/// What the settings routes check against: every compiled-in country, and a tenant grid for a
+/// receipt template's keys (ADR-0207) with one footer with English and one key with no English.
+pub(crate) fn settings_rules() -> http::SettingsRules<FakeTranslations> {
+    let translations = FakeTranslations::seeded(
+        tenant(),
+        &[
+            (
+                "receipt.footer.thanks",
+                &[("en", "Thank you"), ("vi", "Cảm ơn")],
+            ),
+            ("receipt.footer.untranslated", &[("vi", "Hẹn gặp lại")]),
+        ],
+    );
+    http::SettingsRules {
+        countries: pos_cloud::countries::registry(),
+        translations,
+    }
+}
+
 // --- Translation grid (`/admin/translations`, behind the session guard) -------------------------
 
 /// The translation store, one grid per tenant, each carrying the version it was last written at —

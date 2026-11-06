@@ -176,8 +176,10 @@ fn fees_and_settings_app() -> (axum::Router, FakeConfigTrees) {
             Arc::new(NoopAuditRecorder),
         ))
         .merge(http::settings_router(
-            &pos_cloud::countries::registry(),
-            crate::translations::FakeTranslations::default(),
+            http::SettingsRules {
+                countries: pos_cloud::countries::registry(),
+                translations: crate::translations::FakeTranslations::default(),
+            },
             pos_cloud_config::package_pin::WithPackages::new(
                 FakeSettings::default(),
                 pos_cloud_config::packages::InMemoryPackages::new(),

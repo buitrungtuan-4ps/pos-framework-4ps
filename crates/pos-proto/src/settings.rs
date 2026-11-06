@@ -435,9 +435,8 @@ fn render_snapshot_of(settings: &[Setting]) -> String {
                 lines.push(format!("{key}\tvalue=false"));
                 lines.push(format!("{key}\tvalue=true"));
             }
-            SettingShape::Ulid => {}
+            SettingShape::Ulid | SettingShape::ReceiptTemplates => {}
             SettingShape::UlidList { max } => lines.push(format!("{key}\tmax={max}")),
-            SettingShape::ReceiptTemplates => {}
         }
         lines.push(format!(
             "{key}\tdefault={}",

@@ -2,13 +2,16 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! Settings that reach a store as numbers or on nodes of their own: the session, the archive
-//! interval, the permissions switch and the tip keys (ADR-0160 decision 3).
+//! interval, the permissions switch and the tip keys (ADR-0160 decision 3), and the receipt templates
+//! (ADR-0207).
 
 use axum::http::StatusCode;
 use pos_cloud::config_tree::ConfigTreeStore;
 use pos_proto::ids::StoreId;
 use pos_proto::ulid::Ulid;
 use tower::ServiceExt;
+
+use serde_json::{Value, json};
 
 use crate::{
     LOCKOUT_ATTEMPTS, admin_cookie, get_with_cookie, json_body, outcomes, put_number,
@@ -378,4 +381,110 @@ async fn the_tip_keys_reach_a_store_on_their_own_node_and_leave_its_tender_alone
         unlisted.get("tender").is_none(),
         "no tender node, so the store takes every tender as before"
     );
+}
+
+// --- The `receipt` node's templates (ADR-0207): keys from the grid with English, and a section a
+// country requires stays on. ----------------------------------------------------------------------
+
+const RECEIPT_TEMPLATES: &str = "receipt.templates";
+
+/// Writes `value` at the tenant, and answers the status and the body.
+async fn write_template(router: &axum::Router, cookie: &str, value: &Value) -> (StatusCode, Value) {
+    let answer = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/settings",
+            &put_number(RECEIPT_TEMPLATES, value),
+            cookie,
+        ))
+        .await
+        .expect("route the write");
+    let status = answer.status();
+    (status, json_body(answer).await)
+}
+
+/// The reason a `400` names for the value.
+fn reason(body: &Value) -> String {
+    body.to_string()
+}
+
+#[tokio::test]
+async fn a_template_with_grid_keys_reaches_every_store_on_its_receipt_node() {
+    let (router, config_trees, _) = settings_app();
+    let cookie = admin_cookie(&router).await;
+    let template = json!({
+        "base": { "footer_keys": ["receipt.footer.thanks"], "sections": { "payments": false } },
+        "channels": {
+            "SALES_CHANNEL_TAKEAWAY": {
+                "footer_keys": ["receipt.footer.thanks"],
+                "person_copy": ["PERSON_COPY_RECORD_SLIP"]
+            }
+        }
+    });
+    let (status, _) = write_template(&router, &cookie, &template).await;
+    assert_eq!(status, StatusCode::OK);
+    for store_id in settings_stores() {
+        assert_eq!(
+            tenant_layer_node(&config_trees, store_id, "receipt").await,
+            Some(json!({ "templates": template })),
+            "the node the edge reads"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_key_the_grid_has_no_english_for_is_refused_and_nothing_is_written() {
+    let (router, config_trees, _) = settings_app();
+    let cookie = admin_cookie(&router).await;
+    for key in ["receipt.footer.untranslated", "receipt.footer.nowhere"] {
+        let (status, body) = write_template(
+            &router,
+            &cookie,
+            &json!({ "base": { "header_keys": [key] } }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{key}");
+        assert!(reason(&body).contains("UNKNOWN_TRANSLATION_KEY"), "{body}");
+    }
+    let [first, _, _] = settings_stores();
+    assert_eq!(
+        tenant_layer_node(&config_trees, first, "receipt").await,
+        None
+    );
+}
+
+#[tokio::test]
+async fn a_template_cannot_turn_off_a_section_a_country_requires() {
+    let (router, _, _) = settings_app();
+    let cookie = admin_cookie(&router).await;
+    // Vietnam, Japan and India each require the modifiers (their `receipt_required_sections`).
+    let (status, body) = write_template(
+        &router,
+        &cookie,
+        &json!({ "channels": { "SALES_CHANNEL_DELIVERY": { "sections": { "modifiers": false } } } }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(reason(&body).contains("SECTION_REQUIRED"), "{body}");
+}
+
+#[tokio::test]
+async fn free_text_and_values_over_the_limits_are_refused() {
+    let (router, _, _) = settings_app();
+    let cookie = admin_cookie(&router).await;
+    for (value, expected) in [
+        (
+            json!({ "base": { "footer_text": "Thank you" } }),
+            "INVALID_VALUE",
+        ),
+        (json!("Thank you"), "INVALID_VALUE"),
+        (
+            json!({ "base": { "footer_keys": vec!["receipt.footer.thanks"; 5] } }),
+            "OUT_OF_RANGE",
+        ),
+    ] {
+        let (status, body) = write_template(&router, &cookie, &value).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{value}");
+        assert!(reason(&body).contains(expected), "{value}: {body}");
+    }
 }

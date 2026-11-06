@@ -581,25 +581,34 @@ fn read_back(node: &str, field: &str, value: Option<&Value>) -> Option<Value> {
             }
         }
         PublishedPackage::NODE => read_back_package(field, document),
-        PublishedReceipt::NODE if field == "templates" => {
-            let receipt: PublishedReceipt = serde_json::from_value(document).ok()?;
-            serde_json::to_value(receipt.templates.unwrap_or_default()).ok()
-        }
+        PublishedReceipt::NODE => read_back_receipt(field, document),
         PublishedBilling::NODE if field == "settled_void_window" => {
             let billing: PublishedBilling = serde_json::from_value(document).ok()?;
             Some(json!(billing.settled_void_window().as_wire()))
         }
-        PublishedBackup::NODE => {
-            let backup: PublishedBackup = serde_json::from_value(document).ok()?;
-            match field {
-                // A node that sets no interval leaves the edge on its deprecated local file and
-                // then on this default, so the default is what a store with neither runs.
-                "interval_hours" => Some(json!(
-                    backup.interval_hours().unwrap_or(DEFAULT_INTERVAL_HOURS)
-                )),
-                _ => None,
-            }
-        }
+        PublishedBackup::NODE => read_back_backup(field, document),
+        _ => None,
+    }
+}
+
+/// [`read_back`] for the `backup` node.
+fn read_back_backup(field: &str, document: Value) -> Option<Value> {
+    let backup: PublishedBackup = serde_json::from_value(document).ok()?;
+    match field {
+        // A node that sets no interval leaves the edge on its deprecated local file and then on
+        // this default, so the default is what a store with neither runs.
+        "interval_hours" => Some(json!(
+            backup.interval_hours().unwrap_or(DEFAULT_INTERVAL_HOURS)
+        )),
+        _ => None,
+    }
+}
+
+/// [`read_back`] for the `receipt` node (ADR-0207): no templates read as the empty set.
+fn read_back_receipt(field: &str, document: Value) -> Option<Value> {
+    let receipt: PublishedReceipt = serde_json::from_value(document).ok()?;
+    match field {
+        "templates" => serde_json::to_value(receipt.templates.unwrap_or_default()).ok(),
         _ => None,
     }
 }
