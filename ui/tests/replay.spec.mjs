@@ -6888,6 +6888,10 @@ test("take payment moves at once, and reads the amount while the bill is opened"
     await seatTable(page);
     await addItem(page);
     await sendOrder(page);
+    // The order screen reads the table's figure again after each change, once its frame is drawn:
+    // those reads are the order screen's, so the count starts once they are done.
+    await expect(page.locator('[data-outcome="writes-pending"]')).toHaveCount(0);
+    await page.waitForLoadState("networkidle");
 
     const held = await holdPost(page, "**/api/tables/*/bill");
     const checks = [];

@@ -7,7 +7,7 @@
 // state — so the figure refreshes on every act without polling. A line still sending is left out:
 // the edge has not priced it, and its confirmation re-reads.
 
-import { createMemo, createResource, type Accessor } from "solid-js";
+import { createMemo, createResource, untrack, type Accessor } from "solid-js";
 
 import type { CheckResponse } from "../api/schemas";
 import { afterPaint } from "../lib/after-paint";
@@ -51,6 +51,11 @@ export function createTableCheck(
     async () => {
       const pricedKey = key();
       await afterPaint();
+      // A screen hidden, or on another table, by the time the frame is drawn reads nothing: it is
+      // read again when it shows, and a read of a table it has left would be one too many.
+      if (!untrack(reads) || untrack(key) !== pricedKey) {
+        return undefined;
+      }
       return loadCheck(pricedKey).then(
         (totals) => ({ key: pricedKey, totals }),
         () => undefined,
