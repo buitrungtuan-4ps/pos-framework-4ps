@@ -1083,6 +1083,22 @@ test("a counter store lands on the counter, and is not offered a floor or a kitc
 // The same store with the default profile still gets the floor, so the test above is measuring the
 // flag rather than a screen that broke. Cheap, and it is the assertion that would have caught a
 // `tables_enabled` read inverted.
+// The till's rules module (`crates/pos-till-rules`, ADR-0193 decision 2) is served by the edge it is
+// embedded in, as WebAssembly, and fetched once the till is idle after its first screen.
+test("the till fetches its rules module from the edge once it has drawn the floor", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    const fetched = page.waitForResponse((response) => new URL(response.url()).pathname.endsWith(".wasm"));
+    await pair(page, edge);
+    await signIn(page, edge);
+    const module = await fetched;
+    expect(module.status()).toBe(200);
+    expect(module.headers()["content-type"]).toBe("application/wasm");
+  } finally {
+    await edge.stop();
+  }
+});
+
 test("a table-service store still lands on the floor", async ({ page }) => {
   const edge = await startEdge();
   try {

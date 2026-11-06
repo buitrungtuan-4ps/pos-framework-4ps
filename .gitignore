@@ -25,6 +25,8 @@ config.toml
 
 /ui/node_modules/
 /ui/dist/
+# The till's rules module, built from `crates/pos-till-rules` by `pnpm rules` before every build.
+/ui/src/rules/pos_till_rules.wasm
 # What the browser step gate leaves behind: traces and reports for a failed
 # replay (ADR-0109). Diagnostic output, regenerated on every run.
 /ui/test-results/

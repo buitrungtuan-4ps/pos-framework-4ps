@@ -6,5 +6,6 @@
 [toolchain]
 channel    = "1.94.1"
 components = ["rustfmt", "clippy"]
-targets    = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+# wasm32: the till's rules module (`crates/pos-till-rules`, ADR-0193 decision 2).
+targets    = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc", "wasm32-unknown-unknown"]
 profile    = "minimal"

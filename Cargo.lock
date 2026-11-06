@@ -2287,6 +2287,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pos-till-rules"
+version = "0.1.0"
+dependencies = [
+ "pos-core",
+ "pos-proto",
+ "pos-rules",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "postgres-protocol"
 version = "0.6.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"

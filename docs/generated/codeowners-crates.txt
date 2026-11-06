@@ -46,5 +46,6 @@
 /crates/pos-render/                    @maintainers-architecture
 /crates/pos-rules/                     @maintainers-architecture
 /crates/pos-simulator/                 @maintainers-architecture
+/crates/pos-till-rules/                @maintainers-architecture
 /examples/minimal-edge/                @maintainers-architecture
 /xtask/                                @maintainers-architecture

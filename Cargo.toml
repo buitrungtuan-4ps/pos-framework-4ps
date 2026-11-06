@@ -5,6 +5,7 @@ members = [
     "crates/pos-core",
     "crates/pos-ports",
     "crates/pos-rules",
+    "crates/pos-till-rules",
     "crates/pos-render",
     "crates/pos-country",
     "crates/pos-providers",
@@ -199,3 +200,11 @@ strip           = "symbols"
 # Money is i64 in a currency's minor unit. A silent wrap is a wrong total on a
 # receipt; a panic is a crash we find in testing. Keep it loud in release too.
 overflow-checks = true
+
+# The till's rules module (`crates/pos-till-rules`, built for `wasm32-unknown-unknown`). Smallest
+# for its download (ADR-0202 decision 1, measured: 292 kB gzipped against 360 kB at the release
+# profile's speed setting, with no slower answer). Everything else is the release profile.
+[profile.till-rules]
+inherits  = "release"
+opt-level = "z"
+lto       = "fat"
