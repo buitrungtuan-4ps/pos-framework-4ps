@@ -7,7 +7,6 @@
 
 import type { EdgeMethod, EdgeUrlFor } from "./paths";
 import { clearDeviceToken, deviceToken, edgeBase, rememberPairing } from "./credentials";
-import { pageIsLeaving } from "../lib/after-paint";
 import { observeEdgeVersion } from "./edgeVersion";
 import { type LeaseStanding, observeLeaseStanding } from "./leaseStanding";
 import type {
@@ -219,8 +218,11 @@ async function request<T, M extends EdgeMethod = EdgeMethod>(
     method,
     headers: authHeaders(body !== undefined),
     body: body === undefined ? undefined : JSON.stringify(body),
-    // A write sent as the page leaves outlives it (`../lib/after-paint.ts`).
-    keepalive: method !== "GET" && pageIsLeaving(),
+    // A write outlives the page that sent it. A reload or a navigation cancels every request still
+    // in flight, and the edge drops a request whose client has gone before it commits: a write
+    // painted a moment before was then lost (`../lib/after-paint.ts`). A `keepalive` request is not
+    // cancelled. Writes are small, well inside the browser's 64 KiB for those in flight at once.
+    keepalive: method !== "GET",
   });
   // Which release answered (ADR-0111). Before the `ok` check on purpose: the call that just failed
   // is exactly the one an operator is looking at when they ask which version this box is running.

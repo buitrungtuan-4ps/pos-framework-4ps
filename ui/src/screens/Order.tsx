@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createResource, createSignal } from "solid-js";
+import { For, Show, createMemo, createSignal } from "solid-js";
 import { useLocation, useNavigate, useParams, useSearchParams } from "@solidjs/router";
 
 import { api } from "../api/client";
@@ -7,7 +7,6 @@ import { t } from "../i18n";
 import { WhyUnavailable, WritesPendingNote } from "../components/StoreData";
 import { tableStateKey } from "../i18n/labels";
 import { formatQuantity } from "../lib/money";
-import { fold, matches } from "../lib/search";
 import type {
   FeeLine,
   LayoutButton,
@@ -22,7 +21,6 @@ import {
   modifiersSatisfied,
   floorTables,
   linesForTable,
-  loadCheck,
   modifierNames,
   noteLost,
   openBillFor,
@@ -51,6 +49,9 @@ import { errorMessage } from "../lib/errors";
 import { RegionsContext, type Regions } from "../package/regions";
 import { NO_ACTS, PackageScreen } from "../package/screen";
 import { useInFlight } from "../lib/in-flight";
+import { createTableScoped, resetPerTable, useKeptTable } from "../state/kept-table";
+import { createTableCheck } from "../state/table-check";
+import { createMenuSearch } from "../state/menu-search";
 import { createPrint } from "../state/print-writes";
 import { printOutcomeKey } from "../lib/print";
 import { SendFirst } from "../components/SendFirst";
@@ -71,15 +72,26 @@ const WAIVE_FEE = "REASON_ACTION_WAIVE_FEE";
 // sliding bill). Tapping a menu item adds it optimistically; a fresh line can be fired to the
 // kitchen. "Take payment" opens the bill and moves to the pay screen.
 export function Order() {
-  const params = useParams<{ id: string }>();
+  // A table's order screen is kept mounted beside the floor (`./kept.tsx`), and shows the table it
+  // is given; a walk-in's is the router's, and shows the one its address names.
+  const kept = useKeptTable();
+  const routed = useParams<{ id: string }>();
+  const params: { readonly id: string } = kept ?? routed;
+  const shown = kept?.shown ?? (() => true);
   const navigate = useNavigate();
   const location = useLocation();
-  const [error, setError] = createSignal<string | null>(null);
   // A walk-in order the counter started (ADR-0146), at `/order/:id`, rather than a table's. It sits
   // on no table, so it is held under a key of its own and every table-keyed read below works on it
   // unchanged; only the header, the way back and the way to pay differ.
   const walkIn = () => location.pathname.startsWith("/order/");
   const key = () => (walkIn() ? walkInKey(params.id) : params.id);
+  // What a kept screen keeps per table (`../state/kept-table.ts`). A walk-in's screen is the
+  // router's own, and its draft becoming an order is the same screen going on: one scope.
+  const scope = kept === undefined ? () => "" : key;
+  // The last act's refusal, shown only on the table the act was for.
+  const errorScope = createTableScoped<string>(scope);
+  const error = errorScope.get;
+  const setError = errorScope.set;
   if (walkIn() && params.id !== DRAFT) {
     holdWalkIn(params.id);
   }
@@ -104,28 +116,9 @@ export function Order() {
     }
   };
 
-  // What the table owes right now, asked of the edge — the same `billing::assemble` the settle runs,
-  // so the guest is quoted the figure the bill will charge (roadmap-v3 E5).
-  //
-  // Until this screen showed it, the only way to answer "how much so far?" was to press Take
-  // payment, and that **opens a bill**: a guest's question changed the order's state. The
-  // fingerprint below is what the edge would price differently — a line appearing, disappearing, or
-  // changing state — so the figure refreshes on every act without polling.
-  //
-  // Written below `params` deliberately: a `createMemo` runs when it is created, so one placed above
-  // the `const`s it reads dies in their temporal dead zone and takes the screen down (`.jules/bolt.md`).
-  // A line still sending is left out: the edge has not priced it, and its confirmation re-reads.
-  const priceable = createMemo(() =>
-    linesForTable(key())
-      .filter((line) => line.pending !== true)
-      .map((line) => `${line.orderLineId}:${line.state}:${line.quantityMilli}`)
-      .join(","),
-  );
+  // What the table owes right now, as the edge prices it (roadmap-v3 E5, `../state/table-check.ts`).
   // A draft walk-in (`../state/draft-walk-in`) has nothing on the edge to price until its first item.
-  // A read that fails is "no figure yet" rather than an error the resource keeps: a resource that
-  // has thrown stays errored, so one failed read used to leave the total at "—" through every read
-  // that followed. The next change reads it again.
-  const [check, { refetch: refetchCheck }] = createResource(() => params.id !== DRAFT && priceable(), () => loadCheck(key()).catch(() => undefined));
+  const { check, refetch: refetchCheck } = createTableCheck(key, () => shown() && params.id !== DRAFT);
 
   // The lines the kitchen has not been told about. The count rides on the Send button, because the
   // question an operator asks before pressing it is "what is about to go" — and the answer used to
@@ -186,14 +179,16 @@ export function Order() {
     navigate(`/table/${to}?moved_from=${from}`);
     moveTable(from, to).catch((caught: unknown) => {
       navigate(`/table/${from}`);
-      setError(errorMessage(caught));
+      errorScope.setFor(from, errorMessage(caught));
     });
   };
 
   // A pre-bill: what the order comes to, on paper, before anyone pays (roadmap-v3 B2.1). No bill
   // opens, so the guests can check the total and still order dessert; a split table prints one per
   // open part. What each piece of paper came to, or null before the first press.
-  const [preBill, setPreBill] = createSignal<readonly string[] | null>(null);
+  const preBillScope = createTableScoped<readonly string[]>(scope);
+  const preBill = preBillScope.get;
+  const setPreBill = preBillScope.set;
   const print = createPrint(setError);
   const printPreBill = () => {
     setPreBill(null);
@@ -279,7 +274,9 @@ export function Order() {
   // are the void's, and only one of the two panels is open at a time. A waive changes no line, so
   // the check is read again once it lands.
   const [waiving, setWaiving] = createSignal<FeeLine | null>(null);
-  const [waivedFee, setWaivedFee] = createSignal<string | null>(null);
+  const waivedScope = createTableScoped<string>(scope);
+  const waivedFee = waivedScope.get;
+  const setWaivedFee = waivedScope.set;
   const openBillOnly = () => {
     const bills = openBillsFor(key());
     return bills.length === 1 ? bills[0] : undefined;
@@ -411,53 +408,8 @@ export function Order() {
   const [query, setQuery] = createSignal("");
   const searching = () => query().trim() !== "";
 
-  // Every caption an item can be found by: the price book's own name, plus whatever the console
-  // wrote on each button pointing at it (ADR-0066). The two differ on purpose — a button inside a
-  // "Pizza" category can say "Large" — and an operator who knows an item by the grid's word for it
-  // would otherwise search for it and be told there is no such thing.
-  //
-  // Built once per menu-and-layout rather than per keystroke: the two gates this screen already
-  // carries for that (`menuItemMap`, `arranged`) exist because a linear scan per render is what this
-  // grid costs, and a scan per *letter typed* would be worse than either.
-  //
-  // Folded here rather than at the comparison, so a caption is normalized when the menu changes
-  // instead of once per item per keystroke. Deduplicated on the folded form too: two buttons whose
-  // captions differ only in case or tone marks are one string to search, and keeping both would
-  // scan the same text twice.
-  const captions = createMemo(() => {
-    const byItem = new Map<string, string[]>(
-      menuItems().map((item) => [item.menu_item_id, [fold(item.display_name)]]),
-    );
-    const record = (button: LayoutButton) => {
-      const known = byItem.get(button.menu_item_id);
-      const folded = fold(button.label);
-      if (known !== undefined && !known.includes(folded)) {
-        known.push(folded);
-      }
-    };
-    for (const category of state.layout) {
-      category.buttons.forEach(record);
-      for (const subcategory of category.subcategories) {
-        subcategory.buttons.forEach(record);
-      }
-    }
-    return byItem;
-  });
-
-  // The matches, in the price book's own order. Drawn with `display_name` and not the caption that
-  // matched: a button's caption is shorthand that means something inside its category and nothing
-  // outside it, and a flat result list is outside it.
-  //
-  // The needle is its own memo for the same reason the captions are: folded once per keystroke
-  // rather than once per item scanned.
-  const needle = createMemo(() => fold(query().trim()));
-  const results = createMemo(() =>
-    searching()
-      ? menuItems().filter((item) =>
-          matches(needle(), captions().get(item.menu_item_id) ?? [fold(item.display_name)]),
-        )
-      : [],
-  );
+  // The matches, in the price book's own order (`../state/menu-search.ts`).
+  const results = createMenuSearch(query, menuItems, () => state.layout);
 
   // A guest note for the next item added (ADR-0157): typed before the tap rather than after it, so
   // adding an item stays one tap and a note costs no tap at all — typing is not a tap (§6). It goes
@@ -1526,6 +1478,17 @@ export function Order() {
         </Show>
       </Show>,
   };
+
+  // A kept screen starts each table as a fresh screen would (`./kept.tsx`).
+  resetPerTable(shown, scope, {
+    panels: () => {
+      [setMoving, setBillOpen, setMarking].forEach((set) => set(false));
+      [setMoveError, setPickedCategory].forEach((set) => set(null));
+      [setQuery, setNote].forEach((set) => set(""));
+      [closeVoid, closeWaive, closeChoosing, sendFirst.cancel].forEach((close) => close());
+    },
+    results: [errorScope, preBillScope, waivedScope],
+  });
 
   return (
     <RegionsContext.Provider value={regions}>

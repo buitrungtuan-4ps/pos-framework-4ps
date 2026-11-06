@@ -10,9 +10,10 @@ import { StatusBar } from "./components/StatusBar";
 import { t } from "./i18n";
 import { Devices } from "./screens/Devices";
 import { Expo } from "./screens/Expo";
-import { Floor } from "./screens/Floor";
 import { Kds } from "./screens/Kds";
+import { Floor } from "./screens/Floor";
 import { Order } from "./screens/Order";
+import { TableScreens } from "./screens/kept";
 import { Pairing } from "./screens/Pairing";
 import { Pay } from "./screens/Pay";
 import { Setup } from "./screens/Setup";
@@ -141,6 +142,11 @@ function sendTo(path: string): void {
   }
 }
 
+// The floor and a table's order screen are drawn by one layout that keeps both mounted
+// (`screens/kept.tsx`), so the router draws nothing of its own at either address.
+const KEPT: ReadonlySet<ScreenId> = new Set<ScreenId>(["floor", "tableOrder"]);
+const DRAWN_BY_LAYOUT: Component = () => null;
+
 export function App() {
   // A box being claimed (ADR-0148) is not a store server yet: `pos-edge claim` serves this page and
   // `GET /api/claim`, and nothing else. So it gets the page alone — no status bar, no navigation, no
@@ -227,7 +233,12 @@ export function App() {
 
   return (
     <Router root={Shell}>
-      {SCREEN_IDS.map((id) => (
+      <Route path="/" component={TableScreens}>
+        {SCREEN_IDS.filter((id) => KEPT.has(id)).map((id) => (
+          <Route path={SCREENS[id].path} component={DRAWN_BY_LAYOUT} />
+        ))}
+      </Route>
+      {SCREEN_IDS.filter((id) => !KEPT.has(id)).map((id) => (
         <Route path={SCREENS[id].path} component={COMPONENTS[id]} />
       ))}
     </Router>

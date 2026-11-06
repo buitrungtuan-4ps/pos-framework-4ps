@@ -129,11 +129,15 @@ function installProbe() {
  * - `{ count: selector }`: more elements match than now.
  * - `{ text: selector }`: the first match's text differs from now.
  * - `{ present: selector }`: an element matches, where none does now.
+ *
+ * Only elements on screen count: one inside a `hidden` screen the till keeps mounted does not.
  */
 async function arm(page, until) {
   await page.evaluate((spec) => {
     const probe = window.__ttp;
-    const select = (selector) => document.querySelectorAll(selector);
+    // What a screen kept mounted but hidden holds is not on screen, so it never answers a tap.
+    const select = (selector) =>
+      [...document.querySelectorAll(selector)].filter((element) => element.closest("[hidden]") === null);
     let holds;
     if (spec.count !== undefined) {
       const before = select(spec.count).length;
@@ -203,13 +207,29 @@ const longFrames = {};
 /** How long one sample may take before the run says which act never answered. */
 const SAMPLE_DEADLINE_MS = 10_000;
 
+/**
+ * Where `locator` is on screen, scrolled into view. A row the edge's late answer draws again can be
+ * replaced while it is being found, before any sample starts, so it is found again, up to 3 times.
+ */
+async function whereToTap(locator) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await locator.scrollIntoViewIfNeeded();
+      return await locator.boundingBox();
+    } catch (caught) {
+      if (attempt === 3 || !String(caught).includes("not attached")) {
+        throw caught;
+      }
+    }
+  }
+}
+
 /** Taps `locator` and adds the sample, in milliseconds, to `acts[act]`; a trace marks it `ttp <act>`. */
 async function measure(page, acts, act, locator, until) {
   // The tap is a plain mouse press at the element's centre, found before the sample starts.
   // `locator.click()` would check its hit target inside the tap, from a listener on `pointerdown`,
   // and that check's layout read is Playwright's time, not the till's.
-  await locator.scrollIntoViewIfNeeded();
-  const box = await locator.boundingBox();
+  const box = await whereToTap(locator);
   if (box === null) {
     throw new Error(`${act}: nothing to tap`);
   }

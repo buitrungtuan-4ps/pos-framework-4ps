@@ -1872,6 +1872,75 @@ test("guests move to another table with their order, and every screen follows th
   }
 });
 
+// The floor and a table's order screen stay mounted (`ui/src/screens/kept.tsx`), and a switch only
+// shows one and hides the other. The order screen never shows one table's lines, figure or refusal
+// on another: before the new table's figure lands it shows the dash. And while it is hidden it
+// neither writes nor reads.
+test("the order screen kept beside the floor never shows the last table's lines, figure or refusal", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    const header = page.locator('[data-outcome="order-open"]');
+    const total = page.locator('[data-outcome="check-total"]');
+    const lines = page.locator('[data-outcome="line-added"]');
+    const card = (label) => page.locator('[data-step="onCard"]', { hasText: `Table ${label}` });
+
+    // Table 1: a salad, and a send the edge refuses.
+    await seatTable(page);
+    await expect(header).toHaveText("Table 1");
+    await addStarter(page);
+    await expect(total).toContainText("97,900");
+    await refusePost(page, "**/api/orders/*/fire", "TRANSITION_REFUSED");
+    await page.locator('[data-step="fireOrder"]').click();
+    await expect(page.getByRole("alert")).toContainText("That is not possible right now");
+    await page.unroute("**/api/orders/*/fire");
+
+    // On the floor the order screen is hidden: it writes nothing and reads nothing.
+    const whileHidden = [];
+    const record = (request) => whileHidden.push(`${request.method()} ${new URL(request.url()).pathname}`);
+    page.on("request", record);
+    await navigateTo(page, "/");
+    await expect(page.locator('[data-outcome="floor"]')).toBeVisible();
+    await expect(header).toBeHidden();
+    page.off("request", record);
+    expect(whileHidden.filter((request) => request.startsWith("POST") || request.endsWith("/check"))).toEqual([]);
+
+    // Table 2: no refusal, none of table 1's lines, and its own iced tea.
+    await card(2).click();
+    await expect(header).toHaveText("Table 2");
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await expect(lines).toHaveCount(0);
+    await addByName(page, "iced");
+    await expect(lines).toHaveCount(1);
+    await expect(total).toContainText("43,450");
+    const iced = (await lines.first().textContent()) ?? "";
+
+    // Back to table 1 with its figure held: the dash, never table 2's figure, and table 1's lines.
+    let release = () => {};
+    const released = new Promise((resolve) => {
+      release = resolve;
+    });
+    await page.route("**/api/tables/*/check", async (route) => {
+      await released;
+      await route.continue();
+    });
+    await navigateTo(page, "/");
+    await card(1).click();
+    await expect(header).toHaveText("Table 1");
+    await expect(lines).toHaveCount(1);
+    await expect(lines.first()).not.toHaveText(iced);
+    await expect(total).toContainText("—");
+    await expect(total).not.toContainText("43,450");
+    release();
+    await expect(total).toContainText("97,900");
+  } finally {
+    await edge.stop();
+  }
+});
+
 // Marking a dish sold out paints first (ADR-0196 decision 1): it shows sold out before the edge
 // answers. A refusal puts it back with its sentence (substituted: the real edge marks any dish it
 // knows); a mark whose answer is lost is put back and the menu is read again, which finds it marked.
@@ -6819,6 +6888,10 @@ test("take payment moves at once, and reads the amount while the bill is opened"
     await seatTable(page);
     await addItem(page);
     await sendOrder(page);
+    // The order screen reads the table's figure again after each change, once its frame is drawn:
+    // those reads are the order screen's, so the count starts once they are done.
+    await expect(page.locator('[data-outcome="writes-pending"]')).toHaveCount(0);
+    await page.waitForLoadState("networkidle");
 
     const held = await holdPost(page, "**/api/tables/*/bill");
     const checks = [];
