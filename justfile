@@ -70,8 +70,9 @@ run-cloud:
 simulate:
     POS_EDGE_RELEASE_VERSION={{dev_edge_release}} cargo run -q -p pos-simulator
 
-# The till's 10 ms tap budget (ADR-0208): every act's tap to its frame ready to paint, p95, at a 2x
-# CPU throttle, against a release edge and a production till; a failing act is measured once more.
+# The till's 10 ms tap budget (ADR-0208): every act's tap to its frame ready to paint, p50 enforced
+# and p95 recorded, at a 2x CPU throttle, against a release edge and a production till; a failing act
+# is measured once more.
 # Set `POS_UI_CHROMIUM` to use a browser already on the machine.
 perf-gate:
     cd ui && pnpm build
