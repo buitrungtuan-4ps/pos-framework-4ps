@@ -55,6 +55,7 @@ async fn app() -> App {
                 flows: Vec::new(),
                 screens: Vec::new(),
                 data: pos_proto::package::PackageData::default(),
+                reactions: Vec::new(),
             },
             create_time: Timestamp::EPOCH,
         };

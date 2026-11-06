@@ -51,6 +51,7 @@ pub mod menu;
 pub mod ota;
 pub mod package;
 pub mod permission;
+pub mod reaction;
 pub mod state_machine;
 
 pub use business_date::{CutoffHour, StoreTimeZone, derive_business_date};

@@ -59,6 +59,7 @@ pub mod printing;
 pub mod protocol;
 pub mod qr;
 pub mod quantity;
+pub mod reaction;
 pub mod reason_codes;
 pub mod retention;
 pub mod screen;

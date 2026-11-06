@@ -28,6 +28,7 @@ use crate::devices::DeviceClass;
 use crate::enums::SalesChannel;
 use crate::flow::Flow;
 use crate::ids::{DeviceId, PackageId, PackageVersionId};
+use crate::reaction::Reaction;
 use crate::screen::Screen;
 use crate::text::{ReleaseTag, TranslationKey};
 use crate::ulid::Ulid;
@@ -133,6 +134,10 @@ pub struct PackageContent {
     /// Empty, and left off the wire, in a version that declares none.
     #[serde(default, skip_serializing_if = "PackageData::is_empty")]
     pub data: PackageData,
+    /// The package's reactions ([ADR-0193](../../../docs/adr/0193-conditions-and-reactions-are-written-in-cel.md)
+    /// decision 5), each with its variants; the variants of one reaction share its `reaction_id`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reactions: Vec<Variant<Reaction>>,
 }
 
 /// A named part of the week a variant may be chosen for, such as lunch.
