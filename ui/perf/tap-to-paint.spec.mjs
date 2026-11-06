@@ -17,10 +17,12 @@
 // # Frame ready, and the frame rule (ADR-0208)
 //
 // Beside it, each sample records `frameReady`: the time to the change plus the main thread's work in
-// the frame that paints it, from that frame's `requestAnimationFrame` callback to the first task
-// after it, leaving out the wait for the display. And whether a frame boundary in the sample came
-// more than 1.5 frame intervals after the one before it (`longFrames`). `perf/gate.mjs` holds both
-// to ADR-0208's budget on every pull request. The tap is a plain mouse press at the element's
+// the frame that paints it, from that frame's first `requestAnimationFrame` callback to the first
+// task after it, leaving out the wait for the display. The harness's own callback is the first in
+// every frame and posts that task, so work the till queues for after the frame, such as a write's
+// request, is not counted in it. And whether a frame boundary in the sample came
+// more than 1.5 frame intervals after the one before it (`longFrames`). `perf/gate.mjs` holds the
+// first to ADR-0208's budget on every pull request and records the second. The tap is a plain mouse press at the element's
 // centre: `locator.click()` checks its hit target from a `pointerdown` listener inside the sample.
 //
 // # Budgets
@@ -150,38 +152,48 @@ async function arm(page, until) {
     }
     probe.tap = null;
     // Every frame boundary from now to the sample's end, for the frame rule (ADR-0208 decision 2).
+    //
+    // The frame loop is the page's first animation-frame callback in every frame, because it asks
+    // for the next frame from inside the last one, before the till asks for anything in answer to
+    // the tap. So the frame that paints the change starts here, and the message it posts is the first
+    // task after that frame: what the till itself does after the frame, such as sending a write's
+    // request, comes later and is not counted in the frame (ADR-0208 decision 1).
     const frames = [];
     let sampling = true;
+    let changed = null;
+    let finish = null;
     const tick = (at) => {
       frames.push(at);
+      if (changed !== null && finish !== null && probe.end === undefined) {
+        probe.end = performance.now();
+        // The first task after this frame runs once its style, layout and paint are done: the
+        // frame is ready to paint (ADR-0208 decision 1).
+        const channel = new MessageChannel();
+        channel.port1.onmessage = finish;
+        channel.port2.postMessage(null);
+      }
       if (sampling) requestAnimationFrame(tick);
     };
+    probe.end = undefined;
     requestAnimationFrame(tick);
     probe.done = new Promise((resolve) => {
+      finish = () => {
+        sampling = false;
+        const work = performance.now() - probe.end;
+        const before = frames.filter((at) => at < probe.tap).pop() ?? probe.tap;
+        const spanned = [before, ...frames.filter((at) => at >= probe.tap), probe.end];
+        const longest = Math.max(...spanned.slice(1).map((at, i) => at - spanned[i]));
+        resolve({
+          paint: probe.end - probe.tap,
+          change: changed - probe.tap,
+          ready: changed - probe.tap + work,
+          longFrame: longest > 1.5 * (1000 / 60),
+        });
+      };
       const observer = new MutationObserver(() => {
         if (holds()) {
           observer.disconnect();
-          const changed = performance.now();
-          requestAnimationFrame(() => {
-            probe.end = performance.now();
-            // The first task after this frame runs once its style, layout and paint are done: the
-            // frame is ready to paint (ADR-0208 decision 1).
-            const channel = new MessageChannel();
-            channel.port1.onmessage = () => {
-              sampling = false;
-              const work = performance.now() - probe.end;
-              const before = frames.filter((at) => at < probe.tap).pop() ?? probe.tap;
-              const spanned = [before, ...frames.filter((at) => at >= probe.tap), probe.end];
-              const longest = Math.max(...spanned.slice(1).map((at, i) => at - spanned[i]));
-              resolve({
-                paint: probe.end - probe.tap,
-                change: changed - probe.tap,
-                ready: changed - probe.tap + work,
-                longFrame: longest > 1.5 * (1000 / 60),
-              });
-            };
-            channel.port2.postMessage(null);
-          });
+          changed = performance.now();
         }
       });
       observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });

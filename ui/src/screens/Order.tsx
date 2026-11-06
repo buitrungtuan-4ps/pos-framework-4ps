@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal } from "solid-js";
+import { For, Show, batch, createMemo, createSignal } from "solid-js";
 import { useLocation, useNavigate, useParams, useSearchParams } from "@solidjs/router";
 
 import { api } from "../api/client";
@@ -40,6 +40,7 @@ import {
   walkInOrderChannel,
   type OrderLine,
   formatAmount,
+  type TableCard,
 } from "../state/store";
 import { addItem, moveTable, setQuantity } from "../state/optimistic";
 import { writesPending } from "../state/edge-write";
@@ -160,11 +161,14 @@ export function Order() {
   // rung after it would be on no bill and leave with the table unpaid; the edge refuses it
   // (`BILL_ALREADY_OPEN`), and the menu says so before the tap rather than after it.
   const billed = () => openBillFor(key()) !== undefined;
-  // Every free table on the published floor, in the floor's own order.
-  const freeTables = createMemo(() =>
-    floorTables().filter(
-      (table) => table.id !== params.id && tableState(table.id) === "TABLE_STATE_FREE",
-    ),
+  // Every free table on the published floor, in the floor's own order. The list stays drawn, and
+  // hidden, while it is closed, so it follows the floor only while it is open: a move or a seat
+  // elsewhere then redraws none of it.
+  const freeTables = createMemo<readonly TableCard[]>((last) =>
+    moving()
+      ? floorTables().filter((table) => table.id !== params.id && tableState(table.id) === "TABLE_STATE_FREE")
+      : last,
+    [],
   );
   const openMove = () => {
     setMoveError(null);
@@ -176,8 +180,15 @@ export function Order() {
     const from = params.id;
     setMoveError(null);
     setMoving(false);
+    // A kept screen takes the new table in the same update as the move's paint, ahead of the
+    // router, so the lines are drawn once on the new table rather than taken off and put back.
+    const transfer = batch(() => {
+      kept?.follow(to);
+      return moveTable(from, to);
+    });
     navigate(`/table/${to}?moved_from=${from}`);
-    moveTable(from, to).catch((caught: unknown) => {
+    transfer.catch((caught: unknown) => {
+      kept?.follow(from);
       navigate(`/table/${from}`);
       errorScope.setFor(from, errorMessage(caught));
     });
@@ -636,7 +647,7 @@ export function Order() {
       </>,
     // The free tables the guests can move to. A tap moves them, with their order, and opens the new
     // table; the table they leave waits to be cleared.
-    order_move: () => <Show when={moving() && movable()}>
+    order_move: () => <div hidden={!(moving() && movable())}>
         <div class="mb-3 rounded-token border border-line bg-surface p-3">
           <div class="mb-1 flex items-center justify-between gap-2">
             <h2 class="font-semibold">{t("order.move_title", { label: label() })}</h2>
@@ -676,7 +687,7 @@ export function Order() {
             </div>
           </Show>
         </div>
-      </Show>,
+      </div>,
     // The bill. A phone and a terminal draw it in the column, as they always did. A tablet slides it
     // up from the bottom of the screen: closed, it shows the bar saying what is on it, the seat row,
     // and the two buttons that end the screen, so sending and paying stay one tap away; open, it is

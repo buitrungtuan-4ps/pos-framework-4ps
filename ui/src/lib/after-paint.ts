@@ -34,6 +34,35 @@ if (typeof addEventListener === "function") {
   });
 }
 
+/** The waits the next frame resolves, sharing one frame request and one timer between them. */
+let nextFrame: Set<() => void> | null = null;
+
+/** Asks for the next frame, and for the first task after it, for every wait made until then. */
+function scheduleFrame(): Set<() => void> {
+  const batch = new Set<() => void>();
+  nextFrame = batch;
+  const release = () => {
+    clearTimeout(timer);
+    if (nextFrame === batch) {
+      nextFrame = null;
+    }
+    for (const go of batch) {
+      go();
+    }
+  };
+  const timer = setTimeout(release, NO_FRAME_MS);
+  requestAnimationFrame(() => {
+    // A wait made from here on paints in the frame after this one.
+    if (nextFrame === batch) {
+      nextFrame = null;
+    }
+    const channel = new MessageChannel();
+    channel.port1.onmessage = release;
+    channel.port2.postMessage(null);
+  });
+  return batch;
+}
+
 export function afterPaint(): Promise<void> {
   return new Promise((resolve) => {
     let done = false;
@@ -44,24 +73,11 @@ export function afterPaint(): Promise<void> {
         resolve();
       }
     };
-    if (leaving) {
+    if (leaving || typeof requestAnimationFrame !== "function" || typeof MessageChannel !== "function") {
       go();
       return;
     }
     waiting.add(go);
-    const timer = setTimeout(go, NO_FRAME_MS);
-    if (typeof requestAnimationFrame !== "function" || typeof MessageChannel !== "function") {
-      clearTimeout(timer);
-      go();
-      return;
-    }
-    requestAnimationFrame(() => {
-      const channel = new MessageChannel();
-      channel.port1.onmessage = () => {
-        clearTimeout(timer);
-        go();
-      };
-      channel.port2.postMessage(null);
-    });
+    (nextFrame ?? scheduleFrame()).add(go);
   });
 }
