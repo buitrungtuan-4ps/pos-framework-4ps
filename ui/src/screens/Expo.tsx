@@ -1,6 +1,5 @@
 import { For, Show, createEffect, createMemo } from "solid-js";
 
-import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { useDarkTakeover } from "../lib/screen";
 import { can } from "../state/permissions";
@@ -11,6 +10,8 @@ import {
   type KitchenLine,
 } from "../state/store";
 import { queueNumberFor, refreshQueueNumbers } from "../state/queue-numbers";
+import { RegionsContext, type Regions } from "../package/regions";
+import { NO_ACTS, PackageScreen } from "../package/screen";
 
 interface TableGroup {
   orderId: string;
@@ -72,62 +73,63 @@ export function Expo() {
     }
   };
 
-  return (
-    <section class="p-4">
-      <PageHeader title={t("expo.title")} size="xl" />
-      <WriteRefused message={bumper.refused()} outcome="pass-bump-refused" />
-      <div class="grid grid-cols-1 gap-3 tablet:grid-cols-2 terminal:grid-cols-3">
-        <For
-          each={groups()}
-          fallback={
-            <p class="text-ink-muted" data-outcome="pass-clear">
-              {t("expo.empty")}
+  // The regions the default package's `expo` screen arranges (`../package/regions.tsx`).
+  const regions: Regions = {
+    expo_tickets: () => <>
+    <WriteRefused message={bumper.refused()} outcome="pass-bump-refused" />
+    <div class="grid grid-cols-1 gap-3 tablet:grid-cols-2 terminal:grid-cols-3">
+      <For
+        each={groups()}
+        fallback={
+          <p class="text-ink-muted" data-outcome="pass-clear">
+            {t("expo.empty")}
+          </p>
+        }
+      >
+        {(group) => (
+          <div class="rounded-token border border-line bg-surface-raised p-4">
+            <p class="text-lg font-semibold">
+              {group.label === ""
+                ? counterLabel(group.orderId)
+                : t("common.table", { label: group.label })}
             </p>
-          }
-        >
-          {(group) => (
-            <div class="rounded-token border border-line bg-surface-raised p-4">
-              <p class="text-lg font-semibold">
-                {group.label === ""
-                  ? counterLabel(group.orderId)
-                  : t("common.table", { label: group.label })}
-              </p>
-              <ul class="mt-2 flex flex-col gap-1">
-                <For each={group.lines}>
-                  {(line) => (
-                    <li>
-                      {line.name}
-                      {/* The choices, on the same row and dimmed. The pass is checking a plated
-                          table against what was ordered, and "Margherita" alone cannot be checked
-                          against a 30cm. One row rather than the board's list, because the expeditor
-                          is counting dishes and a second line per dish would halve how many fit. */}
-                      <Show when={line.modifiers.length > 0}>
-                        <span class="text-ink-muted" data-outcome="pass-modifiers">
-                          {" "}
-                          · {line.modifiers.join(" · ")}
-                        </span>
-                      </Show>
-                    </li>
-                  )}
-                </For>
-              </ul>
-              <Show when={can("sales.ticket.bump")}>
-              <button
-                type="button"
-                class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink"
-                data-step="runAway"
-                onClick={() => runAway(group.lines)}
-              >
-                {t("expo.all_away")}
-              </button>
-              </Show>
-            </div>
-          )}
-        </For>
-      </div>
-      <Show when={groups().length > 0}>
-        <p class="mt-4 text-sm text-ink-muted">{t("expo.count", { count: groups().length })}</p>
-      </Show>
-    </section>
-  );
+            <ul class="mt-2 flex flex-col gap-1">
+              <For each={group.lines}>
+                {(line) => (
+                  <li>
+                    {line.name}
+                    {/* The choices, on the same row and dimmed. The pass is checking a plated
+                        table against what was ordered, and "Margherita" alone cannot be checked
+                        against a 30cm. One row rather than the board's list, because the expeditor
+                        is counting dishes and a second line per dish would halve how many fit. */}
+                    <Show when={line.modifiers.length > 0}>
+                      <span class="text-ink-muted" data-outcome="pass-modifiers">
+                        {" "}
+                        · {line.modifiers.join(" · ")}
+                      </span>
+                    </Show>
+                  </li>
+                )}
+              </For>
+            </ul>
+            <Show when={can("sales.ticket.bump")}>
+            <button
+              type="button"
+              class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink"
+              data-step="runAway"
+              onClick={() => runAway(group.lines)}
+            >
+              {t("expo.all_away")}
+            </button>
+            </Show>
+          </div>
+        )}
+      </For>
+    </div>
+    <Show when={groups().length > 0}>
+      <p class="mt-4 text-sm text-ink-muted">{t("expo.count", { count: groups().length })}</p>
+    </Show>
+    </>,
+  };
+  return <RegionsContext.Provider value={regions}><PackageScreen screenId="expo" host={NO_ACTS} /></RegionsContext.Provider>;
 }

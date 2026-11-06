@@ -3,10 +3,11 @@ import { useNavigate, useSearchParams } from "@solidjs/router";
 
 import { api, deviceToken } from "../api/client";
 import { ReadFailed } from "../components/StoreData";
-import { PageHeader } from "../components/ui";
 import { t } from "../i18n";
 import { errorMessage } from "../lib/errors";
 import { createScreenRead, onStatus } from "../state/screen-read";
+import { RegionsContext, type Regions } from "../package/regions";
+import { NO_ACTS, PackageScreen } from "../package/screen";
 
 // Activating the store server: the operator reads the `XXXX-XXXX-XXXX` code off the box's setup sheet
 // and enters it here. The edge exchanges it with the cloud once, keeps the device credential it gets
@@ -155,68 +156,69 @@ export function Setup() {
     }
   };
 
-  return (
-    <section class="mx-auto max-w-sm p-4">
-      <PageHeader title={t("setup.title")} />
-      <StateTooOpen when={tooOpen()} />
+  // The regions the default package's `setup` screen arranges (`../package/regions.tsx`).
+  const regions: Regions = {
+    setup_body: () => <>
+    <StateTooOpen when={tooOpen()} />
 
-      <Switch>
-        <Match when={standing() === "checking"}>
-          <p class="text-ink-muted">{t("setup.checking")}</p>
-          <ReadFailed read={standingRead} />
-        </Match>
+    <Switch>
+      <Match when={standing() === "checking"}>
+        <p class="text-ink-muted">{t("setup.checking")}</p>
+        <ReadFailed read={standingRead} />
+      </Match>
 
-        <Match when={standing() === "restarting"}>
-          <div class="rounded-token border border-line bg-surface p-4" role="status">
-            <p class="font-semibold text-ok">{t("setup.activated")}</p>
-            <p class="mt-1 text-ink-muted">{t("setup.restarting")}</p>
-          </div>
-        </Match>
+      <Match when={standing() === "restarting"}>
+        <div class="rounded-token border border-line bg-surface p-4" role="status">
+          <p class="font-semibold text-ok">{t("setup.activated")}</p>
+          <p class="mt-1 text-ink-muted">{t("setup.restarting")}</p>
+        </div>
+      </Match>
 
-        <Match when={standing() === "activated"}>
-          <div class="rounded-token border border-line bg-surface p-4">
-            <p class="font-semibold text-ok">{t("setup.activated")}</p>
-            <p class="mt-1 text-ink-muted">{t("setup.activated_hint")}</p>
-          </div>
-        </Match>
+      <Match when={standing() === "activated"}>
+        <div class="rounded-token border border-line bg-surface p-4">
+          <p class="font-semibold text-ok">{t("setup.activated")}</p>
+          <p class="mt-1 text-ink-muted">{t("setup.activated_hint")}</p>
+        </div>
+      </Match>
 
-        <Match when={standing() === "unavailable"}>
-          <div class="rounded-token border border-line bg-surface p-4">
-            <p class="text-ink-muted">{t("setup.unavailable")}</p>
-          </div>
-        </Match>
+      <Match when={standing() === "unavailable"}>
+        <div class="rounded-token border border-line bg-surface p-4">
+          <p class="text-ink-muted">{t("setup.unavailable")}</p>
+        </div>
+      </Match>
 
-        <Match when={standing() === "needed"}>
-          <p class="text-ink-muted">{t("setup.hint")}</p>
-          <input
-            inputmode="text"
-            autocapitalize="characters"
-            autocomplete="off"
-            spellcheck={false}
-            aria-label={t("setup.code_label")}
-            class="mt-3 w-full rounded-token border border-line bg-surface p-3 text-center text-xl tracking-[0.25em] uppercase"
-            value={code()}
-            onInput={(event) => setCode(normalize(event.currentTarget.value))}
-          />
-          {/* The count is the code's symbols, not characters: not the hyphens, nor a cell prefix. */}
-          <p class="mt-2 text-center text-ink-muted tabular-nums">
-            {t("setup.code_progress", { entered: symbolCount(code()), total: CODE_LENGTH })}
+      <Match when={standing() === "needed"}>
+        <p class="text-ink-muted">{t("setup.hint")}</p>
+        <input
+          inputmode="text"
+          autocapitalize="characters"
+          autocomplete="off"
+          spellcheck={false}
+          aria-label={t("setup.code_label")}
+          class="mt-3 w-full rounded-token border border-line bg-surface p-3 text-center text-xl tracking-[0.25em] uppercase"
+          value={code()}
+          onInput={(event) => setCode(normalize(event.currentTarget.value))}
+        />
+        {/* The count is the code's symbols, not characters: not the hyphens, nor a cell prefix. */}
+        <p class="mt-2 text-center text-ink-muted tabular-nums">
+          {t("setup.code_progress", { entered: symbolCount(code()), total: CODE_LENGTH })}
+        </p>
+        {error() !== null && (
+          <p class="mt-3 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
+            {error()}
           </p>
-          {error() !== null && (
-            <p class="mt-3 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
-              {error()}
-            </p>
-          )}
-          <button
-            type="button"
-            class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
-            disabled={busy() || symbolCount(code()) !== CODE_LENGTH}
-            onClick={() => void submit()}
-          >
-            {t("setup.submit")}
-          </button>
-        </Match>
-      </Switch>
-    </section>
-  );
+        )}
+        <button
+          type="button"
+          class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
+          disabled={busy() || symbolCount(code()) !== CODE_LENGTH}
+          onClick={() => void submit()}
+        >
+          {t("setup.submit")}
+        </button>
+      </Match>
+    </Switch>
+    </>,
+  };
+  return <RegionsContext.Provider value={regions}><PackageScreen screenId="setup" host={NO_ACTS} /></RegionsContext.Provider>;
 }

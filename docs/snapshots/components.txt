@@ -19,6 +19,50 @@ action_button	reads=subject
 action_button	since=0.14.1
 action_button	supplies=order_id
 action_button	supplies=table_id
+confirm_queue
+confirm_queue	children=false
+confirm_queue	device_class=DEVICE_CLASS_KIOSK
+confirm_queue	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+confirm_queue	device_class=DEVICE_CLASS_PHONE
+confirm_queue	device_class=DEVICE_CLASS_TABLET
+confirm_queue	device_class=DEVICE_CLASS_TERMINAL
+confirm_queue	reads=guests
+confirm_queue	since=0.14.1
+counter_flow
+counter_flow	children=false
+counter_flow	device_class=DEVICE_CLASS_KIOSK
+counter_flow	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+counter_flow	device_class=DEVICE_CLASS_PHONE
+counter_flow	device_class=DEVICE_CLASS_TABLET
+counter_flow	device_class=DEVICE_CLASS_TERMINAL
+counter_flow	reads=counter
+counter_flow	since=0.14.1
+counter_frame
+counter_frame	children=true
+counter_frame	device_class=DEVICE_CLASS_KIOSK
+counter_frame	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+counter_frame	device_class=DEVICE_CLASS_PHONE
+counter_frame	device_class=DEVICE_CLASS_TABLET
+counter_frame	device_class=DEVICE_CLASS_TERMINAL
+counter_frame	since=0.14.1
+devices_body
+devices_body	children=false
+devices_body	device_class=DEVICE_CLASS_KIOSK
+devices_body	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+devices_body	device_class=DEVICE_CLASS_PHONE
+devices_body	device_class=DEVICE_CLASS_TABLET
+devices_body	device_class=DEVICE_CLASS_TERMINAL
+devices_body	reads=devices
+devices_body	since=0.14.1
+expo_tickets
+expo_tickets	children=false
+expo_tickets	device_class=DEVICE_CLASS_KIOSK
+expo_tickets	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+expo_tickets	device_class=DEVICE_CLASS_PHONE
+expo_tickets	device_class=DEVICE_CLASS_TABLET
+expo_tickets	device_class=DEVICE_CLASS_TERMINAL
+expo_tickets	reads=kitchen
+expo_tickets	since=0.14.1
 floor_alerts
 floor_alerts	children=false
 floor_alerts	device_class=DEVICE_CLASS_KIOSK
@@ -38,6 +82,50 @@ floor_plan	device_class=DEVICE_CLASS_TERMINAL
 floor_plan	reads=floor
 floor_plan	since=0.14.1
 floor_plan	supplies=table_id
+kds_frame
+kds_frame	children=true
+kds_frame	device_class=DEVICE_CLASS_KIOSK
+kds_frame	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+kds_frame	device_class=DEVICE_CLASS_PHONE
+kds_frame	device_class=DEVICE_CLASS_TABLET
+kds_frame	device_class=DEVICE_CLASS_TERMINAL
+kds_frame	since=0.14.1
+kds_header
+kds_header	children=false
+kds_header	device_class=DEVICE_CLASS_KIOSK
+kds_header	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+kds_header	device_class=DEVICE_CLASS_PHONE
+kds_header	device_class=DEVICE_CLASS_TABLET
+kds_header	device_class=DEVICE_CLASS_TERMINAL
+kds_header	reads=kitchen
+kds_header	since=0.14.1
+kds_notices
+kds_notices	children=false
+kds_notices	device_class=DEVICE_CLASS_KIOSK
+kds_notices	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+kds_notices	device_class=DEVICE_CLASS_PHONE
+kds_notices	device_class=DEVICE_CLASS_TABLET
+kds_notices	device_class=DEVICE_CLASS_TERMINAL
+kds_notices	reads=kitchen
+kds_notices	since=0.14.1
+kds_stations
+kds_stations	children=false
+kds_stations	device_class=DEVICE_CLASS_KIOSK
+kds_stations	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+kds_stations	device_class=DEVICE_CLASS_PHONE
+kds_stations	device_class=DEVICE_CLASS_TABLET
+kds_stations	device_class=DEVICE_CLASS_TERMINAL
+kds_stations	reads=kitchen
+kds_stations	since=0.14.1
+kds_tickets
+kds_tickets	children=false
+kds_tickets	device_class=DEVICE_CLASS_KIOSK
+kds_tickets	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+kds_tickets	device_class=DEVICE_CLASS_PHONE
+kds_tickets	device_class=DEVICE_CLASS_TABLET
+kds_tickets	device_class=DEVICE_CLASS_TERMINAL
+kds_tickets	reads=kitchen
+kds_tickets	since=0.14.1
 menu_buttons
 menu_buttons	children=false
 menu_buttons	device_class=DEVICE_CLASS_KIOSK
@@ -132,8 +220,38 @@ page_header	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
 page_header	device_class=DEVICE_CLASS_PHONE
 page_header	device_class=DEVICE_CLASS_TABLET
 page_header	device_class=DEVICE_CLASS_TERMINAL
+page_header	property=size:PROPERTY_KIND_TOKEN:optional
+page_header	property=size:token=extra_large
+page_header	property=size:token=large
 page_header	property=title_key:PROPERTY_KIND_TRANSLATION_KEY:required
 page_header	since=0.14.1
+pair_body
+pair_body	children=false
+pair_body	device_class=DEVICE_CLASS_KIOSK
+pair_body	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+pair_body	device_class=DEVICE_CLASS_PHONE
+pair_body	device_class=DEVICE_CLASS_TABLET
+pair_body	device_class=DEVICE_CLASS_TERMINAL
+pair_body	reads=pairing
+pair_body	since=0.14.1
+pay_back
+pay_back	children=false
+pay_back	device_class=DEVICE_CLASS_KIOSK
+pay_back	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+pay_back	device_class=DEVICE_CLASS_PHONE
+pay_back	device_class=DEVICE_CLASS_TABLET
+pay_back	device_class=DEVICE_CLASS_TERMINAL
+pay_back	reads=bill
+pay_back	since=0.14.1
+pay_flow
+pay_flow	children=false
+pay_flow	device_class=DEVICE_CLASS_KIOSK
+pay_flow	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+pay_flow	device_class=DEVICE_CLASS_PHONE
+pay_flow	device_class=DEVICE_CLASS_TABLET
+pay_flow	device_class=DEVICE_CLASS_TERMINAL
+pay_flow	reads=bill
+pay_flow	since=0.14.1
 screen_frame
 screen_frame	children=true
 screen_frame	device_class=DEVICE_CLASS_KIOSK
@@ -141,7 +259,39 @@ screen_frame	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
 screen_frame	device_class=DEVICE_CLASS_PHONE
 screen_frame	device_class=DEVICE_CLASS_TABLET
 screen_frame	device_class=DEVICE_CLASS_TERMINAL
+screen_frame	property=width:PROPERTY_KIND_TOKEN:optional
+screen_frame	property=width:token=full
+screen_frame	property=width:token=medium
+screen_frame	property=width:token=narrow
+screen_frame	property=width:token=small
 screen_frame	since=0.14.1
+setup_body
+setup_body	children=false
+setup_body	device_class=DEVICE_CLASS_KIOSK
+setup_body	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+setup_body	device_class=DEVICE_CLASS_PHONE
+setup_body	device_class=DEVICE_CLASS_TABLET
+setup_body	device_class=DEVICE_CLASS_TERMINAL
+setup_body	reads=setup
+setup_body	since=0.14.1
+shift_screen
+shift_screen	children=false
+shift_screen	device_class=DEVICE_CLASS_KIOSK
+shift_screen	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+shift_screen	device_class=DEVICE_CLASS_PHONE
+shift_screen	device_class=DEVICE_CLASS_TABLET
+shift_screen	device_class=DEVICE_CLASS_TERMINAL
+shift_screen	reads=drawer
+shift_screen	since=0.14.1
+sign_in_screen
+sign_in_screen	children=false
+sign_in_screen	device_class=DEVICE_CLASS_KIOSK
+sign_in_screen	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+sign_in_screen	device_class=DEVICE_CLASS_PHONE
+sign_in_screen	device_class=DEVICE_CLASS_TABLET
+sign_in_screen	device_class=DEVICE_CLASS_TERMINAL
+sign_in_screen	reads=sign_in
+sign_in_screen	since=0.14.1
 stack
 stack	children=true
 stack	device_class=DEVICE_CLASS_KIOSK
@@ -166,3 +316,12 @@ text	property=variant:token=body
 text	property=variant:token=muted
 text	property=variant:token=title
 text	since=0.14.1
+today_body
+today_body	children=false
+today_body	device_class=DEVICE_CLASS_KIOSK
+today_body	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+today_body	device_class=DEVICE_CLASS_PHONE
+today_body	device_class=DEVICE_CLASS_TABLET
+today_body	device_class=DEVICE_CLASS_TERMINAL
+today_body	reads=takings
+today_body	since=0.14.1

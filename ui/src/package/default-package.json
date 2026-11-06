@@ -62,6 +62,203 @@
           ]
         }
       }
+    },
+    {
+      "body": {
+        "screen_id": "pay",
+        "root": {
+          "component_id": "screen_frame",
+          "properties": {
+            "width": "narrow"
+          },
+          "children": [
+            {
+              "component_id": "pay_back"
+            },
+            {
+              "component_id": "pay_flow"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "body": {
+        "screen_id": "kds",
+        "root": {
+          "component_id": "kds_frame",
+          "children": [
+            {
+              "component_id": "kds_header"
+            },
+            {
+              "component_id": "kds_notices"
+            },
+            {
+              "component_id": "kds_stations"
+            },
+            {
+              "component_id": "kds_tickets"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "body": {
+        "screen_id": "expo",
+        "root": {
+          "component_id": "screen_frame",
+          "children": [
+            {
+              "component_id": "page_header",
+              "properties": {
+                "title_key": "expo.title",
+                "size": "extra_large"
+              }
+            },
+            {
+              "component_id": "expo_tickets"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "body": {
+        "screen_id": "guests",
+        "root": {
+          "component_id": "screen_frame",
+          "properties": {
+            "width": "narrow"
+          },
+          "children": [
+            {
+              "component_id": "page_header",
+              "properties": {
+                "title_key": "confirm.title"
+              }
+            },
+            {
+              "component_id": "confirm_queue"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "body": {
+        "screen_id": "counter",
+        "root": {
+          "component_id": "counter_frame",
+          "children": [
+            {
+              "component_id": "counter_flow"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "body": {
+        "screen_id": "today",
+        "root": {
+          "component_id": "screen_frame",
+          "children": [
+            {
+              "component_id": "page_header",
+              "properties": {
+                "title_key": "today.title"
+              }
+            },
+            {
+              "component_id": "today_body"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "body": {
+        "screen_id": "shift",
+        "root": {
+          "component_id": "shift_screen"
+        }
+      }
+    },
+    {
+      "body": {
+        "screen_id": "devices",
+        "root": {
+          "component_id": "screen_frame",
+          "children": [
+            {
+              "component_id": "page_header",
+              "properties": {
+                "title_key": "devices.title"
+              }
+            },
+            {
+              "component_id": "devices_body"
+            }
+          ],
+          "properties": {
+            "width": "medium"
+          }
+        }
+      }
+    },
+    {
+      "body": {
+        "screen_id": "pair",
+        "root": {
+          "component_id": "screen_frame",
+          "children": [
+            {
+              "component_id": "page_header",
+              "properties": {
+                "title_key": "pair.title"
+              }
+            },
+            {
+              "component_id": "pair_body"
+            }
+          ],
+          "properties": {
+            "width": "small"
+          }
+        }
+      }
+    },
+    {
+      "body": {
+        "screen_id": "setup",
+        "root": {
+          "component_id": "screen_frame",
+          "children": [
+            {
+              "component_id": "page_header",
+              "properties": {
+                "title_key": "setup.title"
+              }
+            },
+            {
+              "component_id": "setup_body"
+            }
+          ],
+          "properties": {
+            "width": "small"
+          }
+        }
+      }
+    },
+    {
+      "body": {
+        "screen_id": "sign_in",
+        "root": {
+          "component_id": "sign_in_screen"
+        }
+      }
     }
   ]
 }

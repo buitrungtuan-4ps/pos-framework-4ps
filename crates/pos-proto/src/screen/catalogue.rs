@@ -104,18 +104,31 @@ pub static CATALOGUE: &[Component] = &[
     },
     Component {
         component_id: "screen_frame",
+        properties: &[Property {
+            name: "width",
+            tokens: &["full", "narrow", "medium", "small"],
+            ..PROPERTY
+        }],
         holds_children: true,
-        summary: "A whole screen's frame, its children inside the screen's margin.",
+        summary: "A whole screen's frame, its children inside the screen's margin, across the \
+                  screen or in a column at its centre: narrow, medium or small.",
         ..BASE
     },
     Component {
         component_id: "page_header",
-        properties: &[Property {
-            name: "title_key",
-            kind: TranslationKey,
-            required: true,
-            ..PROPERTY
-        }],
+        properties: &[
+            Property {
+                name: "title_key",
+                kind: TranslationKey,
+                required: true,
+                ..PROPERTY
+            },
+            Property {
+                name: "size",
+                tokens: &["large", "extra_large"],
+                ..PROPERTY
+            },
+        ],
         summary: "A screen's heading.",
         ..BASE
     },
@@ -191,6 +204,109 @@ pub static CATALOGUE: &[Component] = &[
         component_id: "menu_buttons",
         reads: "menu",
         summary: "The menu's buttons as the store arranged them, or what the search found.",
+        ..BASE
+    },
+    Component {
+        component_id: "pay_back",
+        reads: "bill",
+        summary: "The way back from taking payment to the order.",
+        ..BASE
+    },
+    Component {
+        component_id: "pay_flow",
+        reads: "bill",
+        summary: "Taking payment: the amount due and the bill's arithmetic, the tenders, splitting \
+                  and reductions, the settle and its answer, or what ended the bill.",
+        ..BASE
+    },
+    Component {
+        component_id: "kds_frame",
+        holds_children: true,
+        summary: "The kitchen board's frame, which wakes the board's sound on a touch.",
+        ..BASE
+    },
+    Component {
+        component_id: "kds_header",
+        reads: "kitchen",
+        summary: "The kitchen board's heading, its clock and the switches for sound and marking dishes.",
+        ..BASE
+    },
+    Component {
+        component_id: "kds_notices",
+        reads: "kitchen",
+        summary: "A bump the store refused, marking dishes sold out, and a sound the device blocked.",
+        ..BASE
+    },
+    Component {
+        component_id: "kds_stations",
+        reads: "kitchen",
+        summary: "The stations the board can show, when the store has more than one.",
+        ..BASE
+    },
+    Component {
+        component_id: "kds_tickets",
+        reads: "kitchen",
+        summary: "The tickets for the station shown, each bumped with a tap, and how many lines wait.",
+        ..BASE
+    },
+    Component {
+        component_id: "expo_tickets",
+        reads: "kitchen",
+        summary: "The pass: a bump the store refused, every order's ready lines, and how many wait.",
+        ..BASE
+    },
+    Component {
+        component_id: "confirm_queue",
+        reads: "guests",
+        summary: "The guests' orders waiting for staff to confirm or refuse, with the reason a refusal cites.",
+        ..BASE
+    },
+    Component {
+        component_id: "counter_frame",
+        holds_children: true,
+        summary: "The counter's frame, in a narrow column at the screen's centre.",
+        ..BASE
+    },
+    Component {
+        component_id: "counter_flow",
+        reads: "counter",
+        summary: "The counter: a new order, how each guest is asked, and the open counter orders, or the one chosen.",
+        ..BASE
+    },
+    Component {
+        component_id: "today_body",
+        reads: "takings",
+        summary: "Today's takings and the bills to reprint from.",
+        ..BASE
+    },
+    Component {
+        component_id: "shift_screen",
+        reads: "drawer",
+        summary: "The drawer's shift: opening, cash in and out, counting and closing, and every till's drawer beside it.",
+        ..BASE
+    },
+    Component {
+        component_id: "devices_body",
+        reads: "devices",
+        summary: "The store's devices, printers and connections, and pairing a new one.",
+        ..BASE
+    },
+    Component {
+        component_id: "pair_body",
+        reads: "pairing",
+        summary: "Pairing this device with a code from the store server.",
+        ..BASE
+    },
+    Component {
+        component_id: "setup_body",
+        reads: "setup",
+        summary: "Setting the store server up: claiming it and checking how it is reached.",
+        ..BASE
+    },
+    Component {
+        component_id: "sign_in_screen",
+        reads: "sign_in",
+        summary: "Signing in with a badge code and PIN, and the pad to type them on.",
         ..BASE
     },
 ];

@@ -55,6 +55,8 @@ import { openForPay } from "../state/open-for-pay";
 import { useSplitPlan } from "../state/split-plan";
 import { useSplitActs } from "../state/split-acts";
 import { printOutcomeKey } from "../lib/print";
+import { RegionsContext, type Regions } from "../package/regions";
+import { NO_ACTS, PackageScreen } from "../package/screen";
 import { asksApprover, can } from "../state/permissions";
 import { createPrint } from "../state/print-writes";
 
@@ -688,655 +690,658 @@ export function Pay() {
     </div>
   );
 
-  return (
-    <section class="mx-auto max-w-xl p-4">
-      <a
-        href={`/table/${params.id}`}
-        class="inline-flex min-h-touch items-center text-sm text-ink-muted no-underline"
-      >
-        {t("common.back_order")}
-      </a>
-
-      <Show
-        when={done()}
-        fallback={
-          <Show when={!voided() && ended() === null && acts.pending() === null} fallback={voided() ? voidedPanel() : acts.pending() !== null ? <PendingSettle phase={acts.pending()?.phase ?? "sending"} act={acts.pending()?.act} amount={formatAmount(money(currency(), total()))} onLeave={() => navigate("/")} /> : <BillEnded how={ended() ?? "settled"} tableId={params.id} />}>
-            <p class="mt-4 text-sm text-ink-muted">{t("pay.amount_due")}</p>
-            <Show when={check()} fallback={<p class="h-8 w-40 animate-pulse rounded-token bg-surface-raised" role="status" aria-label={t("pay.amount_loading")} data-outcome="amount-loading" />}>
-              {(totals) => (
-                <>
-                  {/* A reduced bill says so and by how much. A total that simply came out smaller
-                      than the food on the table is the kind of figure a guest queries and nobody
-                      at the till can explain. Shown only when there is one, because a row of
-                      zeroes on every bill is noise the eye learns to skip. */}
-                  {/* And once it is reduced, the bill's own arithmetic around it: the lines before tax,
-                      what came off, each fee, and the tax the edge worked out again on what is left —
-                      so the figures add up to the total rather than leaving a gap nobody can explain
-                      (UX-11). The tax line is the edge's `tax_total`, never the till's. */}
-                  <Show when={reduced(totals())}>
-                    <CheckRow label={t("order.subtotal")} amount={formatAmount(totals().subtotal)} outcome="bill-subtotal" />
-                  </Show>
-                  <Show when={totals().discount_total.amount_minor > 0}>
-                    <div data-outcome="bill-discounted"><CheckRow label={t("pay.discount_applied")} amount={formatAmount(totals().discount_total)} minus /></div>
-                  </Show>
-                  <Show when={totals().comp_total.amount_minor > 0}>
-                    <CheckRow label={t("pay.comp_applied")} amount={formatAmount(totals().comp_total)} minus />
-                  </Show>
-                  {/* Each fee the bill carries, under its own name (ADR-0159). The figure below
-                      already includes them: the till shows the edge's arithmetic, never its own.
-                      A fee its rule lets staff waive carries **Waive** (decision 5). */}
-                  <For
-                    each={(totals().fee_lines ?? []).filter(
-                      (fee) => fee.amount.amount_minor !== 0,
-                    )}
-                  >
-                    {(fee) => (
-                      <p
-                        class="flex items-center justify-between gap-2 text-sm text-ink-muted"
-                        data-outcome="bill-fee"
-                      >
-                        <span>{fee.display_name}</span>
-                        <span class="flex items-center gap-2">
-                          <span class="tabular-nums">{formatAmount(fee.amount)}</span>
-                          <Show when={canWaive(fee) && waiving() === null}>
-                            <button
-                              type="button"
-                              class="min-h-touch rounded-token border border-line px-3 text-sm"
-                              data-step="askWaiveFee"
-                              onClick={() => askWaiveFee(fee)}
-                            >
-                              {t("pay.waive_fee")}
-                            </button>
-                          </Show>
-                        </span>
-                      </p>
-                    )}
-                  </For>
-                  <Show when={reduced(totals())}>
-                    <CheckRow label={t("order.tax")} amount={formatAmount(totals().tax_total)} outcome="bill-tax" />
-                  </Show>
-                  <p class="text-2xl font-semibold tabular-nums">
-                    {formatAmount(totals().total_due)}
-                  </p>
-                </>
-              )}
-            </Show>
-            {/*
-              Waiving a fee (ADR-0159 decision 5): the reasons the store publishes for a waive, and
-              the manager's badge and PIN where the person needs an approver, typed rather than
-              tapped, so the act is three taps from the order screen — pay, waive, reason — as the
-              discount is. The reasons stay disabled until the approver is typed.
-            */}
-            <Show when={waiving()}>
-              {(fee) => (
-                <div class="mt-3 rounded-token border border-line bg-surface p-3">
-                  <h2 class="font-semibold">{t("pay.waive_title", { fee: fee().display_name })}</h2>
-                  <Show when={waiveAsks()}>
-                    <p class="mt-1 text-sm text-ink-muted">{t("pay.waive_manager")}</p>
-                    <ApproverFields
-                      id="waive-fee-approver"
-                      code={approver.code()}
-                      pin={approver.pin()}
-                      onCode={approver.setCode}
-                      onPin={approver.setPin}
-                      codeLabel={t("pay.approver_code")}
-                      pinLabel={t("pay.approver_pin")}
-                    />
-                  </Show>
-                  <p class="mt-3 text-sm text-ink-muted">{t("pay.waive_reason")}</p>
-                  <div class="mt-2 grid grid-cols-2 gap-2">
-                    <For each={reasonsFor(WAIVE_FEE)}>
-                      {(reason) => (
-                        <button
-                          type="button"
-                          class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
-                          disabled={!readyToWaive() || waiveAct.phase() !== "idle" || waiveAct.refusal() !== null}
-                          data-step="waiveFeeReason"
-                          onClick={() => waiveFeeReason(reason.reason_code_id)}
-                        >
-                          {reason.display_name}
-                        </button>
-                      )}
-                    </For>
-                  </div>
-                  <Show when={waiveAct.phase() !== "idle"}><PendingSettle act="waive" phase={waiveAct.phase()} amount="" onLeave={closeWaive} /></Show>
-                  <RefusalPanel message={waiveAct.refusal()} onDismiss={waiveAct.dismiss} />
-                  <button
-                    type="button"
-                    class="mt-3 min-h-touch rounded-token border border-line px-3 text-sm"
-                    onClick={() => closeWaive()}
-                  >
-                    {t("common.cancel")}
-                  </button>
-                </div>
-              )}
-            </Show>
-            <Show when={waivedFee()}>
-              {(name) => (
-                <p class="mt-1 text-sm text-ink-muted" role="status" data-outcome="fee-waived">
-                  {t("pay.fee_waived", { fee: name() })}
-                </p>
-              )}
-            </Show>
-            {/*
-              A part of a split table says what it is for (ADR-0128), so the guest can check it
-              before paying, and the cashier is not reading out a total that matches nobody's order.
-              Putting the bill back together is the way out of a split made by mistake: a merge into
-              the bill on screen, which the edge records rather than edits.
-            */}
-            <Show when={isPart()}>
-              <p class="mt-1 text-sm text-ink-muted" data-outcome="bill-part">
-                {partSeat() === undefined
-                  ? t("pay.part_for", { items: partItems() })
-                  : t("pay.part_for_seat", { seat: partSeat() ?? 0, items: partItems() })}
-              </p>
-            </Show>
-            <Show
-              when={otherParts().length > 0 && taken().length === 0 && can("billing.bill.split")}
-            >
-              <button
-                type="button"
-                class="mt-2 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted"
-                onClick={() => putBack()}
-              >
-                {t("pay.put_back", { count: otherParts().length + 1 })}
-              </button>
-            </Show>
-
-            {/* Before any money is taken: once a payment is against the bill, the guest has agreed
-                the figure and the receipt is the paper that follows. */}
-            <Show when={taken().length === 0 && can("billing.bill.open")}>
-              <button
-                type="button"
-                class="mt-2 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted disabled:opacity-50"
-                disabled={billId() === null || check() === null || print.printing()}
-                onClick={() => void printPreBill()}
-              >
-                {t(print.printing() ? "common.sending" : "order.pre_bill")}
-              </button>
-            </Show>
-            <Show when={preBill()}>
-              {(outcome) => (
-                <p class="mt-1 text-sm text-ink-muted" role="status" data-outcome="bill-pre-bill-print">
-                  {t(printOutcomeKey(outcome(), "order.pre_bill_printed"))}
-                </p>
-              )}
-            </Show>
-
-            <RefusalPanel message={acts.refusal()} onDismiss={acts.dismiss} />
-            <Show when={shape.pending()}>
-              {(out) => <PendingSettle act={out().act} phase={out().phase} amount="" onLeave={() => navigate("/")} />}
-            </Show>
-            <RefusalPanel message={shape.refusal()} onDismiss={shape.dismiss} />
-            <Show when={error()}>
-              {(message) => (
-                <p class="mt-3 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
-                  {message()}
-                </p>
-              )}
-            </Show>
-
-            {/*
-              Splitting the bill evenly (the till review's first gap). A row of guest counts rather
-              than a button that opens one, so a split costs one tap before the guests' own: a
-              screen that asked "split?" first would make every split a tap longer and every other
-              settle no shorter.
-            */}
-            <Show when={can("billing.payment.take")}>
-            <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">{t("pay.split")}</h2>
-            <div
-              class={
-                splitWays().length > SPLIT_COLUMNS
-                  ? "-mx-1 flex gap-2 overflow-x-auto px-1 pb-1"
-                  : "grid grid-cols-5 gap-2"
-              }
-            >
-              <For each={splitWays()}>
-                {(n) => (
-                  <button
-                    type="button"
-                    class="min-h-touch rounded-token border border-line bg-surface tabular-nums disabled:opacity-50"
-                    classList={{
-                      "border-accent": ways() === n,
-                      "min-w-touch shrink-0": splitWays().length > SPLIT_COLUMNS,
-                    }}
-                    aria-pressed={ways() === n}
-                    aria-label={t("pay.split_ways", { count: n })}
-                    disabled={taken().length > 0 || picking()}
-                    data-step="splitEvenly"
-                    onClick={() => splitEvenly(n)}
-                  >
-                    {n}
-                  </button>
-                )}
-              </For>
-            </div>
-            </Show>
-            <Show when={ways()}>
-              {(n) => (
-                <div class="mt-3 rounded-token border border-line bg-surface p-3">
-                  <p class="text-sm text-ink-muted">
-                    {t("pay.share_of", { part: taken().length + 1, count: n() })}
-                  </p>
-                  <p class="text-2xl font-semibold tabular-nums" data-outcome="share-due">
-                    {formatAmount(money(currency(), due()))}
-                  </p>
-                  <Show when={taken().length > 0}>
-                    <ul class="mt-2 flex list-none flex-col gap-1 p-0">
-                      <For each={taken()}>
-                        {(payment, index) => (
-                          <li
-                            class="flex items-center justify-between gap-2 text-sm"
-                            data-outcome="share-taken"
-                          >
-                            <span>
-                              {t("pay.share_taken", {
-                                part: index() + 1,
-                                method: t(methodKey(payment.method)),
-                              })}
-                            </span>
-                            <span class="flex items-center gap-2">
-                              <span class="tabular-nums">{formatAmount(payment.applied_to_bill)}</span>
-                              <button
-                                type="button"
-                                class="min-h-touch rounded-token border border-line px-3"
-                                onClick={() => untake(index())}
-                              >
-                                {t("pay.share_untake")}
-                              </button>
-                            </span>
-                          </li>
-                        )}
-                      </For>
-                    </ul>
-                    <p class="mt-2 text-sm text-ink-muted">
-                      {t("pay.remaining")}:{" "}
-                      <span class="tabular-nums">{formatAmount(money(currency(), remaining()))}</span>
-                    </p>
-                  </Show>
-                  <button
-                    type="button"
-                    class="mt-2 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted"
-                    onClick={() => cancelSplit()}
-                  >
-                    {t("pay.split_cancel")}
-                  </button>
-                </div>
-              )}
-            </Show>
-
-            {/*
-              Splitting by item (ADR-0128): pick the lines one guest is paying for and split them off
-              into a bill of their own, and what is left stays open as the next bill. Behind a button
-              rather than a list on every bill, because the list would push the tenders below the fold
-              on a phone for every settle that never splits.
-            */}
-            <Show when={(covered()?.length ?? 0) > 1 && !picking() && can("billing.bill.split")}>
-              <div class="mt-2 flex gap-2">
-                <button
-                  type="button"
-                  class="min-h-touch flex-1 rounded-token border border-line bg-surface disabled:opacity-50"
-                  disabled={ways() !== null || taken().length > 0}
-                  data-step="splitByItem"
-                  onClick={() => splitByItem()}
-                >
-                  {t("pay.split_by_item")}
-                </button>
-                {/* By seat, where the store assigns them: the partition is already written on the
-                    lines, so it costs one tap and no picking. */}
-                <Show when={seatParts()}>
-                  {(parts) => (
-                    <button
-                      type="button"
-                      class="min-h-touch flex-1 rounded-token border border-line bg-surface disabled:opacity-50"
-                      disabled={ways() !== null || taken().length > 0}
-                      data-step="splitBySeat"
-                      onClick={() => splitBySeat()}
-                    >
-                      {t("pay.split_by_seat", { count: parts().length })}
-                    </button>
-                  )}
+  // The regions the default package's `pay` screen arranges (`../package/regions.tsx`).
+  const regions: Regions = {
+    pay_back: () => <a
+      href={`/table/${params.id}`}
+      class="inline-flex min-h-touch items-center text-sm text-ink-muted no-underline"
+    >
+      {t("common.back_order")}
+    </a>,
+    pay_flow: () => <Show
+      when={done()}
+      fallback={
+        <Show when={!voided() && ended() === null && acts.pending() === null} fallback={voided() ? voidedPanel() : acts.pending() !== null ? <PendingSettle phase={acts.pending()?.phase ?? "sending"} act={acts.pending()?.act} amount={formatAmount(money(currency(), total()))} onLeave={() => navigate("/")} /> : <BillEnded how={ended() ?? "settled"} tableId={params.id} />}>
+          <p class="mt-4 text-sm text-ink-muted">{t("pay.amount_due")}</p>
+          <Show when={check()} fallback={<p class="h-8 w-40 animate-pulse rounded-token bg-surface-raised" role="status" aria-label={t("pay.amount_loading")} data-outcome="amount-loading" />}>
+            {(totals) => (
+              <>
+                {/* A reduced bill says so and by how much. A total that simply came out smaller
+                    than the food on the table is the kind of figure a guest queries and nobody
+                    at the till can explain. Shown only when there is one, because a row of
+                    zeroes on every bill is noise the eye learns to skip. */}
+                {/* And once it is reduced, the bill's own arithmetic around it: the lines before tax,
+                    what came off, each fee, and the tax the edge worked out again on what is left —
+                    so the figures add up to the total rather than leaving a gap nobody can explain
+                    (UX-11). The tax line is the edge's `tax_total`, never the till's. */}
+                <Show when={reduced(totals())}>
+                  <CheckRow label={t("order.subtotal")} amount={formatAmount(totals().subtotal)} outcome="bill-subtotal" />
                 </Show>
-              </div>
-            </Show>
-            <Show when={picking()}>
+                <Show when={totals().discount_total.amount_minor > 0}>
+                  <div data-outcome="bill-discounted"><CheckRow label={t("pay.discount_applied")} amount={formatAmount(totals().discount_total)} minus /></div>
+                </Show>
+                <Show when={totals().comp_total.amount_minor > 0}>
+                  <CheckRow label={t("pay.comp_applied")} amount={formatAmount(totals().comp_total)} minus />
+                </Show>
+                {/* Each fee the bill carries, under its own name (ADR-0159). The figure below
+                    already includes them: the till shows the edge's arithmetic, never its own.
+                    A fee its rule lets staff waive carries **Waive** (decision 5). */}
+                <For
+                  each={(totals().fee_lines ?? []).filter(
+                    (fee) => fee.amount.amount_minor !== 0,
+                  )}
+                >
+                  {(fee) => (
+                    <p
+                      class="flex items-center justify-between gap-2 text-sm text-ink-muted"
+                      data-outcome="bill-fee"
+                    >
+                      <span>{fee.display_name}</span>
+                      <span class="flex items-center gap-2">
+                        <span class="tabular-nums">{formatAmount(fee.amount)}</span>
+                        <Show when={canWaive(fee) && waiving() === null}>
+                          <button
+                            type="button"
+                            class="min-h-touch rounded-token border border-line px-3 text-sm"
+                            data-step="askWaiveFee"
+                            onClick={() => askWaiveFee(fee)}
+                          >
+                            {t("pay.waive_fee")}
+                          </button>
+                        </Show>
+                      </span>
+                    </p>
+                  )}
+                </For>
+                <Show when={reduced(totals())}>
+                  <CheckRow label={t("order.tax")} amount={formatAmount(totals().tax_total)} outcome="bill-tax" />
+                </Show>
+                <p class="text-2xl font-semibold tabular-nums">
+                  {formatAmount(totals().total_due)}
+                </p>
+              </>
+            )}
+          </Show>
+          {/*
+            Waiving a fee (ADR-0159 decision 5): the reasons the store publishes for a waive, and
+            the manager's badge and PIN where the person needs an approver, typed rather than
+            tapped, so the act is three taps from the order screen — pay, waive, reason — as the
+            discount is. The reasons stay disabled until the approver is typed.
+          */}
+          <Show when={waiving()}>
+            {(fee) => (
               <div class="mt-3 rounded-token border border-line bg-surface p-3">
-                <p class="text-sm text-ink-muted">{t("pay.split_pick")}</p>
-                <ul class="mt-2 flex list-none flex-col gap-2 p-0">
-                  <For each={coveredLines()}>
-                    {(line) => (
-                      <li>
-                        <button
-                          type="button"
-                          class="flex min-h-touch w-full items-center justify-between gap-2 rounded-token border border-line px-3 text-left"
-                          classList={{ "border-2 border-accent font-semibold": picked().has(line.orderLineId) }}
-                          aria-pressed={picked().has(line.orderLineId)}
-                          data-step="pickLine"
-                          onClick={() => pickLine(line.orderLineId)}
-                        >
-                          <span>{`${formatQuantity(line.quantityMilli)} × ${line.name}`}</span>
-                          <span class="tabular-nums">{formatAmount(line.lineTotal)}</span>
-                        </button>
-                      </li>
+                <h2 class="font-semibold">{t("pay.waive_title", { fee: fee().display_name })}</h2>
+                <Show when={waiveAsks()}>
+                  <p class="mt-1 text-sm text-ink-muted">{t("pay.waive_manager")}</p>
+                  <ApproverFields
+                    id="waive-fee-approver"
+                    code={approver.code()}
+                    pin={approver.pin()}
+                    onCode={approver.setCode}
+                    onPin={approver.setPin}
+                    codeLabel={t("pay.approver_code")}
+                    pinLabel={t("pay.approver_pin")}
+                  />
+                </Show>
+                <p class="mt-3 text-sm text-ink-muted">{t("pay.waive_reason")}</p>
+                <div class="mt-2 grid grid-cols-2 gap-2">
+                  <For each={reasonsFor(WAIVE_FEE)}>
+                    {(reason) => (
+                      <button
+                        type="button"
+                        class="min-h-touch rounded-token border border-line bg-surface px-3 text-left disabled:opacity-50"
+                        disabled={!readyToWaive() || waiveAct.phase() !== "idle" || waiveAct.refusal() !== null}
+                        data-step="waiveFeeReason"
+                        onClick={() => waiveFeeReason(reason.reason_code_id)}
+                      >
+                        {reason.display_name}
+                      </button>
                     )}
                   </For>
-                </ul>
+                </div>
+                <Show when={waiveAct.phase() !== "idle"}><PendingSettle act="waive" phase={waiveAct.phase()} amount="" onLeave={closeWaive} /></Show>
+                <RefusalPanel message={waiveAct.refusal()} onDismiss={waiveAct.dismiss} />
                 <button
                   type="button"
-                  class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
-                  disabled={!canSplitOff()}
-                  data-step="splitOff"
-                  onClick={() => splitOff()}
-                >
-                  {t("pay.split_off", { count: picked().size })}
-                </button>
-                <button
-                  type="button"
-                  class="mt-2 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted"
-                  onClick={() => setPicking(false)}
+                  class="mt-3 min-h-touch rounded-token border border-line px-3 text-sm"
+                  onClick={() => closeWaive()}
                 >
                   {t("common.cancel")}
                 </button>
               </div>
-            </Show>
+            )}
+          </Show>
+          <Show when={waivedFee()}>
+            {(name) => (
+              <p class="mt-1 text-sm text-ink-muted" role="status" data-outcome="fee-waived">
+                {t("pay.fee_waived", { fee: name() })}
+              </p>
+            )}
+          </Show>
+          {/*
+            A part of a split table says what it is for (ADR-0128), so the guest can check it
+            before paying, and the cashier is not reading out a total that matches nobody's order.
+            Putting the bill back together is the way out of a split made by mistake: a merge into
+            the bill on screen, which the edge records rather than edits.
+          */}
+          <Show when={isPart()}>
+            <p class="mt-1 text-sm text-ink-muted" data-outcome="bill-part">
+              {partSeat() === undefined
+                ? t("pay.part_for", { items: partItems() })
+                : t("pay.part_for_seat", { seat: partSeat() ?? 0, items: partItems() })}
+            </p>
+          </Show>
+          <Show
+            when={otherParts().length > 0 && taken().length === 0 && can("billing.bill.split")}
+          >
+            <button
+              type="button"
+              class="mt-2 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted"
+              onClick={() => putBack()}
+            >
+              {t("pay.put_back", { count: otherParts().length + 1 })}
+            </button>
+          </Show>
 
-            {/* The tip, the buyer and the tenders are taking payment (ADR-0158). */}
-            <Show when={can("billing.payment.take")}>
-            {/*
-              No tip key left to offer, and the row is not drawn: with no amount to type, a lone
-              "No tip" would offer nothing (ADR-0160 decision 2).
-            */}
-            <Show when={tipsEnabled() && ways() === null && tipPercents().length > 0}>
-              <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">{t("pay.tip")}</h2>
-              <div class="grid grid-cols-4 gap-2">
+          {/* Before any money is taken: once a payment is against the bill, the guest has agreed
+              the figure and the receipt is the paper that follows. */}
+          <Show when={taken().length === 0 && can("billing.bill.open")}>
+            <button
+              type="button"
+              class="mt-2 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted disabled:opacity-50"
+              disabled={billId() === null || check() === null || print.printing()}
+              onClick={() => void printPreBill()}
+            >
+              {t(print.printing() ? "common.sending" : "order.pre_bill")}
+            </button>
+          </Show>
+          <Show when={preBill()}>
+            {(outcome) => (
+              <p class="mt-1 text-sm text-ink-muted" role="status" data-outcome="bill-pre-bill-print">
+                {t(printOutcomeKey(outcome(), "order.pre_bill_printed"))}
+              </p>
+            )}
+          </Show>
+
+          <RefusalPanel message={acts.refusal()} onDismiss={acts.dismiss} />
+          <Show when={shape.pending()}>
+            {(out) => <PendingSettle act={out().act} phase={out().phase} amount="" onLeave={() => navigate("/")} />}
+          </Show>
+          <RefusalPanel message={shape.refusal()} onDismiss={shape.dismiss} />
+          <Show when={error()}>
+            {(message) => (
+              <p class="mt-3 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
+                {message()}
+              </p>
+            )}
+          </Show>
+
+          {/*
+            Splitting the bill evenly (the till review's first gap). A row of guest counts rather
+            than a button that opens one, so a split costs one tap before the guests' own: a
+            screen that asked "split?" first would make every split a tap longer and every other
+            settle no shorter.
+          */}
+          <Show when={can("billing.payment.take")}>
+          <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">{t("pay.split")}</h2>
+          <div
+            class={
+              splitWays().length > SPLIT_COLUMNS
+                ? "-mx-1 flex gap-2 overflow-x-auto px-1 pb-1"
+                : "grid grid-cols-5 gap-2"
+            }
+          >
+            <For each={splitWays()}>
+              {(n) => (
                 <button
                   type="button"
-                  class="min-h-touch rounded-token border border-line bg-surface"
-                  classList={{ "border-accent": tip() === 0 }}
-                  onClick={() => setTip(0)}
+                  class="min-h-touch rounded-token border border-line bg-surface tabular-nums disabled:opacity-50"
+                  classList={{
+                    "border-accent": ways() === n,
+                    "min-w-touch shrink-0": splitWays().length > SPLIT_COLUMNS,
+                  }}
+                  aria-pressed={ways() === n}
+                  aria-label={t("pay.split_ways", { count: n })}
+                  disabled={taken().length > 0 || picking()}
+                  data-step="splitEvenly"
+                  onClick={() => splitEvenly(n)}
                 >
-                  {t("pay.tip_none")}
+                  {n}
                 </button>
-                <For each={tipKeys()}>
-                  {(amount) => (
-                    <button
-                      type="button"
-                      class="min-h-touch rounded-token border border-line bg-surface tabular-nums"
-                      classList={{ "border-accent": tip() === amount && amount > 0 }}
-                      data-step="setTip"
-                      onClick={() => setTip(amount)}
-                    >
-                      {formatAmount(money(currency(), amount))}
-                    </button>
+              )}
+            </For>
+          </div>
+          </Show>
+          <Show when={ways()}>
+            {(n) => (
+              <div class="mt-3 rounded-token border border-line bg-surface p-3">
+                <p class="text-sm text-ink-muted">
+                  {t("pay.share_of", { part: taken().length + 1, count: n() })}
+                </p>
+                <p class="text-2xl font-semibold tabular-nums" data-outcome="share-due">
+                  {formatAmount(money(currency(), due()))}
+                </p>
+                <Show when={taken().length > 0}>
+                  <ul class="mt-2 flex list-none flex-col gap-1 p-0">
+                    <For each={taken()}>
+                      {(payment, index) => (
+                        <li
+                          class="flex items-center justify-between gap-2 text-sm"
+                          data-outcome="share-taken"
+                        >
+                          <span>
+                            {t("pay.share_taken", {
+                              part: index() + 1,
+                              method: t(methodKey(payment.method)),
+                            })}
+                          </span>
+                          <span class="flex items-center gap-2">
+                            <span class="tabular-nums">{formatAmount(payment.applied_to_bill)}</span>
+                            <button
+                              type="button"
+                              class="min-h-touch rounded-token border border-line px-3"
+                              onClick={() => untake(index())}
+                            >
+                              {t("pay.share_untake")}
+                            </button>
+                          </span>
+                        </li>
+                      )}
+                    </For>
+                  </ul>
+                  <p class="mt-2 text-sm text-ink-muted">
+                    {t("pay.remaining")}:{" "}
+                    <span class="tabular-nums">{formatAmount(money(currency(), remaining()))}</span>
+                  </p>
+                </Show>
+                <button
+                  type="button"
+                  class="mt-2 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted"
+                  onClick={() => cancelSplit()}
+                >
+                  {t("pay.split_cancel")}
+                </button>
+              </div>
+            )}
+          </Show>
+
+          {/*
+            Splitting by item (ADR-0128): pick the lines one guest is paying for and split them off
+            into a bill of their own, and what is left stays open as the next bill. Behind a button
+            rather than a list on every bill, because the list would push the tenders below the fold
+            on a phone for every settle that never splits.
+          */}
+          <Show when={(covered()?.length ?? 0) > 1 && !picking() && can("billing.bill.split")}>
+            <div class="mt-2 flex gap-2">
+              <button
+                type="button"
+                class="min-h-touch flex-1 rounded-token border border-line bg-surface disabled:opacity-50"
+                disabled={ways() !== null || taken().length > 0}
+                data-step="splitByItem"
+                onClick={() => splitByItem()}
+              >
+                {t("pay.split_by_item")}
+              </button>
+              {/* By seat, where the store assigns them: the partition is already written on the
+                  lines, so it costs one tap and no picking. */}
+              <Show when={seatParts()}>
+                {(parts) => (
+                  <button
+                    type="button"
+                    class="min-h-touch flex-1 rounded-token border border-line bg-surface disabled:opacity-50"
+                    disabled={ways() !== null || taken().length > 0}
+                    data-step="splitBySeat"
+                    onClick={() => splitBySeat()}
+                  >
+                    {t("pay.split_by_seat", { count: parts().length })}
+                  </button>
+                )}
+              </Show>
+            </div>
+          </Show>
+          <Show when={picking()}>
+            <div class="mt-3 rounded-token border border-line bg-surface p-3">
+              <p class="text-sm text-ink-muted">{t("pay.split_pick")}</p>
+              <ul class="mt-2 flex list-none flex-col gap-2 p-0">
+                <For each={coveredLines()}>
+                  {(line) => (
+                    <li>
+                      <button
+                        type="button"
+                        class="flex min-h-touch w-full items-center justify-between gap-2 rounded-token border border-line px-3 text-left"
+                        classList={{ "border-2 border-accent font-semibold": picked().has(line.orderLineId) }}
+                        aria-pressed={picked().has(line.orderLineId)}
+                        data-step="pickLine"
+                        onClick={() => pickLine(line.orderLineId)}
+                      >
+                        <span>{`${formatQuantity(line.quantityMilli)} × ${line.name}`}</span>
+                        <span class="tabular-nums">{formatAmount(line.lineTotal)}</span>
+                      </button>
+                    </li>
                   )}
                 </For>
-              </div>
-            </Show>
+              </ul>
+              <button
+                type="button"
+                class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
+                disabled={!canSplitOff()}
+                data-step="splitOff"
+                onClick={() => splitOff()}
+              >
+                {t("pay.split_off", { count: picked().size })}
+              </button>
+              <button
+                type="button"
+                class="mt-2 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted"
+                onClick={() => setPicking(false)}
+              >
+                {t("common.cancel")}
+              </button>
+            </div>
+          </Show>
 
-            <details class="mt-6 rounded-token border border-line bg-surface px-3 py-2">
-              <summary class="min-h-touch cursor-pointer text-sm font-semibold text-ink-muted">
-                {t("pay.buyer")}
-              </summary>
-              <p class="mt-1 text-sm text-ink-muted">{t("pay.buyer_hint")}</p>
-              <label class="mt-3 block text-sm">
-                {t("pay.buyer_name")}
-                <input
-                  type="text"
-                  class="mt-1 min-h-touch w-full rounded-token border border-line bg-surface px-2"
-                  value={buyerName()}
-                  onInput={(event) => setBuyerName(event.currentTarget.value)}
-                />
-              </label>
-              <label class="mt-2 block text-sm">
-                {t("pay.buyer_tax_code")}
-                <input
-                  type="text"
-                  class="mt-1 min-h-touch w-full rounded-token border border-line bg-surface px-2"
-                  value={buyerTaxCode()}
-                  onInput={(event) => setBuyerTaxCode(event.currentTarget.value)}
-                />
-              </label>
-              <label class="mt-2 block text-sm">
-                {t("pay.buyer_address")}
-                <input
-                  type="text"
-                  class="mt-1 min-h-touch w-full rounded-token border border-line bg-surface px-2"
-                  value={buyerAddress()}
-                  onInput={(event) => setBuyerAddress(event.currentTarget.value)}
-                />
-              </label>
-            </details>
-
-            <Show when={tenderAccepted("PAYMENT_METHOD_CASH")}>
-            <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">{t("pay.cash")}</h2>
-            <fieldset class="grid min-w-0 grid-cols-2 gap-2" disabled={check() === null} data-outcome="quick-cash">
-              <For each={quickCash()}>
+          {/* The tip, the buyer and the tenders are taking payment (ADR-0158). */}
+          <Show when={can("billing.payment.take")}>
+          {/*
+            No tip key left to offer, and the row is not drawn: with no amount to type, a lone
+            "No tip" would offer nothing (ADR-0160 decision 2).
+          */}
+          <Show when={tipsEnabled() && ways() === null && tipPercents().length > 0}>
+            <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">{t("pay.tip")}</h2>
+            <div class="grid grid-cols-4 gap-2">
+              <button
+                type="button"
+                class="min-h-touch rounded-token border border-line bg-surface"
+                classList={{ "border-accent": tip() === 0 }}
+                onClick={() => setTip(0)}
+              >
+                {t("pay.tip_none")}
+              </button>
+              <For each={tipKeys()}>
                 {(amount) => (
                   <button
                     type="button"
-                    class="min-h-touch rounded-token border border-line bg-surface tabular-nums disabled:opacity-50"
-                    classList={{ "border-accent": !typing() && tender() === amount }}
-                    data-step="setTender"
-                    onClick={() => {
-                      setTyping(false);
-                      setTender(amount);
-                    }}
+                    class="min-h-touch rounded-token border border-line bg-surface tabular-nums"
+                    classList={{ "border-accent": tip() === amount && amount > 0 }}
+                    data-step="setTip"
+                    onClick={() => setTip(amount)}
                   >
-                    {amount === due() ? t("pay.exact") : formatAmount(money(currency(), amount))}
+                    {formatAmount(money(currency(), amount))}
                   </button>
                 )}
               </For>
+            </div>
+          </Show>
+
+          <details class="mt-6 rounded-token border border-line bg-surface px-3 py-2">
+            <summary class="min-h-touch cursor-pointer text-sm font-semibold text-ink-muted">
+              {t("pay.buyer")}
+            </summary>
+            <p class="mt-1 text-sm text-ink-muted">{t("pay.buyer_hint")}</p>
+            <label class="mt-3 block text-sm">
+              {t("pay.buyer_name")}
+              <input
+                type="text"
+                class="mt-1 min-h-touch w-full rounded-token border border-line bg-surface px-2"
+                value={buyerName()}
+                onInput={(event) => setBuyerName(event.currentTarget.value)}
+              />
+            </label>
+            <label class="mt-2 block text-sm">
+              {t("pay.buyer_tax_code")}
+              <input
+                type="text"
+                class="mt-1 min-h-touch w-full rounded-token border border-line bg-surface px-2"
+                value={buyerTaxCode()}
+                onInput={(event) => setBuyerTaxCode(event.currentTarget.value)}
+              />
+            </label>
+            <label class="mt-2 block text-sm">
+              {t("pay.buyer_address")}
+              <input
+                type="text"
+                class="mt-1 min-h-touch w-full rounded-token border border-line bg-surface px-2"
+                value={buyerAddress()}
+                onInput={(event) => setBuyerAddress(event.currentTarget.value)}
+              />
+            </label>
+          </details>
+
+          <Show when={tenderAccepted("PAYMENT_METHOD_CASH")}>
+          <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">{t("pay.cash")}</h2>
+          <fieldset class="grid min-w-0 grid-cols-2 gap-2" disabled={check() === null} data-outcome="quick-cash">
+            <For each={quickCash()}>
+              {(amount) => (
+                <button
+                  type="button"
+                  class="min-h-touch rounded-token border border-line bg-surface tabular-nums disabled:opacity-50"
+                  classList={{ "border-accent": !typing() && tender() === amount }}
+                  data-step="setTender"
+                  onClick={() => {
+                    setTyping(false);
+                    setTender(amount);
+                  }}
+                >
+                  {amount === due() ? t("pay.exact") : formatAmount(money(currency(), amount))}
+                </button>
+              )}
+            </For>
+            <button
+              type="button"
+              class="min-h-touch rounded-token border border-line bg-surface disabled:opacity-50"
+              classList={{ "border-accent": typing() }}
+              aria-expanded={typing()}
+              data-step="typeTender"
+              onClick={() => typeTender()}
+            >
+              {t("pay.other_amount")}
+            </button>
+          </fieldset>
+          <Show when={typing()}>
+            <p class="mt-3 text-sm text-ink-muted">{t("pay.tendered")}</p>
+            <p class="text-2xl font-semibold tabular-nums" data-outcome="typed-tender">
+              {typedTender() === null ? "—" : formatAmount(money(currency(), typedTender() ?? 0))}
+            </p>
+            <Keypad value={typedText()} onChange={setTypedText} data-step="tenderKeypad" />
+            <Show when={shortBy()}>
+              {(gap) => (
+                <p class="mt-2 text-sm text-danger" role="status">
+                  {t("pay.short_by", { amount: formatAmount(money(currency(), gap())) })}
+                </p>
+              )}
+            </Show>
+          </Show>
+          <p class="mt-2 text-sm text-ink-muted">
+            {t("pay.change")}: <span class="tabular-nums">{formatAmount(money(currency(), change()))}</span>
+          </p>
+          </Show>
+
+          {/*
+            Every tender waits for the edge's figure, and so do the cash keys above it, whose "Exact"
+            is nothing until the figure lands. Before it lands the amount owed reads as
+            nothing, and a tap then would ask the edge to settle for nothing — which it refuses, with
+            the guest's money already on the counter. A bill put on screen mid-flow (the next part of
+            a split) starts in exactly that state, so the window is not only the first load's.
+          */}
+          <DrawerOwner own approver />
+          <div class="mt-4 flex flex-col gap-2">
+            <Show when={tenderAccepted("PAYMENT_METHOD_CASH")}>
+            <button
+              type="button"
+              class="min-h-money rounded-token bg-primary text-lg font-semibold text-primary-ink disabled:opacity-50"
+              disabled={check() === null || typedTenderInvalid() || paying.busy() !== null}
+              data-step="payCash"
+              onClick={() => payCash()}
+            >
+              {t(paying.busy() === "PAYMENT_METHOD_CASH" ? "pay.paying" : "pay.take_cash")}
+            </button>
+            </Show>
+            <Show when={tenderAccepted("PAYMENT_METHOD_CARD")}>
               <button
                 type="button"
                 class="min-h-touch rounded-token border border-line bg-surface disabled:opacity-50"
-                classList={{ "border-accent": typing() }}
-                aria-expanded={typing()}
-                data-step="typeTender"
-                onClick={() => typeTender()}
+                disabled={check() === null || paying.busy() !== null}
+                data-step="payCard"
+                onClick={() => payCard()}
               >
-                {t("pay.other_amount")}
+                {t(paying.busy() === "PAYMENT_METHOD_CARD" ? "pay.paying" : "pay.card")}
               </button>
-            </fieldset>
-            <Show when={typing()}>
-              <p class="mt-3 text-sm text-ink-muted">{t("pay.tendered")}</p>
-              <p class="text-2xl font-semibold tabular-nums" data-outcome="typed-tender">
-                {typedTender() === null ? "—" : formatAmount(money(currency(), typedTender() ?? 0))}
-              </p>
-              <Keypad value={typedText()} onChange={setTypedText} data-step="tenderKeypad" />
-              <Show when={shortBy()}>
-                {(gap) => (
-                  <p class="mt-2 text-sm text-danger" role="status">
-                    {t("pay.short_by", { amount: formatAmount(money(currency(), gap())) })}
-                  </p>
-                )}
-              </Show>
             </Show>
-            <p class="mt-2 text-sm text-ink-muted">
-              {t("pay.change")}: <span class="tabular-nums">{formatAmount(money(currency(), change()))}</span>
-            </p>
-            </Show>
-
-            {/*
-              Every tender waits for the edge's figure, and so do the cash keys above it, whose "Exact"
-              is nothing until the figure lands. Before it lands the amount owed reads as
-              nothing, and a tap then would ask the edge to settle for nothing — which it refuses, with
-              the guest's money already on the counter. A bill put on screen mid-flow (the next part of
-              a split) starts in exactly that state, so the window is not only the first load's.
-            */}
-            <DrawerOwner own approver />
-            <div class="mt-4 flex flex-col gap-2">
-              <Show when={tenderAccepted("PAYMENT_METHOD_CASH")}>
+            <Show when={tenderAccepted("PAYMENT_METHOD_QR")}>
               <button
                 type="button"
-                class="min-h-money rounded-token bg-primary text-lg font-semibold text-primary-ink disabled:opacity-50"
-                disabled={check() === null || typedTenderInvalid() || paying.busy() !== null}
-                data-step="payCash"
-                onClick={() => payCash()}
+                class="min-h-touch rounded-token border border-line bg-surface disabled:opacity-50"
+                disabled={check() === null || paying.busy() !== null}
+                data-step="payQr"
+                onClick={() => payQr()}
               >
-                {t(paying.busy() === "PAYMENT_METHOD_CASH" ? "pay.paying" : "pay.take_cash")}
+                {t(paying.busy() === "PAYMENT_METHOD_QR" ? "pay.paying" : "pay.qr")}
+              </button>
+              <p class="text-sm text-ink-muted">{t("pay.qr_hint")}</p>
+            </Show>
+          </div>
+          </Show>
+
+          {/* Taking money off and voiding the bill: each its own panel, shared with the counter. */}
+          <Show
+            when={discount.open()}
+            fallback={
+              <Show when={can("billing.discount.apply")}>
+              <button
+                type="button"
+                class="mt-6 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted disabled:opacity-50"
+                disabled={billId() === null || reasonsFor(DISCOUNT).length === 0 || taken().length > 0}
+                aria-describedby="why-reasons"
+                data-step="askDiscount"
+                onClick={() => discount.askDiscount()}
+              >
+                {t("pay.discount")}
               </button>
               </Show>
-              <Show when={tenderAccepted("PAYMENT_METHOD_CARD")}>
-                <button
-                  type="button"
-                  class="min-h-touch rounded-token border border-line bg-surface disabled:opacity-50"
-                  disabled={check() === null || paying.busy() !== null}
-                  data-step="payCard"
-                  onClick={() => payCard()}
-                >
-                  {t(paying.busy() === "PAYMENT_METHOD_CARD" ? "pay.paying" : "pay.card")}
-                </button>
-              </Show>
-              <Show when={tenderAccepted("PAYMENT_METHOD_QR")}>
-                <button
-                  type="button"
-                  class="min-h-touch rounded-token border border-line bg-surface disabled:opacity-50"
-                  disabled={check() === null || paying.busy() !== null}
-                  data-step="payQr"
-                  onClick={() => payQr()}
-                >
-                  {t(paying.busy() === "PAYMENT_METHOD_QR" ? "pay.paying" : "pay.qr")}
-                </button>
-                <p class="text-sm text-ink-muted">{t("pay.qr_hint")}</p>
-              </Show>
-            </div>
-            </Show>
-
-            {/* Taking money off and voiding the bill: each its own panel, shared with the counter. */}
-            <Show
-              when={discount.open()}
-              fallback={
-                <Show when={can("billing.discount.apply")}>
-                <button
-                  type="button"
-                  class="mt-6 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted disabled:opacity-50"
-                  disabled={billId() === null || reasonsFor(DISCOUNT).length === 0 || taken().length > 0}
-                  aria-describedby="why-reasons"
-                  data-step="askDiscount"
-                  onClick={() => discount.askDiscount()}
-                >
-                  {t("pay.discount")}
-                </button>
-                </Show>
-              }
-            >
-              <DiscountPanel state={discount} approver={approver} data-step="discountReason" onSubmit={(id) => discount.discountReason(id)} />
-            </Show>
-
-            <Show
-              when={voiding.open()}
-              fallback={
-                <Show when={can("billing.bill.void")}>
-                <button
-                  type="button"
-                  class="mt-6 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted disabled:opacity-50"
-                  disabled={billId() === null || reasonsFor(VOID_BILL).length === 0 || taken().length > 0}
-                  aria-describedby="why-reasons"
-                  data-step="askVoidBill"
-                  onClick={() => voiding.askVoidBill()}
-                >
-                  {t("pay.void")}
-                </button>
-                <WhyUnavailable entry="reason_codes" id="why-reasons" />
-                </Show>
-              }
-            >
-              <VoidBillPanel state={voiding} approver={approver} data-step="voidBillReason" onSubmit={(id) => voiding.voidBillReason(id)} />
-            </Show>
+            }
+          >
+            <DiscountPanel state={discount} approver={approver} data-step="discountReason" onSubmit={(id) => discount.discountReason(id)} />
           </Show>
-        }
-      >
-        {(bill) => (
-          // The settled block: what a pay flow has to reach, and what an undeclared extra tap would
-          // stop it reaching (ADR-0109).
-          <div class="mt-6 rounded-token border border-line bg-surface p-4" data-outcome="settled">
-            <p class="text-lg font-semibold text-ok">{t("pay.settled")}</p>
-            <p class="mt-2 tabular-nums">
-              {receiptLine(bill())}
-            </p>
-            {/* The change is what the cashier acts on next, so it is the largest figure here (UX-15). */}
-            <Show when={givenChange() > 0}>
-              <p class="mt-3 text-sm text-ink-muted">{t("pay.change")}<span class="block text-4xl font-semibold text-ink tabular-nums" data-outcome="change-due">{formatAmount(money(currency(), givenChange()))}</span></p>
-            </Show>
-            <Show when={bill().print_receipt}>
-              <p
-                class="mt-1 text-sm"
-                classList={{
-                  "text-ink-muted":
-                    bill().receipt_print === undefined || bill().receipt_print === "PRINTED",
-                  "text-danger":
-                    bill().receipt_print !== undefined && bill().receipt_print !== "PRINTED",
-                }}
+
+          <Show
+            when={voiding.open()}
+            fallback={
+              <Show when={can("billing.bill.void")}>
+              <button
+                type="button"
+                class="mt-6 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted disabled:opacity-50"
+                disabled={billId() === null || reasonsFor(VOID_BILL).length === 0 || taken().length > 0}
+                aria-describedby="why-reasons"
+                data-step="askVoidBill"
+                onClick={() => voiding.askVoidBill()}
               >
-                {t(receiptPrintKey(bill().receipt_print))}
-              </p>
-            </Show>
-            {/*
-              A drawer that should have sprung and did not (ADR-0165). A store with no drawer marked
-              says nothing here: `NO_DRAWER` is its ordinary state, not news for the cashier.
-            */}
-            <Show when={bill().drawer_open === "DRAWER_UNAVAILABLE"}>
-              <p class="mt-1 text-sm text-danger" role="status" data-outcome="drawer-unavailable">
-                {t("pay.drawer_unavailable")}
-              </p>
-            </Show>
-            <Show when={can("billing.receipt.reprint")}>
-            <button
-              type="button"
-              class="mt-3 min-h-touch w-full rounded-token border border-line text-sm"
-              data-step="printAgain"
-              disabled={print.printing()}
-              onClick={() => void printAgain(bill().bill_id)}
-            >
-              {t(print.printing() ? "common.sending" : "pay.print_again")}
-            </button>
-            </Show>
-            <Show when={copy()}>
-              {(printed) => (
-                <p class="mt-1 text-sm text-ink-muted" role="status" data-outcome="receipt-reprinted">
-                  {t(printOutcomeKey(printed().receipt_print, "pay.copy_printed"), {
-                    number: printed().copy_number,
-                  })}
-                </p>
-              )}
-            </Show>
-            <Show when={error()}>
-              {(message) => (
-                <p class="mt-3 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
-                  {message()}
-                </p>
-              )}
-            </Show>
-            {/*
-              A split table's next guest (ADR-0128). The table waits for the last part, so the pay
-              screen offers it straight away rather than sending the cashier back through the order.
-            */}
-            <Show when={openBillFor(params.id)}>
-              {(next) => (
-                <button
-                  type="button"
-                  class="mt-4 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink"
-                  data-step="nextBill"
-                  onClick={() => nextBill(next())}
-                >
-                  {t("pay.next_bill", { count: openBillsFor(params.id).length })}
-                </button>
-              )}
-            </Show>
-            <button
-              type="button"
-              class="mt-4 min-h-touch w-full rounded-token font-semibold"
+                {t("pay.void")}
+              </button>
+              <WhyUnavailable entry="reason_codes" id="why-reasons" />
+              </Show>
+            }
+          >
+            <VoidBillPanel state={voiding} approver={approver} data-step="voidBillReason" onSubmit={(id) => voiding.voidBillReason(id)} />
+          </Show>
+        </Show>
+      }
+    >
+      {(bill) => (
+        // The settled block: what a pay flow has to reach, and what an undeclared extra tap would
+        // stop it reaching (ADR-0109).
+        <div class="mt-6 rounded-token border border-line bg-surface p-4" data-outcome="settled">
+          <p class="text-lg font-semibold text-ok">{t("pay.settled")}</p>
+          <p class="mt-2 tabular-nums">
+            {receiptLine(bill())}
+          </p>
+          {/* The change is what the cashier acts on next, so it is the largest figure here (UX-15). */}
+          <Show when={givenChange() > 0}>
+            <p class="mt-3 text-sm text-ink-muted">{t("pay.change")}<span class="block text-4xl font-semibold text-ink tabular-nums" data-outcome="change-due">{formatAmount(money(currency(), givenChange()))}</span></p>
+          </Show>
+          <Show when={bill().print_receipt}>
+            <p
+              class="mt-1 text-sm"
               classList={{
-                "bg-primary text-primary-ink": openBillFor(params.id) === undefined,
-                "border border-line": openBillFor(params.id) !== undefined,
+                "text-ink-muted":
+                  bill().receipt_print === undefined || bill().receipt_print === "PRINTED",
+                "text-danger":
+                  bill().receipt_print !== undefined && bill().receipt_print !== "PRINTED",
               }}
-              onClick={() => navigate("/")}
             >
-              {t("pay.back_floor")}
-            </button>
-          </div>
-        )}
-      </Show>
-    </section>
+              {t(receiptPrintKey(bill().receipt_print))}
+            </p>
+          </Show>
+          {/*
+            A drawer that should have sprung and did not (ADR-0165). A store with no drawer marked
+            says nothing here: `NO_DRAWER` is its ordinary state, not news for the cashier.
+          */}
+          <Show when={bill().drawer_open === "DRAWER_UNAVAILABLE"}>
+            <p class="mt-1 text-sm text-danger" role="status" data-outcome="drawer-unavailable">
+              {t("pay.drawer_unavailable")}
+            </p>
+          </Show>
+          <Show when={can("billing.receipt.reprint")}>
+          <button
+            type="button"
+            class="mt-3 min-h-touch w-full rounded-token border border-line text-sm"
+            data-step="printAgain"
+            disabled={print.printing()}
+            onClick={() => void printAgain(bill().bill_id)}
+          >
+            {t(print.printing() ? "common.sending" : "pay.print_again")}
+          </button>
+          </Show>
+          <Show when={copy()}>
+            {(printed) => (
+              <p class="mt-1 text-sm text-ink-muted" role="status" data-outcome="receipt-reprinted">
+                {t(printOutcomeKey(printed().receipt_print, "pay.copy_printed"), {
+                  number: printed().copy_number,
+                })}
+              </p>
+            )}
+          </Show>
+          <Show when={error()}>
+            {(message) => (
+              <p class="mt-3 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
+                {message()}
+              </p>
+            )}
+          </Show>
+          {/*
+            A split table's next guest (ADR-0128). The table waits for the last part, so the pay
+            screen offers it straight away rather than sending the cashier back through the order.
+          */}
+          <Show when={openBillFor(params.id)}>
+            {(next) => (
+              <button
+                type="button"
+                class="mt-4 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink"
+                data-step="nextBill"
+                onClick={() => nextBill(next())}
+              >
+                {t("pay.next_bill", { count: openBillsFor(params.id).length })}
+              </button>
+            )}
+          </Show>
+          <button
+            type="button"
+            class="mt-4 min-h-touch w-full rounded-token font-semibold"
+            classList={{
+              "bg-primary text-primary-ink": openBillFor(params.id) === undefined,
+              "border border-line": openBillFor(params.id) !== undefined,
+            }}
+            onClick={() => navigate("/")}
+          >
+            {t("pay.back_floor")}
+          </button>
+        </div>
+      )}
+    </Show>,
+  };
+  return (
+    <RegionsContext.Provider value={regions}>
+      <PackageScreen screenId="pay" host={NO_ACTS} />
+    </RegionsContext.Provider>
   );
 }

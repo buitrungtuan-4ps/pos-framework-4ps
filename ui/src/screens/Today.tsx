@@ -12,7 +12,6 @@ import { PendingSettle } from "../components/PendingSettle";
 import { RefusalPanel } from "../components/RefusalPanel";
 import { useVoidSettledAct } from "../state/void-settled-act";
 import { ReadFailed } from "../components/StoreData";
-import { PageHeader } from "../components/ui";
 import { type MessageKey, t } from "../i18n";
 import { tableStateKey } from "../i18n/labels";
 import { printOutcomeKey } from "../lib/print";
@@ -28,6 +27,8 @@ import {
   tableLabel,
 } from "../state/store";
 import { createPrint } from "../state/print-writes";
+import { RegionsContext, type Regions } from "../package/regions";
+import { NO_ACTS, PackageScreen } from "../package/screen";
 
 const ORDER = [
   "TABLE_STATE_FREE",
@@ -319,100 +320,101 @@ export function Today() {
     });
   };
 
-  return (
-    <section class="p-4">
-      <PageHeader title={t("today.title")} />
-      <Tiles takings={takings()} />
+  // The regions the default package's `today` screen arranges (`../package/regions.tsx`).
+  const regions: Regions = {
+    today_body: () => <>
+    <Tiles takings={takings()} />
 
-      {/* The list is there to reprint from (`billing.receipt.reprint`, ADR-0158). */}
-      <Show when={can("billing.receipt.reprint")}>
-      <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">{t("today.recent_bills")}</h2>
-      <Show when={error()}>
-        {(message) => (
-          <p class="mb-3 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
-            {message()}
-          </p>
-        )}
-      </Show>
-      <ReadFailed read={billsRead} />
-      <Show when={bills()}>
-        {(listed) => (
-          <Show
-            when={listed().length > 0}
-            fallback={<p class="text-sm text-ink-muted">{t("today.no_recent_bills")}</p>}
-          >
-            <ul class="flex flex-col gap-2">
-              <For each={listed()}>
-                {(bill) => (
-                  <li>
+    {/* The list is there to reprint from (`billing.receipt.reprint`, ADR-0158). */}
+    <Show when={can("billing.receipt.reprint")}>
+    <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">{t("today.recent_bills")}</h2>
+    <Show when={error()}>
+      {(message) => (
+        <p class="mb-3 rounded-token border border-danger px-3 py-2 text-danger" role="alert">
+          {message()}
+        </p>
+      )}
+    </Show>
+    <ReadFailed read={billsRead} />
+    <Show when={bills()}>
+      {(listed) => (
+        <Show
+          when={listed().length > 0}
+          fallback={<p class="text-sm text-ink-muted">{t("today.no_recent_bills")}</p>}
+        >
+          <ul class="flex flex-col gap-2">
+            <For each={listed()}>
+              {(bill) => (
+                <li>
+                  <button
+                    type="button"
+                    class="flex min-h-touch w-full items-center gap-3 rounded-token border border-line bg-surface px-3 text-left"
+                    classList={{ "border-2 border-accent font-semibold": chosen() === bill.bill_id }}
+                    aria-pressed={chosen() === bill.bill_id}
+                    data-step="chooseBill"
+                    onClick={() => chooseBill(bill.bill_id)}
+                  >
+                    <span class="tabular-nums">
+                      {t("pay.receipt", { number: bill.receipt_number })}
+                    </span>
+                    <span class="flex-1 text-ink-muted">{paidAt(bill)}</span>
+                    <Show when={isVoided(bill)}>
+                      <span class="text-sm font-semibold text-danger">{t("today.voided")}</span>
+                    </Show>
+                    <span class="tabular-nums">{formatAmount(bill.total_due)}</span>
+                    <span class="w-12 text-right text-sm tabular-nums text-ink-muted">
+                      {bill.settle_clock ?? ""}
+                    </span>
+                  </button>
+                  <Show when={copiesOf(bill) > 0}>
+                    <p class="mt-1 px-3 text-sm text-ink-muted" data-outcome="receipt-copies">
+                      {t("today.copies", { count: copiesOf(bill) })}
+                    </p>
+                  </Show>
+                  <Show when={chosen() === bill.bill_id}>
                     <button
                       type="button"
-                      class="flex min-h-touch w-full items-center gap-3 rounded-token border border-line bg-surface px-3 text-left"
-                      classList={{ "border-2 border-accent font-semibold": chosen() === bill.bill_id }}
-                      aria-pressed={chosen() === bill.bill_id}
-                      data-step="chooseBill"
-                      onClick={() => chooseBill(bill.bill_id)}
+                      class="mt-2 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink"
+                      data-step="reprintReceipt"
+                      disabled={print.printing()}
+                      onClick={() => void reprintReceipt()}
                     >
-                      <span class="tabular-nums">
-                        {t("pay.receipt", { number: bill.receipt_number })}
-                      </span>
-                      <span class="flex-1 text-ink-muted">{paidAt(bill)}</span>
-                      <Show when={isVoided(bill)}>
-                        <span class="text-sm font-semibold text-danger">{t("today.voided")}</span>
-                      </Show>
-                      <span class="tabular-nums">{formatAmount(bill.total_due)}</span>
-                      <span class="w-12 text-right text-sm tabular-nums text-ink-muted">
-                        {bill.settle_clock ?? ""}
-                      </span>
+                      {t(print.printing() ? "common.sending" : "today.reprint")}
                     </button>
-                    <Show when={copiesOf(bill) > 0}>
-                      <p class="mt-1 px-3 text-sm text-ink-muted" data-outcome="receipt-copies">
-                        {t("today.copies", { count: copiesOf(bill) })}
-                      </p>
+                    <Show when={copy()}>
+                      {(printed) => (
+                        <p
+                          class="mt-1 text-sm text-ink-muted"
+                          role="status"
+                          data-outcome="receipt-reprinted"
+                        >
+                          {t(printOutcomeKey(printed().receipt_print, "pay.copy_printed"), {
+                            number: printed().copy_number,
+                          })}
+                        </p>
+                      )}
                     </Show>
-                    <Show when={chosen() === bill.bill_id}>
-                      <button
-                        type="button"
-                        class="mt-2 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink"
-                        data-step="reprintReceipt"
-                        disabled={print.printing()}
-                        onClick={() => void reprintReceipt()}
-                      >
-                        {t(print.printing() ? "common.sending" : "today.reprint")}
-                      </button>
-                      <Show when={copy()}>
-                        {(printed) => (
-                          <p
-                            class="mt-1 text-sm text-ink-muted"
-                            role="status"
-                            data-outcome="receipt-reprinted"
-                          >
-                            {t(printOutcomeKey(printed().receipt_print, "pay.copy_printed"), {
-                              number: printed().copy_number,
-                            })}
-                          </p>
-                        )}
-                      </Show>
-                      <Show when={bill.bill_id in voidedHere()}>
-                        <VoidedOutcome voided={voidedHere()[bill.bill_id] ?? null} />
-                      </Show>
-                      <Show when={!isVoided(bill) && can("billing.bill.void_settled")}>
-                        <VoidPaidBill
-                          bill={bill}
-                          onVoided={(voided) =>
-                            setVoidedHere((done) => ({ ...done, [bill.bill_id]: voided }))
-                          }
-                        />
-                      </Show>
+                    <Show when={bill.bill_id in voidedHere()}>
+                      <VoidedOutcome voided={voidedHere()[bill.bill_id] ?? null} />
                     </Show>
-                  </li>
-                )}
-              </For>
-            </ul>
-          </Show>
-        )}
-      </Show>
-      </Show>
-    </section>
-  );
+                    <Show when={!isVoided(bill) && can("billing.bill.void_settled")}>
+                      <VoidPaidBill
+                        bill={bill}
+                        onVoided={(voided) =>
+                          setVoidedHere((done) => ({ ...done, [bill.bill_id]: voided }))
+                        }
+                      />
+                    </Show>
+                  </Show>
+                </li>
+              )}
+            </For>
+          </ul>
+        </Show>
+      )}
+    </Show>
+    </Show>
+    </>,
+  };
+  return <RegionsContext.Provider value={regions}><PackageScreen screenId="today" host={NO_ACTS} /></RegionsContext.Provider>;
 }
