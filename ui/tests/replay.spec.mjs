@@ -136,10 +136,19 @@ async function navigateTo(page, path) {
   await page.waitForURL((url) => url.pathname === path);
 }
 
-/** Seats the first table on the floor and lands on its order screen. */
+/**
+ * Answers the guest count a free table's tap asks: the default package's flow makes it a step of
+ * seating a dine-in table (ADR-0192), optional there, so the pad offers Skip as well.
+ */
+async function answerGuests(page, count = 2) {
+  await page.locator('[data-outcome="guest-pad"] [data-step="seatWithGuests"]').nth(count - 1).click();
+}
+
+/** Seats the first table on the floor, two guests, and lands on its order screen. */
 async function seatTable(page) {
   await expect(page.locator('[data-step="onCard"]').first()).toBeVisible();
   await page.locator('[data-step="onCard"]').first().click();
+  await answerGuests(page);
   await expect(page.locator('[data-outcome="order-open"]')).toBeVisible();
 }
 
@@ -1678,6 +1687,7 @@ test("an item marked sold out on one till stops selling on every till, until it 
     await other.goto(`${edge.baseURL}/`);
     await expect(other.locator('[data-outcome="floor"]').first()).toBeVisible();
     await other.locator('[data-step="onCard"]').nth(1).click();
+    await answerGuests(other);
     await expect(other.locator('[data-outcome="order-open"]')).toBeVisible();
     await other.locator("#menu-search").fill("iced");
     const otherTea = other.locator('[data-step="onItem"]');
@@ -1874,6 +1884,112 @@ test("guests move to another table with their order, and every screen follows th
   }
 });
 
+// The guest count is a step of seating a dine-in table (ADR-0192): the default package's flow asks
+// it as an optional step, so the pad offers Skip. The count rides the seat; Skip seats the table with
+// the count unknown, as every seat did before; Cancel leaves the table free.
+test("a free table asks how many guests, the count rides the seat, and Skip seats it without one", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    const seats = [];
+    page.on("request", (request) => {
+      if (request.method() === "POST" && /\/api\/tables\/[^/]+\/seat$/.test(new URL(request.url()).pathname)) {
+        seats.push(request.postData() ?? "");
+      }
+    });
+    const card = (label) => page.locator('[data-step="onCard"]', { hasText: `Table ${label}` });
+    const pad = page.locator('[data-outcome="guest-pad"]');
+
+    await card(1).click();
+    await expect(pad).toContainText("Table 1: how many guests?");
+    await pad.getByRole("button", { name: "Cancel" }).click();
+    await expect(pad).toHaveCount(0);
+    await expect(card(1)).toContainText("Free");
+
+    await card(1).click();
+    await answerGuests(page, 4);
+    await expect(page.locator('[data-outcome="order-open"]')).toHaveText("Table 1");
+    await expect.poll(() => seats).toEqual(['{"guest_count":4}']);
+
+    await navigateTo(page, "/");
+    await card(2).click();
+    await page.locator('[data-step="skipGuests"]').click();
+    await expect(page.locator('[data-outcome="order-open"]')).toHaveText("Table 2");
+    await expect.poll(() => seats).toEqual(['{"guest_count":4}', ""]);
+    // Optional: nothing waits for it.
+    await addItem(page);
+    await expect(page.locator('[data-outcome="flow-waits"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A package can make the guest count required (`POS_DEMO_PROFILE=guests-required`): the pad offers
+// no Skip, and the first line waits for the count. A table seated with none by another device is
+// held on this till, which names the step, and by the edge, which refuses the line and names it.
+test("a required guest count is asked with no Skip, and a table seated without one takes no first line", async ({
+  page,
+}) => {
+  const edge = await startEdge("guests-required");
+  try {
+    // This package's flow has a condition to answer, so the till fetches its rules module, as
+    // WebAssembly from the edge it is embedded in, once the store has loaded (ADR-0193 decision 2).
+    const fetched = page.waitForResponse((response) => new URL(response.url()).pathname.endsWith(".wasm"));
+    await pair(page, edge);
+    await signIn(page, edge);
+    const module = await fetched;
+    expect(module.status()).toBe(200);
+    expect(module.headers()["content-type"]).toBe("application/wasm");
+    const card = (label) => page.locator('[data-step="onCard"]', { hasText: `Table ${label}` });
+    const pad = page.locator('[data-outcome="guest-pad"]');
+    const header = page.locator('[data-outcome="order-open"]');
+
+    await card(1).click();
+    await expect(pad).toContainText("The store asks how many guests before the table is seated.");
+    await expect(page.locator('[data-step="skipGuests"]')).toHaveCount(0);
+    await answerGuests(page, 3);
+    await expect(header).toHaveText("Table 1");
+    await addItem(page);
+    await expect(page.locator('[data-outcome="flow-waits"]')).toHaveCount(0);
+
+    // Table 2, seated by another device that gave no count: this till hears it on its live link.
+    await navigateTo(page, "/");
+    const tableTwo = await page.evaluate(() =>
+      fetch("/api/floor", {
+        headers: { authorization: `Bearer ${localStorage.getItem("pos-edge.device-token")}` },
+      })
+        .then((response) => response.json())
+        .then((body) => body.floor.areas.flatMap((area) => area.tables).find((table) => table.label === "2").table_id),
+    );
+    const seated = await page.evaluate(
+      (tableId) =>
+        fetch(`/api/tables/${tableId}/seat`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${localStorage.getItem("pos-edge.device-token")}` },
+        }).then((response) => response.status),
+      tableTwo,
+    );
+    expect(seated).toBe(200);
+    await expect(card(2)).toContainText("Occupied");
+    await card(2).click();
+    await expect(header).toHaveText("Table 2");
+    await expect(page.locator('[data-outcome="flow-waits"]')).toContainText("This table has no guest count");
+    await expect(page.locator('[data-step="onItem"]').first()).toBeDisabled();
+
+    // A till that does not know the count, after a reload, holds nothing back; the edge refuses.
+    await page.reload();
+    await expect(header).toHaveText("Table 2");
+    await page.locator('[data-step="onItem"]').first().click();
+    await expect(page.getByRole("alert")).toContainText("puts another step first (guests)");
+    await expect(page.locator('[data-outcome="line-added"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // The floor and a table's order screen stay mounted (`ui/src/screens/kept.tsx`), and a switch only
 // shows one and hides the other. The order screen never shows one table's lines, figure or refusal
 // on another: before the new table's figure lands it shows the dash. And while it is hidden it
@@ -1915,6 +2031,7 @@ test("the order screen kept beside the floor never shows the last table's lines,
 
     // Table 2: no refusal, none of table 1's lines, and its own iced tea.
     await card(2).click();
+    await answerGuests(page);
     await expect(header).toHaveText("Table 2");
     await expect(page.getByRole("alert")).toHaveCount(0);
     await expect(lines).toHaveCount(0);
@@ -6753,6 +6870,7 @@ test("a free table opens its order at once, and its lines and payment wait for t
     await signIn(page, edge);
     const held = await holdPost(page, "**/api/tables/*/seat");
     await page.locator('[data-step="onCard"]').first().click();
+    await answerGuests(page);
     await expect(page.locator('[data-outcome="order-open"]')).toBeVisible();
     await page.locator('[data-step="onItem"]').first().click();
     await expect(page.locator('[data-outcome="line-sending"]')).toHaveText("Sending…");
@@ -6792,6 +6910,7 @@ test("a seat the edge refuses goes back to the floor, saying why and keeping wha
       }
     });
     await page.locator('[data-step="onCard"]').first().click();
+    await answerGuests(page);
     await expect(page.locator('[data-outcome="order-open"]')).toBeVisible();
     const item = await page.locator('[data-step="onItem"]').first().innerText();
     await page.locator('[data-step="onItem"]').first().click();

@@ -1,48 +1,31 @@
 // Starts the till's rules module once the store is loaded (`./till-rules.ts`): instantiated when the
-// till is next idle, never on a tap, and loaded with the flows of the package it draws, which
-// compiles every condition once. A tap then only asks.
+// till is next idle, never on a tap, and loaded with the flows of the package it runs
+// (`../state/flows.ts`), which compiles every condition once and again whenever they change. A tap
+// then only asks.
 //
 // After the store's load, not at boot: building the evaluator is a few tens of milliseconds of main
 // thread on a slow till, and done during sign-in or the store's first reads it would hold those reads
-// back behind it.
-//
-// And only when the flows the till runs can hold an act back: a step with a condition or a
-// prerequisite. A package with none needs nothing answered, so the till neither downloads the module
-// (about 300 kB gzipped) nor builds the evaluator.
+// back behind it. The module itself is fetched only once the flows need it (`../state/flows.ts`).
 
-import DEFAULT_PACKAGE from "../package/default-package.json";
-import type { Variant } from "../package/variant";
-import { needsRules, startTillRules, type Flow } from "./till-rules";
+import { keepRulesLoaded } from "../state/flows";
 
 /** How long the till waits for an idle moment before starting the module anyway. */
 const START_WITHIN_MS = 2_000;
 
-/** The default package's flows: every variant of each, in the package's order. */
-export function defaultFlows(): Flow[] {
-  const flows = ((DEFAULT_PACKAGE as { flows?: Variant<Flow>[] }).flows ?? []) as Variant<Flow>[];
-  return flows.map((variant) => variant.body);
-}
-
 let booted = false;
 
 /**
- * Instantiates the module when the till is next idle, and loads the default package's flows, if
- * they need it. Once: every later call does nothing.
+ * Instantiates the module when the till is next idle, and keeps the package's flows loaded in it.
+ * Once: every later call does nothing.
  */
 export function bootTillRules(): void {
   if (booted) {
     return;
   }
   booted = true;
-  if (!needsRules(defaultFlows())) {
-    return;
-  }
-  const start = () => {
-    void startTillRules().then((rules) => rules?.load(defaultFlows()));
-  };
   if (typeof requestIdleCallback === "function") {
-    requestIdleCallback(start, { timeout: START_WITHIN_MS });
+    requestIdleCallback(keepRulesLoaded, { timeout: START_WITHIN_MS });
   } else {
-    setTimeout(start, 0);
+    setTimeout(keepRulesLoaded, 0);
   }
 }

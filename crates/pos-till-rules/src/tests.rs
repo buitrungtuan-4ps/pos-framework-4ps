@@ -237,3 +237,43 @@ fn a_length_past_the_buffer_is_an_error() {
     let answer: Value = serde_json::from_slice(&answer).expect("every answer is JSON");
     assert_eq!(answer, json!({ "ok": true, "holds": true }));
 }
+
+/// The till's default package's flows pass the checks a published package's do, over the real
+/// evaluator, so the till never runs a flow the cloud would refuse.
+#[test]
+fn the_tills_default_flows_pass_the_checks_a_published_one_does() {
+    use pos_core::flow::{FlowConditions, check_flows};
+    use pos_proto::flow::Flow;
+    use pos_proto::package::Variant;
+    use pos_rules::{Facts, Rules};
+
+    struct Compiles(Rules);
+    impl FlowConditions for Compiles {
+        fn check(&self, condition: &str, _edge_facts: bool) -> Result<(), String> {
+            self.0
+                .compile(condition)
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        }
+        fn holds(&self, condition: &str) -> Result<bool, String> {
+            self.0
+                .compile(condition)
+                .and_then(|compiled| compiled.evaluate(&Facts::new()))
+                .map_err(|error| error.to_string())
+        }
+    }
+    #[derive(serde::Deserialize)]
+    struct DefaultPackage {
+        flows: Vec<Variant<Flow>>,
+    }
+    let shipped: DefaultPackage =
+        serde_json::from_str(include_str!("../../../ui/src/package/default-package.json"))
+            .expect("the default package reads as flows");
+    assert!(!shipped.flows.is_empty());
+    let rules = Compiles(Rules::new().expect("the evaluator builds"));
+    assert_eq!(check_flows(&shipped.flows, &|_| true, &rules), Ok(()));
+    let mut engine = Engine::default();
+    let bodies: Vec<&Flow> = shipped.flows.iter().map(|variant| &variant.body).collect();
+    let answer = ask(&mut engine, &json!({ "op": "load", "flows": bodies }));
+    assert_eq!(answer.get("refused"), Some(&json!([])));
+}

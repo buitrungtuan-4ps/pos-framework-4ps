@@ -10,6 +10,7 @@ import { adoptStoreLanguage } from "../i18n";
 import { editWrite } from "./edge-write";
 import { load, reload } from "./engine";
 import { ownOverride } from "./drawer-access";
+import { recordGuests } from "./flows";
 import { keptShift, shiftInfo } from "./shift-info";
 import { afterLastVoid, closeBill, forgetLines, settleBill, voidBillClosed } from "./closing";
 import { noteWalkInOpened, walkInsOpenedSince, type LiveOrdersRead } from "./live-orders-read";
@@ -602,6 +603,16 @@ export function setLink(status: LinkStatus): void {
   setState("link", status);
 }
 
+// A table's order says how many guests sat down, if whoever seated them said: what a flow's
+// guest-count step reads (`./flows.ts`). A walk-in's names no table and is no step's.
+function foldGuests(payload: Record<string, unknown>): void {
+  const table = str(payload, "table_id");
+  if (table !== null) {
+    const count = payload["guest_count"];
+    recordGuests(table, typeof count === "number" ? count : undefined);
+  }
+}
+
 export function fold(event: ServerEvent): void {
   const payload = record(event.payload);
   if (payload === null) {
@@ -623,6 +634,9 @@ export function fold(event: ServerEvent): void {
       }
       break;
     }
+    case "sales.order.opened":
+      foldGuests(payload);
+      break;
     case "sales.order.closed": {
       // An order that ended owing nothing: a table released with nothing sold on it (ADR-0163), or
       // a guest order staff refused. Either way it is off every board, and a table still showing it

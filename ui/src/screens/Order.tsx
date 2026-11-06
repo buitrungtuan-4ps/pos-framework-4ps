@@ -52,6 +52,7 @@ import { NO_ACTS, PackageScreen } from "../package/screen";
 import { useInFlight } from "../lib/in-flight";
 import { createTableScoped, resetPerTable, useKeptTable } from "../state/kept-table";
 import { createTableCheck } from "../state/table-check";
+import { flowWaitSentence, lineWaits } from "../state/flows";
 import { createMenuSearch } from "../state/menu-search";
 import { createPrint } from "../state/print-writes";
 import { printOutcomeKey } from "../lib/print";
@@ -510,11 +511,13 @@ export function Order() {
     </Show>
   );
 
+  // A step of the package's flow the first line waits on and the till sees undone (`../state/flows.ts`).
+  const flowWait = () => (walkIn() ? null : lineWaits(params.id, linesForTable(key()).length));
   const saleButton = (item: MenuItemResponse, caption: string) => (
     <button
       type="button"
       class="flex min-h-touch items-center justify-between rounded-token border border-line bg-surface px-3 py-2 text-left disabled:opacity-50"
-      disabled={!item.available || billed() || !can("sales.line.add")}
+      disabled={!item.available || billed() || !can("sales.line.add") || flowWait() !== null}
       data-step="onItem"
       onClick={() => onItem(item)}
     >
@@ -628,6 +631,9 @@ export function Order() {
         </Show>
       </div>,
     order_notices: () => <>
+      <Show when={flowWait()}>
+        {(step) => <p class="mb-3 rounded-token border border-line px-3 py-2" role="status" data-outcome="flow-waits">{flowWaitSentence(step())}</p>}
+      </Show>
       <Show when={preBill()}>
         {(prints) => (
           <p class="mb-3 text-sm text-ink-muted" role="status" data-outcome="pre-bill-print">

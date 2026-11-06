@@ -317,8 +317,14 @@ function signInRefusal(body: string): SignInResult | undefined {
 }
 
 export const api = {
-  seatTable: (tableId: string) =>
-    request<TableResponse>("POST", `/api/tables/${tableId}/seat`),
+  // With the guest count when the operator gave one (a package flow's step, ADR-0192); an empty
+  // body seats the table with the count unknown.
+  seatTable: (tableId: string, guestCount?: number) =>
+    request<TableResponse>(
+      "POST",
+      `/api/tables/${tableId}/seat`,
+      guestCount === undefined ? undefined : { guest_count: guestCount },
+    ),
   cleanTable: (tableId: string) =>
     request<TableResponse>("POST", `/api/tables/${tableId}/clean`),
   // A table seated by mistake goes straight back to the floor, while nothing is sold on it

@@ -6,6 +6,7 @@ import { tableStateKey } from "../i18n/labels";
 import { can } from "../state/permissions";
 import { seatAtOnce, seatRefusal, seating, setSeatRefusal } from "../state/optimistic";
 import {
+  DINE_IN,
   areaIsPlaced,
   floorAreas,
   seatedAt,
@@ -15,6 +16,7 @@ import {
   type TableCard,
 } from "../state/store";
 import { clean } from "../state/floor-writes";
+import { guestStep } from "../state/flows";
 import { Takeaway } from "./Takeaway";
 import { errorMessage } from "../lib/errors";
 import { NO_ACTS, PackageScreen } from "../package/screen";
@@ -74,14 +76,95 @@ const SEATED_STATES = new Set(["TABLE_STATE_OCCUPIED", "TABLE_STATE_AWAITING_PAY
 
 // A free table is seated and its order opened at once (ADR-0188): the Order screen opens before the
 // edge answers, and a refusal brings the server back here, if they are still on that table.
-function seatThenOpen(tableId: string, navigate: (to: string) => void): void {
+function seatThenOpen(tableId: string, navigate: (to: string) => void, guestCount?: number): void {
   const order = `/table/${tableId}`;
-  seatAtOnce(tableId, () => {
-    if (window.location.pathname === order) {
-      navigate("/");
-    }
-  });
+  seatAtOnce(
+    tableId,
+    () => {
+      if (window.location.pathname === order) {
+        navigate("/");
+      }
+    },
+    guestCount,
+  );
   navigate(order);
+}
+
+/** The counts the guest pad offers, one tap each. */
+const GUEST_COUNTS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] as const;
+
+/** A free table the operator tapped, waiting for its guest count. */
+interface AskingGuests {
+  readonly tableId: string;
+  readonly label: string;
+  readonly required: boolean;
+}
+
+/** The free table whose guest count is being asked, and the tap that seats it with its answer. */
+function createGuestAsk(navigate: (to: string) => void) {
+  const [asking, setAsking] = createSignal<AskingGuests | null>(null);
+  const seatAsked = (count?: number) => {
+    const table = asking();
+    setAsking(null);
+    if (table !== null) {
+      seatThenOpen(table.tableId, navigate, count);
+    }
+  };
+  return { asking, setAsking, seatAsked };
+}
+
+// The guest count, where the package's flow makes it a step of seating a dine-in table (ADR-0192,
+// `../state/flows.ts`): one tap on the count seats the table with it and opens the order, as the
+// tap on the table did before. An optional step offers Skip, which seats it with the count unknown;
+// a required one does not, and the edge refuses a first line on a table seated without one.
+function GuestPad(props: {
+  asking: AskingGuests;
+  seatWithGuests: (count: number) => void;
+  skipGuests: () => void;
+  cancel: () => void;
+}): JSX.Element {
+  return (
+    <div
+      class="fixed inset-x-0 bottom-0 z-20 border-t border-line bg-canvas p-4 shadow-overlay"
+      role="dialog"
+      aria-label={t("floor.guests_title", { label: props.asking.label })}
+      data-outcome="guest-pad"
+    >
+      <p class="mb-3 text-lg font-semibold">{t("floor.guests_title", { label: props.asking.label })}</p>
+      <Show when={props.asking.required}>
+        <p class="mb-3 text-sm text-ink-muted">{t("floor.guests_required")}</p>
+      </Show>
+      <div class="grid grid-cols-4 gap-2 tablet:grid-cols-6">
+        <For each={GUEST_COUNTS}>
+          {(count) => (
+            <button
+              type="button"
+              class="min-h-touch rounded-token border border-line bg-surface text-xl font-semibold tabular-nums"
+              data-step="seatWithGuests"
+              onClick={() => props.seatWithGuests(count)}
+            >
+              {count}
+            </button>
+          )}
+        </For>
+      </div>
+      <div class="mt-3 flex gap-2">
+        <Show when={!props.asking.required}>
+          <button
+            type="button"
+            class="min-h-touch flex-1 rounded-token border border-line px-3"
+            data-step="skipGuests"
+            onClick={() => props.skipGuests()}
+          >
+            {t("floor.guests_skip")}
+          </button>
+        </Show>
+        <button type="button" class="min-h-touch flex-1 rounded-token border border-line px-3" onClick={() => props.cancel()}>
+          {t("common.cancel")}
+        </button>
+      </div>
+    </div>
+  );
 }
 
 // A seat the edge refused: its sentence, and the lines typed meanwhile, which were not sent.
@@ -147,12 +230,18 @@ export function FloorPlan(): JSX.Element {
     return null;
   }
 
-  const onCard = async (tableId: string) => {
+  const { asking, setAsking, seatAsked } = createGuestAsk(navigate);
+  const onCard = async (tableId: string, label: string) => {
     view.setError(null);
     const current = tableState(tableId);
     try {
       if (current === "TABLE_STATE_FREE") {
-        seatThenOpen(tableId, navigate);
+        const step = guestStep(DINE_IN);
+        if (step === undefined) {
+          seatThenOpen(tableId, navigate);
+        } else {
+          setAsking({ tableId, label, required: step.required });
+        }
       } else if (current === "TABLE_STATE_NEEDS_CLEANING") {
         await clean(tableId);
       } else {
@@ -193,7 +282,7 @@ export function FloorPlan(): JSX.Element {
             : undefined
         }
         data-step="onCard"
-        onClick={() => void onCard(table.id)}
+        onClick={() => void onCard(table.id, table.label)}
       >
         <span class="text-xl font-semibold">{t("common.table", { label: table.label })}</span>
         <span class="inline-flex items-center gap-2 text-sm text-ink-muted">
@@ -249,6 +338,9 @@ export function FloorPlan(): JSX.Element {
   return (
     <div data-outcome="floor">
       <For each={floorAreas()}>{area}</For>
+      <Show when={asking()}>
+        {(table) => <GuestPad asking={table()} seatWithGuests={seatAsked} skipGuests={() => seatAsked()} cancel={() => setAsking(null)} />}
+      </Show>
     </div>
   );
 }

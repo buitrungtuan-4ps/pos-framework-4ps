@@ -260,5 +260,20 @@
         }
       }
     }
+  ],
+  "flows": [
+    {
+      "body": {
+        "flow_id": "dine_in",
+        "start_action_id": "sales.table.seat",
+        "steps": [
+          {
+            "step_id": "guests",
+            "action_id": "sales.table.seat",
+            "kind": "STEP_KIND_OPTIONAL"
+          }
+        ]
+      }
+    }
   ]
 }
