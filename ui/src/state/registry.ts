@@ -29,6 +29,7 @@ import type {
 import { configApplied, load, loadAll, register, type Entry } from "./engine";
 import { readLiveOrders, type LiveOrdersRead } from "./live-orders-read";
 import { takeSession } from "./session";
+import { bootTillRules } from "../rules/boot";
 import { applyCountDenominations } from "./cash-count";
 import {
   DINE_IN,
@@ -179,5 +180,10 @@ export async function loadConfiguration(changed?: readonly string[]): Promise<vo
 // Two moments a device becomes able to sell have to load the same set: the boot gate, and signing
 // in, which navigates client-side so `App`'s `onMount` does not run again.
 export async function loadStore(except: readonly string[] = []): Promise<void> {
-  await loadAll(except);
+  try {
+    await loadAll(except);
+  } finally {
+    // The till's rules module, once the store's own reads are out of the way (`../rules/boot.ts`).
+    bootTillRules();
+  }
 }

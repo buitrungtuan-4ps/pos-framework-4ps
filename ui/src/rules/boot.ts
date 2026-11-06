@@ -1,6 +1,10 @@
-// Starts the till's rules module once the first screen is drawn (`./till-rules.ts`): instantiated
-// when the till is idle, never on a tap, and loaded with the flows of the package it draws, which
+// Starts the till's rules module once the store is loaded (`./till-rules.ts`): instantiated when the
+// till is next idle, never on a tap, and loaded with the flows of the package it draws, which
 // compiles every condition once. A tap then only asks.
+//
+// After the store's load, not at boot: building the evaluator is a few tens of milliseconds of main
+// thread on a slow till, and done during sign-in or the store's first reads it would hold those reads
+// back behind it.
 
 import DEFAULT_PACKAGE from "../package/default-package.json";
 import type { Variant } from "../package/variant";
@@ -15,8 +19,17 @@ export function defaultFlows(): Flow[] {
   return flows.map((variant) => variant.body);
 }
 
-/** Instantiates the module when the till is next idle, and loads the default package's flows. */
+let booted = false;
+
+/**
+ * Instantiates the module when the till is next idle, and loads the default package's flows. Once:
+ * every later call does nothing.
+ */
 export function bootTillRules(): void {
+  if (booted) {
+    return;
+  }
+  booted = true;
   const start = () => {
     void startTillRules().then((rules) => rules?.load(defaultFlows()));
   };

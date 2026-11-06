@@ -1913,6 +1913,9 @@ test("the order screen kept beside the floor never shows the last table's lines,
     await page.locator('[data-step="fireOrder"]').click();
     await expect(page.getByRole("alert")).toContainText("That is not possible right now");
     await page.unroute("**/api/orders/*/fire");
+    // The refused send puts the line back, and the screen reads the figure again once that is drawn:
+    // a read of the screen while it shows, so the count of what the hidden screen does starts after.
+    await page.waitForLoadState("networkidle");
 
     // On the floor the order screen is hidden: it writes nothing and reads nothing.
     const whileHidden = [];
