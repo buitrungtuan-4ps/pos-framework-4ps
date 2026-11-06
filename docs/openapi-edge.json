@@ -5749,6 +5749,12 @@
             "type": "string",
             "description": "A bill already open on it, so a device that reloads on the payment screen settles **that**\nbill rather than asking for a second one the domain would refuse."
           },
+          "guest_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many guests it was opened for. Omitted when whoever opened it gave no count, which a\ntill reads as a count not given: a flow's guest-count step (ADR-0192) is then not done, as\nthe edge sees it.",
+            "minimum": 0
+          },
           "lines": {
             "type": "array",
             "items": {

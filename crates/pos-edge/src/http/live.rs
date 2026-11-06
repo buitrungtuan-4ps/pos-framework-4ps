@@ -123,6 +123,12 @@ struct LiveOrderResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(nullable = false))]
     sales_channel: Option<&'static str>,
+    /// How many guests it was opened for. Omitted when whoever opened it gave no count, which a
+    /// till reads as a count not given: a flow's guest-count step (ADR-0192) is then not done, as
+    /// the edge sees it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    guest_count: Option<u16>,
     lines: Vec<LiveLineResponse>,
 }
 
@@ -189,6 +195,7 @@ fn respond(orders: Vec<crate::app::LiveOrderView>) -> Response {
                 .map(ToString::to_string)
                 .collect(),
             sales_channel: order.sales_channel.map(WireEnum::as_wire),
+            guest_count: order.guest_count,
             lines: order
                 .lines
                 .into_iter()
