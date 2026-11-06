@@ -124,7 +124,7 @@ pub const JOBS: [Job; 20] = [
         When::Any(UI),
         1,
         &[],
-        "the 10 ms tap budget at 2x (ADR-0208), measuring",
+        "the 10 ms tap budget at 2x (ADR-0208)",
     ),
     job(
         "replay",

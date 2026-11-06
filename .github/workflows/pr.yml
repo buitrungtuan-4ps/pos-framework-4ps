@@ -571,8 +571,8 @@ jobs:
   # The till's 10 ms tap budget (ADR-0208 decision 3; `just perf-gate`, `ui/perf/gate.mjs`): every
   # act's tap to its frame ready to paint at a 2x CPU throttle, against a release edge and a
   # production till. The gate fails an act whose p50 is over 10 ms or that has fewer than 100
-  # samples; p95 and missed frames are recorded. It runs in measuring mode first
-  # (`continue-on-error`), so the runner's own figures are known before it blocks a pull request.
+  # samples; p95 and missed frames are recorded. Its first run on a hosted runner (#1196) put every
+  # act's p50 at 3.5-5.5 ms and every p95 under 9 ms, so it blocks.
   perf-gate:
     needs: changes
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.ui == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.rust == 'true') }}
@@ -608,7 +608,6 @@ jobs:
       - name: build the example store, release
         run: cargo build -p minimal-edge --release --locked
       - name: the tap gate at 2x (ADR-0208)
-        continue-on-error: true
         working-directory: ui
         env:
           POS_EDGE_BIN: ${{ github.workspace }}/target/release/minimal-edge
