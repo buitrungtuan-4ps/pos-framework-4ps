@@ -27,7 +27,7 @@ use crate::{
 /// The translation store, one grid per tenant, each carrying the version it was last written at —
 /// the `grid` and `xmin` of one `translations` row ([ADR-0095](../../../../docs/adr/0095-conditional-writes-for-collections.md)).
 #[derive(Clone, Default)]
-struct FakeTranslations {
+pub(crate) struct FakeTranslations {
     rows: Arc<Mutex<HashMap<TenantId, Versioned<TranslationGrid>>>>,
     next_version: Arc<Mutex<u64>>,
     /// A competing save to land *between* the next read and its write, so a test can produce the
@@ -36,6 +36,28 @@ struct FakeTranslations {
 }
 
 impl FakeTranslations {
+    /// A store holding `tenant`'s grid of `entries`, `(key, [(locale, text)])`.
+    pub(crate) fn seeded(tenant: TenantId, entries: &[(&str, &[(&str, &str)])]) -> Self {
+        let store = Self::default();
+        let grid = entries
+            .iter()
+            .map(|(key, texts)| {
+                let texts = texts
+                    .iter()
+                    .map(|(locale, text)| ((*locale).to_owned(), (*text).to_owned()))
+                    .collect();
+                ((*key).to_owned(), texts)
+            })
+            .collect();
+        let version = store.mint();
+        store
+            .rows
+            .lock()
+            .expect("lock")
+            .insert(tenant, Versioned::new(TranslationGrid::new(grid), version));
+        store
+    }
+
     fn mint(&self) -> Version {
         let mut next = self.next_version.lock().expect("lock");
         *next += 1;

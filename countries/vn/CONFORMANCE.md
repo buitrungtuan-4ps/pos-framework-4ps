@@ -30,6 +30,7 @@ beyond those is marked **to confirm by legal**. The line prices in the cases are
 | R11 | The fields a Vietnamese e-invoice must carry, and its submission | ADR-0156 (Proposed) | unconfirmed: to confirm by legal and the chosen provider |
 | R12 | The moment a bill's tax rate is fixed (the tax point) | ADR-0162 (Proposed, awaits accounting) | unconfirmed |
 | R13 | Personal data retention, 365 days by default | `default_retention_days`; gate L1, L2, L6 | unconfirmed: the module says this is a starting value the operator must confirm |
+| R14 | A receipt template may not leave out the item rows' modifiers; it may leave out the payments, the change line and a second language | `receipt_required_sections`; ADR-0207 decision 3 | unconfirmed: to confirm by legal. The legal body (seller, receipt number, lines, totals, tax lines, a captured buyer) cannot be turned off by any template |
 
 ## Findings: what the current model cannot express
 

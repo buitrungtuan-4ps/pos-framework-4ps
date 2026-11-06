@@ -12,6 +12,7 @@ use crate::package::{ALLOWED_VERSIONS_MAX, PackageMode, PublishedPackage};
 use crate::people::PublishedPermissions;
 use crate::printing::{self, PublishedPrinting, ReceiptLanguage, ReceiptSecondLanguage};
 use crate::qr::{PublishedQr, TableOrder};
+use crate::receipt::PublishedReceipt;
 use crate::session::{self, PublishedSession};
 use crate::shift::{
     self, CloseReport, DrawerAccess, DrawerDayEnd, DrawerModel, NoShiftSelling, PublishedShift,
@@ -443,6 +444,29 @@ fn font_size_setting() -> Setting {
                       config.toml sets font_size_dots keeps it until this is set, and this then \
                       wins.",
     }
+}
+
+/// The setting on the `receipt` node: its templates, a base and one per sales channel
+/// ([ADR-0207](../../../../docs/adr/0207-a-receipt-is-a-structured-template-per-store-and-channel.md)).
+pub(super) fn receipt_template_settings() -> Vec<Setting> {
+    vec![Setting {
+        node: PublishedReceipt::NODE,
+        field: "templates",
+        shape: SettingShape::ReceiptTemplates,
+        scopes: STORE_WIDE,
+        since: NEXT_RELEASE,
+        confirm: None,
+        summary: "What a receipt, its copy, a pre-bill and a custom record's slip print above \
+                  and below the legal body: a `base` template and, under `channels`, at most one \
+                  per `SALES_CHANNEL_*` token, which an order's channel picks before the base. Each \
+                  names its `header_keys` and `footer_keys` from the translation grid, every one \
+                  with an `en` value; turns `sections` off (`modifiers`, `payments`, \
+                  `change_line`, `second_language`) where the store's country does not require \
+                  them; lists the `custom_field_ids` that print under the header; and marks \
+                  `person_copy` (`PERSON_COPY_RECORD_SLIP`, `PERSON_COPY_TAX_INVOICE_BUYER`), the \
+                  only documents a personal value prints on. Kitchen tickets and shift reports \
+                  are not templated, and nothing set prints as before.",
+    }]
 }
 
 /// The settings on the `qr` node, in the register's order.

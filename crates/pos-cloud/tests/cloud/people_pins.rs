@@ -154,6 +154,7 @@ async fn a_pin_set_once_the_tenant_asks_for_more_digits_has_at_least_that_many()
     )
     .merge(http::settings_router(
         &pos_cloud::countries::registry(),
+        crate::translations::FakeTranslations::default(),
         pos_cloud_config::package_pin::WithPackages::new(
             settings,
             pos_cloud_config::packages::InMemoryPackages::new(),

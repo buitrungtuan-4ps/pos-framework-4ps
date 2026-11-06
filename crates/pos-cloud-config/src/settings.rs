@@ -44,8 +44,8 @@ use pos_proto::time::Timestamp;
 use pos_proto::wire_enum::Open;
 
 /// The schema of a setting's value: one of the shapes a [`SettingKind`] allows — a `CHOICE`'s
-/// token, an `INT`'s whole number, a `BOOL`'s `true` or `false`, a `ULID`'s identifier or `null`, or
-/// a `ULID_LIST`'s identifiers (ADR-0180 D-T3, ADR-0189). A schema only;
+/// token, an `INT`'s whole number, a `BOOL`'s `true` or `false`, a `ULID`'s identifier or `null`, a
+/// `ULID_LIST`'s identifiers (ADR-0180 D-T3, ADR-0189), or a `RECEIPT_TEMPLATES`' object (ADR-0207). A schema only;
 /// the values themselves stay `serde_json::Value`, and `setting_value_schema_tests` holds every
 /// register default to it.
 ///
@@ -81,6 +81,13 @@ impl utoipa::PartialSchema for SettingValueSchema {
                 ArrayBuilder::new()
                     .items(ObjectBuilder::new().schema_type(Type::String))
                     .description(Some("A `ULID_LIST`'s identifiers")),
+            )
+            .item(
+                ObjectBuilder::new()
+                    .schema_type(Type::Object)
+                    .description(Some(
+                        "A `RECEIPT_TEMPLATES`' base and per-channel templates",
+                    )),
             )
             .description(Some("A setting's value, in the shape its kind gives it"))
             .into()
@@ -160,6 +167,28 @@ pub enum SettingRefusal {
         setting_key: String,
         /// The identifier.
         package_version_id: String,
+    },
+    /// A receipt template names a translation key the tenant's grid does not hold with an `en`
+    /// value ([ADR-0207](../../../docs/adr/0207-a-receipt-is-a-structured-template-per-store-and-channel.md)
+    /// decision 3).
+    #[error(
+        "`{setting_key}` names {translation_key}, which the translation grid has no `en` value for"
+    )]
+    UnknownTranslationKey {
+        /// The setting.
+        setting_key: String,
+        /// The key.
+        translation_key: String,
+    },
+    /// A receipt template turns off a section a country's law requires (ADR-0207 decision 3).
+    #[error("`{setting_key}` turns off {section}, which {country_code} requires on a receipt")]
+    SectionRequired {
+        /// The setting.
+        setting_key: String,
+        /// The section.
+        section: pos_proto::receipt::ReceiptSection,
+        /// The country that requires it.
+        country_code: CountryCode,
     },
     /// The value is written only with a recorded confirmation, and the write did not confirm its
     /// notice ([ADR-0169](../../../docs/adr/0169-a-setting-value-can-require-a-recorded-confirmation.md)

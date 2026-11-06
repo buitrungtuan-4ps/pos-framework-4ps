@@ -111,6 +111,8 @@ mod people_republisher;
 mod people_scopes;
 #[path = "cloud/reason_codes.rs"]
 mod reason_codes;
+#[path = "cloud/receipt_template.rs"]
+mod receipt_template;
 #[path = "cloud/reconcile.rs"]
 mod reconcile;
 #[path = "cloud/registry.rs"]
@@ -11582,6 +11584,7 @@ fn settings_app_with_packages(
     let router = http::router(app)
         .merge(http::settings_router(
             &pos_cloud::countries::registry(),
+            settings_grid(),
             settings,
             registry,
             groups.clone(),
@@ -11605,6 +11608,21 @@ fn settings_app_with_packages(
             Arc::new(NoopAuditRecorder),
         ));
     (router, config_trees, groups)
+}
+
+/// The tenant grid the settings routes check a receipt template's keys against (ADR-0207): one
+/// footer with English, and one key with no English.
+fn settings_grid() -> translations::FakeTranslations {
+    translations::FakeTranslations::seeded(
+        tenant(),
+        &[
+            (
+                "receipt.footer.thanks",
+                &[("en", "Thank you"), ("vi", "Cảm ơn")],
+            ),
+            ("receipt.footer.untranslated", &[("vi", "Hẹn gặp lại")]),
+        ],
+    )
 }
 
 /// Each store a write reached and its outcome, in the order the response lists them.

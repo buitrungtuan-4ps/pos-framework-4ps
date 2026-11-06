@@ -35,6 +35,7 @@ use pos_country::offline::OfflineFiscalization;
 use pos_country::tax_class;
 use pos_proto::locale::{CountryCode, LocalePack, NumberFormat, TaxRate, TaxRateTable};
 use pos_proto::money::CurrencyCode;
+use pos_proto::receipt::ReceiptSection;
 use pos_proto::text::TranslationKey;
 use pos_proto::{SalesChannel, TaxClassId};
 
@@ -99,6 +100,13 @@ impl CountryModule for Japan {
 
     fn is_valid_tax_code(&self, tax_code: &str) -> bool {
         is_valid_registration_number(tax_code)
+    }
+
+    /// The item rows' modifiers (ADR-0207 decision 3). A qualified invoice names what was sold, and a modifier that changes what was sold or its
+    /// price is part of that. To confirm by legal (`CONFORMANCE.md` R14). The payments, the change line and a
+    /// second language are not required.
+    fn receipt_required_sections(&self) -> Vec<ReceiptSection> {
+        vec![ReceiptSection::Modifiers]
     }
 }
 
@@ -315,5 +323,15 @@ mod tests {
                 "{number:?} was handed out by both ranges"
             );
         }
+    }
+
+    #[test]
+    fn a_receipt_template_may_not_leave_out_the_modifiers() {
+        use pos_country::CountryModule;
+        use pos_proto::receipt::ReceiptSection;
+        assert_eq!(
+            Japan.receipt_required_sections(),
+            vec![ReceiptSection::Modifiers]
+        );
     }
 }

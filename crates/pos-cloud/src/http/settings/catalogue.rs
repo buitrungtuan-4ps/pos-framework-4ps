@@ -68,9 +68,10 @@ impl SettingCatalogueEntry {
         let (values, bounds) = match &setting.shape {
             SettingShape::Choice { values, .. } => (Some(values.clone()), None),
             SettingShape::Int { min, max, unit, .. } => (None, Some((*min, *max, unit.as_wire()))),
-            SettingShape::Bool { .. } | SettingShape::Ulid | SettingShape::UlidList { .. } => {
-                (None, None)
-            }
+            SettingShape::Bool { .. }
+            | SettingShape::Ulid
+            | SettingShape::UlidList { .. }
+            | SettingShape::ReceiptTemplates => (None, None),
         };
         // An identifier list's most is its `max`; it has no `min` and no unit.
         let list_max = match &setting.shape {
@@ -118,7 +119,7 @@ struct SettingValues {
     extensions(("x-permission" = json!("console.data.read"))),
     responses(
         (status = 200, body = SettingsCatalogue, description = "Every setting in the register: its key, node and field, its \
-                                      kind (SETTING_KIND_CHOICE, _INT, _BOOL, _ULID or _ULID_LIST) and what it \
+                                      kind (SETTING_KIND_CHOICE, _INT, _BOOL, _ULID, _ULID_LIST or _RECEIPT_TEMPLATES) and what it \
                                       takes — a choice's values, or a whole number's min, max \
                                       and unit — its default and the value a new store is given \
                                       (each as the node carries it), the scopes it may be written \

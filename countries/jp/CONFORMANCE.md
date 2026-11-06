@@ -30,6 +30,7 @@ beyond those is marked **to confirm by legal**. The line prices in the cases are
 | R11 | Two invoice ranges never share a number | `fiscalization()`; `pos_country::offline` | covered by case 7 |
 | R12 | Any other field a qualified invoice must carry (for example the buyer, the date, the items) | none in the module | unconfirmed: to confirm by legal |
 | R13 | Personal data retention, 365 days by default | `default_retention_days`; gate X3 | unconfirmed: the module says somebody must confirm it |
+| R14 | A receipt template may not leave out the item rows' modifiers; it may leave out the payments, the change line and a second language | `receipt_required_sections`; ADR-0207 decision 3 | unconfirmed: to confirm by legal. The legal body (seller, receipt number, lines, totals, tax lines, a captured buyer) cannot be turned off by any template |
 
 ## Findings: what the current model cannot express
 

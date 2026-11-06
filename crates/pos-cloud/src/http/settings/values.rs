@@ -134,6 +134,13 @@ where
         Ok(notice) => notice,
         Err(refusal) => return setting_refusal_response(&refusal),
     };
+    if let Err(refusal) = state
+        .receipt
+        .check(tenant_id, &request.setting_key, &request.value)
+        .await
+    {
+        return refusal;
+    }
     let layout = match TenantLayout::load(&state.registry, &state.groups, tenant_id).await {
         Ok(layout) => layout,
         Err(refusal) => return refusal,

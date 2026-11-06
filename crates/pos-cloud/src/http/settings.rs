@@ -15,6 +15,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use catalogue::{admin_list_settings, admin_settings_catalogue};
 use effective::admin_effective_settings;
+use pos_cloud_catalog::translations::TranslationStore;
 use pos_country::CountryRegistry;
 use pos_proto::WireEnum;
 use pos_proto::determinism::ClockSource;
@@ -41,6 +42,7 @@ mod package_pin;
 mod package_status;
 mod presets;
 mod publish;
+mod receipt;
 mod values;
 
 // The handlers the console's OpenAPI document names.
@@ -75,6 +77,9 @@ struct SettingsState<St, Rg, Grp, Cfg, A, C> {
     /// What each country pack gives a new store, computed once from the compiled registry at
     /// start-up (ADR-0183): the registry does not change while the process runs.
     country_values: Arc<CountrySettingValues>,
+    /// The tenant grid and the compiled-in countries a receipt template is checked against
+    /// (ADR-0207 decision 3).
+    receipt: receipt::ReceiptChecks,
 }
 
 /// Builds the settings sub-router
@@ -88,9 +93,16 @@ struct SettingsState<St, Rg, Grp, Cfg, A, C> {
 /// it is behind [`ConsolePermission::PublishConfig`](crate::auth::console_rbac::ConsolePermission::PublishConfig), like every node publish.
 ///
 /// `countries` is the compiled registry: a new store's values take its country pack's setting
-/// defaults before the register's presets (ADR-0183).
-pub fn settings_router<St, Rg, Grp, Cfg, A, C>(
+/// defaults before the register's presets (ADR-0183), and a receipt template may not turn off a
+/// section one of them requires (ADR-0207). `translations` is the tenant grid a receipt template's
+/// keys must be in.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each collaborator is its own store, handed in once where the cloud is composed"
+)]
+pub fn settings_router<St, Rg, Grp, Cfg, A, C, Tr>(
     countries: &CountryRegistry,
+    translations: Tr,
     settings: St,
     registry: Rg,
     groups: Grp,
@@ -106,6 +118,7 @@ where
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    Tr: TranslationStore + Send + Sync + 'static,
 {
     Router::new()
         .route(
@@ -149,6 +162,7 @@ where
             clock,
             audit,
             country_values: Arc::new(country_setting_values(countries)),
+            receipt: receipt::ReceiptChecks::new(countries, translations),
         })
 }
 
@@ -187,6 +201,7 @@ where
         clock,
         audit,
         country_values: Arc::new(country_setting_values(countries)),
+        receipt: receipt::ReceiptChecks::without_grid(countries),
     };
     (hand_off, catch_up::run(state, receiver))
 }

@@ -44,6 +44,7 @@
 use core::fmt;
 
 use pos_proto::locale::{CountryCode, LocalePack};
+use pos_proto::receipt::ReceiptSection;
 
 pub mod offline;
 mod setting_defaults;
@@ -103,6 +104,19 @@ pub trait CountryModule: Send + Sync + 'static {
     ///
     /// Empty by default, so a pack that says nothing changes nothing.
     fn setting_defaults(&self) -> Vec<SettingDefault> {
+        Vec::new()
+    }
+
+    /// The sections of a receipt a template may leave out that this country's law requires all the
+    /// same ([ADR-0207](../../../docs/adr/0207-a-receipt-is-a-structured-template-per-store-and-channel.md)
+    /// decision 3): the cloud refuses a `receipt` template that turns one of these off.
+    ///
+    /// Values only, as ADR-0105 requires. The legal body of a receipt (the seller, the receipt
+    /// number, the lines, the totals, the tax lines and a captured buyer) is not among the sections
+    /// a template can turn off, so it is never listed here.
+    ///
+    /// Empty by default: a pack that says nothing lets a template leave out every optional section.
+    fn receipt_required_sections(&self) -> Vec<ReceiptSection> {
         Vec::new()
     }
 }
