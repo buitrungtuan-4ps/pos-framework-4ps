@@ -38,6 +38,7 @@ the configuration described.
 | Console admins (email) and the audit trail | Yes | The cell's PostgreSQL | The cell runs outside the admin's country |
 | Store archive (the whole store database) | Yes, sealed (XChaCha20-Poly1305) | The cell's object store, and the off-box backup tier ([ADR-0124](adr/0124-a-store-that-can-be-restored.md)) | The object store or the off-box destination is abroad |
 | Cloud database dump | Yes | The off-box destination; each backup records the country it rests in (`BACKUP_COUNTRY`) and warns when that is not the cell's home country | The destination is abroad |
+| Translation grid (labels HQ writes) | No | The cell's `translations` table; each store holds a copy in memory and in its state directory ([ADR-0043](adr/0043-translation-grid.md)) | The cell runs outside the store's country |
 | Logs | Must not be: logging PII is forbidden ([`AGENTS.md`](../AGENTS.md) §2) | Store disk; the cell's Docker logs | A fork ships logs abroad |
 | Metrics and alerts | No | Optional metrics host; one alert webhook URL | The metrics host or the alert URL is abroad |
 | Reports, rollups and CSV export | No: counts and money only | The cell; a CSV goes to the admin's browser | An admin downloads from abroad |

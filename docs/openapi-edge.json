@@ -7679,6 +7679,22 @@
             },
             "description": "The version's flows, every variant of each in the version's order, for the till to run\n(ADR-0192 decision 3); the edge re-checks their guards. Left out when the version has none,\nso a till that predates the field reads the same answer as before."
           },
+          "labels": {
+            "type": "object",
+            "description": "The tenant's labels for the translation keys this version names, `key → { locale → text }`,\nfrom the grid the store pulled (ADR-0043): every key with `en`. A key the grid lacks is not\nhere. Left out when there are none.",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "propertyNames": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "min_edge_version": {
             "type": "string",
             "description": "The oldest edge release that runs it."

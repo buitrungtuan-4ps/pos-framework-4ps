@@ -314,7 +314,7 @@ fn each_role_is_the_scope_the_handler_checks() {
         }
     }
     assert_eq!(
-        checked, 16,
+        checked, 17,
         "the /v1 and /sync operations that need a credential"
     );
 }

@@ -114,6 +114,7 @@ pub(crate) mod config_publish;
 pub(crate) mod countries;
 mod custom_values;
 pub(crate) mod fleet;
+mod grid_sync;
 pub(crate) mod health;
 pub(crate) mod integrations;
 mod lease_bump;
@@ -203,6 +204,8 @@ pub(crate) use fees::{
 pub(crate) use fleet::__path_admin_acknowledge_region;
 pub use fleet::fleet_router;
 pub use floor::{floor_publish_router, floor_router, table_qr_router};
+pub(crate) use grid_sync::__path_serve_store_grid;
+pub use grid_sync::store_grid_router;
 pub use health::health_router;
 pub(crate) use integrations::{
     __path_admin_create_connection, __path_admin_delete_connection, __path_admin_get_connection,

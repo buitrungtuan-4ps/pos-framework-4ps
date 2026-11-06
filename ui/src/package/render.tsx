@@ -19,6 +19,7 @@ import { createContext, For, useContext, type JSX } from "solid-js";
 
 import { t, type MessageKey } from "../i18n";
 import en from "../i18n/en.json";
+import { tenantLabel } from "../state/labels";
 import { COMPONENTS, DEPTH_MAX, NODES_MAX, type ActionBinding, type ComponentId, type PropertyValue, type ScreenNode } from "./components";
 
 /** What a component's implementation is given: its node, and how deep it is (the root is 1). */
@@ -90,12 +91,15 @@ export function actionProperty(node: ScreenNode, name: string): ActionBinding | 
 }
 
 /**
- * A package label in the till's language. A key the till's own catalogue has is shown from it; the
- * tenant's translation grid does not reach the till yet, so any other key draws nothing rather than
- * the key itself.
+ * A package label in the till's language. A key the till's own catalogue has is shown from it; any
+ * other from the tenant's translation grid the store holds (ADR-0043), in the till's language and
+ * then English; and a key in neither draws nothing rather than the key itself.
  */
 export function packageLabel(key: string | undefined): string {
-  return key !== undefined && Object.hasOwn(en, key) ? t(key as MessageKey) : "";
+  if (key === undefined) {
+    return "";
+  }
+  return Object.hasOwn(en, key) ? t(key as MessageKey) : (tenantLabel(key) ?? "");
 }
 
 /** What a node of a component this release lacks draws in its place. */

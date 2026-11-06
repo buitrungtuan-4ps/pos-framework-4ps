@@ -496,6 +496,61 @@ impl ConfigTransport for ConfigHttpTransport {
 }
 
 // -------------------------------------------------------------------------------------------------
+// Translation grid transport
+// -------------------------------------------------------------------------------------------------
+
+/// The field transport of the tenant's translation grid: one `GET /sync/stores/{store_id}/translations`
+/// ([ADR-0043](../../../docs/adr/0043-translation-grid.md)), the grid whole.
+#[derive(Debug, Clone)]
+pub struct GridHttpTransport {
+    client: CloudHttpClient,
+    store_id: StoreId,
+}
+
+/// The grid as the cloud sends it.
+#[derive(serde::Deserialize)]
+struct GridWire {
+    #[serde(default)]
+    grid: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+}
+
+impl GridHttpTransport {
+    /// Builds a grid transport over `client` for `store_id`.
+    #[must_use]
+    pub fn new(client: CloudHttpClient, store_id: StoreId) -> Self {
+        Self { client, store_id }
+    }
+
+    /// Pulls the grid whole.
+    ///
+    /// # Errors
+    ///
+    /// The reason, when the request fails, the cloud answers anything but `200`, or the answer does
+    /// not parse.
+    pub async fn pull(
+        &self,
+    ) -> Result<
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+        String,
+    > {
+        let path = format!("/sync/stores/{}/translations", self.store_id);
+        let (status, body) = self
+            .client
+            .request(&hyper::Method::GET, &path, None, Vec::new())
+            .await
+            .map_err(|error| error.to_string())?;
+        if status != 200 {
+            return Err(format!(
+                "the cloud refused the grid pull with status {status}"
+            ));
+        }
+        serde_json::from_slice::<GridWire>(&body)
+            .map(|wire| wire.grid)
+            .map_err(|error| format!("the grid did not parse: {error}"))
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
 // Heartbeat transport
 // -------------------------------------------------------------------------------------------------
 

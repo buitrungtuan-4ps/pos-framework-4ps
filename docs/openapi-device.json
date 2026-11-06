@@ -1659,6 +1659,95 @@
           }
         ]
       }
+    },
+    "/sync/stores/{store_id}/translations": {
+      "get": {
+        "tags": [
+          "configuration"
+        ],
+        "summary": "Serves a store its tenant's translation grid, whole. The tenant is the credential's, never the\npath's.",
+        "operationId": "serve_store_grid",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store, a ULID. It must be the credential's own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`grid`: the tenant's translation grid whole, `key → { locale → text }`, every key with `en`; empty when the tenant has authored none (ADR-0043)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoreGridResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "store_id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or one the cloud does not accept: one answer for every credential problem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credential lacks the `read_config` scope, or belongs to another store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests to the store sync surface: `Retry-After` says when to try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The credential store, or the translation store, is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_credential": [
+              "read_config"
+            ]
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -2840,6 +2929,30 @@
         "description": "A `ShiftId`: a ULID, 26 Crockford base-32 characters",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
       },
+      "StoreGridResponse": {
+        "type": "object",
+        "description": "A store's tenant grid, `key → { locale → text }`, empty when the tenant has authored none.",
+        "required": [
+          "grid"
+        ],
+        "properties": {
+          "grid": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "propertyNames": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "StoreId": {
         "type": "string",
         "description": "A `StoreId`: a ULID, 26 Crockford base-32 characters",
@@ -3038,7 +3151,7 @@
   "tags": [
     {
       "name": "configuration",
-      "description": "The store's published configuration, pulled as a snapshot or a delta, and its liveness heartbeat (ADR-0039, ADR-0068)."
+      "description": "The store's published configuration, pulled as a snapshot or a delta, its tenant's translation grid, pulled whole, and its liveness heartbeat (ADR-0039, ADR-0043, ADR-0068)."
     },
     {
       "name": "events",

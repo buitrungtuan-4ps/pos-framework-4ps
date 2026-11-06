@@ -31,6 +31,7 @@ import { readLiveOrders, type LiveOrdersRead } from "./live-orders-read";
 import { takeSession } from "./session";
 import { applyPackage } from "./flows";
 import { applyReactions } from "./reactions";
+import { applyLabels } from "./labels";
 import { bootTillRules } from "../rules/boot";
 import { applyCountDenominations } from "./cash-count";
 import {
@@ -113,6 +114,7 @@ const ENTRIES: readonly Entry[] = [
     apply: (body) => {
       applyPackage(body);
       applyReactions(body);
+      applyLabels(body);
     },
     required: false,
     nodes: ["package"],

@@ -29,6 +29,7 @@ pub mod clock;
 pub mod durable_auth;
 pub mod fanout;
 pub mod idgen;
+pub mod labels;
 pub mod lease_state;
 pub mod line_notes;
 pub mod queue;
