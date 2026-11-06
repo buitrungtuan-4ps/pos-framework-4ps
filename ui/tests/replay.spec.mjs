@@ -242,10 +242,16 @@ async function aTableWithTheDrinkSplitOff(page) {
   await expect(page.getByText("43,450₫", { exact: true })).toBeVisible();
 }
 
-/** Sends the order's unsent lines to the kitchen — one button, whatever the line count. */
+/**
+ * Sends the order's unsent lines to the kitchen — one button, whatever the line count — and waits
+ * for the edge's answer. The lines show sent from the tap (ADR-0196), but the request leaves after
+ * the frame that shows them (ADR-0208): a flow that reloads or leaves the page at once would race
+ * the send, and a kitchen board loaded on its heels showed "Nothing firing" on CI.
+ */
 async function sendOrder(page) {
   await page.locator('[data-step="fireOrder"]').click();
   await expect(page.locator('[data-outcome="line-fired"]').first()).toBeVisible();
+  await expect(page.locator('[data-outcome="writes-pending"]')).toHaveCount(0);
 }
 
 /**
@@ -2911,6 +2917,12 @@ test("a till remembers the store's language for the screens before sign-in", asy
   try {
     await page.route("**/api/locale", async (route) => {
       const response = await fetchWhole(route);
+      // A read that reaches the edge once nobody is signed in is refused, as it should be: it is
+      // passed on as it came. On CI one landed just after the sign-out and its body was no JSON.
+      if (!response.ok()) {
+        await route.fulfill({ response });
+        return;
+      }
       const body = await response.json();
       await route.fulfill({ response, json: { ...body, display_language: "vi-VN" } });
     });
