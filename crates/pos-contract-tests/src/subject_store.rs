@@ -48,6 +48,8 @@ macro_rules! subject_store_suite {
                 the_sweep_is_idempotent,
                 the_sweep_leaves_a_record_inside_the_retention_window,
                 a_record_is_scoped_to_its_store,
+                a_shorter_expiry_is_masked_before_the_store_cutoff_reaches_it,
+                a_longer_expiry_outlives_the_store_cutoff,
             ]
         }
     };
@@ -89,6 +91,15 @@ fn buyer(collected_at: Timestamp) -> SubjectRecord {
     fields.insert("tax_code".to_owned(), "T1234567890123".to_owned());
     fields.insert("address".to_owned(), "1-1 Marunouchi, Chiyoda".to_owned());
     SubjectRecord::new(collected_at, fields)
+}
+
+/// A record a till's custom field wrote: an obviously made-up value under a field id, kept until
+/// `retain_until` ([ADR-0206](../../../docs/adr/0206-a-personal-custom-value-stays-on-its-store-and-expires-on-its-own-clock.md)
+/// decision 1).
+fn custom(collected_at: Timestamp, retain_until: Timestamp) -> SubjectRecord {
+    let mut fields = BTreeMap::new();
+    fields.insert("guest_note".to_owned(), "demo value".to_owned());
+    SubjectRecord::new(collected_at, fields).retained_until(retain_until)
 }
 
 /// Records one subject and commits it, so a case can assert what a *durable* record does.
@@ -301,4 +312,77 @@ pub async fn a_record_is_scoped_to_its_store<H: SubjectStoreHarness>(
     let found = store.fetch(store_id, subject(7)).await?;
     let seen = obligation.require_nth(found.as_slice(), 0, "the owning store's subject")?;
     obligation.require_eq(seen, &record, "the owning store's record is untouched")
+}
+
+/// A record kept for fewer days than the store's default is masked at its own expiry, though the
+/// store's cutoff has not reached it, and keeps that expiry once masked.
+///
+/// The failure this guards is a field declared for 30 days held for the store's 365.
+///
+/// # Errors
+///
+/// [`CaseFailure`] if the obligation does not hold.
+pub async fn a_shorter_expiry_is_masked_before_the_store_cutoff_reaches_it<
+    H: SubjectStoreHarness,
+>(
+    harness: &H,
+) -> Result<(), CaseFailure> {
+    let store = harness.fresh().await?;
+    let store_id = harness.store_id();
+    record_committed(&store, store_id, subject(8), &custom(at(8_000), at(9_000))).await?;
+
+    let obligation = masking();
+    let early = store.mask_before(store_id, at(5_000), at(8_999)).await?;
+    obligation.require_eq(&early, &0, "a record was masked before its own expiry")?;
+    let due = store.mask_before(store_id, at(5_000), at(9_000)).await?;
+    obligation.require_eq(&due, &1, "a record outlived its own expiry")?;
+
+    let found = store.fetch(store_id, subject(8)).await?;
+    let seen = obligation.require_nth(found.as_slice(), 0, "the expired subject")?;
+    obligation.require_eq(&seen.masked_at, &Some(at(9_000)), "masked at its expiry")?;
+    obligation.require_eq(
+        &seen.retain_until,
+        &Some(at(9_000)),
+        "the expiry survives masking",
+    )?;
+    obligation.require(
+        seen.fields.values().all(|value| value == REDACTION),
+        "a field survived its own expiry with its value intact",
+    )
+}
+
+/// A record kept for more days than the store's default is not masked by the store's cutoff,
+/// while a record beside it without an expiry still is.
+///
+/// The failure this guards is a field declared for two years masked at the store's one.
+///
+/// # Errors
+///
+/// [`CaseFailure`] if the obligation does not hold.
+pub async fn a_longer_expiry_outlives_the_store_cutoff<H: SubjectStoreHarness>(
+    harness: &H,
+) -> Result<(), CaseFailure> {
+    let store = harness.fresh().await?;
+    let store_id = harness.store_id();
+    let kept = custom(at(1_000), at(20_000));
+    record_committed(&store, store_id, subject(9), &kept).await?;
+    record_committed(&store, store_id, subject(10), &buyer(at(1_000))).await?;
+
+    let obligation = masking();
+    let swept = store.mask_before(store_id, at(5_000), at(6_000)).await?;
+    obligation.require_eq(
+        &swept,
+        &1,
+        "the sweep masks the record without an expiry, and only it",
+    )?;
+
+    let found = store.fetch(store_id, subject(9)).await?;
+    let seen = obligation.require_nth(found.as_slice(), 0, "the still-retained subject")?;
+    obligation.require_eq(seen, &kept, "a record inside its own period is untouched")?;
+    let other = store.fetch(store_id, subject(10)).await?;
+    let masked = obligation.require_nth(other.as_slice(), 0, "the default-retention subject")?;
+    obligation.require(
+        masked.is_masked(),
+        "a record without an expiry escaped the store's cutoff",
+    )
 }

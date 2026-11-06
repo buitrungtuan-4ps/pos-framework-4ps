@@ -81,6 +81,7 @@ fn a_till_that_has_traded(path: &Path) -> Vec<u64> {
                         .into_iter()
                         .collect(),
                     masked_at: None,
+                    retain_until: None,
                 },
             )
             .await

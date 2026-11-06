@@ -532,9 +532,10 @@ impl SubjectStore for FakeStore {
         let mut state = lock(&self.state);
         let mut swept: u64 = 0;
         for ((owner, _), record) in &mut state.subjects {
-            // Scoped, in the window, and not already scrubbed. The last condition is what makes a
-            // second sweep report zero rather than re-stamping yesterday's masking.
-            if *owner == store_id && record.collected_at <= cutoff && !record.is_masked() {
+            // Scoped, due by its own expiry or by the store's cutoff, and not already scrubbed
+            // (`is_due`). The last condition is what makes a second sweep report zero rather than
+            // re-stamping yesterday's masking.
+            if *owner == store_id && record.is_due(cutoff, now) {
                 *record = record.masked(now);
                 swept = swept.saturating_add(1);
             }

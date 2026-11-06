@@ -20,7 +20,7 @@ Only two places, and knowing that is most of the work:
 | Where | What | Who removes it |
 |---|---|---|
 | The cloud's `subjects` table | The person's fields, keyed by a `SubjectId`. Events carry only the id ([ADR-0035](../adr/0035-retention-and-pii-masking.md)) | The subject-request tooling ([ADR-0076](../adr/0076-subject-request-tooling.md)), or the masking cron once the retention period passes |
-| A **store's** `subjects` table | The buyer name, tax code and address a B2B invoice needs ([ADR-0107](../adr/0107-the-buyer-is-a-subject.md)) | The store's own hourly retention sweep, on the same period |
+| A **store's** `subjects` table | The buyer name, tax code and address a B2B invoice needs ([ADR-0107](../adr/0107-the-buyer-is-a-subject.md)) | The store's own hourly retention sweep, on the same period, or at a record's own `retain_until` where it has one ([ADR-0206](../adr/0206-a-personal-custom-value-stays-on-its-store-and-expires-on-its-own-clock.md)) |
 | **A store's sealed archives** | The store's whole database as it was on the day it was taken — including the buyer rows the sweeps have since redacted ([ADR-0124](../adr/0124-a-store-that-can-be-restored.md)) | The archive-retention sweep, automatically, within `archive_retention_days` |
 
 That third row is the one this guide exists for. An archive taken on Monday preserves exactly what
