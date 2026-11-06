@@ -3,7 +3,7 @@
 
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { instantiateTillRules, type Flow, type TillRules } from "../src/rules/till-rules";
+import { instantiateTillRules, needsRules, type Flow, type TillRules } from "../src/rules/till-rules";
 // The module's bytes, inlined as a data URL, as `pnpm rules` built them.
 import moduleData from "../src/rules/pos_till_rules.wasm?url&inline";
 
@@ -52,8 +52,7 @@ describe("the till's rules module", () => {
 });
 
 describe("when the till loads the module", () => {
-    it("only for flows a condition or a prerequisite can hold back", async () => {
-        const { needsRules } = await import("../src/rules/boot");
+    it("only for flows a condition or a prerequisite can hold back", () => {
         expect(needsRules([])).toBe(false);
         expect(
             needsRules([{ flow_id: "f", start_action_id: "a", steps: [{ step_id: "s", action_id: "a" }] }]),

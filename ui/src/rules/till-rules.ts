@@ -112,6 +112,18 @@ export class TillRules {
   }
 }
 
+/** Whether any step of `flows` has a condition or a prerequisite: something only the module answers. */
+export function needsRules(flows: readonly Flow[]): boolean {
+  return flows.some((flow) =>
+    flow.steps.some(
+      (step) =>
+        step.applies_when !== undefined ||
+        step.done_when !== undefined ||
+        (step.prerequisites ?? []).length > 0,
+    ),
+  );
+}
+
 /** Instantiates the module from its bytes. */
 export async function instantiateTillRules(bytes: BufferSource): Promise<TillRules> {
   const { instance } = await WebAssembly.instantiate(bytes, {});

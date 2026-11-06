@@ -12,22 +12,10 @@
 
 import DEFAULT_PACKAGE from "../package/default-package.json";
 import type { Variant } from "../package/variant";
-import { startTillRules, type Flow } from "./till-rules";
+import { needsRules, startTillRules, type Flow } from "./till-rules";
 
 /** How long the till waits for an idle moment before starting the module anyway. */
 const START_WITHIN_MS = 2_000;
-
-/** Whether any step of `flows` has a condition or a prerequisite: something only the module answers. */
-export function needsRules(flows: readonly Flow[]): boolean {
-  return flows.some((flow) =>
-    flow.steps.some(
-      (step) =>
-        step.applies_when !== undefined ||
-        step.done_when !== undefined ||
-        (step.prerequisites ?? []).length > 0,
-    ),
-  );
-}
 
 /** The default package's flows: every variant of each, in the package's order. */
 export function defaultFlows(): Flow[] {
