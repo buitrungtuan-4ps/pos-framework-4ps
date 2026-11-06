@@ -24,6 +24,7 @@ import { Confirm } from "./screens/Confirm";
 import { Takeaway } from "./screens/Takeaway";
 import { SignIn } from "./screens/SignIn";
 import { Today } from "./screens/Today";
+import { Records } from "./screens/Records";
 import { locked } from "./state/session";
 import { StoreGate, StoreDataBanner } from "./components/StoreData";
 import { prime, readAgain } from "./state/engine";
@@ -129,6 +130,7 @@ const COMPONENTS: Record<ScreenId, Component> = {
   counterOrder: Order,
   guests: Confirm,
   today: Today,
+  records: Records,
   shift: Shift,
   pair: Pairing,
   devices: Devices,

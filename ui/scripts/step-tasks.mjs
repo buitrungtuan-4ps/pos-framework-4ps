@@ -143,6 +143,18 @@ export const TASKS = [
       "the bill void's missing moment — the manager's badge and PIN are typed between the second and third taps, and the harness types only before the first",
   },
   {
+    task: "Enter a record of the store's own kind, such as a reservation",
+    budget: 3,
+    note: "Two taps on the Records screen once it is open: *New*, then *Save*, with the values typed between them, which are not taps. The kinds of record, their fields and their lists are the package's (ADR-0194); the edge re-checks every value. A personal value is never shown again once saved, and is sent only with its consent ticked (ADR-0206). Rare, so its ceiling is three.",
+    steps: [
+      { route: "/records", action: "newRecord" },
+      { route: "/records", action: "saveRecord" },
+    ],
+    outcome: { route: "/records", mark: "record-saved" },
+    unreplayable:
+      "the walk boots a store whose package declares no record, and this needs the `custom-data` store and a required value typed between the taps; a dedicated replay below runs it there",
+  },
+  {
     task: "Print a guest's receipt again right after they pay",
     budget: 3,
     note: "One tap under the settled figures, which is where the cashier is when the guest asks. The same act as the Today screen's reprint, counted the same way (ADR-0164). The counter's settled screen carries the same button, and it is not declared separately because it is the same act on the other pay screen.",

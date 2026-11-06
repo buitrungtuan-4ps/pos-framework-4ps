@@ -601,5 +601,21 @@
   "x.read": "X (read, not a close)",
   "x.sales": "Sales",
   "x.title": "X: how the shift stands",
-  "x.voided": "Cash given back for voids"
+  "x.voided": "Cash given back for voids",
+  "nav.records": "Records",
+  "records.title": "Records",
+  "records.none_declared": "This store's package declares no records.",
+  "records.new": "New {kind}",
+  "records.save": "Save",
+  "records.saved": "Saved.",
+  "records.required": "(required)",
+  "records.none_chosen": "None",
+  "records.no_values": "No values yet",
+  "records.personal_held": "A personal value is held. It is not shown.",
+  "records.show_personal": "Show personal values",
+  "records.consent": "The guest agreed: {purpose}",
+  "records.invalid_value": "A value is not in the form its field takes.",
+  "records.refused_entry": "The store refused a value. Check each field and save again.",
+  "records.refused_permission": "You may not do this.",
+  "records.save_failed": "The record could not be saved. Try again."
 }

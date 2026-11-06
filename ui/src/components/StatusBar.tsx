@@ -2,6 +2,7 @@ import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid
 import { A, useLocation } from "@solidjs/router";
 
 import { api, deviceToken } from "../api/client";
+import { customData } from "../state/custom-data";
 import { type MessageKey, locale, setLocale, t } from "../i18n";
 import { afterPaint } from "../lib/after-paint";
 import { can, canAny } from "../state/permissions";
@@ -70,6 +71,8 @@ const NAV: { href: string; key: MessageKey; needs?: () => boolean }[] = [
   { href: "/kds", key: "nav.kitchen", needs: () => kdsEnabled() && can("sales.ticket.bump") },
   { href: "/expo", key: "nav.pass", needs: () => kdsEnabled() && can("sales.ticket.bump") },
   { href: "/today", key: "nav.today" },
+  // A package's custom records (ADR-0194), where the running package declares an object type.
+  { href: "/records", key: "nav.records", needs: () => (customData().object_types ?? []).length > 0 },
   {
     href: "/shift",
     key: "nav.shift",

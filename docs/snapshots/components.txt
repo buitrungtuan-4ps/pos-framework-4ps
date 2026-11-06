@@ -252,6 +252,15 @@ pay_flow	device_class=DEVICE_CLASS_TABLET
 pay_flow	device_class=DEVICE_CLASS_TERMINAL
 pay_flow	reads=bill
 pay_flow	since=0.14.1
+records_body
+records_body	children=false
+records_body	device_class=DEVICE_CLASS_KIOSK
+records_body	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+records_body	device_class=DEVICE_CLASS_PHONE
+records_body	device_class=DEVICE_CLASS_TABLET
+records_body	device_class=DEVICE_CLASS_TERMINAL
+records_body	reads=custom_records
+records_body	since=0.14.1
 screen_frame
 screen_frame	children=true
 screen_frame	device_class=DEVICE_CLASS_KIOSK

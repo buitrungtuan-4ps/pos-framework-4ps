@@ -41,6 +41,7 @@ use pos_proto::ulid::Ulid;
 use crate::app::EdgeSession;
 
 mod package;
+pub use package::custom_data_labels;
 
 /// The badge code the demo store's one employee signs in with.
 ///
@@ -454,6 +455,11 @@ fn demo_catalog(salad: i64) -> MenuCatalog {
 ///
 /// `POS_DEMO_PROFILE=reactions`: locked to a package with a reaction the demo employee may run and
 /// one they may not, in a store that enforces permissions. See `demo/package.rs`.
+///
+/// # The custom-data profile
+///
+/// `POS_DEMO_PROFILE=custom-data`: locked to a package with a reservation object type, and holding
+/// its labels as a tenant's grid would. See `demo/package.rs`.
 ///
 /// # The walk-in profiles
 ///

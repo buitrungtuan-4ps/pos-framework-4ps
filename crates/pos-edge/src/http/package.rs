@@ -18,7 +18,7 @@ use serde::Serialize;
 
 use pos_ports::event_store::EventStore;
 use pos_proto::flow::Flow;
-use pos_proto::package::Variant;
+use pos_proto::package::{PackageData, Variant};
 use pos_proto::reaction::Reaction;
 
 use crate::app::Edge;
@@ -59,6 +59,11 @@ pub(crate) struct RunningPackage {
     /// here. Left out when there are none.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     labels: BTreeMap<String, BTreeMap<String, String>>,
+    /// The version's data part: its custom fields, object types and lists (ADR-0194), which the
+    /// till's records screen enters values against; the edge re-checks every value. Left out when
+    /// the version declares none.
+    #[serde(skip_serializing_if = "PackageData::is_empty")]
+    data: PackageData,
 }
 
 /// A configuration refused for its package; the store kept the one before it.
@@ -102,6 +107,7 @@ where
             min_edge_version: content.min_edge_version.to_string(),
             flows: content.flows.clone(),
             reactions: content.reactions.clone(),
+            data: content.data.clone(),
             labels: if grid.is_empty() {
                 BTreeMap::new()
             } else {

@@ -274,6 +274,12 @@ pub static CATALOGUE: &[Component] = &[
         ..BASE
     },
     Component {
+        component_id: "records_body",
+        reads: "custom_records",
+        summary: "A package's custom records: its object types, each one's records, and the form that enters or changes one (ADR-0194).",
+        ..BASE
+    },
+    Component {
         component_id: "today_body",
         reads: "takings",
         summary: "Today's takings and the bills to reprint from.",

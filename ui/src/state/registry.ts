@@ -32,6 +32,7 @@ import { takeSession } from "./session";
 import { applyPackage } from "./flows";
 import { applyReactions } from "./reactions";
 import { applyLabels } from "./labels";
+import { applyCustomData } from "./custom-data";
 import { bootTillRules } from "../rules/boot";
 import { applyCountDenominations } from "./cash-count";
 import {
@@ -115,6 +116,7 @@ const ENTRIES: readonly Entry[] = [
       applyPackage(body);
       applyReactions(body);
       applyLabels(body);
+      applyCustomData(body);
     },
     required: false,
     nodes: ["package"],

@@ -115,3 +115,15 @@ export type SettleRequest = Schemas["SettleRequest"];
 export type ApproverRequest = {
   [K in "approver_code" | "approver_pin"]: NonNullable<VoidRequest[K]>;
 };
+
+// Custom data (ADR-0194, ADR-0206): the running package's declarations, a record or an object's
+// non-personal values, and one subject's personal values for a person holding `data.personal.read`.
+export type PackageData = Schemas["PackageData"];
+export type CustomField = Schemas["CustomField"];
+export type ObjectType = Schemas["ObjectType"];
+export type CustomFieldValue = Schemas["CustomFieldValue"];
+export type CustomDataResponse = Schemas["CustomDataResponse"];
+export type CustomRecordsResponse = Schemas["CustomRecordsResponse"];
+export type NewRecordRequest = Schemas["NewRecordRequest"];
+export type ValueRequest = Schemas["ValueRequest"];
+export type SubjectResponse = Schemas["SubjectResponse"];

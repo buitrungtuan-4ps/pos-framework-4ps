@@ -601,5 +601,21 @@
   "x.read": "X (xem, không chốt ca)",
   "x.sales": "Doanh thu",
   "x.title": "X: tình hình ca hiện tại",
-  "x.voided": "Tiền mặt trả lại do hủy"
+  "x.voided": "Tiền mặt trả lại do hủy",
+  "nav.records": "Hồ sơ",
+  "records.title": "Hồ sơ",
+  "records.none_declared": "Gói của cửa hàng này không khai báo loại hồ sơ nào.",
+  "records.new": "Thêm {kind}",
+  "records.save": "Lưu",
+  "records.saved": "Đã lưu.",
+  "records.required": "(bắt buộc)",
+  "records.none_chosen": "Không chọn",
+  "records.no_values": "Chưa có giá trị",
+  "records.personal_held": "Đã lưu một giá trị cá nhân. Giá trị này không được hiển thị.",
+  "records.show_personal": "Xem giá trị cá nhân",
+  "records.consent": "Khách đã đồng ý: {purpose}",
+  "records.invalid_value": "Có giá trị không đúng dạng của trường.",
+  "records.refused_entry": "Cửa hàng từ chối một giá trị. Kiểm tra từng trường rồi lưu lại.",
+  "records.refused_permission": "Bạn không được làm việc này.",
+  "records.save_failed": "Không lưu được hồ sơ. Hãy thử lại."
 }

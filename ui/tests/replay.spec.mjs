@@ -2032,6 +2032,48 @@ test("a reaction prints the check when the bill opens, and one the person may no
   }
 });
 
+// A package's own kind of record (`POS_DEMO_PROFILE=custom-data`, ADR-0194): a reservation is
+// entered on the Records screen, listed with the labels the tenant's grid gives it (ADR-0043),
+// changed, and refused by the edge when its required party size is left out.
+test("a reservation is entered and changed on the till, labelled from the tenant's grid", async ({ page }) => {
+  const edge = await startEdge("custom-data");
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await navigateTo(page, "/records");
+    await expect(page.getByRole("tab", { name: "Reservation" })).toBeVisible();
+    const rows = page.locator('[data-step="chooseRecord"]');
+
+    await page.locator('[data-step="newRecord"]').click();
+    await page.getByLabel("Party size").fill("4");
+    await page.getByLabel("Occasion").selectOption({ label: "Birthday" });
+    await page.locator('[data-step="saveRecord"]').click();
+    await expect(page.locator('[data-outcome="record-saved"]')).toBeVisible();
+    await expect(rows.first()).toHaveText("4 · Birthday");
+
+    await rows.first().click();
+    await page.getByLabel("Party size").fill("6");
+    await page.locator('[data-step="saveRecord"]').click();
+    await expect(page.locator('[data-outcome="record-saved"]')).toBeVisible();
+    await expect(rows).toHaveCount(1);
+    await expect(rows.first()).toHaveText("6 · Birthday");
+
+    await page.locator('[data-step="newRecord"]').click();
+    await page.getByLabel("Occasion").selectOption({ label: "Business" });
+    await page.locator('[data-step="saveRecord"]').click();
+    await expect(page.locator('[data-outcome="record-refused"]')).toHaveText(
+      "The store refused a value. Check each field and save again.",
+    );
+    await expect(rows).toHaveCount(1);
+
+    // A reload reads the records back from the edge.
+    await page.reload();
+    await expect(rows.first()).toHaveText("6 · Birthday");
+  } finally {
+    await edge.stop();
+  }
+});
+
 // The floor and a table's order screen stay mounted (`ui/src/screens/kept.tsx`), and a switch only
 // shows one and hides the other. The order screen never shows one table's lines, figure or refusal
 // on another: before the new table's figure lands it shows the dash. And while it is hidden it
@@ -7390,6 +7432,7 @@ test("every flow is replayed except the ones that say why they cannot be", () =>
       "Close the shift over or short, giving a reason",
       "Close two counted drawers together",
       "Count another till's drawer, blind",
+      "Enter a record of the store's own kind, such as a reservation",
       "Open the cash drawer without a sale",
       "Settle a dine-in table in cash, typing the amount handed over",
       "Start another till's drawer",
@@ -7433,6 +7476,7 @@ const ROUTED_SCREENS = [
   },
   { path: "/guests", title: "confirm.title" },
   { path: "/today", shows: '[data-outcome="today-takings"]' },
+  { path: "/records", title: "records.title" },
   { path: "/shift", shows: '[data-step="openShift"]' },
   { path: "/devices", shows: '[data-outcome="till"]' },
   { path: "/setup", title: "setup.title" },
