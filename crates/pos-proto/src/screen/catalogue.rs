@@ -116,12 +116,19 @@ pub static CATALOGUE: &[Component] = &[
     },
     Component {
         component_id: "page_header",
-        properties: &[Property {
-            name: "title_key",
-            kind: TranslationKey,
-            required: true,
-            ..PROPERTY
-        }],
+        properties: &[
+            Property {
+                name: "title_key",
+                kind: TranslationKey,
+                required: true,
+                ..PROPERTY
+            },
+            Property {
+                name: "size",
+                tokens: &["large", "extra_large"],
+                ..PROPERTY
+            },
+        ],
         summary: "A screen's heading.",
         ..BASE
     },
@@ -210,6 +217,60 @@ pub static CATALOGUE: &[Component] = &[
         reads: "bill",
         summary: "Taking payment: the amount due and the bill's arithmetic, the tenders, splitting \
                   and reductions, the settle and its answer, or what ended the bill.",
+        ..BASE
+    },
+    Component {
+        component_id: "kds_frame",
+        holds_children: true,
+        summary: "The kitchen board's frame, which wakes the board's sound on a touch.",
+        ..BASE
+    },
+    Component {
+        component_id: "kds_header",
+        reads: "kitchen",
+        summary: "The kitchen board's heading, its clock and the switches for sound and marking dishes.",
+        ..BASE
+    },
+    Component {
+        component_id: "kds_notices",
+        reads: "kitchen",
+        summary: "A bump the store refused, marking dishes sold out, and a sound the device blocked.",
+        ..BASE
+    },
+    Component {
+        component_id: "kds_stations",
+        reads: "kitchen",
+        summary: "The stations the board can show, when the store has more than one.",
+        ..BASE
+    },
+    Component {
+        component_id: "kds_tickets",
+        reads: "kitchen",
+        summary: "The tickets for the station shown, each bumped with a tap, and how many lines wait.",
+        ..BASE
+    },
+    Component {
+        component_id: "expo_tickets",
+        reads: "kitchen",
+        summary: "The pass: a bump the store refused, every order's ready lines, and how many wait.",
+        ..BASE
+    },
+    Component {
+        component_id: "confirm_queue",
+        reads: "guests",
+        summary: "The guests' orders waiting for staff to confirm or refuse, with the reason a refusal cites.",
+        ..BASE
+    },
+    Component {
+        component_id: "counter_frame",
+        holds_children: true,
+        summary: "The counter's frame, in a narrow column at the screen's centre.",
+        ..BASE
+    },
+    Component {
+        component_id: "counter_flow",
+        reads: "counter",
+        summary: "The counter: a new order, how each guest is asked, and the open counter orders, or the one chosen.",
         ..BASE
     },
 ];

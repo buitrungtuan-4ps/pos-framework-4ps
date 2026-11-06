@@ -48,7 +48,7 @@ import { writesPending } from "../state/edge-write";
 import { fireCourse, fireOrder, voidLine } from "../state/order-writes";
 import { releaseTable, setItemSoldOut } from "../state/floor-writes";
 import { errorMessage } from "../lib/errors";
-import { OrderContext, type OrderRegions } from "../package/order-regions";
+import { RegionsContext, type Regions } from "../package/regions";
 import { NO_ACTS, PackageScreen } from "../package/screen";
 import { useInFlight } from "../lib/in-flight";
 import { createPrint } from "../state/print-writes";
@@ -614,8 +614,10 @@ export function Order() {
     const item = menuItemMap().get(button.menu_item_id);
     return <Show when={item}>{(found) => sellButton(found(), button.label)}</Show>;
   };
-  const regions: OrderRegions = {
-    header: () => <div class="mb-3 flex flex-wrap items-center gap-3">
+  const regions: Regions = {
+    // Wraps rather than squeezes: on a narrow phone, in a longer language, the move button goes to a
+    // line of its own instead of breaking every word in the row onto two.
+    order_header: () => <div class="mb-3 flex flex-wrap items-center gap-3">
         <a
           href={walkIn() ? "/counter" : "/"}
           class="inline-flex min-h-touch items-center text-sm text-ink-muted no-underline"
@@ -662,7 +664,7 @@ export function Order() {
           </button>
         </Show>
       </div>,
-    notices: () => <>
+    order_notices: () => <>
       <Show when={preBill()}>
         {(prints) => (
           <p class="mb-3 text-sm text-ink-muted" role="status" data-outcome="pre-bill-print">
@@ -680,7 +682,9 @@ export function Order() {
         )}
       </Show>
       </>,
-    move: () => <Show when={moving() && movable()}>
+    // The free tables the guests can move to. A tap moves them, with their order, and opens the new
+    // table; the table they leave waits to be cleared.
+    order_move: () => <Show when={moving() && movable()}>
         <div class="mb-3 rounded-token border border-line bg-surface p-3">
           <div class="mb-1 flex items-center justify-between gap-2">
             <h2 class="font-semibold">{t("order.move_title", { label: label() })}</h2>
@@ -721,7 +725,11 @@ export function Order() {
           </Show>
         </div>
       </Show>,
-    bill: () => <div class="tablet:fixed tablet:inset-x-0 tablet:bottom-0 tablet:z-10 tablet:max-h-[85dvh] tablet:overflow-y-auto tablet:rounded-t-token tablet:border-t tablet:border-line tablet:bg-canvas tablet:px-4 tablet:pb-4 tablet:shadow-overlay terminal:static terminal:z-auto terminal:max-h-none terminal:overflow-visible terminal:rounded-none terminal:border-0 terminal:bg-transparent terminal:p-0 terminal:shadow-none">
+    // The bill. A phone and a terminal draw it in the column, as they always did. A tablet slides it
+    // up from the bottom of the screen: closed, it shows the bar saying what is on it, the seat row,
+    // and the two buttons that end the screen, so sending and paying stay one tap away; open, it is
+    // the whole bill, over the menu, with the bar at its top to close it.
+    order_bill: () => <div class="tablet:fixed tablet:inset-x-0 tablet:bottom-0 tablet:z-10 tablet:max-h-[85dvh] tablet:overflow-y-auto tablet:rounded-t-token tablet:border-t tablet:border-line tablet:bg-canvas tablet:px-4 tablet:pb-4 tablet:shadow-overlay terminal:static terminal:z-auto terminal:max-h-none terminal:overflow-visible terminal:rounded-none terminal:border-0 terminal:bg-transparent terminal:p-0 terminal:shadow-none">
         <button
           type="button"
           class="mb-3 hidden min-h-touch w-full items-center justify-between gap-3 bg-canvas py-2 text-left tablet:sticky tablet:top-0 tablet:flex terminal:hidden"
@@ -1361,7 +1369,8 @@ export function Order() {
           </Show>
         </div>
       </div>,
-    menuToolbar: () => <>
+    // On a tablet the menu is the screen, with room at its foot for the closed panel.
+    menu_toolbar: () => <>
       <div class="mb-2 flex items-center justify-between gap-2">
         <h2 class="text-sm font-semibold text-ink-muted">{t("order.menu")}</h2>
         <Show
@@ -1406,7 +1415,7 @@ export function Order() {
         </p>
       </Show>
       </>,
-    menuFields: () => <>
+    menu_fields: () => <>
       {/*
         The box that makes a long menu usable. `type="search"` rather than `text` so the browser
         gives the operator its own clear affordance — one control fewer to draw, and the one every
@@ -1447,7 +1456,7 @@ export function Order() {
         </span>
       </label>
       </>,
-    menuButtons: () => <Show when={!searching()} fallback={searchResults()}>
+    menu_buttons: () => <Show when={!searching()} fallback={searchResults()}>
         {/*
           Two ways to draw the same price book. When the console has arranged buttons on the
           `layout` node (ADR-0066, C4) the till groups by the categories it authored, in the order
@@ -1519,8 +1528,8 @@ export function Order() {
   };
 
   return (
-    <OrderContext.Provider value={regions}>
+    <RegionsContext.Provider value={regions}>
       <PackageScreen screenId="order" host={NO_ACTS} />
-    </OrderContext.Provider>
+    </RegionsContext.Provider>
   );
 }

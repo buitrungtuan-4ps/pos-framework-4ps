@@ -16,19 +16,8 @@ import { Show, type JSX } from "solid-js";
 
 import { PageHeader } from "../components/ui";
 import { FloorAlerts, FloorPlan } from "../screens/Floor";
-import {
-  MenuButtons,
-  MenuFields,
-  MenuToolbar,
-  OrderBill,
-  OrderColumn,
-  OrderHeader,
-  OrderLayout,
-  OrderMenu,
-  OrderMove,
-  OrderNotices,
-} from "./order-regions";
-import { PayBack, PayFlow } from "./pay-regions";
+import { OrderColumn, OrderLayout, OrderMenu } from "./order-regions";
+import { region } from "./regions";
 import { actionProperty, Children, packageLabel, textProperty, useHost, type Implementations, type NodeProps } from "./render";
 
 /** Its children down the screen, or across it. */
@@ -97,7 +86,8 @@ function ScreenFrame(props: NodeProps): JSX.Element {
 
 /** A screen's heading. */
 function Header(props: NodeProps): JSX.Element {
-  return <PageHeader title={packageLabel(textProperty(props.node, "title_key"))} />;
+  const size = textProperty(props.node, "size") === "extra_large" ? "xl" : "lg";
+  return <PageHeader title={packageLabel(textProperty(props.node, "title_key"))} size={size} />;
 }
 
 /** Every catalogued component's implementation. */
@@ -111,14 +101,23 @@ export const IMPLEMENTATIONS: Implementations = {
   floor_plan: FloorPlan,
   order_layout: OrderLayout,
   order_column: OrderColumn,
-  order_header: OrderHeader,
-  order_notices: OrderNotices,
-  order_move: OrderMove,
-  order_bill: OrderBill,
+  order_header: region("order_header"),
+  order_notices: region("order_notices"),
+  order_move: region("order_move"),
+  order_bill: region("order_bill"),
   order_menu: OrderMenu,
-  menu_toolbar: MenuToolbar,
-  menu_fields: MenuFields,
-  menu_buttons: MenuButtons,
-  pay_back: PayBack,
-  pay_flow: PayFlow,
+  menu_toolbar: region("menu_toolbar"),
+  menu_fields: region("menu_fields"),
+  menu_buttons: region("menu_buttons"),
+  pay_back: region("pay_back"),
+  pay_flow: region("pay_flow"),
+  kds_frame: region("kds_frame"),
+  kds_header: region("kds_header"),
+  kds_notices: region("kds_notices"),
+  kds_stations: region("kds_stations"),
+  kds_tickets: region("kds_tickets"),
+  expo_tickets: region("expo_tickets"),
+  confirm_queue: region("confirm_queue"),
+  counter_frame: region("counter_frame"),
+  counter_flow: region("counter_flow"),
 };

@@ -55,7 +55,7 @@ import { openForPay } from "../state/open-for-pay";
 import { useSplitPlan } from "../state/split-plan";
 import { useSplitActs } from "../state/split-acts";
 import { printOutcomeKey } from "../lib/print";
-import { PayContext, type PayRegions } from "../package/pay-regions";
+import { RegionsContext, type Regions } from "../package/regions";
 import { NO_ACTS, PackageScreen } from "../package/screen";
 import { asksApprover, can } from "../state/permissions";
 import { createPrint } from "../state/print-writes";
@@ -690,15 +690,15 @@ export function Pay() {
     </div>
   );
 
-  // The regions the default package's `pay` screen arranges (`../package/pay-regions.tsx`).
-  const regions: PayRegions = {
-    back: () => <a
+  // The regions the default package's `pay` screen arranges (`../package/regions.tsx`).
+  const regions: Regions = {
+    pay_back: () => <a
       href={`/table/${params.id}`}
       class="inline-flex min-h-touch items-center text-sm text-ink-muted no-underline"
     >
       {t("common.back_order")}
     </a>,
-    flow: () => <Show
+    pay_flow: () => <Show
       when={done()}
       fallback={
         <Show when={!voided() && ended() === null && acts.pending() === null} fallback={voided() ? voidedPanel() : acts.pending() !== null ? <PendingSettle phase={acts.pending()?.phase ?? "sending"} act={acts.pending()?.act} amount={formatAmount(money(currency(), total()))} onLeave={() => navigate("/")} /> : <BillEnded how={ended() ?? "settled"} tableId={params.id} />}>
@@ -1340,8 +1340,8 @@ export function Pay() {
     </Show>,
   };
   return (
-    <PayContext.Provider value={regions}>
+    <RegionsContext.Provider value={regions}>
       <PackageScreen screenId="pay" host={NO_ACTS} />
-    </PayContext.Provider>
+    </RegionsContext.Provider>
   );
 }
