@@ -7,6 +7,7 @@
 
 import type { EdgeMethod, EdgeUrlFor } from "./paths";
 import { clearDeviceToken, deviceToken, edgeBase, rememberPairing } from "./credentials";
+import { pageIsLeaving } from "../lib/after-paint";
 import { observeEdgeVersion } from "./edgeVersion";
 import { type LeaseStanding, observeLeaseStanding } from "./leaseStanding";
 import type {
@@ -218,6 +219,8 @@ async function request<T, M extends EdgeMethod = EdgeMethod>(
     method,
     headers: authHeaders(body !== undefined),
     body: body === undefined ? undefined : JSON.stringify(body),
+    // A write sent as the page leaves outlives it (`../lib/after-paint.ts`).
+    keepalive: method !== "GET" && pageIsLeaving(),
   });
   // Which release answered (ADR-0111). Before the `ok` check on purpose: the call that just failed
   // is exactly the one an operator is looking at when they ask which version this box is running.

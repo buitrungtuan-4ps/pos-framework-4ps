@@ -3,7 +3,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { afterPaint } from "../src/lib/after-paint";
+import { afterPaint, pageIsLeaving } from "../src/lib/after-paint";
 
 afterEach(() => {
     vi.useRealTimers();
@@ -40,5 +40,23 @@ describe("after the paint", () => {
         await vi.advanceTimersByTimeAsync(1);
         await waiting;
         expect(done).toBe(true);
+    });
+
+    it("goes ahead at once when the page leaves, and says it is leaving", async () => {
+        vi.stubGlobal("requestAnimationFrame", () => 1);
+        let done = false;
+        const waiting = afterPaint().then(() => {
+            done = true;
+        });
+        await Promise.resolve();
+        expect(done).toBe(false);
+        expect(pageIsLeaving()).toBe(false);
+        dispatchEvent(new Event("pagehide"));
+        await waiting;
+        expect(done).toBe(true);
+        expect(pageIsLeaving()).toBe(true);
+        await afterPaint();
+        dispatchEvent(new Event("pageshow"));
+        expect(pageIsLeaving()).toBe(false);
     });
 });
