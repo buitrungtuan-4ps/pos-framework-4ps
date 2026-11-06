@@ -1072,6 +1072,9 @@ impl SubjectStore for SqliteStore {
             collected_at_ms: record.collected_at.as_milliseconds_since_epoch(),
             fields_json,
             masked_at_ms: record.masked_at.map(Timestamp::as_milliseconds_since_epoch),
+            retain_until_ms: record
+                .retain_until
+                .map(Timestamp::as_milliseconds_since_epoch),
         });
         Ok(())
     }
@@ -1124,6 +1127,11 @@ fn into_record(row: &SubjectWrite) -> Result<SubjectRecord, PortError> {
         })?,
         masked_at: row
             .masked_at_ms
+            .map(Timestamp::from_milliseconds_since_epoch)
+            .transpose()
+            .map_err(|_ignored| bad_stamp())?,
+        retain_until: row
+            .retain_until_ms
             .map(Timestamp::from_milliseconds_since_epoch)
             .transpose()
             .map_err(|_ignored| bad_stamp())?,

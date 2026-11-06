@@ -55,6 +55,12 @@ pub const REDACTION: &str = "[REDACTED]";
 /// filed. `collected_at` is when the data was captured and is what the retention clock counts from;
 /// masking preserves it, because "held from then until then" is an audit trail rather than personal
 /// data.
+///
+/// A record may carry its own expiry, `retain_until`
+/// ([ADR-0206](../../../docs/adr/0206-a-personal-custom-value-stays-on-its-store-and-expires-on-its-own-clock.md)
+/// decision 1): a personal custom value is kept for the days its field declares, not for the
+/// store's default. A record without one, such as a B2B buyer's (ADR-0107), is swept by the store's
+/// default as before.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct SubjectRecord {
@@ -65,16 +71,43 @@ pub struct SubjectRecord {
     pub fields: BTreeMap<String, String>,
     /// When this record was masked, or `None` while it still holds personal data.
     pub masked_at: Option<Timestamp>,
+    /// When this record expires, or `None` to keep the store's default retention. Kept by masking,
+    /// as `collected_at` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retain_until: Option<Timestamp>,
 }
 
 impl SubjectRecord {
-    /// A fresh, unmasked record collected at `collected_at`.
+    /// A fresh, unmasked record collected at `collected_at`, kept for the store's default retention.
     #[must_use]
     pub fn new(collected_at: Timestamp, fields: BTreeMap<String, String>) -> Self {
         Self {
             collected_at,
             fields,
             masked_at: None,
+            retain_until: None,
+        }
+    }
+
+    /// This record, expiring at `retain_until` rather than at the store's default.
+    #[must_use]
+    pub fn retained_until(self, retain_until: Timestamp) -> Self {
+        Self {
+            retain_until: Some(retain_until),
+            ..self
+        }
+    }
+
+    /// Whether the sweep masks this record: unmasked, and either past its own `retain_until` at
+    /// `now`, or, without one, collected at or before the store's `cutoff`.
+    #[must_use]
+    pub fn is_due(&self, cutoff: Timestamp, now: Timestamp) -> bool {
+        if self.is_masked() {
+            return false;
+        }
+        match self.retain_until {
+            Some(retain_until) => retain_until <= now,
+            None => self.collected_at <= cutoff,
         }
     }
 
@@ -102,6 +135,7 @@ impl SubjectRecord {
                 .map(|key| (key.clone(), REDACTION.to_owned()))
                 .collect(),
             masked_at: Some(now),
+            retain_until: self.retain_until,
         }
     }
 }
@@ -120,9 +154,10 @@ impl SubjectRecord {
 ///    be able to fail a transaction that is otherwise sound.
 /// 3. **`fetch` reads one subject**, and reports the record as stored — including its real
 ///    `masked_at`, so a caller can tell whether anything is left.
-/// 4. **`mask_before` is one-way and idempotent.** It scrubs unmasked records collected at or before
-///    the cutoff, keeps `subject_id` and `collected_at`, and returns how many it changed. Running it
-///    twice changes nothing the second time.
+/// 4. **`mask_before` is one-way and idempotent.** It scrubs the unmasked records
+///    [`SubjectRecord::is_due`] names — past their own `retain_until`, or, without one, collected at
+///    or before the cutoff — keeps `subject_id`, `collected_at` and `retain_until`, and returns how
+///    many it changed. Running it twice changes nothing the second time.
 pub trait SubjectStore: Transactional {
     /// Buffers `record` for `subject_id` into the caller's transaction. Realised at
     /// [`crate::TxContext::commit`].
@@ -150,8 +185,9 @@ pub trait SubjectStore: Transactional {
         subject_id: SubjectId,
     ) -> impl Future<Output = Result<Option<SubjectRecord>, PortError>> + Send;
 
-    /// Masks every unmasked record collected at or before `cutoff`, stamping `now`. Returns how many
-    /// records were changed.
+    /// Masks every unmasked record whose `retain_until` is at or before `now`, and every unmasked
+    /// record without one collected at or before `cutoff`, stamping `now`. Returns how many records
+    /// were changed.
     ///
     /// The retention sweep. Not transactional: it destroys data rather than accompanying a write, so
     /// there is nothing for it to be atomic *with*, and a sweep that stops halfway has simply scrubbed
@@ -214,5 +250,31 @@ mod tests {
 
         assert_eq!(once, twice, "a second sweep changes nothing");
         assert_eq!(twice.masked_at, Some(at(2_000)));
+    }
+
+    #[test]
+    fn a_record_with_its_own_expiry_is_due_at_it_whatever_the_cutoff() {
+        let kept = buyer().retained_until(at(5_000));
+
+        assert!(!kept.is_due(at(9_000), at(4_999)), "before its expiry");
+        assert!(kept.is_due(at(0), at(5_000)), "at its expiry");
+        assert_eq!(kept.masked(at(5_000)).retain_until, Some(at(5_000)));
+    }
+
+    #[test]
+    fn a_record_without_an_expiry_is_due_at_the_cutoff() {
+        assert!(buyer().is_due(at(1_000), at(0)));
+        assert!(!buyer().is_due(at(999), at(9_000)));
+        assert!(!buyer().masked(at(2_000)).is_due(at(9_000), at(9_000)));
+    }
+
+    #[test]
+    fn a_record_written_before_expiries_reads_back_without_one() {
+        let mut json = serde_json::to_value(buyer()).expect("a record encodes");
+        assert_eq!(json.get("retain_until"), None, "no expiry, no key");
+        json.as_object_mut()
+            .map(|fields| fields.remove("retain_until"));
+        let record: SubjectRecord = serde_json::from_value(json).expect("an older record decodes");
+        assert_eq!(record, buyer());
     }
 }

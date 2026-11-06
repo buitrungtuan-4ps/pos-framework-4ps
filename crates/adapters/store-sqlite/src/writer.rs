@@ -154,6 +154,8 @@ pub(crate) struct SubjectWrite {
     pub(crate) collected_at_ms: i64,
     pub(crate) fields_json: String,
     pub(crate) masked_at_ms: Option<i64>,
+    /// The record's own expiry (ADR-0206 decision 1), or `None` for the store's default retention.
+    pub(crate) retain_until_ms: Option<i64>,
 }
 
 /// A device-registry row in the writer thread's own terms (ADR-0091).
@@ -337,8 +339,9 @@ pub(crate) enum Command {
         subject_id: String,
         reply: oneshot::Sender<Result<Option<SubjectWrite>, PortError>>,
     },
-    /// The retention sweep: scrub every unmasked subject collected at or before a cutoff, returning
-    /// how many rows changed (ADR-0107, ADR-0035).
+    /// The retention sweep: scrub every unmasked subject past its own expiry, or without one
+    /// collected at or before a cutoff, returning how many rows changed (ADR-0107, ADR-0035,
+    /// ADR-0206).
     MaskSubjects {
         store_id: StoreId,
         cutoff_ms: i64,
@@ -1300,18 +1303,20 @@ fn commit(
         // policy anyone relies on — it is the absence of a failure mode, because a retried write must
         // not be able to fail a transaction that is otherwise sound (ADR-0107).
         tx.execute(
-            "INSERT INTO subjects (store_id, subject_id, collected_at, fields, masked_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)
+            "INSERT INTO subjects (store_id, subject_id, collected_at, fields, masked_at, retain_until)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT (store_id, subject_id) DO UPDATE SET
                  collected_at = excluded.collected_at,
                  fields       = excluded.fields,
-                 masked_at    = excluded.masked_at",
+                 masked_at    = excluded.masked_at,
+                 retain_until = excluded.retain_until",
             params![
                 subject.store_id.to_string(),
                 subject.subject_id,
                 subject.collected_at_ms,
                 subject.fields_json,
                 subject.masked_at_ms,
+                subject.retain_until_ms,
             ],
         )
         .map_err(|error| db_error(PortName::SubjectStore, error))?;
@@ -1329,7 +1334,7 @@ fn fetch_subject(
     let port = PortName::SubjectStore;
     let mut statement = conn
         .prepare_cached(
-            "SELECT collected_at, fields, masked_at FROM subjects
+            "SELECT collected_at, fields, masked_at, retain_until FROM subjects
              WHERE store_id = ?1 AND subject_id = ?2",
         )
         .map_err(|error| db_error(port, error))?;
@@ -1345,11 +1350,13 @@ fn fetch_subject(
         collected_at_ms: row.get(0).map_err(|error| db_error(port, error))?,
         fields_json: row.get(1).map_err(|error| db_error(port, error))?,
         masked_at_ms: row.get(2).map_err(|error| db_error(port, error))?,
+        retain_until_ms: row.get(3).map_err(|error| db_error(port, error))?,
     }))
 }
 
 /// The retention sweep (ADR-0107, ADR-0035): replace every field *value* with the redaction
-/// sentinel and stamp `masked_at`, for unmasked rows collected at or before the cutoff.
+/// sentinel and stamp `masked_at`, for unmasked rows whose own `retain_until` is at or before now,
+/// and unmasked rows without one collected at or before the cutoff (ADR-0206 decision 1).
 ///
 /// `json_group_object` rebuilds the document from its own keys, so the field names survive and the
 /// values do not — which is what keeps "what kind of data was held" knowable after the data is gone.
@@ -1367,7 +1374,8 @@ fn mask_subjects(
             "UPDATE subjects SET
                  fields = (SELECT json_group_object(key, ?4) FROM json_each(subjects.fields)),
                  masked_at = ?3
-             WHERE store_id = ?1 AND collected_at <= ?2 AND masked_at IS NULL",
+             WHERE store_id = ?1 AND masked_at IS NULL
+               AND (retain_until <= ?3 OR (retain_until IS NULL AND collected_at <= ?2))",
             params![store_id.to_string(), cutoff_ms, now_ms, REDACTION],
         )
         .map_err(|error| db_error(port, error))?;
