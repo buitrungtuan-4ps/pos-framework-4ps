@@ -3,7 +3,7 @@
 // the edge decides.
 //
 // - **The screen moves at once.** `paint` applies the provisional change and hands back its undo;
-//   one request goes to the edge. Nothing is queued: the edge is the only writer (decision 5).
+//   one request goes to the edge, once the frame that shows the change is produced (ADR-0208). Nothing is queued: the edge is the only writer (decision 5).
 // - **The edge confirms.** Its answer, or its event, whichever lands first, makes the change real;
 //   `confirmed` takes the answer.
 // - **A refusal rolls back,** and the caller shows the refusal's own sentence.
@@ -16,6 +16,7 @@
 import { createSignal } from "solid-js";
 
 import { ApiError } from "../api/client";
+import { afterPaint } from "../lib/after-paint";
 import type { ACTIONS } from "../package/actions";
 import { state } from "./store";
 
@@ -53,6 +54,8 @@ export async function editWrite<T>(action: EdgeWriteId, write: EdgeWrite<T>): Pr
   const counted = write.holdsPayment !== false ? 1 : 0;
   setInFlight((count) => count + counted);
   try {
+    // The request leaves once the change is on the screen, so the tap's frame is the paint alone.
+    await afterPaint();
     const answer = await write.send();
     write.confirmed?.(answer);
     return answer;

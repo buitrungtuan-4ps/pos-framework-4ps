@@ -2,7 +2,7 @@
 // at once and takes no second tap; a refusal says its own sentence; no answer is said unconfirmed,
 // never rolled back to a re-read and never sent again.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "../src/api/client";
 import { t } from "../src/i18n";
@@ -32,7 +32,8 @@ describe("a print", () => {
     // A print changes no money: payment does not wait for it.
     expect(writesPending()).toBe(false);
     await print.run("billing.check.print", send, (printed) => answers.push(printed));
-    expect(sent).toBe(1);
+    // The request leaves once the tap's frame is produced (ADR-0208), and only once.
+    await vi.waitFor(() => expect(sent).toBe(1));
     answer("PRINTED");
     await first;
     expect(answers).toEqual(["PRINTED"]);

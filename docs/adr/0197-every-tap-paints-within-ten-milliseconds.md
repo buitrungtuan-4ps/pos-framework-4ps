@@ -5,6 +5,9 @@
 Replaces roadmap-v3 PF1's targets for the till · Relates to
 [ADR-0109](0109-counting-the-taps-an-operator-makes.md),
 [ADR-0188](0188-seating-a-free-table-is-painted-at-once.md)
+· **Amended by** [ADR-0208](0208-a-tap-is-measured-to-its-frame-ready-and-gated-per-pull-request.md) — the
+metric ends at the frame ready to paint, a tap never misses a frame, and the gate runs on every pull
+request at 2×
 
 Accepted by the owner on 2026-11-03 through approval of the overhaul plan
 ([`docs/roadmap-v4.md`](../roadmap-v4.md)).

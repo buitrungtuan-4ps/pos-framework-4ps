@@ -1902,13 +1902,20 @@ test("a dish marked sold out shows at once, a refusal puts it back, a lost answe
     await answered;
 
     let restores = 0;
+    let lost = () => {};
+    const answerLost = new Promise((resolve) => {
+      lost = resolve;
+    });
     await page.route("**/api/menu/*/restore", async (route) => {
       restores += 1;
       await route.fetch();
       await route.abort("connectionreset");
+      lost();
     });
     await mark.click();
     await expect(page.locator('[data-outcome="item-sold-out"]')).toHaveCount(0);
+    // The request leaves after the frame that shows the change (ADR-0208), and only once.
+    await answerLost;
     expect(restores).toBe(1);
   } finally {
     await edge.stop();

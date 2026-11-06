@@ -3,6 +3,7 @@ import { A, useLocation } from "@solidjs/router";
 
 import { api, deviceToken } from "../api/client";
 import { type MessageKey, locale, setLocale, t } from "../i18n";
+import { afterPaint } from "../lib/after-paint";
 import { can, canAny } from "../state/permissions";
 import { signedOut } from "../state/session";
 import { drawerPerTill, kdsEnabled, loadSync, state, tablesEnabled } from "../state/store";
@@ -110,7 +111,9 @@ function keepShownInView(path: () => string): (nav: HTMLElement) => void {
   let held: HTMLElement | undefined;
   createEffect(() => {
     void path();
-    queueMicrotask(() =>
+    // After the new screen is painted: scrolling reads the layout, and inside the tap it made the
+    // screen switch's frame lay the page out twice (ADR-0208).
+    void afterPaint().then(() =>
       held?.querySelector("a.text-ink")?.scrollIntoView({ block: "nearest", inline: "nearest" }),
     );
   });
