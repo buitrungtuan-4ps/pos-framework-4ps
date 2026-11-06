@@ -564,6 +564,17 @@ jobs:
       - name: say which flow failed
         if: failure()
         run: node .github/scripts/replay-summary.mjs ui/test-results/report.json >> "$GITHUB_STEP_SUMMARY"
+      # The page snapshot Playwright writes beside each failed flow (`error-context.md`), printed into
+      # the log, so a failure can be diagnosed from the log alone, without downloading the traces.
+      - name: print the failed flows' page snapshots
+        if: failure()
+        run: |
+          find ui/test-results -name error-context.md -print0 | while IFS= read -r -d '' file; do
+            echo "::group::$file"
+            head -c 20000 "$file"
+            echo
+            echo "::endgroup::"
+          done
       # The trace of a failed replay is the difference between "a tap did not
       # land" and knowing which one. Only on failure, and only for a fortnight.
       - name: keep the traces of whatever failed
