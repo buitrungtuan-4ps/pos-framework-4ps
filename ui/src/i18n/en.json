@@ -322,6 +322,7 @@
   "order.walk_in": "Counter order",
   "order.sending": "Sending…",
   "order.writes_pending": "Waiting for the store to confirm the last change.",
+  "package.needs_update": "This part of the screen needs a newer version of the till. Ask your manager to update it.",
   "pair.hint": "Enter the six-digit code shown on the store server.",
   "pair.paired": "Paired",
   "pair.paired_hint": "This device is now trusted by the store. Sign in to start.",
