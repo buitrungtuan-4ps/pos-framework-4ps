@@ -1,11 +1,11 @@
 # ADR-0202 — CEL as the crate and the spike found it
 
-**Status** Proposed · **Owner** @maintainers-architecture · **Date** 2026-11-03
+**Status** Accepted · **Owner** @maintainers-architecture · **Date** 2026-11-03
 · Amends [ADR-0193](0193-conditions-and-reactions-are-written-in-cel.md) decisions 1, 2 and 3
 · Relates to [ADR-0192](0192-a-flow-is-a-graph-of-steps-the-edge-re-checks.md),
 [ADR-0197](0197-every-tap-paints-within-ten-milliseconds.md)
 
-Proposed: it waits on the owner's acceptance of what phase 0's spike (`spike/cel-on-both-sides`,
+Accepted by the owner on 2026-11-05. It records what phase 0's spike (`spike/cel-on-both-sides`,
 `spikes/cel/FINDINGS.md`) and the `pos-rules` crate found about ADR-0193's assumptions.
 
 ## Context
