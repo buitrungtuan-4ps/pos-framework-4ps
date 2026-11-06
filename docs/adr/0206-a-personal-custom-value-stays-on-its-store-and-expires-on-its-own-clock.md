@@ -1,16 +1,14 @@
 # ADR-0206 — A personal custom value stays on its store and expires on its own clock
 
-**Status** Proposed · **Owner** @maintainers-architecture · **Date** 2026-11-04
+**Status** Accepted · **Owner** @maintainers-architecture · **Date** 2026-11-04
 · Amends [ADR-0194](0194-custom-data-is-declared-and-personal-fields-are-kept-apart.md) decisions 4
 and 5 · Extends [ADR-0107](0107-the-buyer-is-a-subject.md) (the `SubjectStore` port)
 · Relates to [ADR-0035](0035-retention-and-pii-masking.md), [ADR-0076](0076-subject-request-tooling.md),
 [ADR-0124](0124-a-store-that-can-be-restored.md), [ADR-0160](0160-everything-a-store-runs-differently-is-published-configuration.md)
 
-Proposed: decisions 1, 3, 4, 5, 6, 9 and 10 wait on the owner's acceptance, because they change a
-port, the handling of personal data, or what prints. Decisions 2, 7, 8 and 11 were set by the
-coordinator under ADR-0194 and are recorded here, so that phase 3 builds from one record; decision 7
-takes effect when this record is accepted. Until then, the cloud refuses to publish any field with
-`personal: true`.
+Accepted by the owner on 2026-11-06, every decision as written. Decisions 2, 7, 8 and 11 were set by
+the coordinator under ADR-0194 and are recorded here, so that phase 3 builds from one record; decision
+7 takes effect with this acceptance.
 
 ## Context
 
