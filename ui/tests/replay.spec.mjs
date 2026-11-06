@@ -2017,6 +2017,9 @@ test("the order screen kept beside the floor never shows the last table's lines,
     await page.unroute("**/api/orders/*/fire");
     // The refused send puts the line back, and the screen reads the figure again once that is drawn:
     // a read of the screen while it shows, so the count of what the hidden screen does starts after.
+    // So does the salad's own event, which arrives on the live link, not as a request the network
+    // wait sees: its line is still sending until then, and its arrival reads the figure again.
+    await expect(page.locator('[data-outcome="writes-pending"]')).toHaveCount(0);
     await page.waitForLoadState("networkidle");
 
     // On the floor the order screen is hidden: it writes nothing and reads nothing.
