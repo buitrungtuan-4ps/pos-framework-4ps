@@ -445,12 +445,18 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.ui == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.rust == 'true') }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # `pnpm build` builds the till's rules module first (`pnpm rules`, crates/pos-till-rules for
+    # wasm32-unknown-unknown, ADR-0193 decision 2), so this job needs the pinned Rust toolchain;
+    # rust-toolchain.toml lists the wasm32 target, which `rust-setup` installs.
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: ui
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: ui
       # `node-setup` installs the pinned pnpm major, retrying a failed fetch --
       # see that action for what a bare install cost. `--frozen-lockfile` fails if
       # ui/pnpm-lock.yaml is out of date.

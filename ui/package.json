@@ -6,9 +6,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && pnpm i18n:lint && pnpm i18n:parity && pnpm contrast && pnpm tokens && pnpm classes && pnpm steps && pnpm test && vite build",
+    "build": "pnpm rules && tsc --noEmit && pnpm i18n:lint && pnpm i18n:parity && pnpm contrast && pnpm tokens && pnpm classes && pnpm steps && pnpm test && vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "rules": "node scripts/till-rules.mjs",
     "gen:api": "node ../packages/shared/scripts/gen-api.mjs ../docs/openapi-edge.json src/api/generated/edge.d.ts",
     "lint": "eslint . && node ../packages/shared/scripts/eslint-baseline.mjs --check",
     "i18n:lint": "node ../packages/shared/scripts/i18n-lint.mjs",

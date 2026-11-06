@@ -590,6 +590,8 @@ test("a send whose answer is lost is read again, and the lines show fired, sent 
     await expect(page.locator('[data-outcome="line-sending"]')).toHaveCount(0);
     await expect(page.locator('[data-outcome="line-unsent"]')).toHaveCount(0);
     await expect.poll(() => fires).toBe(1);
+    // The answer lost on purpose is fetched from the edge first: wait for it before the edge stops.
+    await page.unrouteAll({ behavior: "wait" });
   } finally {
     await edge.stop();
   }
@@ -1897,6 +1899,9 @@ test("the order screen kept beside the floor never shows the last table's lines,
     await page.locator('[data-step="fireOrder"]').click();
     await expect(page.getByRole("alert")).toContainText("That is not possible right now");
     await page.unroute("**/api/orders/*/fire");
+    // The refused send puts the line back, and the screen reads the figure again once that is drawn:
+    // a read of the screen while it shows, so the count of what the hidden screen does starts after.
+    await page.waitForLoadState("networkidle");
 
     // On the floor the order screen is hidden: it writes nothing and reads nothing.
     const whileHidden = [];
@@ -1986,6 +1991,8 @@ test("a dish marked sold out shows at once, a refusal puts it back, a lost answe
     // The request leaves after the frame that shows the change (ADR-0208), and only once.
     await answerLost;
     await expect.poll(() => restores).toBe(1);
+    // The answer lost on purpose is fetched from the edge first: wait for it before the edge stops.
+    await page.unrouteAll({ behavior: "wait" });
   } finally {
     await edge.stop();
   }
@@ -2022,6 +2029,8 @@ test("a table cleared shows free at once, and a lost or unsent clean is read aga
     // it has left, and the floor is read again after its answer is lost.
     await expect.poll(() => cleans).toBe(1);
     await expect(card).toContainText("Free");
+    // The answer lost on purpose is fetched from the edge first: wait for it before the edge stops.
+    await page.unrouteAll({ behavior: "wait" });
   } finally {
     await edge.stop();
   }
@@ -2055,6 +2064,8 @@ test("a table given back shows free at once, a refusal keeps it seated, a lost a
     await navigateTo(page, "/");
     await expect(page.locator('[data-step="onCard"]', { hasText: "Table 1" })).toContainText("Free");
     await expect.poll(() => releases).toBe(1);
+    // The answer lost on purpose is fetched from the edge first: wait for it before the edge stops.
+    await page.unrouteAll({ behavior: "wait" });
   } finally {
     await edge.stop();
   }
@@ -2088,6 +2099,8 @@ test("a bill opened whose answer is lost is read again, and is not opened twice"
     await page.locator('[data-step="takePayment"]').click();
     await expect(page.locator('[data-step="payCash"]')).toBeEnabled();
     await expect.poll(() => opens).toBe(1);
+    // The answer lost on purpose is fetched from the edge first: wait for it before the edge stops.
+    await page.unrouteAll({ behavior: "wait" });
   } finally {
     await edge.stop();
   }
@@ -2225,6 +2238,8 @@ test("a pre-bill says it is printing at once, holds no payment, a refusal says w
     await button.click();
     await expect(page.getByRole("alert").first()).toContainText("The print is not confirmed");
     await expect.poll(() => prints).toBe(1);
+    // The answer lost on purpose is fetched from the edge first: wait for it before the edge stops.
+    await page.unrouteAll({ behavior: "wait" });
   } finally {
     await edge.stop();
   }
@@ -2253,6 +2268,8 @@ test("a receipt copy whose answer is lost is said not confirmed, and the edge's 
 
     await navigateTo(page, "/today");
     await expect(page.locator('[data-outcome="receipt-copies"]')).toHaveText("1 copy");
+    // The answer lost on purpose is fetched from the edge first: wait for it before the edge stops.
+    await page.unrouteAll({ behavior: "wait" });
   } finally {
     await edge.stop();
   }
@@ -3187,6 +3204,8 @@ test("a split whose answer is lost is checked, not rolled back, and shows the pa
     await expect(page.locator('[data-outcome="split-pending"]')).toContainText("Checking with the store server");
     await expect(page.locator('[data-outcome="bill-part"]')).toHaveText("For: 1 × Iced tea");
     await expect(page.locator('[data-outcome="money-refused"]')).toHaveCount(0);
+    // The answer lost on purpose is fetched from the edge first: wait for it before the edge stops.
+    await page.unrouteAll({ behavior: "wait" });
   } finally {
     await edge.stop();
   }
@@ -3261,6 +3280,8 @@ test("a merge whose answer is lost is checked, and the bill is whole again", asy
     await expect(page.getByText("141,350₫", { exact: true })).toBeVisible();
     await expect(page.locator('[data-outcome="bill-part"]')).toHaveCount(0);
     await expect(page.locator('[data-outcome="money-refused"]')).toHaveCount(0);
+    // The answer lost on purpose is fetched from the edge first: wait for it before the edge stops.
+    await page.unrouteAll({ behavior: "wait" });
   } finally {
     await edge.stop();
   }
@@ -3582,6 +3603,8 @@ test("a ticket bumped leaves the board at once, a refusal brings it back, a lost
     await expect(board.locator('[data-outcome="kds-bump-refused"]')).toBeVisible();
     await expect(ticket).toHaveCount(0);
     await expect.poll(() => bumps).toBe(1);
+    // The answer lost on purpose is fetched from the edge first: wait for it before the edge stops.
+    await board.unrouteAll({ behavior: "wait" });
   } finally {
     await edge.stop();
   }
@@ -4356,6 +4379,8 @@ test("a draft walk-in whose first open goes unanswered is not confirmed and open
     await startWalkIn(page);
     await addItem(page);
     await expect(page).toHaveURL(/\/order\/[0-9A-Z]{26}$/);
+    // The answer lost on purpose is fetched from the edge first: wait for it before the edge stops.
+    await page.unrouteAll({ behavior: "wait" });
   } finally {
     await edge.stop();
   }
@@ -5850,6 +5875,8 @@ test("a start and a batch close from the list whose answers are lost are checked
     await expect(page.locator('[data-outcome="drawers-closed-unread"]')).toContainText("read it on the shift's report");
     await expect(drawerRow(page, "Bar till")).toContainText("Closed");
     await expect.poll(() => closes).toBe(1);
+    // The answer lost on purpose is fetched from the edge first: wait for it before the edge stops.
+    await page.unrouteAll({ behavior: "wait" });
   } finally {
     await edge.stop();
   }
@@ -5929,6 +5956,8 @@ test("a handover whose answers are lost goes on with the edge's count, never re-
     await expect(page.locator('[data-outcome="open-pending"]')).toBeVisible();
     await expect(page.locator('[data-outcome="handover-done"]')).toContainText("0₫");
     await expect.poll(() => opens).toBe(1);
+    // The answer lost on purpose is fetched from the edge first: wait for it before the edge stops.
+    await page.unrouteAll({ behavior: "wait" });
   } finally {
     await edge.stop();
   }
@@ -7344,6 +7373,8 @@ test("a settle whose answer is lost is checked, not rolled back, and shows settl
     await expect(page.locator('[data-outcome="settle-pending"]')).toContainText("Checking with the store server");
     await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
     await expect(page.locator('[data-outcome="money-refused"]')).toHaveCount(0);
+    // The answer lost on purpose is fetched from the edge first: wait for it before the edge stops.
+    await page.unrouteAll({ behavior: "wait" });
   } finally {
     await edge.stop();
   }
@@ -7379,6 +7410,8 @@ test("a count and a close whose answers are lost show the edge's count, not the 
     await expect(closed).toContainText("-10,000₫");
     await expect(closed).not.toContainText("Counted 100,000₫");
     await expect(page.locator('[data-outcome="money-refused"]')).toHaveCount(0);
+    // The answer lost on purpose is fetched from the edge first: wait for it before the edge stops.
+    await page.unrouteAll({ behavior: "wait" });
   } finally {
     await edge.stop();
   }
@@ -7428,6 +7461,8 @@ test("an opening whose answer is lost is checked, and the shift shows open", asy
     await expect(page.locator('[data-outcome="open-pending"]')).toBeVisible();
     await expect(page.locator('[data-outcome="shift-open"]')).toBeVisible();
     await expect(page.locator('[data-outcome="money-refused"]')).toHaveCount(0);
+    // The answer lost on purpose is fetched from the edge first: wait for it before the edge stops.
+    await page.unrouteAll({ behavior: "wait" });
   } finally {
     await edge.stop();
   }
@@ -7515,6 +7550,8 @@ test("a paid out whose answer is lost is checked by the shift's total, and shows
     await expect(page.locator('[data-outcome="cash-moved"]')).toHaveText("Paid out 20,000₫.");
     await expect(page.locator('[data-outcome="cash-totals"]')).toContainText("20,000₫");
     await expect(page.locator('[data-outcome="money-refused"]')).toHaveCount(0);
+    // The answer lost on purpose is fetched from the edge first: wait for it before the edge stops.
+    await page.unrouteAll({ behavior: "wait" });
   } finally {
     await edge.stop();
   }
@@ -7693,6 +7730,8 @@ test("cash into a counted drawer is refused before sending, and the edge refuses
       return { status: response.status, reason: response.headers.get("pos-error-reason") };
     }, billId);
     expect(answer).toEqual({ status: 409, reason: "DRAWER_COUNTED" });
+    // The answer lost on purpose is fetched from the edge first: wait for it before the edge stops.
+    await page.unrouteAll({ behavior: "wait" });
   } finally {
     await edge.stop();
   }
