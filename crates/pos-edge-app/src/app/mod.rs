@@ -41,6 +41,7 @@ mod authority;
 mod bills;
 mod composition;
 mod config_wake;
+mod custom_data;
 mod error;
 mod floor;
 pub mod flows;
@@ -56,6 +57,7 @@ mod shifts;
 mod views;
 
 pub use config_wake::{ConfigDelivery, ConfigWakeReport, ConfigWakeStanding, WAKE_SAMPLES_MAX};
+pub use custom_data::{CONSENT_FIELD_PREFIX, CustomDataView};
 pub use error::{AppError, Approval};
 pub use package::{PackageRefusal, PackageStanding, RefusedPackage};
 pub(crate) use records::fee_records;
@@ -213,6 +215,10 @@ struct Projection {
     /// a bump, so no read scans for it. Bounded by [`MAX_COOKING`], and cut to the current
     /// business day by [`Edge::kitchen_orders`].
     cooking: BTreeMap<OrderId, Timestamp>,
+    /// Each object's and each custom record's non-personal custom values and the subject holding
+    /// its personal ones (ADR-0194 decision 3), folded from `data.custom_field.set` and
+    /// `data.custom_record.changed`. Bounded by its own limits.
+    custom: projection::CustomData,
 }
 
 /// The most paid orders the kitchen board holds waiting for a bump.

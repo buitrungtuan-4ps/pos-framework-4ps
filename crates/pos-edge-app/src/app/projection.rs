@@ -6,12 +6,15 @@
 //! and bill inputs the commands read from it.
 
 mod bills;
+mod custom;
 mod fold;
 mod lines;
 mod orders;
 mod paid;
 mod shifts;
 mod snapshots;
+
+pub(in crate::app) use custom::{CustomData, HeldValues};
 
 // The unit tests name these as `super::`, as they did beside them in `app/mod.rs`.
 #[cfg(test)]

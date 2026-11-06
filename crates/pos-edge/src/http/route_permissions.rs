@@ -346,6 +346,14 @@ pub const NOT_ON_A_ROUTE: &[(Permission, &str)] = &[
         Permission::ChoosePackage,
         "a store's package version is chosen in the console (ADR-0189)",
     ),
+    (
+        Permission::WriteDataRecord,
+        "the edge's custom-data routes are the next slice (ADR-0206 decision 7)",
+    ),
+    (
+        Permission::ReadPersonalData,
+        "the edge's per-subject read is the next slice (ADR-0206 decision 5)",
+    ),
     (Permission::ManageTenant, "cloud-only administration"),
     (Permission::ManageStaff, "cloud-only administration"),
 ];

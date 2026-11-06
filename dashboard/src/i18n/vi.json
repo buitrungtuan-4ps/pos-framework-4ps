@@ -1718,6 +1718,8 @@
   "permission.cash.shift.close": "Đóng ca",
   "permission.cash.shift.manage_other_till": "Mở, đếm hoặc đóng ngăn kéo tiền của máy POS khác",
   "permission.cash.shift.open": "Mở ca",
+  "permission.data.personal.read": "Xem lại giá trị cá nhân đã lưu",
+  "permission.data.record.write": "Nhập và sửa bản ghi và trường tùy chỉnh",
   "permission.inventory.receipt.record": "Ghi nhận hàng nhập",
   "permission.inventory.stocktake.perform": "Kiểm kho",
   "permission.inventory.waste.record": "Ghi nhận hao hụt",
