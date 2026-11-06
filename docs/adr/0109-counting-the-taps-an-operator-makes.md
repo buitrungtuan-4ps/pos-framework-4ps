@@ -6,6 +6,8 @@
 · Relates to [ADR-0018](0018-http-websocket-stack.md) (the edge serves the built UI),
 [ADR-0030](0030-pairing-and-offline-auth.md) (pairing and sign-in),
 [ADR-0084](0084-device-authentication.md) (the boot gate a harness must pass)
+· **Amended by** [ADR-0208](0208-a-tap-is-measured-to-its-frame-ready-and-gated-per-pull-request.md) — one
+per-commit gate asserts a timing: the till's 10 ms tap budget at a 2× CPU throttle
 
 ## The problem
 
