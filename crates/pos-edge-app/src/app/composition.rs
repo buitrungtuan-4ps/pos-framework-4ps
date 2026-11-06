@@ -152,6 +152,7 @@ impl<S: EventStore> Edge<S> {
             pin_lockout: Arc::new(Lockout::new()),
             package: PackageStanding::default(),
             config_wake: ConfigWakeStanding::default(),
+            custom_writes: tokio::sync::Mutex::new(()),
         })
     }
 

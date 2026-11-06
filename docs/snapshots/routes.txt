@@ -6,6 +6,9 @@ GET /api/activation
 GET /api/bills/settled
 GET /api/bills/{id}/check
 GET /api/claim
+GET /api/custom-fields
+GET /api/custom-records
+GET /api/custom-records/{id}
 GET /api/floor
 GET /api/integrations
 GET /api/layout
@@ -29,6 +32,7 @@ GET /api/shifts
 GET /api/shifts/current
 GET /api/shifts/{id}/x
 GET /api/shifts:x
+GET /api/subjects/{subject_id}
 GET /api/sync
 GET /api/tables/{id}
 GET /api/tables/{id}/check
@@ -42,6 +46,9 @@ POST /api/bills/{id}/settle
 POST /api/bills/{id}/split
 POST /api/bills/{id}/void
 POST /api/bills/{id}/void_settled
+POST /api/custom-fields
+POST /api/custom-records
+POST /api/custom-records/{id}/values
 POST /api/drawer/open
 POST /api/kds/bump
 POST /api/lines/{id}/fire

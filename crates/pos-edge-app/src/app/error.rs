@@ -269,6 +269,9 @@ pub enum AppError {
     /// No custom record has that id on this edge.
     #[error("no such custom record")]
     UnknownCustomRecord,
+    /// This store holds no subject with that id.
+    #[error("no such subject")]
+    UnknownSubject,
 }
 
 impl AppError {

@@ -283,6 +283,9 @@ pub struct Edge<S> {
     package: PackageStanding,
     /// How configuration reaches the store and how fast (ADR-0195).
     config_wake: ConfigWakeStanding,
+    /// Held by a custom-data write from reading the object's subject to folding its event, so two
+    /// writes to one object cannot each start a subject for it (ADR-0206).
+    custom_writes: tokio::sync::Mutex<()>,
 }
 
 /// What [`Edge::open_inbound_order`] opened, and the one acceptance fact the caller must not work
