@@ -14,7 +14,6 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 - [ADR-0197](../adr/0197-every-tap-paints-within-ten-milliseconds.md) Every tap paints within ten milliseconds
 - [ADR-0199](../adr/0199-a-function-is-signed-pure-webassembly-that-returns-a-decision.md) A function is signed, pure WebAssembly that returns a decision
 - [ADR-0200](../adr/0200-six-business-type-templates-ship-with-the-framework.md) Six business-type templates ship with the framework
-- [ADR-0202](../adr/0202-cel-as-the-crate-and-the-spike-found-it.md) CEL as the crate and the spike found it
 - [ADR-0205](../adr/0205-a-refusal-any-act-can-meet-is-not-listed-per-act.md) A refusal any act can meet is not listed per act
 - [ADR-0207](../adr/0207-a-receipt-is-a-structured-template-per-store-and-channel.md) A receipt is a structured template, per store and per sales channel
 
