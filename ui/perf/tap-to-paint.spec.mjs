@@ -14,6 +14,15 @@
 // The edge round trip is the browser's resource timing for every `/api/*` request made meanwhile,
 // from the request's start to the response's end. Ids in a path are folded to `:id`.
 //
+// # Frame ready, and the frame rule (ADR-0208)
+//
+// Beside it, each sample records `frameReady`: the time to the change plus the main thread's work in
+// the frame that paints it, from that frame's `requestAnimationFrame` callback to the first task
+// after it, leaving out the wait for the display. And whether a frame boundary in the sample came
+// more than 1.5 frame intervals after the one before it (`longFrames`). `perf/gate.mjs` holds both
+// to ADR-0208's budget on every pull request. The tap is a plain mouse press at the element's
+// centre: `locator.click()` checks its hit target from a `pointerdown` listener inside the sample.
+//
 // # Budgets
 //
 // ADR-0173 decision 6 gives each act a 95th-percentile budget: 50 ms for an act the till answers
@@ -51,6 +60,8 @@ const LINES_PER_ROUND = 10;
 const QUANTITY_TAPS_PER_ROUND = 10;
 const SWITCHES_PER_ROUND = 10;
 const RELOADS_PER_ROUND = 5;
+/** Seats per round: the table is given back between two, so a round never runs out of free ones. */
+const SEATS_PER_ROUND = Number(process.env["POS_PERF_SEATS"] ?? 1);
 
 const OUT = process.env["POS_PERF_OUT"] ?? "test-results/tap-to-paint.json";
 const ENFORCE = process.env["POS_PERF_ENFORCE"] === "1";
@@ -134,6 +145,14 @@ async function arm(page, until) {
       holds = () => select(spec.present).length > 0;
     }
     probe.tap = null;
+    // Every frame boundary from now to the sample's end, for the frame rule (ADR-0208 decision 2).
+    const frames = [];
+    let sampling = true;
+    const tick = (at) => {
+      frames.push(at);
+      if (sampling) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
     probe.done = new Promise((resolve) => {
       const observer = new MutationObserver(() => {
         if (holds()) {
@@ -141,7 +160,23 @@ async function arm(page, until) {
           const changed = performance.now();
           requestAnimationFrame(() => {
             probe.end = performance.now();
-            resolve({ paint: probe.end - probe.tap, change: changed - probe.tap });
+            // The first task after this frame runs once its style, layout and paint are done: the
+            // frame is ready to paint (ADR-0208 decision 1).
+            const channel = new MessageChannel();
+            channel.port1.onmessage = () => {
+              sampling = false;
+              const work = performance.now() - probe.end;
+              const before = frames.filter((at) => at < probe.tap).pop() ?? probe.tap;
+              const spanned = [before, ...frames.filter((at) => at >= probe.tap), probe.end];
+              const longest = Math.max(...spanned.slice(1).map((at, i) => at - spanned[i]));
+              resolve({
+                paint: probe.end - probe.tap,
+                change: changed - probe.tap,
+                ready: changed - probe.tap + work,
+                longFrame: longest > 1.5 * (1000 / 60),
+              });
+            };
+            channel.port2.postMessage(null);
           });
         }
       });
@@ -157,13 +192,29 @@ async function arm(page, until) {
  */
 const tapToChange = {};
 
+/**
+ * Each act's time from the tap to its frame ready to paint (ADR-0208 decision 1): the change, plus
+ * the main thread's work in the frame that paints it, leaving out the wait for the display. And how
+ * many of its samples broke the frame rule (decision 2).
+ */
+const frameReady = {};
+const longFrames = {};
+
 /** How long one sample may take before the run says which act never answered. */
 const SAMPLE_DEADLINE_MS = 10_000;
 
 /** Taps `locator` and adds the sample, in milliseconds, to `acts[act]`; a trace marks it `ttp <act>`. */
 async function measure(page, acts, act, locator, until) {
+  // The tap is a plain mouse press at the element's centre, found before the sample starts.
+  // `locator.click()` would check its hit target inside the tap, from a listener on `pointerdown`,
+  // and that check's layout read is Playwright's time, not the till's.
+  await locator.scrollIntoViewIfNeeded();
+  const box = await locator.boundingBox();
+  if (box === null) {
+    throw new Error(`${act}: nothing to tap`);
+  }
   await arm(page, until);
-  await locator.click();
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
   const sample = await page.evaluate(
     (deadline) =>
       Promise.race([window.__ttp.done, new Promise((resolve) => setTimeout(() => resolve(null), deadline))]),
@@ -179,6 +230,8 @@ async function measure(page, acts, act, locator, until) {
   }
   acts[act].push(sample.paint);
   (tapToChange[act] ??= []).push(sample.change);
+  (frameReady[act] ??= []).push(sample.ready);
+  longFrames[act] = (longFrames[act] ?? 0) + (sample.longFrame ? 1 : 0);
 }
 
 /** Every `/api/*` request since the last call, as `{ "<path>": [ms, …] }`, and clears the buffer. */
@@ -253,6 +306,15 @@ async function round(page, acts, requests) {
     // Seat the first free table: an act that waits for the edge.
     const seat = page.locator('[data-step="onCard"]').first();
     await measure(page, acts, "seat a table", seat, { present: '[data-outcome="order-open"]' });
+    // Given back once the edge has seated it, which frees it for the next seat.
+    for (let i = 1; i < SEATS_PER_ROUND; i += 1) {
+      const giveBack = page.locator('[data-step="releaseTable"]');
+      await expect(giveBack).toBeEnabled();
+      await giveBack.click();
+      await expect(page.locator('[data-outcome="floor"]')).toBeVisible();
+      await expect(seat).toContainText("Free");
+      await measure(page, acts, "seat a table", seat, { present: '[data-outcome="order-open"]' });
+    }
     const tableUrl = page.url();
 
     // Adding a line, which waits for the edge.
@@ -350,6 +412,9 @@ test("tap-to-paint and the edge round trip, recorded", async ({ browser }) => {
     cpuThrottle: CPU_THROTTLE,
     tapToPaint,
     tapToChange: Object.fromEntries(Object.entries(tapToChange).map(([act, samples]) => [act, summarise(samples)])),
+    frameReady: Object.fromEntries(
+      Object.entries(frameReady).map(([act, samples]) => [act, { ...summarise(samples), longFrames: longFrames[act] ?? 0 }]),
+    ),
     edgeRoundTrip: Object.fromEntries(
       Object.entries(requests)
         .sort(([a], [b]) => a.localeCompare(b))
