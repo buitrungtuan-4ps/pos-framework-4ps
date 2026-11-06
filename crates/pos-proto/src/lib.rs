@@ -61,6 +61,7 @@ pub mod qr;
 pub mod quantity;
 pub mod reaction;
 pub mod reason_codes;
+pub mod receipt;
 pub mod retention;
 pub mod screen;
 pub mod session;

@@ -21,6 +21,7 @@ use crate::package::PublishedPackage;
 use crate::people::PublishedPermissions;
 use crate::printing::{DEFAULT_FONT_SIZE_DOTS, PublishedPrinting};
 use crate::qr::PublishedQr;
+use crate::receipt::PublishedReceipt;
 use crate::session::{DEFAULT_SIGN_IN_IDLE_TIMEOUT_MINUTES, PublishedSession};
 use crate::shift::PublishedShift;
 use crate::tender_keys::PublishedTenderKeys;
@@ -341,7 +342,7 @@ fn assert_well_formed(setting: &Setting) {
             assert!(min <= max, "{key}: its bounds are the wrong way round");
             assert_ne!(*unit, SettingUnit::Unspecified, "{key} counts nothing");
         }
-        SettingShape::Bool { .. } | SettingShape::Ulid => {}
+        SettingShape::Bool { .. } | SettingShape::Ulid | SettingShape::ReceiptTemplates => {}
         SettingShape::UlidList { max } => assert!(*max > 0, "{key} holds nothing"),
     }
     assert!(!setting.scopes.is_empty(), "{key} can be set nowhere");
@@ -469,6 +470,19 @@ fn samples(setting: &Setting) -> Vec<Value> {
         SettingShape::Bool { .. } => vec![json!(false), json!(true)],
         SettingShape::Ulid => vec![Value::Null, json!(V1)],
         SettingShape::UlidList { .. } => vec![json!([]), json!([V1, V2])],
+        SettingShape::ReceiptTemplates => vec![
+            json!({}),
+            json!({
+                "base": {
+                    "header_keys": ["receipt.header.welcome"],
+                    "footer_keys": ["receipt.footer.thanks"],
+                    "sections": { "payments": false, "second_language": false },
+                    "custom_field_ids": [V1],
+                    "person_copy": ["PERSON_COPY_RECORD_SLIP"]
+                },
+                "channels": { "SALES_CHANNEL_TAKEAWAY": { "footer_keys": ["receipt.footer.go"] } }
+            }),
+        ],
     }
 }
 
@@ -567,21 +581,34 @@ fn read_back(node: &str, field: &str, value: Option<&Value>) -> Option<Value> {
             }
         }
         PublishedPackage::NODE => read_back_package(field, document),
+        PublishedReceipt::NODE => read_back_receipt(field, document),
         PublishedBilling::NODE if field == "settled_void_window" => {
             let billing: PublishedBilling = serde_json::from_value(document).ok()?;
             Some(json!(billing.settled_void_window().as_wire()))
         }
-        PublishedBackup::NODE => {
-            let backup: PublishedBackup = serde_json::from_value(document).ok()?;
-            match field {
-                // A node that sets no interval leaves the edge on its deprecated local file and
-                // then on this default, so the default is what a store with neither runs.
-                "interval_hours" => Some(json!(
-                    backup.interval_hours().unwrap_or(DEFAULT_INTERVAL_HOURS)
-                )),
-                _ => None,
-            }
-        }
+        PublishedBackup::NODE => read_back_backup(field, document),
+        _ => None,
+    }
+}
+
+/// [`read_back`] for the `backup` node.
+fn read_back_backup(field: &str, document: Value) -> Option<Value> {
+    let backup: PublishedBackup = serde_json::from_value(document).ok()?;
+    match field {
+        // A node that sets no interval leaves the edge on its deprecated local file and then on
+        // this default, so the default is what a store with neither runs.
+        "interval_hours" => Some(json!(
+            backup.interval_hours().unwrap_or(DEFAULT_INTERVAL_HOURS)
+        )),
+        _ => None,
+    }
+}
+
+/// [`read_back`] for the `receipt` node (ADR-0207): no templates read as the empty set.
+fn read_back_receipt(field: &str, document: Value) -> Option<Value> {
+    let receipt: PublishedReceipt = serde_json::from_value(document).ok()?;
+    match field {
+        "templates" => serde_json::to_value(receipt.templates.unwrap_or_default()).ok(),
         _ => None,
     }
 }

@@ -30,6 +30,7 @@ beyond those is marked **to confirm by legal**. The line prices in the cases are
 | R11 | Above the e-invoicing threshold, the invoice is registered with the IRP, which returns an IRN and a signed QR | module doc; gate X2 | unconfirmed: a provider, not this pack |
 | R12 | Any other field a tax invoice must carry (for example HSN or SAC codes, place of supply) | none in the module | unconfirmed: to confirm by legal. See F2 |
 | R13 | Personal data retention, 365 days by default (DPDP Act 2023) | `default_retention_days` | unconfirmed: the module says somebody must confirm it against the notice and consent record |
+| R14 | A receipt template may not leave out the item rows' modifiers; it may leave out the payments, the change line and a second language | `receipt_required_sections`; ADR-0207 decision 3 | unconfirmed: to confirm by legal. The legal body (seller, receipt number, lines, totals, tax lines, a captured buyer) cannot be turned off by any template |
 
 ## Findings: what the current model cannot express
 

@@ -25,6 +25,7 @@ use pos_country::{CountryModule, SettingDefault, SettingDefaultValue};
 use pos_proto::SalesChannel;
 use pos_proto::locale::{CountryCode, LocalePack, NumberFormat, TaxRate, TaxRateTable};
 use pos_proto::money::CurrencyCode;
+use pos_proto::receipt::ReceiptSection;
 use pos_proto::text::TranslationKey;
 
 /// The standing VAT rate. `docs/pos-spec.md` §5.
@@ -103,6 +104,13 @@ impl CountryModule for Vietnam {
 
     fn is_valid_tax_code(&self, tax_code: &str) -> bool {
         is_valid_mst(tax_code)
+    }
+
+    /// The item rows' modifiers (ADR-0207 decision 3). Decree 123/2020 Art. 10 asks for each good or service named, and a modifier that changes what was
+    /// sold or its price is part of that name. To confirm by legal (`CONFORMANCE.md` R14). The payments, the change line and a
+    /// second language are not required.
+    fn receipt_required_sections(&self) -> Vec<ReceiptSection> {
+        vec![ReceiptSection::Modifiers]
     }
 
     fn setting_defaults(&self) -> Vec<SettingDefault> {
@@ -310,5 +318,15 @@ mod tests {
                 "{number:?} was handed out by both ranges"
             );
         }
+    }
+
+    #[test]
+    fn a_receipt_template_may_not_leave_out_the_modifiers() {
+        use pos_country::CountryModule;
+        use pos_proto::receipt::ReceiptSection;
+        assert_eq!(
+            Vietnam.receipt_required_sections(),
+            vec![ReceiptSection::Modifiers]
+        );
     }
 }

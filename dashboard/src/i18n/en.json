@@ -2074,6 +2074,8 @@
   "settings.item.printing.receipt_tax_components.title": "Print the tax breakdown",
   "settings.item.qr.table_order.help": "Whether a guest's QR order joins the order a table already has open, so the table has one order and one bill, or stays an order of its own on the table. Where staff confirm guest orders, it joins once they confirm it. A table whose bill is already open or paid keeps the guest's order separate. A dish that joins keeps the price the guest saw, and is taxed as the table's order is.",
   "settings.item.qr.table_order.title": "A guest's QR order at a table with an open order",
+  "settings.item.receipt.templates.help": "What a receipt, its copy, a pre-bill and a custom record's slip print above and below the receipt itself, for every sales channel or for one: lines from the translation grid, the sections it leaves out, the custom fields it prints and which documents are the person's own copy. Written through the API for now; nothing set prints as before.",
+  "settings.item.receipt.templates.title": "Receipt template",
   "settings.item.session.idle_lock_seconds.help": "A security setting: how long a till may sit with no touch before it signs its person out and locks, until their PIN opens it again on the screen they left. 0 never locks. The kitchen board and the pass never lock.",
   "settings.item.session.idle_lock_seconds.title": "Lock a till left untouched",
   "settings.item.session.lockout_attempts.help": "A security setting: how many wrong PINs in a row lock a person out, counted across sign-in and a manager's approval together. No value switches the lockout off.",

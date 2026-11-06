@@ -253,7 +253,9 @@ pub(crate) use settings::{
     __path_admin_effective_settings, __path_admin_list_settings, __path_admin_publish_settings,
     __path_admin_put_setting, __path_admin_settings_catalogue, __path_admin_store_package,
 };
-pub use settings::{CATCH_UP_QUEUE, PackageCatchUp, package_catch_up, settings_router};
+pub use settings::{
+    CATCH_UP_QUEUE, PackageCatchUp, SettingsRules, package_catch_up, settings_router,
+};
 use store_groups::unknown_batch_node;
 pub(crate) use store_groups::{
     __path_admin_create_store_group, __path_admin_list_store_group_batches,

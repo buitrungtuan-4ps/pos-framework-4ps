@@ -11581,7 +11581,7 @@ fn settings_app_with_packages(
     tokio::spawn(worker);
     let router = http::router(app)
         .merge(http::settings_router(
-            &pos_cloud::countries::registry(),
+            translations::settings_rules(),
             settings,
             registry,
             groups.clone(),

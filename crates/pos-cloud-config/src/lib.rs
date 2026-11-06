@@ -19,6 +19,7 @@
 //!   (ADR-0122), and the batch history.
 //! - [`qr_ordering`]: QR ordering's one switch, which every Store-layer publish aligns, and the
 //!   one-time migration that settled it ([`data_migrations`]).
+//! - [`receipt_template`]: the grid and country checks on a `receipt` template (ADR-0207).
 //! - [`package_pin`]: the lock and the choice the `package` settings obey (ADR-0189).
 //! - [`packages`]: a tenant's packages and their published versions (ADR-0189).
 //! - [`persistence`]: those stores over PostgreSQL, through `store-postgres`.
@@ -39,6 +40,7 @@ pub mod packages;
 pub mod persistence;
 pub mod publish;
 pub mod qr_ordering;
+pub mod receipt_template;
 pub mod registry;
 pub mod route;
 pub mod setting_refusal;

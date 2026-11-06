@@ -129,6 +129,14 @@ impl CountryModule for Zz {
             && tax_code.len() <= 20
             && tax_code.bytes().all(|byte| byte.is_ascii_alphanumeric())
     }
+
+    /// The sections of a receipt this country's law requires that a template could leave out
+    /// (ADR-0207 decision 3): none here. A real country lists the ones its law requires among
+    /// `ReceiptSection`'s, so the cloud refuses a template that turns one off; the seller, the
+    /// receipt number, the lines, the totals, the tax lines and a captured buyer always print.
+    fn receipt_required_sections(&self) -> Vec<pos_proto::receipt::ReceiptSection> {
+        Vec::new()
+    }
 }
 
 /// `Fiscalization` for the reference country.

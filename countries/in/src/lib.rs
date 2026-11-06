@@ -37,6 +37,7 @@ use pos_proto::locale::{
     CountryCode, LocalePack, NumberFormat, TaxComponent, TaxRate, TaxRateTable,
 };
 use pos_proto::money::CurrencyCode;
+use pos_proto::receipt::ReceiptSection;
 use pos_proto::text::TranslationKey;
 
 /// Restaurant service GST: 5 %, without input tax credit, under Notification 11/2017 as amended.
@@ -108,6 +109,14 @@ impl CountryModule for India {
 
     fn is_valid_tax_code(&self, tax_code: &str) -> bool {
         is_valid_gstin(tax_code)
+    }
+
+    /// The item rows' modifiers (ADR-0207 decision 3). Rule 46 asks a tax invoice to describe the goods or services, and a modifier that changes what
+    /// was sold or its price is part of that description. To confirm by legal (`CONFORMANCE.md`
+    /// R14). The payments, the change line and a
+    /// second language are not required.
+    fn receipt_required_sections(&self) -> Vec<ReceiptSection> {
+        vec![ReceiptSection::Modifiers]
     }
 }
 
@@ -348,5 +357,15 @@ mod tests {
                 "{number:?} was handed out by both ranges"
             );
         }
+    }
+
+    #[test]
+    fn a_receipt_template_may_not_leave_out_the_modifiers() {
+        use pos_country::CountryModule;
+        use pos_proto::receipt::ReceiptSection;
+        assert_eq!(
+            India.receipt_required_sections(),
+            vec![ReceiptSection::Modifiers]
+        );
     }
 }

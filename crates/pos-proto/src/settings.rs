@@ -59,6 +59,9 @@ wire_enum! {
     Ulid = "ULID",
     /// A list of distinct identifiers, each a ULID string, up to a maximum.
     UlidList = "ULID_LIST",
+    /// The `receipt` node's templates: a base template and at most one per sales channel, as
+    /// [`crate::receipt::ReceiptTemplates`] holds them (ADR-0207).
+    ReceiptTemplates = "RECEIPT_TEMPLATES",
 }
 
 wire_enum! {
@@ -125,6 +128,10 @@ pub enum SettingShape {
         /// The most the list holds.
         max: usize,
     },
+    /// A set of receipt templates, as [`crate::receipt::check_templates`] takes them: an object,
+    /// which is structure and never free text (ADR-0207 decision 3). Its default is the empty set,
+    /// which prints every receipt as before, and a new store is given that.
+    ReceiptTemplates,
 }
 
 /// Why a value is not one a setting takes.
@@ -146,6 +153,11 @@ pub enum ValueRefusal {
     /// An on-or-off setting's value is not `true` or `false`.
     #[error("it is not true or false")]
     NotTrueOrFalse,
+    /// A receipt-templates setting's value is not a set of templates
+    /// ([`crate::receipt::TemplateRefusal::NotATemplate`]). One over the templates' limits is
+    /// [`Self::OutOfRange`].
+    #[error("it is not a set of receipt templates")]
+    NotATemplate,
 }
 
 /// One setting: a field on a published node.
@@ -205,6 +217,7 @@ impl Setting {
             SettingShape::Bool { .. } => SettingKind::Bool,
             SettingShape::Ulid => SettingKind::Ulid,
             SettingShape::UlidList { .. } => SettingKind::UlidList,
+            SettingShape::ReceiptTemplates => SettingKind::ReceiptTemplates,
         }
     }
 
@@ -217,6 +230,7 @@ impl Setting {
             SettingShape::Bool { default, .. } => serde_json::Value::from(*default),
             SettingShape::Ulid => serde_json::Value::Null,
             SettingShape::UlidList { .. } => serde_json::Value::Array(Vec::new()),
+            SettingShape::ReceiptTemplates => serde_json::Value::Object(serde_json::Map::new()),
         }
     }
 
@@ -228,7 +242,9 @@ impl Setting {
             SettingShape::Choice { preset, .. } => preset.map(serde_json::Value::from),
             SettingShape::Int { preset, .. } => preset.map(serde_json::Value::from),
             SettingShape::Bool { preset, .. } => preset.map(serde_json::Value::from),
-            SettingShape::Ulid | SettingShape::UlidList { .. } => None,
+            SettingShape::Ulid | SettingShape::UlidList { .. } | SettingShape::ReceiptTemplates => {
+                None
+            }
         }
     }
 
@@ -275,6 +291,12 @@ impl Setting {
                     .then_some(())
                     .ok_or(ValueRefusal::OutOfRange)
             }
+            SettingShape::ReceiptTemplates => crate::receipt::check_templates(value)
+                .map(|_| ())
+                .map_err(|refusal| match refusal {
+                    crate::receipt::TemplateRefusal::NotATemplate => ValueRefusal::NotATemplate,
+                    crate::receipt::TemplateRefusal::OverLimit => ValueRefusal::OutOfRange,
+                }),
         }
     }
 
@@ -296,9 +318,15 @@ impl Setting {
             SettingShape::Bool { .. } => "true or false".to_owned(),
             SettingShape::Ulid => "an identifier or null".to_owned(),
             SettingShape::UlidList { max } => format!("at most {max} distinct identifiers"),
+            SettingShape::ReceiptTemplates => RECEIPT_TEMPLATES_TAKE.to_owned(),
         }
     }
 }
+
+/// What a receipt-templates setting takes, for a refusal and for the register.
+const RECEIPT_TEMPLATES_TAKE: &str = "a base receipt template and at most one per sales channel, \
+     each with at most 4 header and 4 footer translation keys, its optional sections, at most 64 \
+     custom fields and its person's copies, in at most 16 KiB";
 
 /// Whether `value` is a string holding a ULID.
 fn is_ulid(value: &serde_json::Value) -> bool {
@@ -341,6 +369,7 @@ pub fn register() -> Vec<Setting> {
         nodes::session_settings(),
         nodes::permission_settings(),
         nodes::printing_settings(),
+        nodes::receipt_template_settings(),
         nodes::qr_settings(),
         nodes::locale_settings(),
         nodes::tender_key_settings(),
@@ -406,7 +435,7 @@ fn render_snapshot_of(settings: &[Setting]) -> String {
                 lines.push(format!("{key}\tvalue=false"));
                 lines.push(format!("{key}\tvalue=true"));
             }
-            SettingShape::Ulid => {}
+            SettingShape::Ulid | SettingShape::ReceiptTemplates => {}
             SettingShape::UlidList { max } => lines.push(format!("{key}\tmax={max}")),
         }
         lines.push(format!(
@@ -502,6 +531,7 @@ fn render_markdown_of(settings: &[Setting]) -> String {
             SettingShape::Bool { .. } => "`true`, `false`".to_owned(),
             SettingShape::Ulid => "an identifier, or `null` for none".to_owned(),
             SettingShape::UlidList { max } => format!("up to {max} distinct identifiers"),
+            SettingShape::ReceiptTemplates => RECEIPT_TEMPLATES_TAKE.to_owned(),
         };
         let values = match setting.confirm {
             Some(confirm) => format!("{values}; `{}` is confirmed", confirm.value),

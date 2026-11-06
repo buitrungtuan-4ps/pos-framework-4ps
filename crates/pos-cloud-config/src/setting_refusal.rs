@@ -38,11 +38,14 @@ pub fn setting_refusal_response(refusal: &SettingRefusal) -> Response {
                 ValueRefusal::OutOfRange => "OUT_OF_RANGE",
                 ValueRefusal::NotAWholeNumber
                 | ValueRefusal::NotTrueOrFalse
-                | ValueRefusal::NotAnIdentifier => "INVALID_VALUE",
+                | ValueRefusal::NotAnIdentifier
+                | ValueRefusal::NotATemplate => "INVALID_VALUE",
             },
         ),
         SettingRefusal::WrittenThroughItsRoute(_) => ("setting_key", "WRITTEN_THROUGH_ITS_ROUTE"),
         SettingRefusal::UnknownVersion { .. } => ("value", "UNKNOWN_PACKAGE_VERSION"),
+        SettingRefusal::UnknownTranslationKey { .. } => ("value", "UNKNOWN_TRANSLATION_KEY"),
+        SettingRefusal::SectionRequired { .. } => ("value", "SECTION_REQUIRED"),
         SettingRefusal::LockedAbove { .. } => {
             return api_error_with_details(
                 ErrorStatus::FailedPrecondition,
