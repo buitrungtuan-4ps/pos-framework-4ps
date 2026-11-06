@@ -42,8 +42,12 @@ export const TASKS = [
   {
     task: "Seat a table and start its order",
     budget: 2,
-    note: "The floor plan is home. One tap on a free table seats it and opens the order.",
-    steps: [{ route: "/", action: "onCard" }],
+    note:
+      "The floor plan is home. A tap on a free table asks how many guests (the package's flow, ADR-0192), and the count seats it and opens the order.",
+    steps: [
+      { route: "/", action: "onCard" },
+      { route: "/", action: "seatWithGuests" },
+    ],
     outcome: { route: "/table/:id", mark: "order-open" },
   },
   {

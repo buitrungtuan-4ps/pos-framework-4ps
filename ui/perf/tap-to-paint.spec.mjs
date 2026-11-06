@@ -75,6 +75,7 @@ const ALONE_MS = 50;
 const EDGE_MS = 150;
 const RELOAD_MS = 300;
 const BUDGETS = {
+  "ask the guest count": ALONE_MS,
   "seat a table": EDGE_MS,
   "add a line": ALONE_MS,
   "change a quantity": ALONE_MS,
@@ -335,9 +336,15 @@ async function round(page, acts, requests) {
     await pairAndSignIn(page, edge);
     await drainRequests(page, {});
 
-    // Seat the first free table: an act that waits for the edge.
+    // Seat the first free table: a tap on it asks the guest count (the default package's flow,
+    // ADR-0192), and a tap on the count seats it, an act that waits for the edge.
     const seat = page.locator('[data-step="onCard"]').first();
-    await measure(page, acts, "seat a table", seat, { present: '[data-outcome="order-open"]' });
+    const count = page.locator('[data-outcome="guest-pad"] [data-step="seatWithGuests"]').nth(1);
+    const seatOnce = async () => {
+      await measure(page, acts, "ask the guest count", seat, { present: '[data-outcome="guest-pad"]' });
+      await measure(page, acts, "seat a table", count, { present: '[data-outcome="order-open"]' });
+    };
+    await seatOnce();
     // Given back once the edge has seated it, which frees it for the next seat.
     for (let i = 1; i < SEATS_PER_ROUND; i += 1) {
       const giveBack = page.locator('[data-step="releaseTable"]');
@@ -345,7 +352,7 @@ async function round(page, acts, requests) {
       await giveBack.click();
       await expect(page.locator('[data-outcome="floor"]')).toBeVisible();
       await expect(seat).toContainText("Free");
-      await measure(page, acts, "seat a table", seat, { present: '[data-outcome="order-open"]' });
+      await seatOnce();
     }
     const tableUrl = page.url();
 
@@ -412,6 +419,7 @@ async function instrument(browser, context, page, first) {
 
 test("tap-to-paint and the edge round trip, recorded", async ({ browser }) => {
   const acts = {
+    "ask the guest count": [],
     "seat a table": [],
     "add a line": [],
     "change a quantity": [],

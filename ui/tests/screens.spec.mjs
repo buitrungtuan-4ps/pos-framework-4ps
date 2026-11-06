@@ -102,6 +102,8 @@ for (const device of DEVICES) {
         "04-order-empty",
         async () => {
           await w.tap('[data-step="onCard"]');
+          // The default package asks how many guests (ADR-0192).
+          await w.tap('[data-step="seatWithGuests"]');
           await w.see('[data-outcome="order-open"]');
         },
         "A seated table: menu on one side, the bill on the other",

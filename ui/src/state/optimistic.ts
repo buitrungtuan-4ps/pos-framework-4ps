@@ -22,6 +22,7 @@ import type { LineRequest, MenuItemResponse, OrderLineRequest } from "../api/sch
 import { type Money, addMoney } from "../lib/money";
 import { errorMessage } from "../lib/errors";
 import { editWrite } from "./edge-write";
+import { forgetGuests, recordGuests } from "./flows";
 import { load } from "./engine";
 import { PENDING, type OrderLine, loadLiveOrders, moveOrder, state, updateStore, walkInOrder } from "./store";
 
@@ -69,7 +70,7 @@ function settled(tableId: string): void {
 }
 
 // Seats a free table at once; `refused` runs, after the rollback, when the edge says no.
-export function seatAtOnce(tableId: string, refused: () => void): void {
+export function seatAtOnce(tableId: string, refused: () => void, guestCount?: number): void {
   const was = state.tableState[tableId];
   const seat = editWrite("sales.table.seat", {
     paint: () => {
@@ -79,7 +80,9 @@ export function seatAtOnce(tableId: string, refused: () => void): void {
       });
       setSeatingTables((tables) => new Set([...tables, tableId]));
       setSeatRefusal(null);
+      recordGuests(tableId, guestCount);
       return (caught) => {
+        forgetGuests(tableId);
         const ghost = `${PENDING}order:${tableId}`;
         const kept = Object.values(state.lines).filter((line) => line.orderId === ghost);
         updateStore((draft) => {
@@ -95,7 +98,7 @@ export function seatAtOnce(tableId: string, refused: () => void): void {
         void load("floor", true);
       };
     },
-    send: () => api.seatTable(tableId),
+    send: () => api.seatTable(tableId, guestCount),
     confirmed: (response) => {
       updateStore((draft) => {
         draft.tableState[tableId] = response.state;

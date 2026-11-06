@@ -5322,6 +5322,46 @@
           }
         }
       },
+      "FlowStep": {
+        "type": "object",
+        "description": "One step of a flow. It names exactly one of `screen_id` and `action_id`.",
+        "required": [
+          "step_id"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "string",
+            "description": "The catalogue action the step runs."
+          },
+          "applies_when": {
+            "type": "string",
+            "description": "When the step applies at all. Absent: always. A step that does not apply is passed over,\nand counts as done for the steps that wait on it."
+          },
+          "done_when": {
+            "type": "string",
+            "description": "When the edge sees the step as done, from its own facts. Present only on a step the edge\nenforces; a condition over state the edge does not hold is refused at publish."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/OpenStepKind_StepKind",
+            "description": "Required or optional."
+          },
+          "prerequisites": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The steps of the same flow that must be done before this one can run."
+          },
+          "screen_id": {
+            "type": "string",
+            "description": "The package screen the step shows."
+          },
+          "step_id": {
+            "type": "string",
+            "description": "The step's id within its flow."
+          }
+        }
+      },
       "GridPosition": {
         "type": "object",
         "description": "Where a button sits on a POS terminal's fixed grid: zero-based `column` and `row`.",
@@ -6123,6 +6163,10 @@
           }
         }
       },
+      "OpenDeviceClass_DeviceClass": {
+        "type": "string",
+        "description": "A `DeviceClass` token: DEVICE_CLASS_UNSPECIFIED, DEVICE_CLASS_TERMINAL, DEVICE_CLASS_TABLET, DEVICE_CLASS_PHONE, DEVICE_CLASS_KITCHEN_DISPLAY, DEVICE_CLASS_KIOSK, or one a newer build sent, which is kept as it arrived"
+      },
       "OpenDrawerRequest": {
         "type": "object",
         "description": "Opening the drawer outside a sale: why, and the manager whose PIN allows it (ADR-0165 decision 3).",
@@ -6269,6 +6313,10 @@
       "OpenSalesChannel_SalesChannel": {
         "type": "string",
         "description": "A `SalesChannel` token: SALES_CHANNEL_UNSPECIFIED, SALES_CHANNEL_DINE_IN, SALES_CHANNEL_TAKEAWAY, SALES_CHANNEL_DELIVERY, SALES_CHANNEL_QR, SALES_CHANNEL_API, or one a newer build sent, which is kept as it arrived"
+      },
+      "OpenStepKind_StepKind": {
+        "type": "string",
+        "description": "A `StepKind` token: STEP_KIND_UNSPECIFIED, STEP_KIND_REQUIRED, STEP_KIND_OPTIONAL, or one a newer build sent, which is kept as it arrived"
       },
       "OpenedOrderResponse": {
         "type": "object",
@@ -7033,6 +7081,13 @@
           "min_edge_version"
         ],
         "properties": {
+          "flows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Variant_Flow"
+            },
+            "description": "The version's flows, every variant of each in the version's order, for the till to run\n(ADR-0192 decision 3); the edge re-checks their guards. Left out when the version has none,\nso a till that predates the field reads the same answer as before."
+          },
           "min_edge_version": {
             "type": "string",
             "description": "The oldest edge release that runs it."
@@ -7824,6 +7879,11 @@
           }
         }
       },
+      "Ulid": {
+        "type": "string",
+        "description": "A ULID: 26 Crockford base-32 characters, ordered by the time it was minted",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
       "VarianceReason": {
         "type": "object",
         "description": "The reason for one drawer's over or short, in a batch close.",
@@ -7837,6 +7897,71 @@
           },
           "shift_id": {
             "$ref": "#/components/schemas/ShiftId"
+          }
+        }
+      },
+      "VariantSelector": {
+        "type": "object",
+        "description": "The dimensions a variant states: zero to four of device, role, sales channel and time slot\n(ADR-0189 decision 4). A dimension left absent matches every store, device and moment.\n\nThe device dimension is stated by `device_id` or by `device_class`, never both, which the cloud\nrefuses at publish. A token from a newer release states its dimension and matches nothing here.",
+        "properties": {
+          "device_class": {
+            "$ref": "#/components/schemas/OpenDeviceClass_DeviceClass",
+            "description": "Every device of a class."
+          },
+          "device_id": {
+            "$ref": "#/components/schemas/DeviceId",
+            "description": "One device."
+          },
+          "role_id": {
+            "$ref": "#/components/schemas/Ulid",
+            "description": "The role a signed-in person holds, by its role id in the tenant's people."
+          },
+          "sales_channel": {
+            "$ref": "#/components/schemas/OpenSalesChannel_SalesChannel",
+            "description": "The sales channel of the order on screen."
+          },
+          "time_slot_id": {
+            "type": "string",
+            "description": "A time slot of the package, by its id."
+          }
+        }
+      },
+      "Variant_Flow": {
+        "type": "object",
+        "description": "One variant of a package part: what a till shows or runs when its selector is the one chosen.",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "object",
+            "description": "One flow of a package.",
+            "required": [
+              "flow_id",
+              "start_action_id",
+              "steps"
+            ],
+            "properties": {
+              "flow_id": {
+                "type": "string",
+                "description": "The flow's id within its package. Its variants share it."
+              },
+              "start_action_id": {
+                "type": "string",
+                "description": "The catalogue action whose tap starts the flow."
+              },
+              "steps": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/FlowStep"
+                },
+                "description": "The steps, at most [`STEPS_MAX`], in the order the till offers them when several are\navailable at once."
+              }
+            }
+          },
+          "selector": {
+            "$ref": "#/components/schemas/VariantSelector",
+            "description": "When the variant applies. Empty for the part's base variant."
           }
         }
       },
