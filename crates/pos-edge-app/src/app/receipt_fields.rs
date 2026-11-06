@@ -117,13 +117,15 @@ impl<S: EventStore + SubjectStore> Edge<S> {
             let value = if field.personal == Some(true) {
                 let value = self.personal_value(field, view, personal).await;
                 // A reprint that prints a subject's value says so once per subject.
-                if let (Some(PrintedValue::Personal(_)), Some(Some(actor)), Some(subject_id)) =
-                    (&value, personal, view.subject_id)
+                if let (
+                    Some(PrintedValue::Personal(_)),
+                    PersonalOnPaper::Reprinted(actor),
+                    Some(subject_id),
+                ) = (&value, personal, view.subject_id)
+                    && !audited.contains(&subject_id)
                 {
-                    if !audited.contains(&subject_id) {
-                        audit_reprint(actor, subject_id);
-                        audited.push(subject_id);
-                    }
+                    audit_reprint(actor, subject_id);
+                    audited.push(subject_id);
                 }
                 value
             } else {
@@ -142,16 +144,18 @@ impl<S: EventStore + SubjectStore> Edge<S> {
         printed
     }
 
-    /// Whether personal values print, once the reprinting person's permission is known.
-    fn personal_allowed(&self, personal: PersonalOnPaper) -> Option<Option<Actor>> {
+    /// `personal` once the reprinting person's permission is known: a reprint by someone without
+    /// `data.personal.read` withholds.
+    fn personal_allowed(&self, personal: PersonalOnPaper) -> PersonalOnPaper {
         match personal {
-            PersonalOnPaper::Withheld => None,
-            PersonalOnPaper::Shown => Some(None),
-            PersonalOnPaper::Reprinted(actor) => self
-                .decision_ctx(actor)
-                .ok()
-                .filter(|ctx| ctx.require(Permission::ReadPersonalData).is_ok())
-                .map(|_| Some(actor)),
+            PersonalOnPaper::Reprinted(actor)
+                if !self
+                    .decision_ctx(actor)
+                    .is_ok_and(|ctx| ctx.require(Permission::ReadPersonalData).is_ok()) =>
+            {
+                PersonalOnPaper::Withheld
+            }
+            allowed => allowed,
         }
     }
 
@@ -161,10 +165,10 @@ impl<S: EventStore + SubjectStore> Edge<S> {
         &self,
         field: &CustomField,
         view: &CustomDataView,
-        allowed: Option<Option<Actor>>,
+        allowed: PersonalOnPaper,
     ) -> Option<PrintedValue> {
         let subject_id = view.subject_id?;
-        if allowed.is_none() {
+        if allowed == PersonalOnPaper::Withheld {
             return Some(PrintedValue::Withheld);
         }
         let record = self
@@ -222,11 +226,11 @@ impl<S: EventStore + SubjectStore> Edge<S> {
 }
 
 /// The declaration of `custom_field_id` on `kind`, or in the record's object type for `None`.
-fn declared<'a>(
-    package: &'a PackageContent,
+fn declared(
+    package: &PackageContent,
     kind: Option<DataObject>,
     custom_field_id: CustomFieldId,
-) -> Option<&'a CustomField> {
+) -> Option<&CustomField> {
     let data = &package.data;
     match kind {
         Some(kind) => data

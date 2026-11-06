@@ -456,13 +456,7 @@ where
     let template = match printers {
         Some(printers) => {
             printers
-                .template_for(
-                    &edge,
-                    &session,
-                    &till,
-                    PrintedObjects::Order(order_id),
-                    None,
-                )
+                .template_for(edge, &session, &till, PrintedObjects::Order(order_id), None)
                 .await
         }
         None => None,
