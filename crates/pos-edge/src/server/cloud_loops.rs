@@ -53,6 +53,7 @@ pub(super) fn spawn_cloud_loops<S, Q, L, P>(
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
     drained: tokio::sync::oneshot::Receiver<()>,
     wake: Option<NatsStoreWake>,
+    grid_file: std::path::PathBuf,
 ) -> Option<CloudLoops>
 where
     S: EventStore + IntakeLedger + ConfigStore + Send + Sync + 'static,
@@ -73,7 +74,6 @@ where
         origins,
         revocations,
         backup,
-        grid_file,
     } = wiring;
     let client = sync_client(cloud_url, cloud_roots, sync_key)?;
     let config_client = config_client(

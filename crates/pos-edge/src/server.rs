@@ -994,7 +994,6 @@ where
                 origins: &origins,
                 revocations: &revocations,
                 backup,
-                grid_file: state_dir.join(crate::grid_client::GRID_FILE_NAME),
             },
             nats.as_ref(),
             Lifecycle {
@@ -1132,8 +1131,6 @@ struct CloudWiring<'a, S, Q, L, P> {
     origins: &'a Arc<crate::origins::Origins>,
     revocations: &'a Arc<DeviceRevocations>,
     backup: Option<BackupPlan>,
-    /// Where the store keeps its copy of the tenant's translation grid (ADR-0043).
-    grid_file: std::path::PathBuf,
 }
 
 /// Composes the cloud surface onto `app` for a store that has a `cloud_url` (ADR-0086): the vault
@@ -1172,6 +1169,8 @@ where
         wiring.store_id,
         crate::version::target(),
     ));
+    // Where the store keeps its copy of the tenant's translation grid (ADR-0043).
+    let grid_file = state_dir.join(crate::grid_client::GRID_FILE_NAME);
     let app = app.merge(activation_router(
         Arc::clone(wiring.edge),
         cloud,
@@ -1187,7 +1186,7 @@ where
     // logged and the box runs without cloud sync rather than refusing to start.
     match boot_standing(&*vault).await {
         Ok(ActivationStanding::Activated) => {
-            start_cloud_sync(app, wiring, nats, &*vault, shutdown_rx).await
+            start_cloud_sync(app, wiring, nats, &*vault, shutdown_rx, grid_file).await
         }
         Ok(ActivationStanding::NeedsActivation) => {
             tracing::info!(
@@ -1226,6 +1225,7 @@ async fn start_cloud_sync<S, Q, L, P, V>(
     nats: Option<&NatsConfig>,
     vault: &V,
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
+    grid_file: std::path::PathBuf,
 ) -> CloudSurface
 where
     S: EventStore + IntakeLedger + ConfigStore + Send + Sync + 'static,
@@ -1246,7 +1246,9 @@ where
     // the event rail publishes on it (ADR-0195).
     let rail = event_rail::connect_nats(nats).await;
     let wake = event_rail::config_wake(rail.as_ref(), wiring.store_id).await;
-    if let Some(loops) = spawn_cloud_loops(wiring, sync_key, shutdown_rx, drained_rx, wake) {
+    if let Some(loops) =
+        spawn_cloud_loops(wiring, sync_key, shutdown_rx, drained_rx, wake, grid_file)
+    {
         keyed_client = Some(loops.client);
         farewell = Some(FarewellBeat {
             drained: drained_tx,
