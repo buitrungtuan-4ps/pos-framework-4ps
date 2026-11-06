@@ -10,7 +10,7 @@ import { adoptStoreLanguage } from "../i18n";
 import { editWrite } from "./edge-write";
 import { load, reload } from "./engine";
 import { ownOverride } from "./drawer-access";
-import { recordGuests } from "./flows";
+import { recordAllGuests, recordGuests } from "./flows";
 import { keptShift, shiftInfo } from "./shift-info";
 import { afterLastVoid, closeBill, forgetLines, settleBill, voidBillClosed } from "./closing";
 import { noteWalkInOpened, walkInsOpenedSince, type LiveOrdersRead } from "./live-orders-read";
@@ -1621,6 +1621,13 @@ export function applyLiveOrders(read: LiveOrdersRead): void {
         }
       }
     }),
+  );
+  // Each table's guest count as the edge holds it, so a till that reloads knows what one that heard
+  // the seat knows (`./flows.ts`): omitted, the table was seated without one, as on the live link.
+  recordAllGuests(
+    orders.flatMap((order) =>
+      order.table_id === undefined ? [] : [[order.table_id, order.guest_count ?? undefined] as const],
+    ),
   );
 }
 

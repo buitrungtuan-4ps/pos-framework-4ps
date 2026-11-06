@@ -219,6 +219,45 @@ fn a_projection_rebuilt_twice_sells_each_line_once() {
     });
 }
 
+/// A table's guest count rides the live read, so a till that reloads knows it, and a restart keeps
+/// it; a table seated without one says none (ADR-0192).
+#[test]
+fn the_live_read_carries_each_tables_guest_count() {
+    pos_fakes::executor::run_ready(async {
+        let store = FakeStore::default();
+        let live = Edge::new(
+            store.clone(),
+            identity(),
+            EdgeSession::bootstrap(),
+            Arc::new(InMemoryReceipts::new()),
+        )
+        .expect("seeds");
+        let counted = TableId::new(Ulid::from_u128(421));
+        let uncounted = TableId::new(Ulid::from_u128(422));
+        live.seat_table(actor(), counted, Some(4))
+            .await
+            .expect("seats");
+        live.seat_table(actor(), uncounted, None)
+            .await
+            .expect("seats");
+        // A table is open on the live read once it has a line.
+        for table in [counted, uncounted] {
+            live.add_line(actor(), table, a_line()).await.expect("adds");
+        }
+        let counts = |orders: Vec<crate::app::LiveOrderView>| {
+            let mut counts: Vec<_> = orders
+                .into_iter()
+                .map(|order| (order.table_id, order.guest_count))
+                .collect();
+            counts.sort();
+            counts
+        };
+        let expected = vec![(Some(counted), Some(4)), (Some(uncounted), None)];
+        assert_eq!(counts(live.live_orders()), expected);
+        assert_eq!(counts(restarted_over(store).await.live_orders()), expected);
+    });
+}
+
 /// An edge over `store` that has replayed its log, as a box does when it boots.
 async fn restarted_over(store: FakeStore) -> Edge<FakeStore> {
     let restarted = Edge::new(

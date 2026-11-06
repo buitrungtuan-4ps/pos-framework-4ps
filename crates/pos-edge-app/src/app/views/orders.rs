@@ -265,6 +265,9 @@ pub struct LiveOrderView {
     /// ([ADR-0160](../../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
     /// decision 2).
     pub sales_channel: Option<SalesChannel>,
+    /// How many guests it was opened for, or `None` when whoever opened it gave no count: what a
+    /// flow's guest-count step reads (ADR-0192), so a till that reloads knows it as the edge does.
+    pub guest_count: Option<u16>,
     /// Its lines, in id order.
     pub lines: Vec<LiveOrderLine>,
 }

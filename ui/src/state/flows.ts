@@ -31,6 +31,16 @@ export function recordGuests(tableId: string, count: number | undefined): void {
   setGuestsAt((known) => ({ ...known, [tableId]: count ?? "skipped" }));
 }
 
+/** Records each table's count as a read of what is open says it, in one change. */
+export function recordAllGuests(counts: readonly (readonly [string, number | undefined])[]): void {
+  if (counts.length > 0) {
+    setGuestsAt((known) => ({
+      ...known,
+      ...Object.fromEntries(counts.map(([table, count]) => [table, count ?? "skipped"])),
+    }));
+  }
+}
+
 /** Forgets a table's count: its seat was refused. */
 export function forgetGuests(tableId: string): void {
   setGuestsAt((known) => Object.fromEntries(Object.entries(known).filter(([table]) => table !== tableId)));

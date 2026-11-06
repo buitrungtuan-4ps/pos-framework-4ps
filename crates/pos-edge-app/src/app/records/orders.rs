@@ -43,6 +43,7 @@ pub(in crate::app) struct LiveSnapshot {
     pub(in crate::app) bill_id: Option<BillId>,
     pub(in crate::app) open_bill_ids: Vec<BillId>,
     pub(in crate::app) sales_channel: Option<SalesChannel>,
+    pub(in crate::app) guest_count: Option<u16>,
     /// Each line with its id and whether a station has bumped it.
     pub(in crate::app) lines: Vec<(OrderLineId, LineRecord, bool)>,
 }
