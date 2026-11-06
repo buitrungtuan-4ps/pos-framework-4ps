@@ -276,6 +276,7 @@ fn a_second_language_names_what_the_menu_and_the_fees_rule_translate_and_nothing
     assert_eq!(second(&same, &VIETNAMESE, true, &lines), None);
     let none = EdgeSession {
         printing: PublishedPrinting::default(),
+        receipt: pos_proto::receipt::PublishedReceipt::default(),
         ..session
     };
     assert_eq!(second(&none, &VIETNAMESE, true, &lines), None);

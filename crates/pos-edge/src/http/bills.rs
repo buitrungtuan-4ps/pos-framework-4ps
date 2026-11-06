@@ -11,6 +11,8 @@
 //! ([ADR-0100](../../../../docs/adr/0100-receipt-and-ticket-printing.md)) — so a printer that is down
 //! never unwinds a bill the guest has already paid, and the response says what actually came out.
 
+use crate::app::{PersonalOnPaper, PrintedObjects};
+use pos_proto::receipt::PersonCopy;
 use std::sync::Arc;
 
 use axum::Json;
@@ -470,8 +472,31 @@ where
             // At the printer of the till the copy was asked for at (ADR-0160 decision 4).
             let session = edge.session();
             let till = printers.till_for(&session, actor.device_id).await;
+            // A personal value prints on a reprint only for someone holding data.personal.read who
+            // reprints the person's own copy (ADR-0207 decision 5).
+            let template = printers
+                .template_for(
+                    &edge,
+                    &session,
+                    &till,
+                    PrintedObjects::Bill(copy.bill_id),
+                    buyer.as_ref().map(|_| {
+                        (
+                            PersonCopy::TaxInvoiceBuyer,
+                            PersonalOnPaper::Reprinted(actor),
+                        )
+                    }),
+                )
+                .await;
             printers
-                .print_receipt_copy(&session, &till, edge.store_id(), &copy, buyer.as_ref())
+                .print_receipt_copy(
+                    &session,
+                    &till,
+                    edge.store_id(),
+                    &copy,
+                    buyer.as_ref(),
+                    template.as_ref(),
+                )
                 .await
         }
         None => PrintOutcome::NoPrinter,
@@ -508,7 +533,7 @@ async fn print_receipt_for<S>(
     buyer: Option<&BuyerDetails>,
 ) -> PrintOutcome
 where
-    S: EventStore + Send + Sync + 'static,
+    S: EventStore + SubjectStore + Send + Sync + 'static,
 {
     let (Some(printers), Some(receipt_number), Some(totals)) =
         (printers, view.receipt_number, view.totals.as_ref())
@@ -519,6 +544,17 @@ where
     // decision 4). The drawer above is the store's unless the store keeps a drawer per till.
     let session = edge.session();
     let till = printers.till_for(&session, device).await;
+    // The receipt template of the order's channel (ADR-0207). A receipt with a captured buyer is the
+    // buyer's copy of a tax invoice, which the template may mark as the person's own.
+    let template = printers
+        .template_for(
+            edge,
+            &session,
+            &till,
+            PrintedObjects::Bill(view.bill_id),
+            buyer.map(|_| (PersonCopy::TaxInvoiceBuyer, PersonalOnPaper::Shown)),
+        )
+        .await;
     printers
         .print_receipt(
             &session,
@@ -532,6 +568,7 @@ where
             &view.lines,
             totals,
             buyer,
+            template.as_ref(),
         )
         .await
 }

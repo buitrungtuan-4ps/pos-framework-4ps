@@ -22,6 +22,7 @@ use crate::printing::documents::{
     receipt_document, shift_report_document, test_page_document, void_slip_document,
 };
 use crate::printing::language::receipt_lines_in;
+use crate::printing::template::TemplatePrint;
 use crate::printing::tickets::ticket_at;
 use crate::printing::x_read::{XPaper, x_document};
 use crate::printing::{PrintOutcome, Printers};
@@ -53,6 +54,7 @@ impl Printers {
         lines: &[ReceiptLine],
         totals: &BillTotals,
         buyer: Option<&BuyerDetails>,
+        template: Option<&TemplatePrint>,
     ) -> PrintOutcome {
         let device = match guest_printer(&session.devices, till) {
             Ok(device) => device,
@@ -60,9 +62,11 @@ impl Printers {
         };
         // The store's own identity, from the `store_profile` node the config pull applies
         // (ADR-0106). Empty until somebody fills it in, and the document is then what it was before.
-        let printed = receipt_lines_in(session, till, lines);
+        let printed = TemplatePrint::rows(template, receipt_lines_in(session, till, lines));
         let totals = printed_totals(session, till, totals);
-        let second = self.second_language_for(session, till, device, lines, &printed, &totals);
+        let second = self
+            .second_language_for(session, till, device, lines, &printed, &totals)
+            .filter(|_| TemplatePrint::second_language(template));
         let document = receipt_document(
             &session.profile,
             &MoneyStyle::of(session),
@@ -73,6 +77,7 @@ impl Printers {
             buyer,
             second.as_ref(),
         );
+        let document = TemplatePrint::applied(template, document);
         self.dispatch(
             session,
             device,
@@ -99,6 +104,7 @@ impl Printers {
         store_id: StoreId,
         copy: &ReceiptCopy,
         buyer: Option<&BuyerDetails>,
+        template: Option<&TemplatePrint>,
     ) -> PrintOutcome {
         let device = match guest_printer(&session.devices, till) {
             Ok(device) => device,
@@ -109,10 +115,11 @@ impl Printers {
         let reprinted = local_time(copy.reprinted_time, &session.timezone)
             .map(|time| time.to_string())
             .unwrap_or_default();
-        let printed = receipt_lines_in(session, till, &copy.lines);
+        let printed = TemplatePrint::rows(template, receipt_lines_in(session, till, &copy.lines));
         let totals = printed_totals(session, till, &copy.totals);
-        let second =
-            self.second_language_for(session, till, device, &copy.lines, &printed, &totals);
+        let second = self
+            .second_language_for(session, till, device, &copy.lines, &printed, &totals)
+            .filter(|_| TemplatePrint::second_language(template));
         let document = receipt_copy_document(
             &session.profile,
             &MoneyStyle::of(session),
@@ -124,6 +131,7 @@ impl Printers {
             buyer,
             second.as_ref(),
         );
+        let document = TemplatePrint::applied(template, document);
         self.dispatch(
             session,
             device,
@@ -185,15 +193,18 @@ impl Printers {
         job_id: EventId,
         reference: &str,
         pre_bill: &PreBill,
+        template: Option<&TemplatePrint>,
     ) -> PrintOutcome {
         let device = match guest_printer(&session.devices, till) {
             Ok(device) => device,
             Err(outcome) => return outcome,
         };
-        let printed = receipt_lines_in(session, till, &pre_bill.lines);
+        let printed =
+            TemplatePrint::rows(template, receipt_lines_in(session, till, &pre_bill.lines));
         let totals = printed_totals(session, till, &pre_bill.totals);
-        let second =
-            self.second_language_for(session, till, device, &pre_bill.lines, &printed, &totals);
+        let second = self
+            .second_language_for(session, till, device, &pre_bill.lines, &printed, &totals)
+            .filter(|_| TemplatePrint::second_language(template));
         let document = pre_bill_document(
             &session.profile,
             &MoneyStyle::of(session),
@@ -203,6 +214,7 @@ impl Printers {
             &totals,
             second.as_ref(),
         );
+        let document = TemplatePrint::applied(template, document);
         self.dispatch(
             session,
             device,

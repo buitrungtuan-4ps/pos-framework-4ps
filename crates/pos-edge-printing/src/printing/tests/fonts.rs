@@ -124,6 +124,7 @@ async fn an_ascii_line_still_goes_out_as_text_when_fonts_are_loaded() {
             &[],
             &totals_of(Money::new(CurrencyCode::VND, 99_000)),
             None,
+            None,
         )
         .await;
 
@@ -287,6 +288,7 @@ async fn a_bilingual_receipt_draws_what_its_printer_cannot_spell_and_sends_the_r
             &lines,
             &totals,
             None,
+            None,
         )
         .await;
 
@@ -327,6 +329,7 @@ async fn a_box_with_no_fonts_prints_a_bilingual_store_s_receipt_in_one_language_
                 7,
                 &lines,
                 &totals,
+                None,
                 None,
             )
             .await;
@@ -420,6 +423,7 @@ async fn a_58_mm_printer_is_sent_a_384_dot_raster_and_a_bilingual_label_wrapped_
                 &lines,
                 &totals,
                 None,
+                None,
             )
             .await;
         assert_eq!(outcome, PrintOutcome::Printed);
@@ -463,6 +467,7 @@ async fn a_printer_with_no_cutter_is_sent_no_cut_and_one_set_as_it_was_prints_as
                 7,
                 &lines,
                 &totals,
+                None,
                 None,
             )
             .await;

@@ -33,6 +33,7 @@ async fn a_settled_bill_reaches_the_receipt_printer() {
             &[],
             &totals_of(Money::new(CurrencyCode::VND, 99_000)),
             None,
+            None,
         )
         .await;
 
@@ -67,6 +68,7 @@ async fn a_store_with_no_printer_says_so_rather_than_claiming_it_printed() {
             &[],
             &totals_of(Money::new(CurrencyCode::VND, 99_000)),
             None,
+            None,
         )
         .await;
 
@@ -95,6 +97,7 @@ async fn a_printer_that_does_not_answer_is_reported_and_does_not_fail_the_settle
             42,
             &[],
             &totals_of(Money::new(CurrencyCode::VND, 99_000)),
+            None,
             None,
         )
         .await;
@@ -125,6 +128,7 @@ async fn one_settle_retried_prints_one_receipt() {
                 42,
                 &[],
                 &totals_of(total),
+                None,
                 None,
             )
             .await;

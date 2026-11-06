@@ -128,6 +128,7 @@ impl EdgeSession {
             shift: PublishedShift::default(),
             session_settings: PublishedSession::default(),
             printing: PublishedPrinting::default(),
+            receipt: pos_proto::receipt::PublishedReceipt::default(),
             qr: PublishedQr::default(),
             campaigns: Vec::new(),
             recipe_thresholds: BTreeMap::new(),

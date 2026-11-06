@@ -887,6 +887,35 @@ mod tests {
     }
 
     #[test]
+    fn a_receipt_node_is_applied_a_malformed_one_keeps_the_last_and_an_absent_one_resets() {
+        use pos_proto::SalesChannel;
+        use pos_proto::receipt::PublishedReceipt;
+
+        let base = EdgeSession::bootstrap();
+        assert_eq!(base.receipt, PublishedReceipt::default(), "no template");
+        let templated = session_from_config(
+            &base,
+            &serde_json::json!({ "receipt": { "templates": {
+                "base": { "footer_keys": ["receipt.footer.thanks"] },
+                "custom_field_ids": "from a newer release"
+            } } }),
+        );
+        assert!(
+            templated
+                .receipt
+                .template_for(SalesChannel::Takeaway)
+                .is_some()
+        );
+        let broken = serde_json::json!({ "receipt": { "templates": { "base": 7 } } });
+        assert_eq!(
+            session_from_config(&templated, &broken).receipt,
+            templated.receipt
+        );
+        let cleared = session_from_config(&templated, &serde_json::json!({ "other": true }));
+        assert_eq!(cleared.receipt, PublishedReceipt::default());
+    }
+
+    #[test]
     fn the_country_language_is_what_the_locale_node_says_and_nothing_once_it_says_none() {
         let locale = |language: Option<&str>| {
             let mut node = serde_json::json!({

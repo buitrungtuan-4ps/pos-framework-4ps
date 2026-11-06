@@ -130,6 +130,7 @@ fn a_receipt_in_another_language_names_what_the_menu_translates_and_keeps_the_re
     // In the display language a receipt prints the names its lines captured, as it always did.
     let as_before = EdgeSession {
         printing: PublishedPrinting::default(),
+        receipt: pos_proto::receipt::PublishedReceipt::default(),
         ..session
     };
     assert!(matches!(

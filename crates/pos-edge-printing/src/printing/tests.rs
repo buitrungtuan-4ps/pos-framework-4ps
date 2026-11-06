@@ -32,6 +32,7 @@ mod language;
 mod layout;
 mod receipts;
 mod reports;
+mod template;
 mod tickets;
 mod tills;
 mod void_slip;

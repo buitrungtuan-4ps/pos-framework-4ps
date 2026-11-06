@@ -281,7 +281,14 @@ impl Sale {
         let session = self.edge.session();
         let printed = self
             .printers
-            .print_receipt_copy(&session, &TillPrinting::STORE, store_id(), &copy, None)
+            .print_receipt_copy(
+                &session,
+                &TillPrinting::STORE,
+                store_id(),
+                &copy,
+                None,
+                None,
+            )
             .await;
         assert_eq!(printed, PrintOutcome::Printed, "the copy");
         let paper = self.printed.0.lock().expect("the paper");
@@ -327,6 +334,7 @@ async fn sell(session: EdgeSession, lines: Vec<LineDraft>) -> Sale {
             job(1),
             "T41",
             &pre_bill,
+            None,
         )
         .await;
     assert_eq!(printed, PrintOutcome::Printed, "the pre-bill");
@@ -355,6 +363,7 @@ async fn sell(session: EdgeSession, lines: Vec<LineDraft>) -> Sale {
             &settled.lines,
             settled.totals.as_ref().expect("the totals"),
             None,
+            None,
         )
         .await;
     assert_eq!(printed, PrintOutcome::Printed, "the receipt");
@@ -364,7 +373,14 @@ async fn sell(session: EdgeSession, lines: Vec<LineDraft>) -> Sale {
         .expect("a copy");
     copy.reprinted_time = copy_time();
     let printed = printers
-        .print_receipt_copy(&session, &TillPrinting::STORE, store_id(), &copy, None)
+        .print_receipt_copy(
+            &session,
+            &TillPrinting::STORE,
+            store_id(),
+            &copy,
+            None,
+            None,
+        )
         .await;
     assert_eq!(printed, PrintOutcome::Printed, "the copy");
 
