@@ -7219,6 +7219,10 @@ test("a line refused because a bill is already open is taken back off, with no g
     await signIn(page, edge);
     await seatTable(page);
     await addItem(page);
+    // The first line waits for the seat's answer before it is sent, and is shown sending until the
+    // edge confirms it: only then is the refusal stubbed, or a slow seat sends the first line into
+    // the stub too and both are refused.
+    await expect(page.locator('[data-outcome="line-sending"]')).toHaveCount(0);
     await refusePost(page, "**/api/tables/*/lines", "BILL_ALREADY_OPEN");
     await page.locator('[data-step="onItem"]').first().click();
     await expect(page.getByText("A bill is already open for this order.")).toBeVisible();
