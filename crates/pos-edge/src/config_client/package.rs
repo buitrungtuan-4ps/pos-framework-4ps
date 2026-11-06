@@ -11,14 +11,17 @@
 //!
 //! The flows a package carries are checked here too (ADR-0192 decision 2), with the rule evaluator
 //! `pos_edge_app::app::flows` holds: limits, ids, references, cycles, and every condition compiled,
-//! an edge guard's reading only what the edge holds. Until a package carries its screens (ADR-0190),
-//! a step's `screen_id` is not resolved here.
+//! an edge guard's reading only what the edge holds. So are its reactions (ADR-0193 decision 5):
+//! their triggers, their acts (a UI act or an edge write, never money), their parameters and their
+//! conditions. Until a package carries its screens (ADR-0190), a step's or a reaction's `screen_id`
+//! is not resolved here.
 
 use std::sync::Arc;
 
 use pos_core::flow::check_flows;
 use pos_core::ota::ReleaseVersion;
 use pos_core::package::check_content;
+use pos_core::reaction::check_reactions;
 use pos_edge_app::app::flows::EdgeConditions;
 use pos_proto::package::{PackageContent, PublishedPackage};
 
@@ -47,6 +50,13 @@ pub fn checked_package(
     };
     check_content(&content).map_err(|refusal| PackageRefusal::Invalid(refusal.to_string()))?;
     check_flows(
+        &content.flows,
+        &|_screen| true,
+        &EdgeConditions::for_apply(),
+    )
+    .map_err(|refusal| PackageRefusal::Invalid(refusal.to_string()))?;
+    check_reactions(
+        &content.reactions,
         &content.flows,
         &|_screen| true,
         &EdgeConditions::for_apply(),
@@ -188,6 +198,41 @@ mod tests {
             checked_package(&with_flows(cycle), EDGE).map_err(|refusal| refusal.reason()),
             Err("PACKAGE_INVALID")
         );
+    }
+
+    /// A package's reactions are checked on apply (ADR-0193 decision 5): a UI act whose condition
+    /// compiles passes, and a money act or a condition outside the dialect refuses the package.
+    #[test]
+    fn a_packages_reactions_are_checked_on_apply() {
+        let with_reaction = |action_id: &str, params: Value, condition: &str| {
+            let mut document = document("0.14.1", "March");
+            document["package"]["content"]["reactions"] = json!([{ "body": {
+                "reaction_id": "note_first",
+                "when": "REACTION_TRIGGER_LINE_ADDED",
+                "if": condition,
+                "then": { "action_id": action_id, "params": params },
+            }}]);
+            document
+        };
+        let note = json!({ "panel_id": "note" });
+        let content = checked_package(
+            &with_reaction("ui.panel.open", note.clone(), "order.line_count == 1"),
+            EDGE,
+        )
+        .expect("passes")
+        .expect("a package");
+        assert_eq!(content.reactions.len(), 1);
+
+        let drawer = json!({ "reason_code_id": "01J00000000000000000000R01" });
+        for refused in [
+            with_reaction("cash.drawer.open", drawer, "order.line_count == 1"),
+            with_reaction("ui.panel.open", note, "order.lines.all(l, l > 0)"),
+        ] {
+            assert_eq!(
+                checked_package(&refused, EDGE).map_err(|refusal| refusal.reason()),
+                Err("PACKAGE_INVALID")
+            );
+        }
     }
 
     #[test]
