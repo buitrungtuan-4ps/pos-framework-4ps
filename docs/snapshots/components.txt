@@ -19,6 +19,42 @@ action_button	reads=subject
 action_button	since=0.14.1
 action_button	supplies=order_id
 action_button	supplies=table_id
+floor_alerts
+floor_alerts	children=false
+floor_alerts	device_class=DEVICE_CLASS_KIOSK
+floor_alerts	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+floor_alerts	device_class=DEVICE_CLASS_PHONE
+floor_alerts	device_class=DEVICE_CLASS_TABLET
+floor_alerts	device_class=DEVICE_CLASS_TERMINAL
+floor_alerts	reads=floor
+floor_alerts	since=0.14.1
+floor_plan
+floor_plan	children=false
+floor_plan	device_class=DEVICE_CLASS_KIOSK
+floor_plan	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+floor_plan	device_class=DEVICE_CLASS_PHONE
+floor_plan	device_class=DEVICE_CLASS_TABLET
+floor_plan	device_class=DEVICE_CLASS_TERMINAL
+floor_plan	reads=floor
+floor_plan	since=0.14.1
+floor_plan	supplies=table_id
+page_header
+page_header	children=false
+page_header	device_class=DEVICE_CLASS_KIOSK
+page_header	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+page_header	device_class=DEVICE_CLASS_PHONE
+page_header	device_class=DEVICE_CLASS_TABLET
+page_header	device_class=DEVICE_CLASS_TERMINAL
+page_header	property=title_key:PROPERTY_KIND_TRANSLATION_KEY:required
+page_header	since=0.14.1
+screen_frame
+screen_frame	children=true
+screen_frame	device_class=DEVICE_CLASS_KIOSK
+screen_frame	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+screen_frame	device_class=DEVICE_CLASS_PHONE
+screen_frame	device_class=DEVICE_CLASS_TABLET
+screen_frame	device_class=DEVICE_CLASS_TERMINAL
+screen_frame	since=0.14.1
 stack
 stack	children=true
 stack	device_class=DEVICE_CLASS_KIOSK

@@ -1,0 +1,17 @@
+{
+  "screens": [
+    {
+      "body": {
+        "screen_id": "floor",
+        "root": {
+          "component_id": "screen_frame",
+          "children": [
+            { "component_id": "page_header", "properties": { "title_key": "floor.title" } },
+            { "component_id": "floor_alerts" },
+            { "component_id": "floor_plan" }
+          ]
+        }
+      }
+    }
+  ]
+}

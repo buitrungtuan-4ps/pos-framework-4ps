@@ -183,3 +183,19 @@ fn a_screens_variants_are_told_apart_and_drawn_on_their_class() {
         Some(ScreenFault::Variants(VariantRefusal::NoBaseVariant))
     );
 }
+
+/// The default package the till ships passes every check a published one does, so the till never
+/// draws a screen the cloud would refuse.
+#[test]
+fn the_tills_default_package_passes_the_checks_a_published_one_does() {
+    #[derive(serde::Deserialize)]
+    struct DefaultPackage {
+        screens: Vec<Variant<Screen>>,
+    }
+    let shipped: DefaultPackage = serde_json::from_str(include_str!(
+        "../../../../../ui/src/package/default-package.json"
+    ))
+    .expect("the default package reads as screens");
+    assert!(!shipped.screens.is_empty());
+    assert_eq!(check(&shipped.screens), Ok(()));
+}

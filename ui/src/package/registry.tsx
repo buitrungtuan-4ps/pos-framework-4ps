@@ -4,11 +4,18 @@
 // excess property, so the till and the validator cannot disagree on what exists.
 //
 // Each implementation reads its node's literals and its own part of the screen's context, and
-// nothing else (ADR-0203). A screen's own components join this table as its screen moves into the
-// default package.
+// nothing else (ADR-0203). A screen's own components live in the screen's file, beside the state they
+// read, and join this table as the screen moves into the default package. They stay there because
+// `scripts/step-budget.mjs` resolves a route's taps in `screens/<Name>.tsx`.
+//
+// That makes an import cycle (a screen draws its package tree, whose table names the screen's
+// components), which is safe only because every implementation is a function declaration: hoisted,
+// so it exists before either module finishes evaluating. Never make one a `const`.
 
 import { Show, type JSX } from "solid-js";
 
+import { PageHeader } from "../components/ui";
+import { FloorAlerts, FloorPlan } from "../screens/Floor";
 import { actionProperty, Children, packageLabel, textProperty, useHost, type Implementations, type NodeProps } from "./render";
 
 /** Its children down the screen, or across it. */
@@ -65,9 +72,27 @@ function ActionButton(props: NodeProps): JSX.Element {
   );
 }
 
+/** A whole screen's frame. */
+function ScreenFrame(props: NodeProps): JSX.Element {
+  return (
+    <section class="p-4">
+      <Children {...props} />
+    </section>
+  );
+}
+
+/** A screen's heading. */
+function Header(props: NodeProps): JSX.Element {
+  return <PageHeader title={packageLabel(textProperty(props.node, "title_key"))} />;
+}
+
 /** Every catalogued component's implementation. */
 export const IMPLEMENTATIONS: Implementations = {
   stack: Stack,
   text: Text,
   action_button: ActionButton,
+  screen_frame: ScreenFrame,
+  page_header: Header,
+  floor_alerts: FloorAlerts,
+  floor_plan: FloorPlan,
 };
