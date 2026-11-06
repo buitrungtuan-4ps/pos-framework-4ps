@@ -109,8 +109,16 @@ jobs:
         working-directory: ui
         run: pnpm build
       # `minimal-edge` embeds ui/dist at compile time, so the UI is built first.
+      # Stamped like `just build-replay-edge`: the justfile's `dev_edge_release`, the release this tree
+      # will become, so the store runs the package versions this tree publishes (ADR-0189 decision 5)
+      # exactly as a local replay does. An unstamped build says 0.0.0 and refuses a package that needs more.
       - name: build the example store, release
-        run: cargo build -p minimal-edge --release --locked
+        run: |
+          POS_EDGE_RELEASE_VERSION="$(sed -n 's/^dev_edge_release := "\(.*\)"$/\1/p' justfile)"
+          test -n "$POS_EDGE_RELEASE_VERSION" || { echo "::error::the justfile names no dev_edge_release"; exit 1; }
+          export POS_EDGE_RELEASE_VERSION
+          echo "stamping the example store as release $POS_EDGE_RELEASE_VERSION"
+          cargo build -p minimal-edge --release --locked
       # The runner's own Playwright Chromium, with the libraries a headless one needs.
       - name: install the browser
         working-directory: ui
