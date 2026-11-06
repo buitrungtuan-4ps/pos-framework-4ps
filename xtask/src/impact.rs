@@ -74,7 +74,7 @@ const RUST: &[&str] = &["rust"];
 const UI: &[&str] = &["ui", "shared", "rust"];
 
 /// Every job in `pr.yml`, in file order. A test holds this to the workflow.
-pub const JOBS: [Job; 19] = [
+pub const JOBS: [Job; 20] = [
     job("changes", When::Always, 1, &[], "computes the classes"),
     job("rules", When::Always, 1, &[], ""),
     job(
@@ -119,6 +119,13 @@ pub const JOBS: [Job; 19] = [
     job("ui", When::Any(UI), 1, &[], ""),
     job("replay-build", When::Any(UI), 1, &[], ""),
     job("replay-shard", When::Any(UI), 3, &[], "after replay-build"),
+    job(
+        "perf-gate",
+        When::Any(UI),
+        1,
+        &[],
+        "the 10 ms tap budget at 2x (ADR-0208)",
+    ),
     job(
         "replay",
         When::Always,
@@ -493,7 +500,7 @@ mod tests {
         assert!(row(&text, "replay-shard").starts_with("| `replay-shard` ×3 | skips"));
         assert!(row(&text, "test").contains("| runs | every pull request |"));
         assert!(row(&text, "build").contains("its steps have nothing to do"));
-        assert!(text.contains("**Jobs:** 9 of 24 checks run"));
+        assert!(text.contains("**Jobs:** 9 of 25 checks run"));
     }
 
     #[test]
@@ -522,7 +529,7 @@ mod tests {
         ));
         assert!(text.contains("- `docs/snapshots/permissions.txt` (`pos-core`): changed here;"));
         assert!(text.contains("- `docs/snapshots/events.txt` (`pos-proto`): unchanged;"));
-        assert!(text.contains("**Jobs:** 24 of 24 checks run"));
+        assert!(text.contains("**Jobs:** 25 of 25 checks run"));
     }
 
     #[test]
