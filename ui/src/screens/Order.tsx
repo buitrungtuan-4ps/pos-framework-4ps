@@ -85,8 +85,11 @@ export function Order() {
   // unchanged; only the header, the way back and the way to pay differ.
   const walkIn = () => location.pathname.startsWith("/order/");
   const key = () => (walkIn() ? walkInKey(params.id) : params.id);
-  // The last act's refusal, shown only on the table the act was for (`../state/kept-table.ts`).
-  const errorScope = createTableScoped<string>(key);
+  // What a kept screen keeps per table (`../state/kept-table.ts`). A walk-in's screen is the
+  // router's own, and its draft becoming an order is the same screen going on: one scope.
+  const scope = kept === undefined ? () => "" : key;
+  // The last act's refusal, shown only on the table the act was for.
+  const errorScope = createTableScoped<string>(scope);
   const error = errorScope.get;
   const setError = errorScope.set;
   if (walkIn() && params.id !== DRAFT) {
@@ -183,7 +186,7 @@ export function Order() {
   // A pre-bill: what the order comes to, on paper, before anyone pays (roadmap-v3 B2.1). No bill
   // opens, so the guests can check the total and still order dessert; a split table prints one per
   // open part. What each piece of paper came to, or null before the first press.
-  const preBillScope = createTableScoped<readonly string[]>(key);
+  const preBillScope = createTableScoped<readonly string[]>(scope);
   const preBill = preBillScope.get;
   const setPreBill = preBillScope.set;
   const print = createPrint(setError);
@@ -271,7 +274,7 @@ export function Order() {
   // are the void's, and only one of the two panels is open at a time. A waive changes no line, so
   // the check is read again once it lands.
   const [waiving, setWaiving] = createSignal<FeeLine | null>(null);
-  const waivedScope = createTableScoped<string>(key);
+  const waivedScope = createTableScoped<string>(scope);
   const waivedFee = waivedScope.get;
   const setWaivedFee = waivedScope.set;
   const openBillOnly = () => {
@@ -1477,7 +1480,7 @@ export function Order() {
   };
 
   // A kept screen starts each table as a fresh screen would (`./kept.tsx`).
-  resetPerTable(shown, key, {
+  resetPerTable(shown, scope, {
     panels: () => {
       [setMoving, setBillOpen, setMarking].forEach((set) => set(false));
       [setMoveError, setPickedCategory].forEach((set) => set(null));
