@@ -1,6 +1,6 @@
 # ADR-0207 — A receipt is a structured template, per store and per sales channel
 
-**Status** Proposed · **Owner** @maintainers-architecture · **Date** 2026-11-04
+**Status** Accepted · **Owner** @maintainers-architecture · **Date** 2026-11-04
 · Records roadmap-v3 D10 and B3.2 · Relates to
 [ADR-0160](0160-everything-a-store-runs-differently-is-published-configuration.md),
 [ADR-0194](0194-custom-data-is-declared-and-personal-fields-are-kept-apart.md) decision 7,
@@ -8,8 +8,8 @@
 [ADR-0164](0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md),
 [ADR-0043](0043-translation-grid.md), [ADR-0075](0075-media-and-file-rail.md)
 
-Proposed: it waits on the owner's acceptance, because it adds a published config node to `pos-proto`
-and decides which documents a personal value may print on.
+Accepted by the owner on 2026-11-06. It adds a published config node to `pos-proto` and decides which
+documents a personal value may print on.
 
 ## Context
 
