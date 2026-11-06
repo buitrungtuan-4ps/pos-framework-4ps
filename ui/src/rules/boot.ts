@@ -5,6 +5,10 @@
 // After the store's load, not at boot: building the evaluator is a few tens of milliseconds of main
 // thread on a slow till, and done during sign-in or the store's first reads it would hold those reads
 // back behind it.
+//
+// And only when the flows the till runs can hold an act back: a step with a condition or a
+// prerequisite. A package with none needs nothing answered, so the till neither downloads the module
+// (about 300 kB gzipped) nor builds the evaluator.
 
 import DEFAULT_PACKAGE from "../package/default-package.json";
 import type { Variant } from "../package/variant";
@@ -12,6 +16,18 @@ import { startTillRules, type Flow } from "./till-rules";
 
 /** How long the till waits for an idle moment before starting the module anyway. */
 const START_WITHIN_MS = 2_000;
+
+/** Whether any step of `flows` has a condition or a prerequisite: something only the module answers. */
+export function needsRules(flows: readonly Flow[]): boolean {
+  return flows.some((flow) =>
+    flow.steps.some(
+      (step) =>
+        step.applies_when !== undefined ||
+        step.done_when !== undefined ||
+        (step.prerequisites ?? []).length > 0,
+    ),
+  );
+}
 
 /** The default package's flows: every variant of each, in the package's order. */
 export function defaultFlows(): Flow[] {
@@ -22,14 +38,17 @@ export function defaultFlows(): Flow[] {
 let booted = false;
 
 /**
- * Instantiates the module when the till is next idle, and loads the default package's flows. Once:
- * every later call does nothing.
+ * Instantiates the module when the till is next idle, and loads the default package's flows, if
+ * they need it. Once: every later call does nothing.
  */
 export function bootTillRules(): void {
   if (booted) {
     return;
   }
   booted = true;
+  if (!needsRules(defaultFlows())) {
+    return;
+  }
   const start = () => {
     void startTillRules().then((rules) => rules?.load(defaultFlows()));
   };

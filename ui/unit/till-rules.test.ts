@@ -50,3 +50,14 @@ describe("the till's rules module", () => {
         expect(rules.ask({ op: "launch" }).ok).toBe(false);
     });
 });
+
+describe("when the till loads the module", () => {
+    it("only for flows a condition or a prerequisite can hold back", async () => {
+        const { needsRules } = await import("../src/rules/boot");
+        expect(needsRules([])).toBe(false);
+        expect(
+            needsRules([{ flow_id: "f", start_action_id: "a", steps: [{ step_id: "s", action_id: "a" }] }]),
+        ).toBe(false);
+        expect(needsRules([DINE_IN])).toBe(true);
+    });
+});
