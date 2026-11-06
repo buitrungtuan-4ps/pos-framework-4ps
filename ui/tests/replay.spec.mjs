@@ -6981,10 +6981,13 @@ test("a seat the edge refuses goes back to the floor, saying why and keeping wha
  * Double-taps `step` while its POST to `pattern` is held, and checks the button says `pending` and
  * takes no second tap until the answer. A money act paints its pending state instead of wording the
  * button (ADR-0196): `{ painted }` names that state's outcome. Resolves to how many POSTs reached `pattern` once `outcome`
- * shows; the route is taken off again, so the next act is not held.
+ * shows and every one of them was answered; the route is taken off again, so the next act is not held.
+ * The wait for an answer matters: `outcome` can be painted from the tap, and the request leaves after
+ * that frame (ADR-0208), so on a slow runner the count could be read before the request arrived.
  */
 async function doubleTap(page, step, pattern, pending, outcome) {
   let posts = 0;
+  let answered = 0;
   let release = () => {};
   const released = new Promise((resolve) => {
     release = resolve;
@@ -6997,6 +7000,7 @@ async function doubleTap(page, step, pattern, pending, outcome) {
     posts += 1;
     await released;
     await route.continue();
+    answered += 1;
   };
   await page.route(pattern, hold);
   const button = page.locator(`[data-step="${step}"]`).first();
@@ -7009,6 +7013,7 @@ async function doubleTap(page, step, pattern, pending, outcome) {
   await expect(button).toBeDisabled();
   release();
   await expect(page.locator(`[data-outcome="${outcome}"]`)).toBeVisible();
+  await expect.poll(() => posts > 0 && answered === posts).toBe(true);
   await page.unroute(pattern, hold);
   return posts;
 }
