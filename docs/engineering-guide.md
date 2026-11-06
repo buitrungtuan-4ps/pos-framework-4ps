@@ -67,6 +67,7 @@ fmt → clippy -D warnings → unit tests (core: no database, no network)
 | `ui`, `replay-build`, `replay-shard` | `ui/`, `packages/shared/` or Rust. `replay-build` builds the UI and `examples/minimal-edge` once; three `replay-shard` jobs each run a third of the flows against it (`--shard=k/3`); `replay`, the required check, always runs and passes only when they did, or none had anything to run |
 | `dashboard` | `dashboard/`, `packages/shared/`, Rust or `deploy/` |
 | `console-replay` | `dashboard/`, `packages/shared/` or Rust |
+| `perf-gate` | `ui/`, `packages/shared/` or Rust. Builds the production till and a release `minimal-edge` and runs `ui/perf/gate.mjs`, the till's 10 ms tap budget at a 2x CPU throttle ([ADR-0208](adr/0208-a-tap-is-measured-to-its-frame-ready-and-gated-per-pull-request.md)). It runs in measuring mode (`continue-on-error`) until the runner's own figures are known, then blocks |
 
 `crates/pos-proto`, `pos-core`, `pos-ports`, `Cargo.lock`, the root `Cargo.toml`, the toolchain and lint configs, `.cargo/`, `.config/`, `.github/`, `xtask/` and `tools/` count as all of Rust, and a file no rule names counts as everything. A push to `main` runs everything. A job skipped this way reports success to a required check. Every job is written to run anyway if `changes` itself fails, so a broken classifier runs more, never less. Run `cargo xtask affected --classes --crates` locally to see what a branch would run.
 

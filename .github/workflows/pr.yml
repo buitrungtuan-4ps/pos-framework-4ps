@@ -568,6 +568,59 @@ jobs:
           path: ui/test-results/
           retention-days: 14
 
+  # The till's 10 ms tap budget (ADR-0208 decision 3; `just perf-gate`, `ui/perf/gate.mjs`): every
+  # act's tap to its frame ready to paint at a 2x CPU throttle, against a release edge and a
+  # production till. The gate fails an act whose p50 is over 10 ms or that has fewer than 100
+  # samples; p95 and missed frames are recorded. It runs in measuring mode first
+  # (`continue-on-error`), so the runner's own figures are known before it blocks a pull request.
+  perf-gate:
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.ui == 'true' || needs.changes.outputs.shared == 'true' || needs.changes.outputs.rust == 'true') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: perf-gate
+      - uses: ./.github/actions/node-setup
+      - name: install dependencies
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+      # As in `replay-shard`: apt is not retried, the browser download gets one retry.
+      - name: install the browser's system libraries
+        working-directory: ui
+        timeout-minutes: 12
+        run: pnpm exec playwright install-deps chromium
+      - name: install the browser
+        working-directory: ui
+        timeout-minutes: 10
+        run: |
+          for attempt in 1 2; do
+            timeout 240 pnpm exec playwright install chromium && exit 0
+            echo "playwright install attempt $attempt did not finish"
+          done
+          exit 1
+      - name: build the operator UI for production
+        working-directory: ui
+        run: pnpm build
+      # `minimal-edge` embeds ui/dist at compile time, so the UI is built first.
+      - name: build the example store, release
+        run: cargo build -p minimal-edge --release --locked
+      - name: the tap gate at 2x (ADR-0208)
+        continue-on-error: true
+        working-directory: ui
+        env:
+          POS_EDGE_BIN: ${{ github.workspace }}/target/release/minimal-edge
+        run: node perf/gate.mjs
+      - name: keep the figures
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: perf-gate
+          path: ui/test-results/perf-gate-*.json
+          retention-days: 30
+
   # The required check, with `test`'s pattern: it always runs and reads the results,
   # so a shard skipped because the build failed is a failure, never a silent pass.
   replay:
