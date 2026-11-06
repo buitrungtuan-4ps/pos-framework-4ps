@@ -603,6 +603,29 @@ permissions! {
         description: "Choose which allowed package version the store runs",
     },
 
+    // ---- Custom data ----
+    /// Enter and change custom records and custom field values
+    /// ([ADR-0206](../../../docs/adr/0206-a-personal-custom-value-stays-on-its-store-and-expires-on-its-own-clock.md)
+    /// decision 7). A field on an existing object also needs that object's own permission.
+    WriteDataRecord {
+        id: "data.record.write",
+        group: Sales,
+        risk: Low,
+        pin: false,
+        default_roles: [Server, Cashier, Supervisor, Manager, Owner],
+        description: "Enter and change custom records and custom field values",
+    },
+    /// Show a personal custom value again after it was saved, on a till or by subject (ADR-0206
+    /// decisions 5 and 7). Entering one does not need it.
+    ReadPersonalData {
+        id: "data.personal.read",
+        group: StoreAdministration,
+        risk: High,
+        pin: false,
+        default_roles: [Manager, Owner],
+        description: "Show a saved personal custom value again; every read is audited",
+    },
+
     // ---- Cloud administration ----
     /// Manage tenants, brands and cross-store settings.
     ManageTenant {

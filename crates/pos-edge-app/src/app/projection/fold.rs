@@ -13,10 +13,11 @@ use pos_proto::events::{
     BillingBillMerged, BillingBillOpened, BillingBillSettled, BillingBillSplit, BillingBillVoided,
     BillingDiscountApplied, BillingFeeWaived, BillingPaymentCaptured, BillingReceiptReprinted,
     CashDrawerDropped, CashDrawerPaidIn, CashDrawerPaidOut, CashShiftClosed, CashShiftCounted,
-    CashShiftOpened, EventType, InventoryItemRestored, InventoryItemSoldOut, KitchenTicketBumped,
-    SalesOrderClosed, SalesOrderConfirmedByStaff, SalesOrderLineAdded, SalesOrderLineFired,
-    SalesOrderLineUpdated, SalesOrderLineVoided, SalesOrderOpened, SalesOrderRejectedByStaff,
-    SalesTableClosed, SalesTableMerged, SalesTableOpened, SalesTableTransferred,
+    CashShiftOpened, DataCustomFieldSet, DataCustomRecordChanged, EventType, InventoryItemRestored,
+    InventoryItemSoldOut, KitchenTicketBumped, SalesOrderClosed, SalesOrderConfirmedByStaff,
+    SalesOrderLineAdded, SalesOrderLineFired, SalesOrderLineUpdated, SalesOrderLineVoided,
+    SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed, SalesTableMerged,
+    SalesTableOpened, SalesTableTransferred,
 };
 use pos_proto::time::Timestamp;
 use pos_proto::{BillState, OrderLineState, PaymentMethod, ShiftState, TableState};
@@ -390,6 +391,15 @@ impl<S: EventStore> Edge<S> {
             }
             EventType::InventoryItemSoldOut | EventType::InventoryItemRestored => {
                 Self::fold_sold_out(projection, envelope, known)?;
+            }
+            EventType::DataCustomFieldSet => {
+                let event: DataCustomFieldSet = envelope.data.decode().map_err(AppError::Encode)?;
+                projection.fold_custom_field_set(&event);
+            }
+            EventType::DataCustomRecordChanged => {
+                let event: DataCustomRecordChanged =
+                    envelope.data.decode().map_err(AppError::Encode)?;
+                projection.fold_custom_record(&event);
             }
             _ => {}
         }

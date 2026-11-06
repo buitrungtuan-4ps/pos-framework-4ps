@@ -591,6 +591,9 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
         AppError::ModifierSelectionInvalid => "MODIFIER_SELECTION_INVALID",
         AppError::ChannelNotAccepted => "CHANNEL_NOT_ACCEPTED",
         AppError::ItemNotSellable => "ITEM_NOT_SELLABLE",
+        AppError::CustomEntryRefused(_) => "CUSTOM_ENTRY_REFUSED",
+        AppError::UnknownObject => "UNKNOWN_OBJECT",
+        AppError::UnknownCustomRecord => "UNKNOWN_CUSTOM_RECORD",
         AppError::AlreadyFired => "ALREADY_FIRED",
         AppError::ApprovalRequired => "APPROVAL_REQUIRED",
         AppError::ApprovalRefused => "APPROVAL_REFUSED",
@@ -654,6 +657,8 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::ModifierSelectionInvalid
         | AppError::ChannelNotAccepted
         | AppError::ItemNotSellable
+        | AppError::UnknownObject
+        | AppError::UnknownCustomRecord
         | AppError::AlreadyFired
         | AppError::FlowPrerequisiteUnmet { .. } => {
             refusal(StatusCode::CONFLICT, reason, error.to_string())
@@ -673,7 +678,8 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::ApproverLockedOut
         | AppError::Superseded => refusal(StatusCode::FORBIDDEN, reason, error.to_string()),
         // The request contradicts itself, so no state of the drawer would make it apply (ADR-0186).
-        AppError::CountDoesNotAddUp => {
+        // An entry that does not fit its declarations cannot apply in any state (ADR-0194).
+        AppError::CountDoesNotAddUp | AppError::CustomEntryRefused(_) => {
             refusal(StatusCode::UNPROCESSABLE_ENTITY, reason, error.to_string())
         }
         AppError::Port(_) => refusal(

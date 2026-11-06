@@ -258,6 +258,17 @@ pub enum AppError {
     /// so the edge cannot price the line (ADR-0146). Refused, never substituted.
     #[error("that item cannot be sold right now")]
     ItemNotSellable,
+    /// A custom-data entry does not fit the package the store runs
+    /// ([ADR-0194](../../../../docs/adr/0194-custom-data-is-declared-and-personal-fields-are-kept-apart.md)).
+    /// It names the field and the fault, never the value.
+    #[error("that entry does not fit the store's custom data: {0}")]
+    CustomEntryRefused(pos_core::package::EntryRefusal),
+    /// The object a custom field is set on is not one this edge knows.
+    #[error("no such object to set custom fields on")]
+    UnknownObject,
+    /// No custom record has that id on this edge.
+    #[error("no such custom record")]
+    UnknownCustomRecord,
 }
 
 impl AppError {

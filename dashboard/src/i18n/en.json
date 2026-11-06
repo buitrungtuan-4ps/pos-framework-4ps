@@ -1718,6 +1718,8 @@
   "permission.cash.shift.close": "Close a shift",
   "permission.cash.shift.manage_other_till": "Start, count or close another till's drawer",
   "permission.cash.shift.open": "Open a shift",
+  "permission.data.personal.read": "Show a saved personal value again",
+  "permission.data.record.write": "Enter and change custom records and fields",
   "permission.inventory.receipt.record": "Record goods received",
   "permission.inventory.stocktake.perform": "Count stock",
   "permission.inventory.waste.record": "Record waste",
