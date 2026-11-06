@@ -1,7 +1,8 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! `GET /api/package`: which package version this store runs, its flows for the till to run, and
+//! `GET /api/package`: which package version this store runs, its flows and reactions for the till
+//! to run, and
 //! whether the last configuration was refused for its package ([ADR-0189](../../../../docs/adr/0189-a-store-runs-a-package-version-hq-pins.md)
 //! decision 6). Read-only: a store's package is chosen in the console, never here (roadmap-v3
 //! D18), so this is what the edge's diagnostics show (B7.5).
@@ -17,6 +18,7 @@ use serde::Serialize;
 use pos_ports::event_store::EventStore;
 use pos_proto::flow::Flow;
 use pos_proto::package::Variant;
+use pos_proto::reaction::Reaction;
 
 use crate::app::Edge;
 
@@ -46,6 +48,11 @@ pub(crate) struct RunningPackage {
     /// so a till that predates the field reads the same answer as before.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     flows: Vec<Variant<Flow>>,
+    /// The version's reactions, every variant of each in the version's order, for the till to run
+    /// under the signed-in person's permissions (ADR-0193 decision 5); the edge checks each command
+    /// a reaction sends as any other. Left out when the version has none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    reactions: Vec<Variant<Reaction>>,
 }
 
 /// A configuration refused for its package; the store kept the one before it.
@@ -87,6 +94,7 @@ where
             version_label: content.version_label.clone(),
             min_edge_version: content.min_edge_version.to_string(),
             flows: content.flows.clone(),
+            reactions: content.reactions.clone(),
         });
     let refused = edge
         .package_standing()
@@ -207,5 +215,41 @@ mod tests {
         ));
         edge.apply_session(session);
         assert_eq!(body(edge).await["running"]["flows"], flows);
+    }
+
+    /// A version's reactions ride the answer beside its flows.
+    #[tokio::test]
+    async fn the_running_version_carries_its_reactions() {
+        let edge = Arc::new(
+            Edge::new(
+                FakeStore::default(),
+                StoreIdentity::for_store(pos_proto::ids::StoreId::new(
+                    pos_proto::ulid::Ulid::from_u128(7),
+                )),
+                EdgeSession::bootstrap(),
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("an edge"),
+        );
+        let reactions = serde_json::json!([{ "body": {
+            "reaction_id": "check_on_bill",
+            "when": "REACTION_TRIGGER_BILL_OPENED",
+            "then": { "action_id": "billing.check.print" },
+        }}]);
+        let mut session = (*edge.session()).clone();
+        session.package = Some(Arc::new(
+            serde_json::from_value::<PackageContent>(serde_json::json!({
+                "package_id": "01J00000000000000000000P01",
+                "package_version_id": V1,
+                "version_label": "March",
+                "min_edge_version": "0.14.1",
+                "reactions": reactions,
+            }))
+            .expect("content"),
+        ));
+        edge.apply_session(session);
+        let answer = body(edge).await;
+        assert_eq!(answer["running"]["reactions"], reactions);
+        assert!(answer["running"].get("flows").is_none());
     }
 }

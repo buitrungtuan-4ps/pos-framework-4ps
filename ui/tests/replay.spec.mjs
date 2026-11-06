@@ -1996,6 +1996,42 @@ test("a required guest count is asked with no Skip, and a table seated without o
   }
 });
 
+// A package's reactions run on the till under the signed-in person's permissions
+// (`POS_DEMO_PROFILE=reactions`, ADR-0193 decision 5): a bill opened on an order with a line prints
+// its check by itself, once the edge confirmed the bill; a seat would print an X report, which this
+// person may not print, so the till never sends it.
+test("a reaction prints the check when the bill opens, and one the person may not run is never sent", async ({
+  page,
+}) => {
+  const edge = await startEdge("reactions");
+  try {
+    const sent = [];
+    page.on("request", (request) => {
+      const path = new URL(request.url()).pathname;
+      if (request.method() === "POST" && (path.endsWith("/check/print") || path.endsWith(":print_x"))) {
+        sent.push(path);
+      }
+    });
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    await sendOrder(page);
+    await expect(page.locator('[data-outcome="writes-pending"]')).toHaveCount(0);
+    expect(sent).toEqual([]);
+
+    const printed = page.waitForRequest((request) => new URL(request.url()).pathname.endsWith("/check/print"));
+    await page.locator('[data-step="takePayment"]').click();
+    await expect(page).toHaveURL(/\/table\/[^/]+\/pay$/);
+    await printed;
+    await page.waitForLoadState("networkidle");
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatch(/\/check\/print$/);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // The floor and a table's order screen stay mounted (`ui/src/screens/kept.tsx`), and a switch only
 // shows one and hides the other. The order screen never shows one table's lines, figure or refusal
 // on another: before the new table's figure lands it shows the dash. And while it is hidden it
@@ -6945,10 +6981,13 @@ test("a seat the edge refuses goes back to the floor, saying why and keeping wha
  * Double-taps `step` while its POST to `pattern` is held, and checks the button says `pending` and
  * takes no second tap until the answer. A money act paints its pending state instead of wording the
  * button (ADR-0196): `{ painted }` names that state's outcome. Resolves to how many POSTs reached `pattern` once `outcome`
- * shows; the route is taken off again, so the next act is not held.
+ * shows and every one of them was answered; the route is taken off again, so the next act is not held.
+ * The wait for an answer matters: `outcome` can be painted from the tap, and the request leaves after
+ * that frame (ADR-0208), so on a slow runner the count could be read before the request arrived.
  */
 async function doubleTap(page, step, pattern, pending, outcome) {
   let posts = 0;
+  let answered = 0;
   let release = () => {};
   const released = new Promise((resolve) => {
     release = resolve;
@@ -6961,6 +7000,7 @@ async function doubleTap(page, step, pattern, pending, outcome) {
     posts += 1;
     await released;
     await route.continue();
+    answered += 1;
   };
   await page.route(pattern, hold);
   const button = page.locator(`[data-step="${step}"]`).first();
@@ -6973,6 +7013,7 @@ async function doubleTap(page, step, pattern, pending, outcome) {
   await expect(button).toBeDisabled();
   release();
   await expect(page.locator(`[data-outcome="${outcome}"]`)).toBeVisible();
+  await expect.poll(() => posts > 0 && answered === posts).toBe(true);
   await page.unroute(pattern, hold);
   return posts;
 }

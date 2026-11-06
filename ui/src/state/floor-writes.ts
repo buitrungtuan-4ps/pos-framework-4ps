@@ -6,6 +6,7 @@
 import { api } from "../api/client";
 import type { BillResponse } from "../api/schemas";
 import { editWrite } from "./edge-write";
+import { tableReacts } from "./optimistic";
 import { reload, rereadWhole } from "./engine";
 import { loadLiveOrders, openBillFor, setSoldOut, state, updateStore } from "./store";
 
@@ -110,6 +111,7 @@ export async function openBill(tableId: string): Promise<string> {
       }),
     reread: rereadFloor,
   });
+  tableReacts("REACTION_TRIGGER_BILL_OPENED", tableId, { billId: response.bill_id });
   return response.bill_id;
 }
 

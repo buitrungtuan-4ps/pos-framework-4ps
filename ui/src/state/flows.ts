@@ -19,6 +19,7 @@ import DEFAULT_PACKAGE from "../package/default-package.json";
 import { resolveVariant, type Variant } from "../package/variant";
 import { t } from "../i18n";
 import { needsRules, startTillRules, tillRules, type Fact, type Facts, type Flow, type FlowStep } from "../rules/till-rules";
+import { reactionsNeedRules } from "./reactions";
 
 /**
  * What the till knows of each table's guest count: the count it seated it with, or `"skipped"`.
@@ -73,13 +74,14 @@ export function applyPackage(body: unknown): void {
 
 /**
  * Loads the flows into the rules module, and again whenever they change. The module is fetched and
- * built only once a package's flows need it (`needsRules`): the default package's do not.
+ * built only once a package's flows need it (`needsRules`), or a reaction has a condition
+ * (`./reactions.ts`): the default package has neither.
  */
 export function keepRulesLoaded(): void {
   createRoot(() => {
     createEffect(() => {
       const flows = activeFlows().map((variant) => variant.body);
-      if (!needsRules(flows)) {
+      if (!needsRules(flows) && !reactionsNeedRules()) {
         return;
       }
       void startTillRules().then((rules) => {
@@ -151,6 +153,21 @@ export function missingFor(actionId: string, channel: string, facts: Facts, gues
     }
   }
   return null;
+}
+
+/** A table's facts, as a condition reads them: its order's channel, line count and guest count. */
+export function tableFacts(tableId: string, lineCount: number): Facts {
+  const guests = guestsOf(tableId);
+  const order: Record<string, Fact> =
+    typeof guests === "number"
+      ? { channel: DINE_IN_TOKEN, line_count: lineCount, guest_count: guests }
+      : { channel: DINE_IN_TOKEN, line_count: lineCount };
+  return { channel: DINE_IN_TOKEN, order };
+}
+
+/** The flow steps a seat runs, by flow and step: the ones a seat with a guest count completes. */
+export function seatSteps(): readonly { readonly flowId: string; readonly stepId: string }[] {
+  return stepsFor("sales.table.seat", DINE_IN_TOKEN).map((at) => ({ flowId: at.flowId, stepId: at.step.step_id }));
 }
 
 /**

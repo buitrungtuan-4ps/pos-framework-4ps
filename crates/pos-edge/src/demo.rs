@@ -450,6 +450,11 @@ fn demo_catalog(salad: i64) -> MenuCatalog {
 /// `POS_DEMO_PROFILE=guests-required`: locked to a package whose guest count is required. See
 /// `demo/package.rs`.
 ///
+/// # The reactions profile
+///
+/// `POS_DEMO_PROFILE=reactions`: locked to a package with a reaction the demo employee may run and
+/// one they may not, in a store that enforces permissions. See `demo/package.rs`.
+///
 /// # The walk-in profiles
 ///
 /// `POS_DEMO_PROFILE=walk-in-takeaway`, `walk-in-dine-in` and `walk-in-ask` publish the same store
