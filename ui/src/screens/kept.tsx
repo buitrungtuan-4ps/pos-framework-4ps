@@ -18,7 +18,7 @@
 //
 // The walk-in order (`/order/:id`) and the pay screen keep the router's own mounting.
 
-import { Show, createMemo, createSignal, onCleanup, onMount, type JSX } from "solid-js";
+import { Show, createMemo, createRenderEffect, createSignal, onCleanup, onMount, type JSX } from "solid-js";
 import { useLocation, useParams } from "@solidjs/router";
 
 import { KeptTableContext, type KeptTable } from "../state/kept-table";
@@ -46,8 +46,15 @@ export function TableScreens(): JSX.Element {
   const location = useLocation();
   const params = useParams<{ id?: string }>();
   const onOrder = () => TABLE_PATH.test(location.pathname);
-  // The table shown, kept while the floor is: the order screen keeps the last table it showed.
-  const held = createMemo<string>((last) => (onOrder() ? (params.id ?? last) : last), "");
+  // The table shown, kept while the floor is: the order screen keeps the last table it showed. A
+  // table it was told to follow is shown until the address reaches it.
+  const [ahead, setAhead] = createSignal<string | null>(null);
+  const held = createMemo<string>((last) => ahead() ?? (onOrder() ? (params.id ?? last) : last), "");
+  createRenderEffect(() => {
+    if (ahead() !== null && params.id === ahead()) {
+      setAhead(null);
+    }
+  });
   const [idle, setIdle] = createSignal(false);
   onMount(() => whenIdle(() => setIdle(true)));
   const kept: KeptTable = {
@@ -55,6 +62,7 @@ export function TableScreens(): JSX.Element {
       return held();
     },
     shown: onOrder,
+    follow: setAhead,
   };
   return (
     <>
