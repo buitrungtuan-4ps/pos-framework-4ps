@@ -33,6 +33,8 @@ export const SCREENS = {
   // The staff-confirmation queue (ADR-0116): the screen the QR hold had no way to reach.
   guests: { path: "/guests", key: "confirm.title" },
   today: { path: "/today", key: "today.title" },
+  // A package's custom records (ADR-0194): drawn from the default package's `records` screen.
+  records: { path: "/records", key: "records.title" },
   shift: { path: "/shift", key: "shift.title" },
   pair: { path: "/pair", key: "pair.title" },
   devices: { path: "/devices", key: "devices.title" },

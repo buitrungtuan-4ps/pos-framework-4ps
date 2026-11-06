@@ -19,6 +19,7 @@ const ROUTES: Readonly<Record<string, string>> = {
   guests: SCREENS.guests.path,
   counter: SCREENS.counter.path,
   today: SCREENS.today.path,
+  records: SCREENS.records.path,
   shift: SCREENS.shift.path,
 };
 

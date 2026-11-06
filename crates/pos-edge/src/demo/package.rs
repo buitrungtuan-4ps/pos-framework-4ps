@@ -109,11 +109,106 @@ fn reactions_package() -> serde_json::Value {
     })
 }
 
+/// Whether this demo store's package declares custom data — `POS_DEMO_PROFILE=custom-data`.
+///
+/// That profile publishes a version with a reservation object type (ADR-0194): a required party
+/// size, an occasion chosen from a list, a date and a window-seat flag, none of them personal, and
+/// holds the labels a tenant's grid would give them (ADR-0043), so the browser gate can enter,
+/// change and read back a record on the till. Every other profile declares no custom data.
+pub(crate) fn custom_data() -> bool {
+    std::env::var("POS_DEMO_PROFILE")
+        .is_ok_and(|profile| profile.eq_ignore_ascii_case("custom-data"))
+}
+
+/// The reservation type's version, locked. Fake ids; published as JSON so it goes through the
+/// checks a cloud's node does.
+fn custom_data_package() -> serde_json::Value {
+    let version = Ulid::from_u128(405).to_string();
+    serde_json::json!({
+        "mode": "PACKAGE_MODE_LOCKED",
+        "locked_version_id": version,
+        "content": {
+            "package_id": Ulid::from_u128(404).to_string(),
+            "package_version_id": version,
+            "version_label": "Demo: reservations",
+            "min_edge_version": crate::version::VERSION,
+            "data": {
+                "object_types": [{
+                    "object_type_id": Ulid::from_u128(410).to_string(),
+                    "label_key": "data.reservation",
+                    "fields": [
+                        { "custom_field_id": Ulid::from_u128(411).to_string(),
+                          "label_key": "data.reservation.party",
+                          "field_type": "CUSTOM_FIELD_TYPE_INT", "required": true, "personal": false },
+                        { "custom_field_id": Ulid::from_u128(412).to_string(),
+                          "label_key": "data.reservation.occasion",
+                          "field_type": "CUSTOM_FIELD_TYPE_CHOICE", "personal": false,
+                          "custom_list_id": Ulid::from_u128(420).to_string() },
+                        { "custom_field_id": Ulid::from_u128(413).to_string(),
+                          "label_key": "data.reservation.day",
+                          "field_type": "CUSTOM_FIELD_TYPE_DATE", "personal": false },
+                        { "custom_field_id": Ulid::from_u128(414).to_string(),
+                          "label_key": "data.reservation.window",
+                          "field_type": "CUSTOM_FIELD_TYPE_BOOL", "personal": false },
+                    ],
+                }],
+                "lists": [{
+                    "custom_list_id": Ulid::from_u128(420).to_string(),
+                    "label_key": "data.list.occasion",
+                    "entries": [
+                        { "list_entry_id": Ulid::from_u128(421).to_string(),
+                          "label_key": "data.occasion.birthday" },
+                        { "list_entry_id": Ulid::from_u128(422).to_string(),
+                          "label_key": "data.occasion.business" },
+                    ],
+                }],
+            },
+        },
+    })
+}
+
+/// The labels the `custom-data` profile's grid holds, in English and Vietnamese, as a tenant's
+/// grid would give them (ADR-0043); `None` on every other profile.
+#[must_use]
+pub fn custom_data_labels() -> Option<pos_edge_app::labels::LabelGrid> {
+    if !custom_data() {
+        return None;
+    }
+    let pairs = [
+        ("data.reservation", "Reservation", "Đặt bàn"),
+        ("data.reservation.party", "Party size", "Số khách"),
+        ("data.reservation.occasion", "Occasion", "Dịp"),
+        ("data.reservation.day", "Day", "Ngày"),
+        ("data.reservation.window", "Window seat", "Chỗ cạnh cửa sổ"),
+        ("data.list.occasion", "Occasions", "Các dịp"),
+        ("data.occasion.birthday", "Birthday", "Sinh nhật"),
+        ("data.occasion.business", "Business", "Công việc"),
+    ];
+    let grid = pairs
+        .iter()
+        .map(|(key, en, vi)| {
+            (
+                (*key).to_owned(),
+                [
+                    ("en".to_owned(), (*en).to_owned()),
+                    ("vi".to_owned(), (*vi).to_owned()),
+                ]
+                .into_iter()
+                .collect(),
+            )
+        })
+        .collect();
+    pos_edge_app::labels::LabelGrid::bounded(grid)
+}
+
 /// Publishes the package on its own profile; every other profile runs the release's default
 /// package. The `reactions` profile also enforces permissions and withholds the X report's.
 pub(super) fn publish_on_its_profile(document: &mut serde_json::Value) {
     if let Some(object) = document.as_object_mut().filter(|_| guests_required()) {
         object.insert("package".to_owned(), guests_required_package());
+    }
+    if let Some(object) = document.as_object_mut().filter(|_| custom_data()) {
+        object.insert("package".to_owned(), custom_data_package());
     }
     if reactions() {
         withhold_x_report(document);
@@ -167,6 +262,17 @@ mod tests {
             document["package"]["content"]["min_edge_version"],
             crate::version::VERSION
         );
+    }
+
+    /// The custom-data profile's version runs here, with its reservation type and list.
+    #[test]
+    fn the_custom_data_profile_runs_here() {
+        let document = serde_json::json!({ "package": super::custom_data_package() });
+        let content = crate::config_client::checked_package(&document, crate::version::released())
+            .expect("runs here")
+            .expect("a package");
+        assert_eq!(content.data.object_types.len(), 1);
+        assert_eq!(content.data.lists.len(), 1);
     }
 
     /// The reactions profile's version runs here, and its employee no longer holds the X report.

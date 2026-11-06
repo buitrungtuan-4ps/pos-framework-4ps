@@ -180,6 +180,25 @@
     },
     {
       "body": {
+        "screen_id": "records",
+        "root": {
+          "component_id": "screen_frame",
+          "children": [
+            {
+              "component_id": "page_header",
+              "properties": {
+                "title_key": "records.title"
+              }
+            },
+            {
+              "component_id": "records_body"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "body": {
         "screen_id": "shift",
         "root": {
           "component_id": "shift_screen"

@@ -56,6 +56,11 @@ async fn main() -> Result<(), EdgeError> {
         )
         .expect("seed the id generator"),
     );
+    // The `custom-data` profile's labels, as a tenant's grid would give them (ADR-0043): a real
+    // store pulls them from its cloud, and this example has none.
+    if let Some(grid) = demo::custom_data_labels() {
+        edge.apply_grid(grid);
+    }
 
     // Where to listen. `POS_EDGE_BIND` overrides the default so two of these can run at once —
     // a second instance on the same port dies with `AddrInUse`, which is what a contributor hits

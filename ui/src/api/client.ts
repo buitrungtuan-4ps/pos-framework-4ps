@@ -53,6 +53,10 @@ import type {
   ReasonCodesResponse,
   ReprintResponse,
   SettledBill,
+  CustomDataResponse,
+  CustomRecordsResponse,
+  NewRecordRequest,
+  SubjectResponse,
   SettleRequest,
   ShiftResponse,
   ShiftXResponse,
@@ -472,6 +476,16 @@ export const api = {
   // Today's settled bills, newest first, and a copy of one's receipt: the original under the same
   // number, marked COPY, and counted (ADR-0164). A bill that has not settled has no receipt to copy.
   settledBills: () => request<SettledBill[]>("GET", "/api/bills/settled"),
+  // A package's custom records (ADR-0194): one object type's, newest first, entering one and
+  // changing one. No answer carries a personal value; one subject's are read on their own, by a
+  // person holding `data.personal.read`, and every read is audited (ADR-0206).
+  customRecords: (objectTypeId: string) =>
+    request<CustomRecordsResponse>("GET", `/api/custom-records?object_type_id=${encodeURIComponent(objectTypeId)}`),
+  createCustomRecord: (body: NewRecordRequest) =>
+    request<CustomDataResponse>("POST", "/api/custom-records", body),
+  changeCustomRecord: (customRecordId: string, body: NewRecordRequest) =>
+    request<CustomDataResponse>("POST", `/api/custom-records/${customRecordId}/values`, body),
+  subject: (subjectId: string) => request<SubjectResponse>("GET", `/api/subjects/${subjectId}`),
   // What the store has taken today (ADR-0160): `403` unless the person's own role grants
   // `reports.takings.view`, whether or not the store enforces each person's own set.
   takings: () => request<TakingsResponse>("GET", "/api/reports/takings"),

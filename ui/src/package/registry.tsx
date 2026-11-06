@@ -128,6 +128,7 @@ export const IMPLEMENTATIONS: Implementations = {
   counter_frame: region("counter_frame"),
   counter_flow: region("counter_flow"),
   today_body: region("today_body"),
+  records_body: region("records_body"),
   shift_screen: region("shift_screen"),
   devices_body: region("devices_body"),
   pair_body: region("pair_body"),
