@@ -36,10 +36,12 @@ use crate::campaign::{LocalTime, Schedule, WeekdaySet};
 mod content;
 mod data;
 mod evolution;
+mod screens;
 
 pub use content::{ContentRefusal, LABEL_KEY_CHARS_MAX, check_content};
 pub use data::{DataRefusal, FieldAt, FieldFault, PERSONAL_FIELDS_AVAILABLE, check_data};
 pub use evolution::{EvolutionRefusal, check_evolution};
+pub use screens::{ScreenFault, ScreenRefusal, check_screens};
 
 /// What a variant is chosen against: the device, the person and the moment on screen.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize)]
@@ -62,7 +64,7 @@ pub struct VariantContext {
 }
 
 /// Why a part's variants cannot be published or applied.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VariantRefusal {
     /// No variant states nothing, so some context would have nothing to run.
     NoBaseVariant,

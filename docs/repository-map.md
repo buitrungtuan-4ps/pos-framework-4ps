@@ -117,6 +117,20 @@ first, then its entry; a new money act also needs its own ADR.
 | Snapshot | [`snapshots/actions.txt`](snapshots/actions.txt), via `just snapshot` | `the_committed_snapshot_matches_the_catalogue`; `xtask snapshot` refuses a removed act, effect or parameter |
 | The till's view | `ui/src/package/actions.ts`, rendered from the catalogue via `just snapshot`; never edited by hand | `the_tills_snapshot_of_the_catalogue_matches_it`; `ui/unit/package-actions.test.ts` |
 
+## Component in the screen catalogue
+
+A component a package's screen may name
+([ADR-0190](adr/0190-a-screen-is-drawn-from-the-package.md),
+[ADR-0203](adr/0203-a-component-reads-its-own-data.md)). A new component is a release: its
+implementation in the till first, then its entry. It reads one fixed part of the screen's context,
+and its properties are literals.
+
+| Step | Files | Checked by |
+|---|---|---|
+| The entry | `CATALOGUE` in `crates/pos-proto/src/screen/catalogue.rs`: id, what it reads, typed properties, whether it holds children, the action parameters it supplies, device classes, fallback, release | `pos-proto` tests (`screen::tests`) |
+| Snapshot | [`snapshots/components.txt`](snapshots/components.txt), via `just snapshot` | `the_committed_snapshot_matches_the_catalogue`; `xtask snapshot` refuses a removed component, property, token, supplied parameter or device class |
+| The till's view | `ui/src/package/components.ts`, rendered from the catalogue via `just snapshot`; never edited by hand | `the_tills_snapshot_of_the_components_matches_it` |
+
 ## Event
 
 | Step | Files | Checked by |

@@ -204,6 +204,7 @@ mod tests {
                 min_edge_version: ReleaseTag::new(min_edge_version),
                 time_slots: Vec::new(),
                 flows: Vec::new(),
+                screens: Vec::new(),
                 data: pos_proto::package::PackageData::default(),
             },
             create_time: Timestamp::EPOCH,

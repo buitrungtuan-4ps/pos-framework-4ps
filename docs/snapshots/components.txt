@@ -1,0 +1,45 @@
+# Generated from crates/pos-proto/src/screen/catalogue.rs — do not edit.
+# One line per fact. A bare component id and its property, children, supplies and
+# device_class lines are contracts; its reads, fallback and since lines may change.
+# ADR-0190 decision 2.
+action_button
+action_button	children=false
+action_button	device_class=DEVICE_CLASS_KIOSK
+action_button	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+action_button	device_class=DEVICE_CLASS_PHONE
+action_button	device_class=DEVICE_CLASS_TABLET
+action_button	device_class=DEVICE_CLASS_TERMINAL
+action_button	property=action:PROPERTY_KIND_ACTION:required
+action_button	property=label_key:PROPERTY_KIND_TRANSLATION_KEY:required
+action_button	property=variant:PROPERTY_KIND_TOKEN:optional
+action_button	property=variant:token=danger
+action_button	property=variant:token=primary
+action_button	property=variant:token=secondary
+action_button	reads=subject
+action_button	since=0.14.1
+action_button	supplies=order_id
+action_button	supplies=table_id
+stack
+stack	children=true
+stack	device_class=DEVICE_CLASS_KIOSK
+stack	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+stack	device_class=DEVICE_CLASS_PHONE
+stack	device_class=DEVICE_CLASS_TABLET
+stack	device_class=DEVICE_CLASS_TERMINAL
+stack	property=direction:PROPERTY_KIND_TOKEN:optional
+stack	property=direction:token=horizontal
+stack	property=direction:token=vertical
+stack	since=0.14.1
+text
+text	children=false
+text	device_class=DEVICE_CLASS_KIOSK
+text	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+text	device_class=DEVICE_CLASS_PHONE
+text	device_class=DEVICE_CLASS_TABLET
+text	device_class=DEVICE_CLASS_TERMINAL
+text	property=text_key:PROPERTY_KIND_TRANSLATION_KEY:required
+text	property=variant:PROPERTY_KIND_TOKEN:optional
+text	property=variant:token=body
+text	property=variant:token=muted
+text	property=variant:token=title
+text	since=0.14.1
