@@ -15,6 +15,12 @@ export interface KeptTable {
   /** The table, held while the screen is hidden. */
   readonly id: string;
   readonly shown: Accessor<boolean>;
+  /**
+   * Shows `id` now, ahead of the router: for an act that changes the table and its order in one
+   * tap, so both are drawn in one update. The address follows, and the router's change then draws
+   * nothing new.
+   */
+  readonly follow: (id: string) => void;
 }
 
 export const KeptTableContext = createContext<KeptTable>();
