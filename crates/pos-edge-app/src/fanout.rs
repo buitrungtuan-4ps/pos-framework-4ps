@@ -172,6 +172,13 @@ impl Fanout {
         self.sender.receiver_count()
     }
 
+    /// Holds back every frame until the guard drops: a test's view of a command committed and not
+    /// yet heard by any device.
+    #[cfg(test)]
+    pub(crate) fn hold(&self) -> impl Sized + '_ {
+        self.lock_replay()
+    }
+
     /// Locks the replay buffer, recovering from a poisoned lock rather than propagating the panic.
     /// Every critical section leaves the buffer whole, so the value behind a poisoned lock is sound.
     fn lock_replay(&self) -> MutexGuard<'_, ReplayBuffer> {

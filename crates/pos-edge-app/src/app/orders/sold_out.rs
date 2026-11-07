@@ -5,6 +5,7 @@
 
 use pos_core::decision::Actor;
 use pos_core::permission::Permission;
+use pos_ports::TxContext;
 use pos_ports::event_store::EventStore;
 use pos_proto::events::{InventoryItemRestored, InventoryItemSoldOut};
 use pos_proto::ids::MenuItemId;
@@ -90,17 +91,74 @@ impl<S: EventStore> Edge<S> {
         if self.item_sold_out(menu_item_id) == sold_out {
             return Ok(());
         }
-        if sold_out {
+        let (envelope, message) = if sold_out {
             let payload = InventoryItemSoldOut {
                 menu_item_id,
                 automatic: false,
             };
-            self.commit_and_publish(&ctx, &payload).await?;
+            self.prepare(&ctx, &payload)?
         } else {
-            let payload = InventoryItemRestored { menu_item_id };
-            self.commit_and_publish(&ctx, &payload).await?;
-        }
+            self.prepare(&ctx, &InventoryItemRestored { menu_item_id })?
+        };
+        let mut tx = self.store.begin().await?;
+        self.store.append(&mut tx, &[envelope]).await?;
+        tx.commit().await?;
+        // Folded before any device is told, not after: a till that hears an item brought back reads
+        // the price book again at once, and a read served between the two answered the item still
+        // sold out, under a new tag, with nothing left to read it again. That till kept the item
+        // greyed out while every other till sold it.
         self.lock_projection().set_sold_out(menu_item_id, sold_out);
+        self.fanout.publish(&message);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use pos_proto::ids::MenuItemId;
+    use pos_proto::ulid::Ulid;
+
+    use crate::app::tests::{actor, edge_with_menu};
+
+    // The fan-out is held, so the mark is committed and no device has heard it yet: whatever a
+    // device then reads must already answer the mark, both ways.
+    #[test]
+    fn a_device_that_hears_a_mark_reads_it_back() {
+        let edge = Arc::new(edge_with_menu());
+        let item = MenuItemId::new(Ulid::from_u128(500));
+        let mut device = edge.fanout().subscribe();
+        for sold_out in [true, false] {
+            let held = edge.fanout().hold();
+            let writer = {
+                let edge = Arc::clone(&edge);
+                std::thread::spawn(move || {
+                    pos_fakes::executor::run_ready(async {
+                        if sold_out {
+                            edge.mark_item_sold_out(actor(), item).await
+                        } else {
+                            edge.restore_item(actor(), item).await
+                        }
+                    })
+                })
+            };
+            // Bounded by tries rather than by a clock: the writer needs a handful.
+            let answered = (0..10_000_000).any(|_| {
+                std::thread::yield_now();
+                edge.item_sold_out(item) == sold_out
+            });
+            assert!(
+                answered,
+                "the store answers the mark only once a device has been told of it"
+            );
+            assert!(device.try_recv().is_err(), "no device has heard it yet");
+            drop(held);
+            writer
+                .join()
+                .expect("the writer ran")
+                .expect("the mark is recorded");
+            assert!(device.try_recv().is_ok(), "then every device hears it");
+        }
     }
 }
