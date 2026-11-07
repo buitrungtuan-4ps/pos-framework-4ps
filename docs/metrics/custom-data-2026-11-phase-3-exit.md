@@ -8,7 +8,7 @@ an event or a log.* This record walks each part to the code and the test that sh
 [till-latency-2026-11-phase-2-exit.md](till-latency-2026-11-phase-2-exit.md), it records one moment
 and is not regenerated.
 
-**Recorded at** `MAIN_SHA` on `main` (#1216, the last pull request before this record).
+**Recorded at** `4f5ba9a8` on `main` (#1217, the last pull request before this record).
 
 ## The criterion, part by part
 
@@ -46,9 +46,22 @@ masked.
 
 ## Replays
 
-The full replay suite (`ui/tests/replay.spec.mjs`) against a `minimal-edge` stamped
-`POS_EDGE_RELEASE_VERSION=0.14.1`: REPLAY_FULL normally and REPLAY_PIN pinned to two CPUs
-(`taskset -c 0,1`). The console's replays (`dashboard/tests/replay.spec.mjs`): CONSOLE_REPLAY.
+On `4f5ba9a8` with this record's test, against a `minimal-edge` stamped
+`POS_EDGE_RELEASE_VERSION=0.14.1`: the till's full suite (`ui/tests`, 230 tests: 226 flows in
+`replay.spec.mjs`, 3 in `store.spec.mjs`, 1 in `catalogue.spec.mjs`) passed 230 of 230 normally, and
+230 of 230 pinned to two CPUs (`taskset -c 0,1`). The console's replays
+(`dashboard/tests/replay.spec.mjs`, against PostgreSQL 16): 17 of 17.
+
+Not every run during the phase was green. On 2026-11-07 the till flow *an item marked sold out on
+one till stops selling on every till, until it is brought back* timed out in 2 of about 21 full
+local runs; it never failed in CI. The till that brought the item back kept it greyed out while the
+other till sold it. Three more full runs on `91d6807a` did not fail: one plain, one beside a
+concurrent build, one pinned beside it. The cause was in the edge: it told every device an item was
+back before it recorded that in what `GET /api/menu` answers, so a till that read the price book in
+between was answered with the item still sold out, and its own read after the answer joined that
+read rather than following it. An edge built to widen that moment reproduced the failure. #1217 records
+the item first, and #1217's own test fails if the order is put back. With the fix, the same widened
+moment passed 3 of 3 runs, and the suite passed as above.
 
 ## Left to the owner
 
@@ -66,7 +79,7 @@ Go-live gains gate L8: a box that holds personal custom values runs with full-di
 
 ## What phase 3 shipped
 
-Pull requests #1165 to #1178 and #1205 to #1216:
+Pull requests #1165 to #1178 and #1205 to #1217:
 
 - the two ADRs (ADR-0206, ADR-0207) and their acceptance;
 - the data part of a package, checked and additive;
@@ -77,4 +90,5 @@ Pull requests #1165 to #1178 and #1205 to #1216:
 - the Records screen;
 - the receipt template, receipt printing and the record slip;
 - erasure by subject id;
-- lifting the personal-field refusal.
+- lifting the personal-field refusal;
+- an item brought back on sale before any till hears of it (#1217).
