@@ -13,6 +13,7 @@
 //! calculation, in one place, with the domain as its home ([ADR-0028](../../../../docs/adr/0028-settlement-and-payment-invariant.md)):
 //! the till displays, it does not decide.
 
+use crate::app::PrintedObjects;
 use std::sync::Arc;
 
 use axum::Json;
@@ -25,6 +26,7 @@ use pos_core::billing::BillTotals;
 use pos_core::decision::Actor;
 use pos_core::permission::Permission;
 use pos_ports::event_store::EventStore;
+use pos_ports::subject_store::SubjectStore;
 use pos_proto::WireEnum;
 use pos_proto::events::BillFeeLine;
 use pos_proto::ids::{BillId, DeviceId, OrderId, TableId};
@@ -300,7 +302,7 @@ pub(crate) async fn print_table_check<S>(
     Path(table_id): Path<String>,
 ) -> Response
 where
-    S: EventStore + Send + Sync + 'static,
+    S: EventStore + SubjectStore + Send + Sync + 'static,
 {
     let Some(table_id) = parse_ulid(&table_id).map(TableId::new) else {
         return bad_request("a table id is a ULID");
@@ -350,7 +352,7 @@ pub(crate) async fn print_order_check<S>(
     Path(order_id): Path<String>,
 ) -> Response
 where
-    S: EventStore + Send + Sync + 'static,
+    S: EventStore + SubjectStore + Send + Sync + 'static,
 {
     let Some(order_id) = parse_ulid(&order_id).map(OrderId::new) else {
         return bad_request("an order id is a ULID");
@@ -397,7 +399,7 @@ pub(crate) async fn print_bill_check<S>(
     Path(bill_id): Path<String>,
 ) -> Response
 where
-    S: EventStore + Send + Sync + 'static,
+    S: EventStore + SubjectStore + Send + Sync + 'static,
 {
     let Some(bill_id) = parse_ulid(&bill_id).map(BillId::new) else {
         return bad_request("a bill id is a ULID");
@@ -432,7 +434,7 @@ async fn print_all<S>(
     pre_bills: Result<Vec<PreBill>, AppError>,
 ) -> Response
 where
-    S: EventStore + Send + Sync + 'static,
+    S: EventStore + SubjectStore + Send + Sync + 'static,
 {
     let pre_bills = match pre_bills {
         Ok(pre_bills) if pre_bills.is_empty() => {
@@ -449,6 +451,16 @@ where
         Some(printers) => printers.till_for(&session, device).await,
         None => TillPrinting::STORE,
     };
+    // The receipt template of the order's channel (ADR-0207). A pre-bill left on a table is never
+    // the person's own copy, so a personal field prints its label alone.
+    let template = match printers {
+        Some(printers) => {
+            printers
+                .template_for(edge, &session, &till, PrintedObjects::Order(order_id), None)
+                .await
+        }
+        None => None,
+    };
     let mut prints = Vec::with_capacity(pre_bills.len());
     for pre_bill in &pre_bills {
         let outcome = match printers {
@@ -462,6 +474,7 @@ where
                         edge.print_job_id(),
                         &reference,
                         pre_bill,
+                        template.as_ref(),
                     )
                     .await
             }

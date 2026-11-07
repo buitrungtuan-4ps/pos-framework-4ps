@@ -237,7 +237,7 @@ async fn a_printer_that_names_a_live_agent_is_queued_rather_than_dialled() {
             41,
             &[],
             &totals_of(Money::new(CurrencyCode::VND, 90_000)),
-            None,
+            (None, None),
         )
         .await;
 
@@ -282,7 +282,7 @@ async fn a_printer_with_no_agent_still_opens_its_own_transport() {
             42,
             &[],
             &totals_of(Money::new(CurrencyCode::VND, 10_000)),
-            None,
+            (None, None),
         )
         .await;
     assert_eq!(outcome, PrintOutcome::Printed);
@@ -309,7 +309,7 @@ async fn an_unbound_or_silent_agent_is_refused_before_the_queue_is_touched() {
                 43,
                 &[],
                 &totals_of(Money::new(CurrencyCode::VND, 10_000)),
-                None,
+                (None, None),
             )
             .await;
         assert_eq!(outcome, PrintOutcome::AgentUnavailable);
@@ -366,7 +366,7 @@ async fn a_printer_whose_agent_is_alive_but_not_consuming_fills_and_then_refuses
             44,
             &[],
             &totals_of(Money::new(CurrencyCode::VND, 10_000)),
-            None,
+            (None, None),
         )
         .await;
     assert_eq!(outcome, PrintOutcome::QueueFull);
@@ -392,7 +392,7 @@ async fn a_named_agent_with_no_queue_composed_refuses_rather_than_dialling() {
             45,
             &[],
             &totals_of(Money::new(CurrencyCode::VND, 10_000)),
-            None,
+            (None, None),
         )
         .await;
     assert_eq!(outcome, PrintOutcome::AgentUnavailable);

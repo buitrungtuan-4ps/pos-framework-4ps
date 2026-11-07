@@ -467,11 +467,10 @@ where
     };
     let printed = match printers.as_deref() {
         Some(printers) => {
-            // At the printer of the till the copy was asked for at (ADR-0160 decision 4).
-            let session = edge.session();
-            let till = printers.till_for(&session, actor.device_id).await;
+            // At the printer of the till the copy was asked for at (ADR-0160 decision 4), with
+            // the template of its order's channel (ADR-0207).
             printers
-                .print_receipt_copy(&session, &till, edge.store_id(), &copy, buyer.as_ref())
+                .print_bill_copy(&edge, actor, &copy, buyer.as_ref())
                 .await
         }
         None => PrintOutcome::NoPrinter,
@@ -508,7 +507,7 @@ async fn print_receipt_for<S>(
     buyer: Option<&BuyerDetails>,
 ) -> PrintOutcome
 where
-    S: EventStore + Send + Sync + 'static,
+    S: EventStore + SubjectStore + Send + Sync + 'static,
 {
     let (Some(printers), Some(receipt_number), Some(totals)) =
         (printers, view.receipt_number, view.totals.as_ref())
@@ -519,6 +518,9 @@ where
     // decision 4). The drawer above is the store's unless the store keeps a drawer per till.
     let session = edge.session();
     let till = printers.till_for(&session, device).await;
+    let template = printers
+        .bill_template(edge, (&session, &till), view.bill_id, buyer.is_some(), None)
+        .await;
     printers
         .print_receipt(
             &session,
@@ -531,7 +533,7 @@ where
             receipt_number,
             &view.lines,
             totals,
-            buyer,
+            (buyer, template.as_ref()),
         )
         .await
 }

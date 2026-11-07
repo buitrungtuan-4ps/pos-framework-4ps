@@ -85,6 +85,10 @@ pub struct PaperLabels {
     pub amount: &'static str,
     /// The reason the void cited.
     pub reason: &'static str,
+    /// A yes-or-no custom field's yes, on a receipt template (ADR-0207).
+    pub yes: &'static str,
+    /// Its no.
+    pub no: &'static str,
     /// The till the void was done at.
     pub till: &'static str,
     /// When it was voided.
@@ -166,6 +170,8 @@ pub static ENGLISH: PaperLabels = PaperLabels {
     bill_voided: "BILL VOIDED",
     amount: "Amount",
     reason: "Reason",
+    yes: "Yes",
+    no: "No",
     till: "Till",
     time: "Time",
     cash_returned: "Cash returned",
@@ -223,6 +229,8 @@ pub static VIETNAMESE: PaperLabels = PaperLabels {
     bill_voided: "HÓA ĐƠN ĐÃ HỦY",
     amount: "Số tiền",
     reason: "Lý do",
+    yes: "Có",
+    no: "Không",
     till: "Quầy",
     time: "Thời gian",
     cash_returned: "Tiền mặt trả lại",

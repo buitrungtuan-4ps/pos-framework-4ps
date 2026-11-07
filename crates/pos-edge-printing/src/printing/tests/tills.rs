@@ -167,7 +167,7 @@ async fn receipt_from(printers: &Printers, session: &EdgeSession, device: u128) 
             42,
             &[],
             &totals_of(Money::new(CurrencyCode::VND, 99_000)),
-            None,
+            (None, None),
         )
         .await
 }
@@ -327,7 +327,7 @@ async fn a_tills_language_prints_its_receipt_in_that_language_and_the_others_in_
                 42,
                 &lines,
                 &totals_of(price),
-                None,
+                (None, None),
             )
             .await;
         assert_eq!(outcome, PrintOutcome::Printed);

@@ -28,6 +28,7 @@ use pos_proto::package::PackageContent;
 use pos_proto::printing::PublishedPrinting;
 use pos_proto::qr::PublishedQr;
 use pos_proto::reason_codes::PublishedReasonCodes;
+use pos_proto::receipt::PublishedReceipt;
 use pos_proto::session::PublishedSession;
 use pos_proto::shift::PublishedShift;
 use pos_proto::store_profile::StoreProfile;
@@ -247,6 +248,11 @@ pub struct EdgeSession {
     /// the receipt's language and whether a settle prints it. The defaults in the bootstrap, which
     /// are what the edge did before the node existed.
     pub printing: PublishedPrinting,
+    /// The receipt templates, from the `receipt` config node
+    /// ([ADR-0207](../../../../docs/adr/0207-a-receipt-is-a-structured-template-per-store-and-channel.md)):
+    /// what a receipt, its copy, a pre-bill and a record's slip print above and below their legal
+    /// body. None in the bootstrap, which prints as before.
+    pub receipt: PublishedReceipt,
     /// The settings on the `qr` config node (ADR-0160 item 2): what a guest's order does at a table
     /// that already has an open order. The defaults in the bootstrap, which are what the edge did
     /// before the node carried them.

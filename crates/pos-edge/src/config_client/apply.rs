@@ -18,6 +18,7 @@ use super::{
 
 use crate::origins::Origins;
 use pos_proto::billing::PublishedBilling;
+use pos_proto::receipt::PublishedReceipt;
 
 /// The store's display language from the `locale` node, and the `menu` node in it (ADR-0066,
 /// ADR-0074).
@@ -191,7 +192,7 @@ pub(super) fn apply_store_identity(session: &mut EdgeSession, document: &serde_j
     }
 }
 
-/// The `shift`, `session`, `printing` and `qr` nodes of settings (ADR-0160).
+/// The `shift`, `session`, `printing`, `receipt` and `qr` nodes of settings (ADR-0160, ADR-0207).
 pub(super) fn apply_settings(session: &mut EdgeSession, document: &serde_json::Value) {
     // The `shift` node (ADR-0160): how the store runs its shifts. Every field is a setting, and a
     // setting the document does not carry means its default (ADR-0160 decision 1) — so, unlike the
@@ -235,6 +236,19 @@ pub(super) fn apply_settings(session: &mut EdgeSession, document: &serde_json::V
                 .and_then(|text| serde_json::from_str::<PublishedPrinting>(&text).ok())
             {
                 session.printing = printing;
+            }
+        }
+    }
+    // The `receipt` node (ADR-0207), read as the `printing` node is: absent puts no template back,
+    // unparseable keeps the last.
+    match document.get(PublishedReceipt::NODE) {
+        None => session.receipt = PublishedReceipt::default(),
+        Some(value) => {
+            if let Some(receipt) = serde_json::to_string(value)
+                .ok()
+                .and_then(|text| serde_json::from_str::<PublishedReceipt>(&text).ok())
+            {
+                session.receipt = receipt;
             }
         }
     }

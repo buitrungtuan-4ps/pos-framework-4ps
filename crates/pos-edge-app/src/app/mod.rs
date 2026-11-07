@@ -50,6 +50,7 @@ mod orders;
 mod package;
 mod projection;
 mod publish;
+mod receipt_fields;
 mod records;
 mod roster;
 mod session;
@@ -60,6 +61,7 @@ pub use config_wake::{ConfigDelivery, ConfigWakeReport, ConfigWakeStanding, WAKE
 pub use custom_data::{CONSENT_FIELD_PREFIX, CustomDataView};
 pub use error::{AppError, Approval};
 pub use package::{PackageRefusal, PackageStanding, RefusedPackage};
+pub use receipt_fields::{PersonalOnPaper, PrintedField, PrintedObjects, PrintedValue};
 pub(crate) use records::fee_records;
 pub use records::fee_records_in;
 use records::{

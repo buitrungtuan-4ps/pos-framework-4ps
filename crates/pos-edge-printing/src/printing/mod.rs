@@ -81,6 +81,7 @@ mod documents;
 mod drawer;
 mod jobs;
 mod language;
+mod template;
 mod tickets;
 mod transports;
 mod x_read;
@@ -97,6 +98,7 @@ pub use documents::{
     receipt_document, shift_report_document, test_page_document, void_slip_document,
 };
 pub use language::{SecondLanguage, receipt_language, ticket_language};
+pub use template::TemplatePrint;
 pub use tickets::{TicketLine, TicketNote, ticket_at, ticket_document, ticket_line};
 pub use transports::{TcpTransports, TransportFactory, assumed_capabilities};
 pub use x_read::{XPaper, x_document};
