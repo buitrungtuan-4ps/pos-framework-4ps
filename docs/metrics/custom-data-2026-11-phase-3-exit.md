@@ -79,7 +79,7 @@ Go-live gains gate L8: a box that holds personal custom values runs with full-di
 
 ## What phase 3 shipped
 
-Pull requests #1165 to #1178 and #1205 to #1217:
+Pull requests #1165 to #1178 and #1205 to #1218:
 
 - the two ADRs (ADR-0206, ADR-0207) and their acceptance;
 - the data part of a package, checked and additive;
@@ -91,4 +91,5 @@ Pull requests #1165 to #1178 and #1205 to #1217:
 - the receipt template, receipt printing and the record slip;
 - erasure by subject id;
 - lifting the personal-field refusal;
-- an item brought back on sale before any till hears of it (#1217).
+- an item brought back on sale before any till hears of it (#1217);
+- this exit record and the test that a personal value reaches no event or log (#1218).
