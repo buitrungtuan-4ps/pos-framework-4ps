@@ -18254,7 +18254,7 @@
             }
           },
           "400": {
-            "description": "tenant_id or package_id is not a ULID, or the content is refused: a blank or long label, a malformed or repeated time slot, a window that is not whole, a data part ADR-0194 refuses, or content over 1 MiB. The detail names the field: its code is `INVALID`, `PERSONAL_FIELD_UNAVAILABLE` for a field declared personal before personal fields are available (ADR-0206), or `NOT_ADDITIVE` for data that removes, moves or retypes what an earlier version declared",
+            "description": "tenant_id or package_id is not a ULID, or the content is refused: a blank or long label, a malformed or repeated time slot, a window that is not whole, a data part ADR-0194 refuses, or content over 1 MiB. The detail names the field: its code is `INVALID`, or `NOT_ADDITIVE` for data that removes, moves or retypes what an earlier version declared",
             "content": {
               "application/json": {
                 "schema": {

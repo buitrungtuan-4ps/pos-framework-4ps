@@ -112,9 +112,10 @@ fn reactions_package() -> serde_json::Value {
 /// Whether this demo store's package declares custom data — `POS_DEMO_PROFILE=custom-data`.
 ///
 /// That profile publishes a version with a reservation object type (ADR-0194): a required party
-/// size, an occasion chosen from a list, a date and a window-seat flag, none of them personal, and
-/// holds the labels a tenant's grid would give them (ADR-0043), so the browser gate can enter,
-/// change and read back a record on the till. Every other profile declares no custom data.
+/// size, an occasion chosen from a list, a date, a window-seat flag and a personal contact note kept
+/// 30 days behind a consent (ADR-0206), and holds the labels a tenant's grid would give them
+/// (ADR-0043), so the browser gate can enter, change and read back a record on the till, and walk
+/// a personal value's path with a made-up note. Every other profile declares no custom data.
 pub(crate) fn custom_data() -> bool {
     std::env::var("POS_DEMO_PROFILE")
         .is_ok_and(|profile| profile.eq_ignore_ascii_case("custom-data"))
@@ -150,6 +151,11 @@ fn custom_data_package() -> serde_json::Value {
                         { "custom_field_id": Ulid::from_u128(414).to_string(),
                           "label_key": "data.reservation.window",
                           "field_type": "CUSTOM_FIELD_TYPE_BOOL", "personal": false },
+                        { "custom_field_id": Ulid::from_u128(415).to_string(),
+                          "label_key": "data.reservation.contact",
+                          "field_type": "CUSTOM_FIELD_TYPE_TEXT", "personal": true,
+                          "retention_days": 30,
+                          "consent_purpose_key": "data.consent.reservation" },
                     ],
                 }],
                 "lists": [{
@@ -167,11 +173,15 @@ fn custom_data_package() -> serde_json::Value {
     })
 }
 
-/// The `custom-data` profile's receipt template (ADR-0207): a reservation's party size and occasion
-/// print on its slip, which is the person's own copy.
+/// The `custom-data` profile's receipt template (ADR-0207): a reservation's party size, occasion and
+/// contact note print on its slip, which is the person's own copy, so the note prints there only.
 fn custom_data_receipt() -> serde_json::Value {
     serde_json::json!({ "templates": { "base": {
-        "custom_field_ids": [Ulid::from_u128(411).to_string(), Ulid::from_u128(412).to_string()],
+        "custom_field_ids": [
+            Ulid::from_u128(411).to_string(),
+            Ulid::from_u128(412).to_string(),
+            Ulid::from_u128(415).to_string(),
+        ],
         "person_copy": ["PERSON_COPY_RECORD_SLIP"],
     }}})
 }
@@ -189,6 +199,16 @@ pub fn custom_data_labels() -> Option<pos_edge_app::labels::LabelGrid> {
         ("data.reservation.occasion", "Occasion", "Dịp"),
         ("data.reservation.day", "Day", "Ngày"),
         ("data.reservation.window", "Window seat", "Chỗ cạnh cửa sổ"),
+        (
+            "data.reservation.contact",
+            "Contact note",
+            "Ghi chú liên hệ",
+        ),
+        (
+            "data.consent.reservation",
+            "keep a contact note for this reservation",
+            "lưu ghi chú liên hệ cho lần đặt bàn này",
+        ),
         ("data.list.occasion", "Occasions", "Các dịp"),
         ("data.occasion.birthday", "Birthday", "Sinh nhật"),
         ("data.occasion.business", "Business", "Công việc"),
@@ -274,7 +294,8 @@ mod tests {
         );
     }
 
-    /// The custom-data profile's version runs here, with its reservation type and list.
+    /// The custom-data profile's version runs here, with its reservation type and list, and the edge
+    /// applies its personal field now that ADR-0206 decision 11's refusal is lifted.
     #[test]
     fn the_custom_data_profile_runs_here() {
         let document = serde_json::json!({ "package": super::custom_data_package() });
@@ -282,6 +303,15 @@ mod tests {
             .expect("runs here")
             .expect("a package");
         assert_eq!(content.data.object_types.len(), 1);
+        assert!(
+            content
+                .data
+                .object_types
+                .iter()
+                .flat_map(|kind| kind.fields.iter())
+                .any(|field| field.personal == Some(true)),
+            "the personal contact note is applied"
+        );
         assert_eq!(content.data.lists.len(), 1);
         let receipt: pos_proto::receipt::PublishedReceipt =
             serde_json::from_value(super::custom_data_receipt()).expect("the receipt node parses");

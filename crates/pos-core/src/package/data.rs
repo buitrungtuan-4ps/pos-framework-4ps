@@ -17,10 +17,6 @@ use pos_proto::package::{
 use pos_proto::text::TranslationKey;
 use pos_proto::wire_enum::{Open, WireEnum};
 
-/// Whether a field may be declared personal yet. Off until the store keeps each personal record
-/// for its own period and an erasure reaches it (ADR-0206 decision 11).
-pub const PERSONAL_FIELDS_AVAILABLE: bool = false;
-
 /// Where a refused field is: the `n`th of the data part's custom fields, or the `field`th field of
 /// the `object_type`th object type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,8 +62,6 @@ pub enum FieldFault {
     /// A personal field whose retention period differs from another personal field of the same
     /// object or type (ADR-0206 decision 2).
     RetentionDisagrees,
-    /// A personal field, before personal fields are available (ADR-0206 decision 11).
-    PersonalUnavailable,
 }
 
 /// Why a data part cannot be published or applied.
@@ -99,8 +93,7 @@ impl DataRefusal {
             Self::Field(FieldAt::Object(_), fault) => match fault {
                 FieldFault::PersonalUndeclared
                 | FieldFault::TextNotPersonal
-                | FieldFault::PersonalOnStaff
-                | FieldFault::PersonalUnavailable => "data.custom_fields.personal",
+                | FieldFault::PersonalOnStaff => "data.custom_fields.personal",
                 FieldFault::Retention | FieldFault::RetentionDisagrees => {
                     "data.custom_fields.retention_days"
                 }
@@ -115,8 +108,7 @@ impl DataRefusal {
             Self::Field(FieldAt::Type { .. }, fault) => match fault {
                 FieldFault::PersonalUndeclared
                 | FieldFault::TextNotPersonal
-                | FieldFault::PersonalOnStaff
-                | FieldFault::PersonalUnavailable => "data.object_types.fields.personal",
+                | FieldFault::PersonalOnStaff => "data.object_types.fields.personal",
                 FieldFault::Retention | FieldFault::RetentionDisagrees => {
                     "data.object_types.fields.retention_days"
                 }
@@ -128,20 +120,6 @@ impl DataRefusal {
                 | FieldFault::Unit
                 | FieldFault::Consent => "data.object_types.fields",
             },
-        }
-    }
-
-    /// The code the console's field error carries: `PERSONAL_FIELD_UNAVAILABLE` for a personal field
-    /// refused because personal fields are not available yet, `INVALID` for every other fault.
-    #[must_use]
-    pub const fn code(self) -> &'static str {
-        match self {
-            Self::Field(_, FieldFault::PersonalUnavailable) => "PERSONAL_FIELD_UNAVAILABLE",
-            Self::TooManyFields
-            | Self::TooManyObjectTypes
-            | Self::ObjectType(_)
-            | Self::List(_)
-            | Self::Field(..) => "INVALID",
         }
     }
 }
@@ -198,7 +176,6 @@ const fn fault_text(fault: FieldFault) -> &'static str {
         FieldFault::RetentionDisagrees => {
             "the personal fields of one object or type share one retention period"
         }
-        FieldFault::PersonalUnavailable => "personal fields are not available yet",
     }
 }
 
@@ -376,11 +353,7 @@ fn check_personal(
     if object == DataObject::Shift {
         return Err(FieldFault::PersonalOnStaff);
     }
-    if PERSONAL_FIELDS_AVAILABLE {
-        Ok(())
-    } else {
-        Err(FieldFault::PersonalUnavailable)
-    }
+    Ok(())
 }
 
 fn is_label_key(key: &TranslationKey) -> bool {

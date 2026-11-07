@@ -117,7 +117,7 @@ async fn main() -> Result<(), EdgeError> {
 }
 
 /// The badges the demo roster carries, printed so the browser gate reads them rather than repeating
-/// them: the employee's, and on the `approvals` profile the manager's who approves for them.
+/// them: the employee's, and on the `approvals` and `custom-data` profiles the manager's.
 fn print_badges() {
     if demo::staffed() {
         tracing::info!(
@@ -125,7 +125,7 @@ fn print_badges() {
             demo::DEMO_STAFF_CODE,
             demo::DEMO_STAFF_PIN
         );
-        if demo::approvals() {
+        if demo::has_manager() {
             tracing::info!(
                 "approve with code {} and PIN {}",
                 demo::DEMO_MANAGER_CODE,

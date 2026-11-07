@@ -283,16 +283,14 @@ async fn a_data_part_is_published_checked_and_only_ever_added_to() {
         "01J0000000000000000000CF01"
     );
 
-    let personal = OCCASION.replace(
-        r#""field_type":"CUSTOM_FIELD_TYPE_CHOICE","personal":false,"custom_list_id":"01J0000000000000000000CA01""#,
-        r#""field_type":"CUSTOM_FIELD_TYPE_TEXT","personal":true,"retention_days":30,"consent_purpose_key":"data.consent.order""#,
+    // A personal field on a shift is refused: no record is kept about staff (ADR-0206 decision 8).
+    let on_staff = OCCASION.replace(
+        "}],\"lists\"",
+        r#"},{"custom_field_id":"01J0000000000000000000CF09","object":"DATA_OBJECT_SHIFT","label_key":"data.shift.note","field_type":"CUSTOM_FIELD_TYPE_TEXT","personal":true,"retention_days":30,"consent_purpose_key":"data.consent.shift"}],"lists""#,
     );
-    let (status, body) = publish(personal).await;
+    let (status, body) = publish(on_staff).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-    assert!(
-        body.to_string().contains("PERSONAL_FIELD_UNAVAILABLE"),
-        "{body}"
-    );
+    assert!(body.to_string().contains("INVALID"), "{body}");
     assert!(
         body.to_string().contains("data.custom_fields.personal"),
         "{body}"
@@ -304,8 +302,14 @@ async fn a_data_part_is_published_checked_and_only_ever_added_to() {
 
     let added = OCCASION.replace(
         "]}]}",
-        r#"]}],"object_types":[{"object_type_id":"01J00000000000000000000B01","label_key":"data.reservation","fields":[{"custom_field_id":"01J0000000000000000000CF02","label_key":"data.reservation.party","field_type":"CUSTOM_FIELD_TYPE_INT","personal":false}]}]}"#,
+        r#"]}],"object_types":[{"object_type_id":"01J00000000000000000000B01","label_key":"data.reservation","fields":[{"custom_field_id":"01J0000000000000000000CF02","label_key":"data.reservation.party","field_type":"CUSTOM_FIELD_TYPE_INT","personal":false},{"custom_field_id":"01J0000000000000000000CF03","label_key":"data.reservation.contact","field_type":"CUSTOM_FIELD_TYPE_TEXT","personal":true,"retention_days":30,"consent_purpose_key":"data.consent.reservation"}]}]}"#,
     );
+    // A personal field declared in full is published now that ADR-0206's expiry and erasure have
+    // landed (decision 11 lifted).
     let (status, body) = publish(added).await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(
+        body["content"]["data"]["object_types"][0]["fields"][1]["personal"],
+        true
+    );
 }

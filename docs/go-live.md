@@ -132,19 +132,26 @@ covers this in full.
     power cycle means activating the store again, and a store key does not stand in for it. Find
     that out on your schedule, not during service.
 
+21. ⛔ **GATE — full-disk encryption** ([L8](gate-register.md#5-privacy-and-legal--before-a-real-customers-data-is-processed)),
+    before the store's package declares a personal field. A box that holds personal custom values
+    runs with the operating system's full-disk encryption (BitLocker on the Windows reference box)
+    ([ADR-0206](adr/0206-a-personal-custom-value-stays-on-its-store-and-expires-on-its-own-clock.md)
+    decision 10). The values rest in the store's `subjects` table as plain JSON; only the store
+    archive is sealed.
+
 ## Phase 5 — Publish, then trade
 
-21. **Publish the configuration.** The store pulls; the cloud never pushes into a shop. A published
+22. **Publish the configuration.** The store pulls; the cloud never pushes into a shop. A published
     menu, tax table, permission set or capability flag hot-swaps the live session without a restart.
 
-22. **Verify the loop closed, in this order.** Each of these is a different link in the chain, and
+23. **Verify the loop closed, in this order.** Each of these is a different link in the chain, and
     checking them in order tells you which one is broken:
     - the store appears **alive** in the fleet view → the heartbeat loop dials;
     - the published menu appears **on the till** → config-pull works;
     - a sale on the till appears in **today's rollup** → the outbox reaches NATS and the projector ran;
     - an order placed **in the cloud** reaches the kitchen → the relay has its scope (step 17).
 
-23. **Trade.** Open a shift, sell, settle, close. The store keeps selling with the internet down; that
+24. **Trade.** Open a shift, sell, settle, close. The store keeps selling with the internet down; that
     is the property everything above exists to protect.
 
 ---

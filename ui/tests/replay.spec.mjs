@@ -2081,6 +2081,65 @@ test("a reservation is entered and changed on the till, labelled from the tenant
   }
 });
 
+// A personal value's path on the till (ADR-0206), with a made-up note: the save waits for the
+// consent box, the note is never drawn again or answered by any route but the subject read, the
+// employee without `data.personal.read` is not offered it, the manager who holds it reads it back,
+// and the edge's log never carries it. The slip of the save is asked for; what its paper holds (the
+// note only on the person's copy) is `crates/pos-edge/tests/record_slip.rs`'s, as this store has no
+// printer.
+test("a personal value is saved behind its consent, never echoed, and read back only by a reader", async ({ page }) => {
+  const edge = await startEdge("custom-data");
+  const note = "DEMO-ONLY note 0000";
+  const answered = [];
+  page.on("response", async (response) => {
+    const path = new URL(response.url()).pathname;
+    if (path.startsWith("/api/") && !path.startsWith("/api/subjects/")) {
+      answered.push(await response.text().catch(() => ""));
+    }
+  });
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await navigateTo(page, "/records");
+    await page.locator('[data-step="newRecord"]').click();
+    await page.getByLabel("Party size").fill("2");
+    await page.getByLabel("Contact note").fill(note);
+    const save = page.locator('[data-step="saveRecord"]');
+    await expect(save).toBeDisabled();
+    await page.getByLabel("The guest agreed: keep a contact note for this reservation").check();
+    await save.click();
+    await expect(page.locator('[data-outcome="record-saved"]')).toBeVisible();
+    await expect(page.locator("body")).not.toContainText(note);
+
+    // The save's own slip is asked for; this store has a template and no printer.
+    await page.locator('[data-step="printSlip"]').click();
+    await expect(page.locator('[data-outcome="record-slip"]')).toHaveText("No printer is set up for this store");
+
+    // The employee does not hold `data.personal.read`: the record says a value is held, and offers
+    // no way to show it.
+    await page.locator('[data-step="chooseRecord"]').first().click();
+    await expect(page.locator('[data-outcome="personal-held"]')).toHaveText("A personal value is held. It is not shown.");
+    await expect(page.getByLabel("Contact note")).toHaveValue("");
+    await expect(page.locator('[data-step="showPersonal"]')).toHaveCount(0);
+
+    // The manager holds it, and reads the note back.
+    await page.getByRole("button", { name: "Sign out" }).click();
+    await page.locator("#signin-code").fill(edge.managerCode);
+    await page.locator("#signin-pin").fill(edge.managerPin);
+    await page.locator('[data-step="submit"]').click();
+    await expect(page.locator('[data-outcome="floor"]')).toBeVisible();
+    await navigateTo(page, "/records");
+    await page.locator('[data-step="chooseRecord"]').first().click();
+    await page.locator('[data-step="showPersonal"]').click();
+    await expect(page.locator('[data-outcome="personal-held"]')).toHaveText(note);
+
+    expect(answered.filter((body) => body.includes(note))).toEqual([]);
+    expect(edge.log()).not.toContain(note);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // The floor and a table's order screen stay mounted (`ui/src/screens/kept.tsx`), and a switch only
 // shows one and hides the other. The order screen never shows one table's lines, figure or refusal
 // on another: before the new table's figure lands it shows the dash. And while it is hidden it

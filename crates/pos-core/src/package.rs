@@ -40,7 +40,7 @@ mod evolution;
 mod screens;
 
 pub use content::{ContentRefusal, LABEL_KEY_CHARS_MAX, check_content};
-pub use data::{DataRefusal, FieldAt, FieldFault, PERSONAL_FIELDS_AVAILABLE, check_data};
+pub use data::{DataRefusal, FieldAt, FieldFault, check_data};
 pub use entry::{
     CheckedEntry, EnteredValue, Entry, EntryFault, EntryRefusal, EntryTarget, PersonalText,
     check_entry,
