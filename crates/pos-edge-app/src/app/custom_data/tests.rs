@@ -25,7 +25,7 @@ const OCCASION: &str = "01J0000000000000000000CF01";
 
 /// A package with a reservation type (a required party size and a personal note kept 30 days),
 /// and a whole-number field on an order.
-fn package() -> PackageContent {
+pub(in crate::app) fn package() -> PackageContent {
     serde_json::from_value(serde_json::json!({
         "package_id": "01J00000000000000000000P01",
         "package_version_id": "01J00000000000000000000V01",
@@ -47,7 +47,7 @@ fn package() -> PackageContent {
     .expect("the package parses")
 }
 
-fn edge_over(store: FakeStore) -> Edge<FakeStore> {
+pub(in crate::app) fn edge_over(store: FakeStore) -> Edge<FakeStore> {
     let mut session = EdgeSession::bootstrap();
     session.package = Some(Arc::new(package()));
     Edge::new(
@@ -63,15 +63,15 @@ fn field(id: &str) -> CustomFieldId {
     id.parse().expect("a field id")
 }
 
-fn reservation() -> ObjectTypeId {
+pub(in crate::app) fn reservation() -> ObjectTypeId {
     "01J00000000000000000000B01".parse().expect("a type id")
 }
 
-fn consent() -> Vec<TranslationKey> {
+pub(in crate::app) fn consent() -> Vec<TranslationKey> {
     vec![TranslationKey::new("data.consent.reservation")]
 }
 
-fn entries(party: i64, note: Option<&str>) -> Vec<Entry> {
+pub(in crate::app) fn entries(party: i64, note: Option<&str>) -> Vec<Entry> {
     let mut entries = vec![Entry {
         custom_field_id: field(PARTY),
         value: EnteredValue::Integer(party),
@@ -86,7 +86,7 @@ fn entries(party: i64, note: Option<&str>) -> Vec<Entry> {
 }
 
 /// Every event the store holds, as stored JSON.
-async fn logged(store: &FakeStore) -> Vec<(EventType, String)> {
+pub(in crate::app) async fn logged(store: &FakeStore) -> Vec<(EventType, String)> {
     let limit = NonZeroU32::new(100).expect("non-zero");
     store
         .read(&EventQuery::first(identity().store_id, limit))

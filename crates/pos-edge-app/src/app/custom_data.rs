@@ -372,4 +372,4 @@ const fn object_permission(object: DataObject) -> Permission {
 }
 
 #[cfg(test)]
-mod tests;
+pub(in crate::app) mod tests;

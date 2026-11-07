@@ -10,18 +10,21 @@ use pos_ports::PortError;
 use pos_ports::event_store::EventStore;
 use pos_ports::tx::{Transactional, TxContext};
 use pos_proto::envelope::{EventEnvelope, EventTypeRef, RawPayload};
-use pos_proto::events::{CustomFieldValue, DataCustomFieldSet, DataCustomRecordChanged, EventType};
+use pos_proto::events::{
+    CustomFieldValue, DataCustomFieldSet, DataCustomRecordChanged, DataSubjectMasked, EventType,
+};
 use pos_proto::ids::{
     CustomFieldId, CustomRecordId, EventId, ListEntryId, ObjectTypeId, PackageVersionId, StoreId,
     SubjectId, TenantId,
 };
 use pos_proto::package::DataObject;
+use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::Open;
 
 use super::{
-    CustomObject, CustomValueChange, CustomValueRow, CustomValueStore, fold_custom_data,
-    project_custom_values,
+    CustomObject, CustomPass, CustomValueChange, CustomValueRow, CustomValueStore,
+    fold_custom_data, project_custom_values,
 };
 
 fn store() -> StoreId {
@@ -132,6 +135,43 @@ fn a_record_keeps_its_type_and_only_the_id_of_its_person() {
     assert_eq!(row.object_id, Ulid::from_u128(20));
     assert_eq!(row.value.integer, Some(4));
     assert_eq!(row.subject_id, Some(SubjectId::new(Ulid::from_u128(30))));
+    assert!(
+        matches!(changes.last(), Some(CustomValueChange::Subject { subject_id, .. })
+            if *subject_id == SubjectId::new(Ulid::from_u128(30))),
+        "the store is recorded as holding the subject: {changes:?}"
+    );
+}
+
+/// The store confirmed masking the reservation's subject.
+fn masked(seed: u32) -> EventEnvelope<RawPayload> {
+    event(
+        seed,
+        EventType::DataSubjectMasked,
+        &DataSubjectMasked {
+            subject_id: SubjectId::new(Ulid::from_u128(30)),
+            masked_time: Timestamp::from_milliseconds_since_epoch(1_000).expect("a time"),
+        },
+    )
+}
+
+#[test]
+fn a_confirmed_erasure_marks_its_subject_masked() {
+    assert_eq!(
+        fold_custom_data(&masked(1)),
+        vec![CustomValueChange::SubjectMasked {
+            subject_id: SubjectId::new(Ulid::from_u128(30)),
+            masked_time: Timestamp::from_milliseconds_since_epoch(1_000).expect("a time"),
+        }]
+    );
+}
+
+#[test]
+fn a_value_with_no_person_names_no_subject() {
+    assert!(
+        fold_custom_data(&occasion_set(1))
+            .iter()
+            .all(|change| !matches!(change, CustomValueChange::Subject { .. }))
+    );
 }
 
 #[test]
@@ -174,6 +214,7 @@ impl CustomValueStore for FakeValues {
                 } => {
                     rows.remove(&(*object_id, *custom_field_id));
                 }
+                CustomValueChange::Subject { .. } | CustomValueChange::SubjectMasked { .. } => {}
             }
         }
         *self.cursor.lock().expect("lock") = Some(cursor);
@@ -206,20 +247,27 @@ async fn a_store_is_projected_once_per_event_and_the_latest_value_wins() {
         project_custom_values(&log, &values, tenant(), store())
             .await
             .expect("project"),
-        3
+        CustomPass {
+            read: 3,
+            masked: false
+        }
     );
-    append(&log, &[reservation(4, 6)]).await;
+    append(&log, &[reservation(4, 6), masked(5)]).await;
     assert_eq!(
         project_custom_values(&log, &values, tenant(), store())
             .await
             .expect("project"),
-        1
+        CustomPass {
+            read: 2,
+            masked: true
+        },
+        "a confirmed erasure is reported, so its id can come off the node"
     );
     assert_eq!(
         project_custom_values(&log, &values, tenant(), store())
             .await
             .expect("project"),
-        0
+        CustomPass::default()
     );
 
     let rows = values.rows.lock().expect("lock");

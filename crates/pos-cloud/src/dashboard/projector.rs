@@ -44,6 +44,15 @@ pub trait StoreCatalog {
     ) -> impl Future<Output = Result<Vec<(TenantId, StoreId)>, PortError>> + Send;
 }
 
+/// Takes the subjects a store has confirmed masking off its `erasures` node
+/// ([ADR-0206](../../../../docs/adr/0206-a-personal-custom-value-stays-on-its-store-and-expires-on-its-own-clock.md)
+/// decision 4), after a pass folded a `data.subject.masked` from it. Logs rather than fails: an id
+/// left on the node is one the store skips, having confirmed it already.
+pub trait ConfirmedErasures {
+    /// Prunes one store's node.
+    fn prune(&self, tenant: TenantId, store_id: StoreId) -> impl Future<Output = ()> + Send;
+}
+
 /// What one fleet-wide projection pass did.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FleetReport {
@@ -95,7 +104,8 @@ where
 
 /// Projects every store's custom values once ([ADR-0194](../../../../docs/adr/0194-custom-data-is-declared-and-personal-fields-are-kept-apart.md)
 /// decision 3), as [`project_fleet`] projects its rollups: a store that fails is logged by its ids
-/// and counted, never propagated.
+/// and counted, never propagated. A store whose pass folded a confirmed erasure has its `erasures`
+/// node pruned ([`ConfirmedErasures`]).
 ///
 /// # Errors
 ///
@@ -107,15 +117,18 @@ pub async fn project_custom_fleet<E, V, Cat>(
 ) -> Result<FleetReport, PortError>
 where
     E: EventStore,
-    V: CustomValueStore,
+    V: CustomValueStore + ConfirmedErasures,
     Cat: StoreCatalog,
 {
     let mut report = FleetReport::default();
     for (tenant, store_id) in catalog.active_stores().await? {
         match project_custom_values(events, values, tenant, store_id).await {
-            Ok(read) => {
+            Ok(pass) => {
                 report.stores = report.stores.saturating_add(1);
-                report.folded = report.folded.saturating_add(read);
+                report.folded = report.folded.saturating_add(pass.read);
+                if pass.masked {
+                    values.prune(tenant, store_id).await;
+                }
             }
             Err(error) => {
                 report.failed = report.failed.saturating_add(1);
@@ -146,7 +159,7 @@ pub async fn run<E, R, V, Cat, C, H>(
 ) where
     E: EventStore,
     R: RollupStore,
-    V: CustomValueStore,
+    V: CustomValueStore + ConfirmedErasures,
     Cat: StoreCatalog,
     C: ClockSource,
     H: crate::health::TaskHealthStore,

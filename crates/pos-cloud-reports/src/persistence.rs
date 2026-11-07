@@ -115,6 +115,20 @@ fn custom_value_write(
             object_id: object_id.to_string(),
             custom_field_id: custom_field_id.to_string(),
         },
+        CustomValueChange::Subject {
+            subject_id,
+            event_time,
+        } => store_postgres::CustomValueWrite::Subject {
+            subject_id: subject_id.to_string(),
+            first_time_ms: event_time.as_milliseconds_since_epoch(),
+        },
+        CustomValueChange::SubjectMasked {
+            subject_id,
+            masked_time,
+        } => store_postgres::CustomValueWrite::SubjectMasked {
+            subject_id: subject_id.to_string(),
+            masked_time_ms: masked_time.as_milliseconds_since_epoch(),
+        },
     })
 }
 

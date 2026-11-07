@@ -40,6 +40,7 @@ pub mod devices;
 pub mod display;
 pub mod enums;
 pub mod envelope;
+pub mod erasures;
 pub mod error;
 pub mod events;
 pub mod fees;

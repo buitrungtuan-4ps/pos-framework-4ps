@@ -17,7 +17,9 @@ use core::num::NonZeroU32;
 use pos_ports::PortError;
 use pos_ports::event_store::{EventQuery, EventStore};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
-use pos_proto::events::{CustomFieldValue, DataCustomFieldSet, DataCustomRecordChanged, EventType};
+use pos_proto::events::{
+    CustomFieldValue, DataCustomFieldSet, DataCustomRecordChanged, DataSubjectMasked, EventType,
+};
 use pos_proto::ids::{
     CustomFieldId, EventId, ObjectTypeId, PackageVersionId, StoreId, SubjectId, TenantId,
 };
@@ -74,12 +76,39 @@ pub enum CustomValueChange {
         /// The field.
         custom_field_id: CustomFieldId,
     },
+    /// The store's events name this subject: it holds the subject's personal values (ADR-0206
+    /// decision 4).
+    Subject {
+        /// The subject.
+        subject_id: SubjectId,
+        /// When the event naming it was recorded.
+        event_time: Timestamp,
+    },
+    /// The store confirmed it masked this subject (`data.subject.masked`).
+    SubjectMasked {
+        /// The subject.
+        subject_id: SubjectId,
+        /// When the store masked it.
+        masked_time: Timestamp,
+    },
 }
 
-/// What an event does to the rows: nothing for any event but the two custom-data events, and
-/// nothing for a payload that does not decode, as every fold skips one.
+/// What an event does to the rows: nothing for any event but the two custom-data events and
+/// `data.subject.masked`, and nothing for a payload that does not decode, as every fold skips one.
 #[must_use]
 pub fn fold_custom_data(event: &EventEnvelope<RawPayload>) -> Vec<CustomValueChange> {
+    if event.event_type.known() == Some(EventType::DataSubjectMasked) {
+        return event
+            .data
+            .decode::<DataSubjectMasked>()
+            .map(|masked| {
+                vec![CustomValueChange::SubjectMasked {
+                    subject_id: masked.subject_id,
+                    masked_time: masked.masked_time,
+                }]
+            })
+            .unwrap_or_default();
+    }
     let (object, object_id, values, subject_id, package_version_id) = match event.event_type.known()
     {
         Some(EventType::DataCustomFieldSet) => {
@@ -108,6 +137,10 @@ pub fn fold_custom_data(event: &EventEnvelope<RawPayload>) -> Vec<CustomValueCha
         }
         _ => return Vec::new(),
     };
+    let named = subject_id.map(|subject_id| CustomValueChange::Subject {
+        subject_id,
+        event_time: event.event_time,
+    });
     values
         .into_iter()
         .map(|value| {
@@ -127,6 +160,7 @@ pub fn fold_custom_data(event: &EventEnvelope<RawPayload>) -> Vec<CustomValueCha
                 })
             }
         })
+        .chain(named)
         .collect()
 }
 
@@ -161,8 +195,17 @@ pub trait CustomValueStore {
     ) -> impl Future<Output = Result<(), PortError>> + Send;
 }
 
-/// Brings one store's custom values up to date with its log, a page at a time. Returns how many
-/// events it read.
+/// What one store's projection pass did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CustomPass {
+    /// How many events it read.
+    pub read: u64,
+    /// Whether any was a `data.subject.masked`: the store confirmed an erasure, so the ids it
+    /// confirmed can come off its `erasures` node.
+    pub masked: bool,
+}
+
+/// Brings one store's custom values up to date with its log, a page at a time.
 ///
 /// # Errors
 ///
@@ -173,7 +216,7 @@ pub async fn project_custom_values<E, V>(
     values: &V,
     tenant: TenantId,
     store_id: StoreId,
-) -> Result<u64, PortError>
+) -> Result<CustomPass, PortError>
 where
     E: EventStore,
     V: CustomValueStore,
@@ -181,7 +224,7 @@ where
     let page = NonZeroU32::new(PROJECT_PAGE).unwrap_or(NonZeroU32::MIN);
     let page_len = usize::try_from(PROJECT_PAGE).unwrap_or(usize::MAX);
     let mut cursor = values.cursor(tenant, store_id).await?;
-    let mut read: u64 = 0;
+    let mut pass = CustomPass::default();
     loop {
         let mut query = EventQuery::first(store_id, page);
         if let Some(after) = cursor {
@@ -193,13 +236,18 @@ where
         };
         let changes: Vec<CustomValueChange> = batch.iter().flat_map(fold_custom_data).collect();
         values.apply(tenant, store_id, &changes, last).await?;
-        read = read.saturating_add(u64::try_from(batch.len()).unwrap_or(u64::MAX));
+        pass.masked |= changes
+            .iter()
+            .any(|change| matches!(change, CustomValueChange::SubjectMasked { .. }));
+        pass.read = pass
+            .read
+            .saturating_add(u64::try_from(batch.len()).unwrap_or(u64::MAX));
         cursor = Some(last);
         if batch.len() < page_len {
             break;
         }
     }
-    Ok(read)
+    Ok(pass)
 }
 
 #[cfg(test)]

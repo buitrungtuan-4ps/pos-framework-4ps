@@ -6,9 +6,12 @@
 //! decision 3): each object's and each record's current non-personal values, and the subject that
 //! holds its personal ones. No personal value is here: the events carry none.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use pos_proto::events::{CustomFieldValue, DataCustomFieldSet, DataCustomRecordChanged};
+use pos_proto::erasures::MAX_ERASURES;
+use pos_proto::events::{
+    CustomFieldValue, DataCustomFieldSet, DataCustomRecordChanged, DataSubjectMasked,
+};
 use pos_proto::ids::{CustomFieldId, CustomRecordId, ObjectTypeId, PackageVersionId, SubjectId};
 use pos_proto::package::DataObject;
 use pos_proto::ulid::Ulid;
@@ -75,6 +78,11 @@ pub(in crate::app) struct CustomData {
     /// By object id first, so the oldest object is the first entry.
     objects: BTreeMap<(Ulid, DataObject), HeldValues>,
     records: BTreeMap<CustomRecordId, (ObjectTypeId, HeldValues)>,
+    /// The subjects this store has confirmed masked with `data.subject.masked` (ADR-0206 decision
+    /// 4), so an `erasures` node applied again confirms nothing twice. At most [`MAX_ERASURES`], the
+    /// node's own cap, dropping the lowest id past it: the cloud takes an id off the node once it
+    /// has the confirmation, so an id this forgets is one the node no longer names.
+    masked: BTreeSet<SubjectId>,
 }
 
 impl Projection {
@@ -110,6 +118,20 @@ impl Projection {
         while custom.records.len() > MAX_CUSTOM_RECORDS {
             custom.records.pop_first();
         }
+    }
+
+    /// Folds a `data.subject.masked`.
+    pub(in crate::app) fn fold_subject_masked(&mut self, event: &DataSubjectMasked) {
+        let masked = &mut self.custom.masked;
+        masked.insert(event.subject_id);
+        while masked.len() > MAX_ERASURES {
+            masked.pop_first();
+        }
+    }
+
+    /// Whether this store has already confirmed `subject_id` masked.
+    pub(in crate::app) fn confirmed_masked(&self, subject_id: SubjectId) -> bool {
+        self.custom.masked.contains(&subject_id)
     }
 
     /// One object's custom data, if it has any.

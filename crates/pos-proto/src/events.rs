@@ -908,6 +908,15 @@ event_catalogue! {
         /// The package version whose declarations the values follow.
         package_version_id: PackageVersionId,
     },
+    /// A store masked a subject the cloud asked it to erase, through its `erasures` config node
+    /// ([ADR-0206](../../../docs/adr/0206-a-personal-custom-value-stays-on-its-store-and-expires-on-its-own-clock.md)
+    /// decision 4). It carries the subject's id and the time, and nothing else.
+    DataSubjectMasked => "data.subject.masked", version = 1 {
+        /// The subject whose personal values are now `[REDACTED]` on this store.
+        subject_id: SubjectId,
+        /// When the store's record was masked: by this erasure, or earlier by its own expiry.
+        masked_time: Timestamp,
+    },
 }
 
 mod bill_parts;

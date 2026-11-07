@@ -727,6 +727,7 @@ fn catalog_publish_routes(deps: &RouteDeps<'_>) -> Router {
         // subject store, owner-only and audited — the Data Protection contact's deliberate instrument.
         .merge(http::subjects_router(
             store.subjects(),
+            (store.custom_values(), store.config_trees()),
             store.admin(),
             SystemClock,
             Arc::clone(audit),

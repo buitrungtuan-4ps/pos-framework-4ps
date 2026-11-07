@@ -1146,7 +1146,7 @@ async fn compose_cloud_surface<S, Q, L, P, V>(
     lifecycle: Lifecycle<'_, V>,
 ) -> CloudSurface
 where
-    S: EventStore + IntakeLedger + ConfigStore + Send + Sync + 'static,
+    S: EventStore + IntakeLedger + ConfigStore + SubjectStore + Send + Sync + 'static,
     Q: QueueNumberAuthority + 'static,
     L: LeaseAuthority + 'static,
     P: crate::print_agent::PrintAgents + 'static,
@@ -1228,7 +1228,7 @@ async fn start_cloud_sync<S, Q, L, P, V>(
     grid_file: std::path::PathBuf,
 ) -> CloudSurface
 where
-    S: EventStore + IntakeLedger + ConfigStore + Send + Sync + 'static,
+    S: EventStore + IntakeLedger + ConfigStore + SubjectStore + Send + Sync + 'static,
     Q: QueueNumberAuthority + 'static,
     L: LeaseAuthority + 'static,
     P: crate::print_agent::PrintAgents + 'static,

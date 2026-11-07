@@ -7,11 +7,15 @@
 // This is the console's most sensitive T1 surface. It records and enables a human decision — it does not
 // make one: the operator must confirm the lawful basis and the subject's identity, and escalate an
 // EU-resident request to the Data Protection contact. That reminder is on the screen, always.
+//
+// A subject whose personal values stay on the store that collected them (ADR-0206) is not in the
+// cloud: a lookup that finds nothing asks which stores hold it. Erasing it sends its id to each
+// store, and the screen shows the erasure pending until every store confirms.
 
 import { createSignal, For, Show } from "solid-js";
 
 import { api, ApiError } from "../api/client";
-import type { SubjectExport, SubjectMeta } from "../api/schemas";
+import type { SubjectExport, SubjectMeta, SubjectStores } from "../api/schemas";
 import { t } from "../i18n";
 import { formatInstant } from "../lib/format";
 import { onScopedContext, RequireContext } from "../lib/scoped";
@@ -21,6 +25,7 @@ import { ConfirmDialog } from "../components/kit";
 import { toast } from "../components/Toast";
 import { apiMessage } from "../lib/errors";
 import { Icon } from "../components/icons";
+import { HeldAtStores } from "./subjects/HeldAtStores";
 
 export function Subjects() {
   const [subjectId, setSubjectId] = createSignal("");
@@ -30,6 +35,7 @@ export function Subjects() {
   const [error, setError] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const [pendingErase, setPendingErase] = createSignal(false);
+  const [atStores, setAtStores] = createSignal<SubjectStores | null>(null);
 
   // console.subjects.manage → owner only (mirrors the backend; the server re-checks every route).
   const canManage = () => actingAdmin()?.role === "owner";
@@ -43,6 +49,7 @@ export function Subjects() {
   // Reset the result panel when the tenant changes — a subject id is tenant-scoped.
   onScopedContext("tenant", () => {
     setMeta(null);
+    setAtStores(null);
     setExported(null);
     setNotFound(false);
     setError("");
@@ -56,13 +63,17 @@ export function Subjects() {
     setError("");
     setExported(null);
     setNotFound(false);
+    setAtStores(null);
     setBusy(true);
     try {
       setMeta(await api.lookupSubject(tenantId(), id));
     } catch (caught) {
       setMeta(null);
       if (caught instanceof ApiError && caught.status === 404) {
-        setNotFound(true);
+        // Not in the cloud: the stores whose events name it, if any (ADR-0206 decision 4).
+        const held = await api.subjectStores(tenantId(), id).catch(fail);
+        setNotFound(held?.stores.length === 0);
+        setAtStores(held && held.stores.length > 0 ? held : null);
       } else {
         fail(caught);
       }
@@ -86,33 +97,17 @@ export function Subjects() {
     }
   };
 
-  // The portability payload as a downloaded JSON file — a client-side blob of what the server returned.
-  const downloadExport = (data: SubjectExport) => {
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    try {
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = `subject-${data.subject_id}.json`;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-    } finally {
-      URL.revokeObjectURL(url);
-    }
-  };
-
   const doErase = async () => {
-    const id = meta()?.subject_id;
+    const id = meta()?.subject_id ?? atStores()?.subject_id;
     if (!id) {
       return;
     }
     setBusy(true);
     try {
-      await api.eraseSubject(tenantId(), id);
+      const waiting = (await api.eraseSubject(tenantId(), id)).pending_store_ids?.length ?? 0;
       setPendingErase(false);
       setExported(null);
-      toast.ok(t("subjects.erased"));
+      toast.ok(waiting > 0 ? t("subjects.erasureSent", { count: waiting }) : t("subjects.erased"));
       await lookup();
     } catch (caught) {
       fail(caught);
@@ -157,6 +152,12 @@ export function Subjects() {
 
             <Show when={notFound()}>
               <Banner tone="danger" message={t("subjects.notFound")} />
+            </Show>
+
+            <Show when={atStores()}>
+              {(held) => (
+                <HeldAtStores held={held()} busy={busy()} onErase={() => setPendingErase(true)} />
+              )}
             </Show>
 
             <Show when={meta()}>
@@ -244,11 +245,27 @@ export function Subjects() {
         closeLabel={t("action.close")}
         busy={busy()}
         danger
-        typeToConfirm={meta()?.subject_id ?? ""}
+        typeToConfirm={meta()?.subject_id ?? atStores()?.subject_id ?? ""}
         typePrompt={t("subjects.eraseConfirmPrompt")}
         onConfirm={() => void doErase()}
         onCancel={() => setPendingErase(false)}
       />
     </div>
   );
+}
+
+// The portability payload as a downloaded JSON file — a client-side blob of what the server returned.
+function downloadExport(data: SubjectExport) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  try {
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `subject-${data.subject_id}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }

@@ -11,6 +11,7 @@ use link_nats::NatsStoreWake;
 use pos_ports::config_store::ConfigStore;
 use pos_ports::event_store::EventStore;
 use pos_ports::intake_ledger::IntakeLedger;
+use pos_ports::subject_store::SubjectStore;
 use pos_proto::ids::StoreId;
 
 use super::{
@@ -23,6 +24,7 @@ use crate::cloud_http::{
     OtaHttpTransport, RelayHttpTransport,
 };
 use crate::config_client::ConfigClient;
+use crate::config_client::erasures::EdgeErasures;
 use crate::device_revocations::DeviceRevocations;
 use crate::heartbeat_client::{HeartbeatClient, StoreReport};
 use crate::lease_state::{LeaseAuthority, LeaseWatch};
@@ -56,7 +58,7 @@ pub(super) fn spawn_cloud_loops<S, Q, L, P>(
     grid_file: std::path::PathBuf,
 ) -> Option<CloudLoops>
 where
-    S: EventStore + IntakeLedger + ConfigStore + Send + Sync + 'static,
+    S: EventStore + IntakeLedger + ConfigStore + SubjectStore + Send + Sync + 'static,
     Q: QueueNumberAuthority + 'static,
     L: LeaseAuthority + 'static,
     P: crate::print_agent::PrintAgents + 'static,
@@ -157,7 +159,7 @@ fn config_client<S>(
     lease_watch: Arc<LeaseWatch>,
 ) -> ConfigClient<ConfigHttpTransport, S>
 where
-    S: EventStore + ConfigStore + Send + Sync + 'static,
+    S: EventStore + ConfigStore + SubjectStore + Send + Sync + 'static,
 {
     ConfigClient::new(
         ConfigHttpTransport::new(client.clone(), store_id),
@@ -170,6 +172,11 @@ where
     // And the same pairing state the request gates answer from, so a `revoked_devices` node retires
     // a till on this box rather than only in the console's picture of it (ADR-0118 §6).
     .with_device_revocations(Arc::clone(revocations))
+    // …and the edge itself, which masks the subjects an `erasures` node names (ADR-0206).
+    .with_erasures(Arc::new(EdgeErasures::new(
+        Arc::clone(edge),
+        system_device_id(store_id),
+    )))
     // …and this box's own lease, so a pull that carries a newer generation makes the box stop
     // seating tables rather than only stop installing updates (ADR-0123). The same `Arc` the
     // application layer refuses on and the response header reports.

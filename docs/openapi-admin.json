@@ -24565,7 +24565,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Erased: every personal field value is masked in place and the erasure time stamped, while the id and `collected_at` remain so the books still reconcile (ADR-0035). Irreversible. Idempotent: erasing a subject already masked changes nothing and still succeeds. The body is `erased` and `already_masked`. Audited",
+            "description": "Erased: every personal field value is masked in place and the erasure time stamped, while the id and `collected_at` remain so the books still reconcile (ADR-0035). Irreversible. Idempotent: erasing a subject already masked changes nothing and still succeeds. The body is `erased` and `already_masked`. A subject the cloud does not hold but a store's events name (ADR-0206) is added to each such store's `erasures` node: the body is then `erased: false` with `pending_store_ids` until every store has confirmed. Audited",
             "content": {
               "application/json": {
                 "schema": {
@@ -24605,7 +24605,17 @@
             }
           },
           "404": {
-            "description": "The tenant has no subject with that id",
+            "description": "The tenant has no subject with that id, and no store's events name it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Concurrent config publishes kept winning the race",
             "content": {
               "application/json": {
                 "schema": {
@@ -24615,7 +24625,7 @@
             }
           },
           "503": {
-            "description": "The subject store is unreachable",
+            "description": "The subject store or the config tree is unreachable",
             "content": {
               "application/json": {
                 "schema": {
@@ -24713,6 +24723,93 @@
           },
           "503": {
             "description": "The subject store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.subjects.manage"
+      }
+    },
+    "/admin/subjects/{subject_id}/stores": {
+      "get": {
+        "tags": [
+          "subject requests"
+        ],
+        "summary": "The stores holding a subject, and where an erasure of it is still pending (ADR-0206 decision 4).",
+        "operationId": "admin_subject_stores",
+        "parameters": [
+          {
+            "name": "subject_id",
+            "in": "path",
+            "description": "The subject's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant the subject belongs to (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The stores whose events name the subject, whose personal custom values stay on the store (ADR-0206): each `store_id`, whether it has confirmed masking the subject (`masked`), and whether an erasure is waiting for it (`erasure_pending`), at most 64. Empty when no store names it. No value is returned. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubjectStoresView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "tenant_id or subject_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.subjects.manage, which only an owner holds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The projection or the config tree is unreachable",
             "content": {
               "application/json": {
                 "schema": {
@@ -35592,7 +35689,7 @@
       },
       "SubjectErased": {
         "type": "object",
-        "description": "What an erasure answers: that it is done, and whether the record was already masked.",
+        "description": "What an erasure answers: whether it is done, and whether the record was already masked.",
         "required": [
           "erased",
           "already_masked"
@@ -35600,11 +35697,18 @@
         "properties": {
           "already_masked": {
             "type": "boolean",
-            "description": "Whether it was masked before this request."
+            "description": "Whether it was masked before this request: the cloud's record, or every store's copy."
           },
           "erased": {
             "type": "boolean",
-            "description": "Always `true`: the record is masked now."
+            "description": "`true` once the subject is masked everywhere it is held: always, for a record the cloud\nholds. `false` while a store in `pending_store_ids` has still to mask it."
+          },
+          "pending_store_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The stores asked to mask the subject that have not yet confirmed it (ADR-0206 decision 4).\nAbsent when there are none."
           }
         }
       },
@@ -35661,6 +35765,47 @@
           "masked": {
             "type": "boolean",
             "description": "Whether the personal data has already been masked (erased) — a masked row holds no PII."
+          },
+          "subject_id": {
+            "type": "string"
+          }
+        }
+      },
+      "SubjectStoreView": {
+        "type": "object",
+        "description": "One store whose events name a subject.",
+        "required": [
+          "store_id",
+          "masked",
+          "erasure_pending"
+        ],
+        "properties": {
+          "erasure_pending": {
+            "type": "boolean",
+            "description": "Whether the store's `erasures` node asks it to, and it has not confirmed yet."
+          },
+          "masked": {
+            "type": "boolean",
+            "description": "Whether the store has confirmed masking the subject (`data.subject.masked`)."
+          },
+          "store_id": {
+            "type": "string"
+          }
+        }
+      },
+      "SubjectStoresView": {
+        "type": "object",
+        "description": "The stores holding a subject's personal values: ids and standing, never a value.",
+        "required": [
+          "subject_id",
+          "stores"
+        ],
+        "properties": {
+          "stores": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SubjectStoreView"
+            }
           },
           "subject_id": {
             "type": "string"

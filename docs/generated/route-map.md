@@ -372,6 +372,7 @@ From [`docs/openapi-admin.json`](../openapi-admin.json).
 | GET | `/admin/subjects/{subject_id}` | `admin_lookup_subject` | `session_cookie` | `console.subjects.manage` | [`crates/pos-cloud/src/http/subjects.rs`](../../crates/pos-cloud/src/http/subjects.rs) |
 | POST | `/admin/subjects/{subject_id}/erase` | `admin_erase_subject` | `session_cookie` | `console.subjects.manage` | [`crates/pos-cloud/src/http/subjects.rs`](../../crates/pos-cloud/src/http/subjects.rs) |
 | GET | `/admin/subjects/{subject_id}/export` | `admin_export_subject` | `session_cookie` | `console.subjects.manage` | [`crates/pos-cloud/src/http/subjects.rs`](../../crates/pos-cloud/src/http/subjects.rs) |
+| GET | `/admin/subjects/{subject_id}/stores` | `admin_subject_stores` | `session_cookie` | `console.subjects.manage` | [`crates/pos-cloud/src/http/subjects.rs`](../../crates/pos-cloud/src/http/subjects.rs) |
 | GET | `/admin/tenants` | `admin_list_tenants` | `session_cookie` | `console.data.read` | [`crates/pos-cloud/src/http/registry/tenants.rs`](../../crates/pos-cloud/src/http/registry/tenants.rs) |
 | POST | `/admin/tenants` | `admin_create_tenant` | `session_cookie` | `console.orgs.manage` | [`crates/pos-cloud/src/http/registry/tenants.rs`](../../crates/pos-cloud/src/http/registry/tenants.rs) |
 | PATCH | `/admin/tenants/{tenant_id}` | `admin_update_tenant` | `session_cookie` | `console.orgs.manage` | [`crates/pos-cloud/src/http/registry/tenants.rs`](../../crates/pos-cloud/src/http/registry/tenants.rs) |

@@ -88,6 +88,7 @@ pub mod connections;
 pub mod countries;
 pub mod cursor;
 pub mod dashboard;
+pub mod erasures;
 pub mod fleet;
 pub mod http;
 pub mod lease;
