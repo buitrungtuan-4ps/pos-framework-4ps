@@ -103,6 +103,7 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::subjects::admin_lookup_subject,
         crate::http::subjects::admin_export_subject,
         crate::http::subjects::admin_erase_subject,
+        crate::http::subjects::admin_subject_stores,
         crate::http::registry::admin_list_tenants,
         crate::http::registry::admin_create_tenant,
         crate::http::registry::admin_update_tenant,

@@ -42,6 +42,7 @@ mod bills;
 mod composition;
 mod config_wake;
 mod custom_data;
+mod erasures;
 mod error;
 mod floor;
 pub mod flows;

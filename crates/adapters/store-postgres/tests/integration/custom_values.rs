@@ -191,3 +191,91 @@ fn a_summary_counts_values_and_never_returns_a_subject() {
         assert_eq!(on_the_terrace.first().map(|(_, count)| *count), Some(1));
     });
 }
+
+/// The stores whose events name a subject (migration 0093): a row once per store and subject, a
+/// confirmation stamps it once, a confirmation for a subject the store never named makes no row,
+/// and only ids are kept.
+#[test]
+fn a_subject_is_held_per_store_and_its_masking_is_recorded_once() {
+    block_on(async {
+        let (store, _admin) = prepared().await.expect("prepare the database");
+        let values = store.custom_values();
+        let tenant = TenantId::new(Ulid::from_u128(0x0A));
+        let shop = StoreId::new(Ulid::from_u128(0x5));
+        let subject = "SUBJECT0000000000000000AA";
+        let named = |time: i64| CustomValueWrite::Subject {
+            subject_id: subject.to_owned(),
+            first_time_ms: time,
+        };
+        let masked = |id: &str, time: i64| CustomValueWrite::SubjectMasked {
+            subject_id: id.to_owned(),
+            masked_time_ms: time,
+        };
+        values
+            .apply(
+                tenant,
+                shop,
+                &[
+                    named(1_000),
+                    named(2_000),
+                    masked("SUBJECT0000000000000000ZZ", 2_500),
+                ],
+                EventId::new(Ulid::from_u128(0x301)),
+            )
+            .await
+            .expect("named");
+        assert_eq!(
+            values
+                .subject_holders(tenant, subject)
+                .await
+                .expect("reads"),
+            vec![(shop.to_string(), None)]
+        );
+        assert!(
+            values
+                .subject_holders(tenant, "SUBJECT0000000000000000ZZ")
+                .await
+                .expect("reads")
+                .is_empty(),
+            "a confirmation for a subject never named makes no row"
+        );
+
+        values
+            .apply(
+                tenant,
+                shop,
+                &[masked(subject, 3_000), masked(subject, 4_000)],
+                EventId::new(Ulid::from_u128(0x302)),
+            )
+            .await
+            .expect("masked");
+        assert_eq!(
+            values
+                .subject_holders(tenant, subject)
+                .await
+                .expect("reads"),
+            vec![(shop.to_string(), Some(3_000))],
+            "the first confirmation's time is kept"
+        );
+        assert_eq!(
+            values
+                .masked_among(
+                    tenant,
+                    shop,
+                    &[subject.to_owned(), "SUBJECT0000000000000000BB".to_owned()]
+                )
+                .await
+                .expect("reads"),
+            vec![subject.to_owned()]
+        );
+        let other = TenantId::new(Ulid::from_u128(0x0B));
+        assert!(
+            values
+                .subject_holders(other, subject)
+                .await
+                .expect("reads")
+                .is_empty(),
+            "another tenant sees no holder"
+        );
+    });
+}

@@ -77,6 +77,7 @@ use crate::lease_state::LeaseWatch;
 use crate::origins::Origins;
 
 mod apply;
+pub mod erasures;
 mod package;
 mod wake;
 
@@ -374,6 +375,8 @@ pub struct ConfigClient<T, S> {
     /// ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §6), or
     /// `None` on a client built without one.
     revocations: Option<Arc<DeviceRevocations>>,
+    /// The edge the `erasures` node is carried into (ADR-0206 decision 4), or `None`.
+    erasures: Option<Arc<dyn erasures::SubjectErasure>>,
     /// This box's own lease and the shared standing a pull settles
     /// ([ADR-0123](../../../docs/adr/0123-a-superseded-box-opens-nothing-new.md)), or `None` on a
     /// client built without one — the on-fakes example and the tests, which have no lease.
@@ -404,6 +407,7 @@ where
             applied: AppliedDocument::default(),
             origins: None,
             revocations: None,
+            erasures: None,
             lease: None,
         }
     }
@@ -509,6 +513,7 @@ where
                 }
             },
         };
+        let erasures_applied = erasures::apply(self.erasures.as_deref(), &synced.document).await;
         // The session, the lease and the origins are all live now, so tell the open tills: each one
         // reloads what it draws from configuration without a new sign-in (ADR-0160 item 7).
         let changed = self.applied.replace(&synced.document);
@@ -528,7 +533,7 @@ where
         // as applied as it is ever going to be, and re-deciding it every interval would produce the
         // same refusal and the same log line for ever. The escape hatch there is a corrected
         // publish or a rollback, not a retry.
-        if revocations_applied && floor_applied {
+        if revocations_applied && floor_applied && erasures_applied {
             *self.held_version.lock().expect("held-version lock") =
                 Some(synced.config_version_id.clone());
         }

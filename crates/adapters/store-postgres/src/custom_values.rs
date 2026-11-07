@@ -46,7 +46,24 @@ pub enum CustomValueWrite {
         /// The field's id.
         custom_field_id: String,
     },
+    /// The store's events name this subject (migration 0093): a row if it has none yet.
+    Subject {
+        /// The subject's id.
+        subject_id: String,
+        /// When the store first named it, in Unix milliseconds.
+        first_time_ms: i64,
+    },
+    /// The store confirmed it masked this subject: its row's `masked_time`, if not set already.
+    SubjectMasked {
+        /// The subject's id.
+        subject_id: String,
+        /// When the store masked it, in Unix milliseconds.
+        masked_time_ms: i64,
+    },
 }
+
+/// The most stores [`PostgresCustomValues::subject_holders`] returns for one subject.
+pub const SUBJECT_HOLDERS_MAX: i64 = 64;
 
 /// The custom-value table over a shared pool. Built by
 /// [`PostgresStore::custom_values`](crate::PostgresStore::custom_values).
@@ -139,6 +156,9 @@ impl PostgresCustomValues {
                         .await
                         .map_err(unavailable)?;
                 }
+                CustomValueWrite::Subject { .. } | CustomValueWrite::SubjectMasked { .. } => {
+                    write_subject(&transaction, &tenant, &store, write).await?;
+                }
                 CustomValueWrite::Delete {
                     object_id,
                     custom_field_id,
@@ -164,6 +184,53 @@ impl PostgresCustomValues {
             .await
             .map_err(unavailable)?;
         transaction.commit().await.map_err(unavailable)
+    }
+
+    /// The stores whose events name `subject_id`, each with when it confirmed masking it in Unix
+    /// milliseconds, or `None` while it has not. At most [`SUBJECT_HOLDERS_MAX`], by store id.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn subject_holders(
+        &self,
+        tenant: TenantId,
+        subject_id: &str,
+    ) -> Result<Vec<(String, Option<i64>)>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .query(
+                "SELECT store_id, (extract(epoch FROM masked_time) * 1000)::bigint \
+                 FROM custom_subjects WHERE tenant_id = $1 AND subject_id = $2 \
+                 ORDER BY store_id LIMIT $3",
+                &[&tenant.to_string(), &subject_id, &SUBJECT_HOLDERS_MAX],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows.iter().map(|row| (row.get(0), row.get(1))).collect())
+    }
+
+    /// Which of `subject_ids` one store has confirmed masking.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn masked_among(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+        subject_ids: &[String],
+    ) -> Result<Vec<String>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .query(
+                "SELECT subject_id FROM custom_subjects WHERE tenant_id = $1 AND store_id = $2 \
+                 AND subject_id = ANY($3) AND masked_time IS NOT NULL",
+                &[&tenant.to_string(), &store_id.to_string(), &subject_ids],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows.iter().map(|row| row.get(0)).collect())
     }
 
     /// Counts the objects of one store holding each value of `custom_field_id`, the most first, at
@@ -210,6 +277,50 @@ impl PostgresCustomValues {
             .map_err(unavailable)?;
         Ok(rows.iter().map(|row| (row.get(0), row.get(1))).collect())
     }
+}
+
+/// One write to `custom_subjects` (migration 0093), inside the page's transaction.
+async fn write_subject(
+    transaction: &deadpool_postgres::Transaction<'_>,
+    tenant: &String,
+    store: &String,
+    write: &CustomValueWrite,
+) -> Result<(), PortError> {
+    match write {
+        CustomValueWrite::Subject {
+            subject_id,
+            first_time_ms,
+        } => {
+            transaction
+                .execute(
+                    "INSERT INTO custom_subjects (tenant_id, store_id, subject_id, \
+                     first_time) VALUES ($1, $2, $3, \
+                     to_timestamp($4::bigint::double precision / 1000.0)) \
+                     ON CONFLICT (tenant_id, store_id, subject_id) DO NOTHING",
+                    &[tenant, store, subject_id, first_time_ms],
+                )
+                .await
+                .map_err(unavailable)?;
+        }
+        CustomValueWrite::SubjectMasked {
+            subject_id,
+            masked_time_ms,
+        } => {
+            // An update, never an insert: a confirmation for a subject this store's events
+            // never named makes no row, so it cannot read as one the store held.
+            transaction
+                .execute(
+                    "UPDATE custom_subjects SET masked_time = COALESCE(masked_time, \
+                     to_timestamp($4::bigint::double precision / 1000.0)) \
+                     WHERE tenant_id = $1 AND store_id = $2 AND subject_id = $3",
+                    &[tenant, store, subject_id, masked_time_ms],
+                )
+                .await
+                .map_err(unavailable)?;
+        }
+        CustomValueWrite::Upsert { .. } | CustomValueWrite::Delete { .. } => {}
+    }
+    Ok(())
 }
 
 /// What a summary counts and groups by, as the table holds it.

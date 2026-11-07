@@ -13,6 +13,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use pos_cloud_api::console::{audit_action, require_permission};
 use pos_cloud_api::response::{api_error, parse_ulid_fields};
+use pos_cloud_config::publish::publish_config_nodes_with;
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{SubjectId, TenantId};
@@ -20,16 +21,23 @@ use pos_proto::ids::{SubjectId, TenantId};
 use crate::audit::AuditRecorder;
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
+use crate::config_tree::{ConfigLevel, ConfigTreeStore};
+use crate::erasures::{SubjectHolders, append_erasure, requested};
 use crate::http::{Json, RegistryTenantQuery, not_found};
 use crate::retention::{RetentionError, SubjectStore};
 
 // --- Subject-request tooling (PDPD/GDPR, ADR-0076, Track M5) ---------------------------------------
 
-/// State for the subject-request routes: the subject store, the admin store for the permission gate,
-/// the clock (for the erase mask stamp and audit time), and the audit recorder.
+/// State for the subject-request routes: the subject store, the stores holding a subject that the
+/// cloud does not, their config trees, the admin store for the permission gate, the clock (for the
+/// erase mask stamp and audit time), and the audit recorder.
 #[derive(Clone)]
-struct SubjectState<Su, A, C> {
+struct SubjectState<Su, H, Cfg, A, C> {
     subjects: Su,
+    /// The stores whose events name a subject (ADR-0206 decision 4).
+    holders: H,
+    /// The config trees an erasure is published to, on each holding store's `erasures` node.
+    config_trees: Cfg,
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
@@ -66,32 +74,45 @@ struct SubjectExportView {
 /// not values); `GET .../export` returns the record for a portability/access request; `POST .../erase`
 /// masks it (irreversible, idempotent) for a right-to-erasure request. There is deliberately no
 /// list-all or bulk route — a bulk T1 export remains an escalation, not a feature.
-pub fn subjects_router<Su, A, C>(
+///
+/// A subject whose personal values a store holds (ADR-0206) is erased at that store: the erase
+/// route adds its id to the store's `erasures` node, and `GET .../stores` shows which stores hold
+/// it and where the erasure is still pending.
+pub fn subjects_router<Su, H, Cfg, A, C>(
     subjects: Su,
+    (holders, config_trees): (H, Cfg),
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
 ) -> Router
 where
     Su: SubjectStore + Clone + Send + Sync + 'static,
+    H: SubjectHolders + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
     Router::new()
         .route(
             "/admin/subjects/{subject_id}",
-            get(admin_lookup_subject::<Su, A, C>),
+            get(admin_lookup_subject::<Su, H, Cfg, A, C>),
         )
         .route(
             "/admin/subjects/{subject_id}/export",
-            get(admin_export_subject::<Su, A, C>),
+            get(admin_export_subject::<Su, H, Cfg, A, C>),
         )
         .route(
             "/admin/subjects/{subject_id}/erase",
-            post(admin_erase_subject::<Su, A, C>),
+            post(admin_erase_subject::<Su, H, Cfg, A, C>),
+        )
+        .route(
+            "/admin/subjects/{subject_id}/stores",
+            get(admin_subject_stores::<Su, H, Cfg, A, C>),
         )
         .with_state(SubjectState {
             subjects,
+            holders,
+            config_trees,
             admin,
             clock,
             audit,
@@ -117,13 +138,35 @@ fn parse_subject_target(
     Ok((TenantId::new(tenant), SubjectId::new(subject)))
 }
 
-/// What an erasure answers: that it is done, and whether the record was already masked.
+/// What an erasure answers: whether it is done, and whether the record was already masked.
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 struct SubjectErased {
-    /// Always `true`: the record is masked now.
+    /// `true` once the subject is masked everywhere it is held: always, for a record the cloud
+    /// holds. `false` while a store in `pending_store_ids` has still to mask it.
     erased: bool,
-    /// Whether it was masked before this request.
+    /// Whether it was masked before this request: the cloud's record, or every store's copy.
     already_masked: bool,
+    /// The stores asked to mask the subject that have not yet confirmed it (ADR-0206 decision 4).
+    /// Absent when there are none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pending_store_ids: Vec<String>,
+}
+
+/// One store whose events name a subject.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+struct SubjectStoreView {
+    store_id: String,
+    /// Whether the store has confirmed masking the subject (`data.subject.masked`).
+    masked: bool,
+    /// Whether the store's `erasures` node asks it to, and it has not confirmed yet.
+    erasure_pending: bool,
+}
+
+/// The stores holding a subject's personal values: ids and standing, never a value.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+struct SubjectStoresView {
+    subject_id: String,
+    stores: Vec<SubjectStoreView>,
 }
 
 #[utoipa::path(
@@ -155,14 +198,16 @@ struct SubjectErased {
     tag = "subject requests",
 )]
 /// Looks a subject up — its existence and whether it is masked — without returning the personal fields.
-async fn admin_lookup_subject<Su, A, C>(
-    State(state): State<SubjectState<Su, A, C>>,
+async fn admin_lookup_subject<Su, H, Cfg, A, C>(
+    State(state): State<SubjectState<Su, H, Cfg, A, C>>,
     headers: HeaderMap,
     Query(query): Query<RegistryTenantQuery>,
     Path(subject_id): Path<String>,
 ) -> Response
 where
     Su: SubjectStore + Clone + Send + Sync + 'static,
+    H: SubjectHolders + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
@@ -243,14 +288,16 @@ where
 )]
 /// Exports a subject's record — the portability/access payload, including the field values. Audited as
 /// an export (field count only). A masked record exports its redacted values (nothing personal remains).
-async fn admin_export_subject<Su, A, C>(
-    State(state): State<SubjectState<Su, A, C>>,
+async fn admin_export_subject<Su, H, Cfg, A, C>(
+    State(state): State<SubjectState<Su, H, Cfg, A, C>>,
     headers: HeaderMap,
     Query(query): Query<RegistryTenantQuery>,
     Path(subject_id): Path<String>,
 ) -> Response
 where
     Su: SubjectStore + Clone + Send + Sync + 'static,
+    H: SubjectHolders + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
@@ -319,27 +366,37 @@ where
                                       erasure time stamped, while the id and `collected_at` remain so \
                                       the books still reconcile (ADR-0035). Irreversible. Idempotent: \
                                       erasing a subject already masked changes nothing and still \
-                                      succeeds. The body is `erased` and `already_masked`. Audited"),
+                                      succeeds. The body is `erased` and `already_masked`. A subject \
+                                      the cloud does not hold but a store's events name (ADR-0206) \
+                                      is added to each such store's `erasures` node: the body is then \
+                                      `erased: false` with `pending_store_ids` until every store has \
+                                      confirmed. Audited"),
+        (status = 400, description = "A holding store's erasures node already names 1,000 \
+                                      subjects, its cap", body = crate::openapi_admin::ErrorResponse),
         (status = 400, description = "tenant_id or subject_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
         (status = 403, description = "The role lacks console.subjects.manage, which only an owner \
                                       holds", body = crate::openapi_admin::ErrorResponse),
-        (status = 404, description = "The tenant has no subject with that id", body = crate::openapi_admin::ErrorResponse),
-        (status = 503, description = "The subject store is unreachable", body = crate::openapi_admin::ErrorResponse),
+        (status = 404, description = "The tenant has no subject with that id, and no store's events \
+                                      name it", body = crate::openapi_admin::ErrorResponse),
+        (status = 409, description = "Concurrent config publishes kept winning the race", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The subject store or the config tree is unreachable", body = crate::openapi_admin::ErrorResponse),
     ),
     tag = "subject requests",
 )]
 /// Erases a subject — masks every personal field value in place ([ADR-0035](../../../docs/adr/0035-retention-and-pii-masking.md)),
 /// keeping the id and `collected_at` so the books still reconcile. Irreversible and idempotent: erasing
 /// an already-masked subject is a no-op that still returns `200`. Audited as an erasure.
-async fn admin_erase_subject<Su, A, C>(
-    State(state): State<SubjectState<Su, A, C>>,
+async fn admin_erase_subject<Su, H, Cfg, A, C>(
+    State(state): State<SubjectState<Su, H, Cfg, A, C>>,
     headers: HeaderMap,
     Query(query): Query<RegistryTenantQuery>,
     Path(subject_id): Path<String>,
 ) -> Response
 where
     Su: SubjectStore + Clone + Send + Sync + 'static,
+    H: SubjectHolders + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
 {
@@ -360,9 +417,7 @@ where
     };
     let record = match state.subjects.fetch(tenant, subject).await {
         Ok(Some(record)) => record,
-        Ok(None) => {
-            return not_found("subject for this tenant");
-        }
+        Ok(None) => return erase_at_stores(&state, &context, tenant, subject).await,
         Err(error) => return subject_error_response(&error),
     };
     let already_masked = record.masked_at.is_some();
@@ -389,9 +444,183 @@ where
         Json(SubjectErased {
             erased: true,
             already_masked,
+            pending_store_ids: Vec::new(),
         }),
     )
         .into_response()
+}
+
+/// Erases a subject the cloud does not hold at every store whose events name it (ADR-0206 decision
+/// 4): its id goes on each store that has not confirmed masking it, on that store's `erasures`
+/// node. A subject no store names is not found.
+#[expect(
+    clippy::result_large_err,
+    reason = "the composing closure's Err is an axum Response by design, as every node publish's is"
+)]
+async fn erase_at_stores<Su, H, Cfg, A, C>(
+    state: &SubjectState<Su, H, Cfg, A, C>,
+    context: &crate::auth::admin::AdminContext,
+    tenant: TenantId,
+    subject: SubjectId,
+) -> Response
+where
+    H: SubjectHolders,
+    Cfg: ConfigTreeStore,
+    C: ClockSource,
+{
+    let holders = match state.holders.holders(tenant, subject).await {
+        Ok(holders) if holders.is_empty() => return not_found("subject for this tenant"),
+        Ok(holders) => holders,
+        Err(error) => return holders_unavailable(&error),
+    };
+    let mut pending = Vec::new();
+    for holder in holders.iter().filter(|holder| holder.masked_time.is_none()) {
+        if let Err(refusal) = publish_config_nodes_with(
+            &state.config_trees,
+            &state.clock,
+            tenant,
+            holder.store_id,
+            ConfigLevel::Store,
+            |before| append_erasure(before, subject),
+        )
+        .await
+        {
+            return refusal;
+        }
+        pending.push(holder.store_id.to_string());
+    }
+    audit_action(
+        &state.audit,
+        &state.clock,
+        context,
+        Some(tenant),
+        "subject.erase",
+        "subject",
+        &subject.to_string(),
+        None,
+        Some(serde_json::json!({ "stores": holders.len(), "pending": pending.len() })),
+    )
+    .await;
+    (
+        StatusCode::OK,
+        Json(SubjectErased {
+            erased: pending.is_empty(),
+            already_masked: pending.is_empty(),
+            pending_store_ids: pending,
+        }),
+    )
+        .into_response()
+}
+
+#[utoipa::path(
+    get,
+    path = "/admin/subjects/{subject_id}/stores",
+    extensions(("x-permission" = json!("console.subjects.manage"))),
+    security(("session_cookie" = [])),
+    params(
+        ("subject_id" = String, Path, description = "The subject's 26-character ULID"),
+        ("tenant_id" = String, Query, description = "The tenant the subject belongs to (a \
+                                                   26-character ULID)"),
+    ),
+    responses(
+        (status = 200, body = SubjectStoresView, description = "The stores whose events name the subject, whose personal \
+                                      custom values stay on the store (ADR-0206): each `store_id`, \
+                                      whether it has confirmed masking the subject (`masked`), and \
+                                      whether an erasure is waiting for it (`erasure_pending`), at \
+                                      most 64. Empty when no store names it. No value is returned. \
+                                      Audited"),
+        (status = 400, description = "tenant_id or subject_id is absent or not a ULID", body = crate::openapi_admin::ErrorResponse),
+        (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
+        (status = 403, description = "The role lacks console.subjects.manage, which only an owner \
+                                      holds", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The projection or the config tree is unreachable", body = crate::openapi_admin::ErrorResponse),
+    ),
+    tag = "subject requests",
+)]
+/// The stores holding a subject, and where an erasure of it is still pending (ADR-0206 decision 4).
+async fn admin_subject_stores<Su, H, Cfg, A, C>(
+    State(state): State<SubjectState<Su, H, Cfg, A, C>>,
+    headers: HeaderMap,
+    Query(query): Query<RegistryTenantQuery>,
+    Path(subject_id): Path<String>,
+) -> Response
+where
+    Su: SubjectStore + Clone + Send + Sync + 'static,
+    H: SubjectHolders + Clone + Send + Sync + 'static,
+    Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageSubjects,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (tenant, subject) = match parse_subject_target(&query.tenant_id, &subject_id) {
+        Ok(target) => target,
+        Err(refusal) => return refusal,
+    };
+    let holders = match state.holders.holders(tenant, subject).await {
+        Ok(holders) => holders,
+        Err(error) => return holders_unavailable(&error),
+    };
+    let mut stores = Vec::with_capacity(holders.len());
+    for holder in holders {
+        let masked = holder.masked_time.is_some();
+        let requested = if masked {
+            false
+        } else {
+            match state.config_trees.load(tenant, holder.store_id).await {
+                Ok(tree) => {
+                    requested(tree.as_ref().map(|versioned| &versioned.record)).contains(&subject)
+                }
+                Err(error) => {
+                    tracing::error!(%error, "reading a store's config tree failed");
+                    return api_error(ErrorStatus::Unavailable, "the config tree is unavailable");
+                }
+            }
+        };
+        stores.push(SubjectStoreView {
+            store_id: holder.store_id.to_string(),
+            masked,
+            erasure_pending: requested,
+        });
+    }
+    audit_action(
+        &state.audit,
+        &state.clock,
+        &context,
+        Some(tenant),
+        "subject.stores",
+        "subject",
+        &subject.to_string(),
+        None,
+        Some(serde_json::json!({ "stores": stores.len() })),
+    )
+    .await;
+    (
+        StatusCode::OK,
+        Json(SubjectStoresView {
+            subject_id: subject.to_string(),
+            stores,
+        }),
+    )
+        .into_response()
+}
+
+/// Maps a failure to read which stores hold a subject to a retryable `503`.
+fn holders_unavailable(error: &pos_ports::PortError) -> Response {
+    tracing::error!(%error, "reading which stores hold a subject failed");
+    api_error(
+        ErrorStatus::Unavailable,
+        "the subject service is unavailable",
+    )
 }
 
 /// Maps a subject-store failure to a retryable `503`, logging the detail rather than leaking it.
@@ -414,6 +643,7 @@ mod answer_tests {
         let answer = SubjectErased {
             erased: true,
             already_masked: false,
+            pending_store_ids: Vec::new(),
         };
         assert_eq!(
             serde_json::to_value(answer).expect("json"),

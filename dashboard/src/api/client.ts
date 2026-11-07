@@ -125,8 +125,10 @@ import type {
   StoreArchive,
   StoreGroup,
   StoreLease,
+  SubjectErased,
   SubjectExport,
   SubjectMeta,
+  SubjectStores,
   Supplier,
   TableQrSheet,
   TaskHealthReport,
@@ -492,6 +494,14 @@ async function downloadCsv(path: AdminUrlFor<"GET">, filename: string): Promise<
 }
 
 const tenantQuery = (tenantId: string) => `tenant_id=${encodeURIComponent(tenantId)}`;
+
+// One subject's route under `/admin/subjects` (ADR-0076), with its tenant.
+const subjectUrl = (
+  tenantId: string,
+  subjectId: string,
+  tail: "" | "/export" | "/erase" | "/stores" = "",
+): `/admin/subjects/${string}?${string}` =>
+  `/admin/subjects/${encodeURIComponent(subjectId)}${tail}?${tenantQuery(tenantId)}`;
 
 /**
  * `tenant_id` plus the paging bounds, when a caller wants a page (ADR-0098).
@@ -2053,20 +2063,14 @@ export const api = {
   // --- subject-request tooling (ADR-0076, owner-only, per-subject, audited) ---
   // A 404 (no such subject for this tenant) surfaces as an ApiError the caller distinguishes by status.
   lookupSubject: (tenantId: string, subjectId: string) =>
-    requestJson<SubjectMeta>(
-      "GET",
-      `/admin/subjects/${encodeURIComponent(subjectId)}?${tenantQuery(tenantId)}`,
-    ),
+    requestJson<SubjectMeta>("GET", subjectUrl(tenantId, subjectId)),
   exportSubject: (tenantId: string, subjectId: string) =>
-    requestJson<SubjectExport>(
-      "GET",
-      `/admin/subjects/${encodeURIComponent(subjectId)}/export?${tenantQuery(tenantId)}`,
-    ),
+    requestJson<SubjectExport>("GET", subjectUrl(tenantId, subjectId, "/export")),
   eraseSubject: (tenantId: string, subjectId: string) =>
-    requestJson<{ readonly erased: boolean; readonly already_masked: boolean }>(
-      "POST",
-      `/admin/subjects/${encodeURIComponent(subjectId)}/erase?${tenantQuery(tenantId)}`,
-    ),
+    requestJson<SubjectErased>("POST", subjectUrl(tenantId, subjectId, "/erase")),
+  // The stores holding a subject whose personal values stay on the store (ADR-0206).
+  subjectStores: (tenantId: string, subjectId: string) =>
+    requestJson<SubjectStores>("GET", subjectUrl(tenantId, subjectId, "/stores")),
 
   // The `<img src>` URL for a rendition; the browser fetches it with the session cookie.
   mediaThumbnailUrl: (tenantId: string, mediaId: string) =>

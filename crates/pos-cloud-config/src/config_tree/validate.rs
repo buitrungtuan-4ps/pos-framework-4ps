@@ -68,6 +68,11 @@ impl ConfigValidator for CapabilityValidator {
         violations.extend(lease_violations(document));
         violations.extend(delivery_node_violations(document));
         violations.extend(device_revocation_violations(document));
+        if let Err(refusal) = pos_proto::erasures::Erasures::read(document) {
+            // Read as the edge reads it (ADR-0206 decision 4), so the store never meets a node it
+            // would refuse whole.
+            violations.push(format!("{refusal}: the store would refuse it whole"));
+        }
         if violations.is_empty() {
             Ok(())
         } else {
@@ -458,6 +463,23 @@ mod tests {
             violations
                 .iter()
                 .any(|v| v.contains("`revoked_devices` node")),
+            "{violations:?}"
+        );
+    }
+
+    #[test]
+    fn an_erasures_node_is_read_as_the_store_reads_it() {
+        assert_eq!(
+            CapabilityValidator.validate(&json!({
+                "erasures": { "subject_ids": ["01ARZ3NDEKTSV4RRFFQ69G5FAV"] }
+            })),
+            Ok(())
+        );
+        let violations = CapabilityValidator
+            .validate(&json!({ "erasures": { "subject_id": ["01ARZ3NDEKTSV4RRFFQ69G5FAV"] } }))
+            .expect_err("a misspelled inner key must be rejected");
+        assert!(
+            violations.iter().any(|v| v.contains("`erasures` node")),
             "{violations:?}"
         );
     }

@@ -21,7 +21,7 @@ use pos_cloud::config_wakes::{self, WakeQueue};
 use pos_cloud::people_republish;
 use pos_cloud::retention::{self, RetentionPolicy};
 use pos_cloud::webhook::{self, TlsWebhookSender};
-use pos_cloud::{Cloud, CloudConfig, cursor, dashboard};
+use pos_cloud::{Cloud, CloudConfig, cursor, dashboard, erasures};
 use pos_ports::PortError;
 use store_postgres::PostgresStore;
 use tokio::task::JoinHandle;
@@ -205,7 +205,8 @@ pub(crate) fn rollup_projector(config: &CloudConfig, store: &PostgresStore) -> J
     tokio::spawn(dashboard::projector::run(
         store.clone(),
         store.rollups(),
-        store.custom_values(),
+        // The custom values, and the config tree a confirmed erasure is taken off (ADR-0206).
+        erasures::CustomProjection::new(store.custom_values(), store.config_trees(), SystemClock),
         store.clone(),
         SystemClock,
         store.task_health(),

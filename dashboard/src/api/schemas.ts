@@ -96,6 +96,8 @@ export type AuditEntry = Schemas["AuditEntryView"];
 export type MediaSummary = Schemas["MediaSummaryView"];
 export type SubjectMeta = Schemas["SubjectMetaView"];
 export type SubjectExport = Schemas["SubjectExportView"];
+export type SubjectErased = Schemas["SubjectErased"];
+export type SubjectStores = Schemas["SubjectStoresView"];
 
 export type WebhookSummary = Schemas["WebhookSummary"];
 export type XzReport = Schemas["XzReport"];

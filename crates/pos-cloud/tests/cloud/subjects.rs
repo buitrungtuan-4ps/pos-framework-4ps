@@ -10,10 +10,13 @@ use std::sync::{Arc, Mutex};
 use axum::http::StatusCode;
 use pos_cloud::audit::NoopAuditRecorder;
 use pos_cloud::auth::admin::AdminRole;
+use pos_cloud::config_tree::ConfigTreeStore;
+use pos_cloud::erasures::{SubjectHolder, SubjectHolders, prune_confirmed, requested};
 use pos_cloud::retention::{RetentionError, SubjectRecord, SubjectStore};
 use pos_cloud::{Cloud, http};
 use pos_fakes::FakeStore;
-use pos_proto::ids::{SubjectId, TenantId};
+use pos_ports::PortError;
+use pos_proto::ids::{StoreId, SubjectId, TenantId};
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
 use tower::ServiceExt;
@@ -77,8 +80,71 @@ impl SubjectStore for FakeSubjects {
     }
 }
 
+/// The stores whose events name a subject, as `custom_subjects` holds them: `(store, subject,
+/// masked)`.
+#[derive(Clone, Default)]
+struct FakeHolders {
+    rows: Arc<Mutex<Vec<HolderRow>>>,
+}
+
+/// A store, a subject it names, and when it confirmed masking it.
+type HolderRow = (StoreId, SubjectId, Option<Timestamp>);
+
+impl SubjectHolders for FakeHolders {
+    async fn holders(
+        &self,
+        _tenant: TenantId,
+        subject_id: SubjectId,
+    ) -> Result<Vec<SubjectHolder>, PortError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|(_, subject, _)| *subject == subject_id)
+            .map(|(store_id, _, masked_time)| SubjectHolder {
+                store_id: *store_id,
+                masked_time: *masked_time,
+            })
+            .collect())
+    }
+
+    async fn masked_among(
+        &self,
+        _tenant: TenantId,
+        store_id: StoreId,
+        subject_ids: &[SubjectId],
+    ) -> Result<Vec<SubjectId>, PortError> {
+        Ok(self
+            .rows
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|(store, subject, masked)| {
+                *store == store_id && masked.is_some() && subject_ids.contains(subject)
+            })
+            .map(|(_, subject, _)| *subject)
+            .collect())
+    }
+}
+
 /// The main router (for the session guard) plus the subject-request sub-router.
 fn subjects_app(admin: FakeAdmin, subjects: FakeSubjects) -> axum::Router {
+    subjects_app_with(
+        admin,
+        subjects,
+        FakeHolders::default(),
+        FakeConfigTrees::default(),
+    )
+}
+
+/// [`subjects_app`] with the stores holding subjects and their config trees.
+fn subjects_app_with(
+    admin: FakeAdmin,
+    subjects: FakeSubjects,
+    holders: FakeHolders,
+    config_trees: FakeConfigTrees,
+) -> axum::Router {
     let app = app_all(
         Cloud::new(FakeStore::new()),
         FakeRollups::default(),
@@ -89,6 +155,7 @@ fn subjects_app(admin: FakeAdmin, subjects: FakeSubjects) -> axum::Router {
     );
     http::router(app).merge(http::subjects_router(
         subjects,
+        (holders, config_trees),
         admin,
         clock(),
         Arc::new(NoopAuditRecorder),
@@ -207,4 +274,98 @@ async fn subject_lookup_404s_for_an_unknown_id_and_needs_a_session() {
 
     let no_session = router.oneshot(get(&uri, None)).await.expect("route");
     assert_eq!(no_session.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// A subject only a store holds is erased at that store (ADR-0206 decision 4): its id goes on the
+/// store's `erasures` node, the console sees it pending, and once the store confirms, the id comes
+/// off the node.
+#[tokio::test]
+async fn a_subject_a_store_holds_is_erased_through_its_erasures_node() {
+    let admin = provisioned_admin();
+    let holding = StoreId::new(Ulid::from_u128(0x5701));
+    let subject_id = SubjectId::new(Ulid::from_u128(0x0ACE));
+    let holders = FakeHolders::default();
+    holders
+        .rows
+        .lock()
+        .expect("lock")
+        .push((holding, subject_id, None));
+    let trees = FakeConfigTrees::default();
+    let router = subjects_app_with(
+        admin.clone(),
+        FakeSubjects::default(),
+        holders.clone(),
+        trees.clone(),
+    );
+    let owner = role_session_cookie(&admin, AdminRole::Owner, "owner-token").await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let sid = subject_id.to_string();
+    let stores_uri = format!("/admin/subjects/{sid}/stores?tenant_id={tenant_ulid}");
+
+    let erased = router
+        .clone()
+        .oneshot(post_with_cookie(
+            &format!("/admin/subjects/{sid}/erase?tenant_id={tenant_ulid}"),
+            &serde_json::json!({}),
+            &owner,
+        ))
+        .await
+        .expect("route");
+    assert_eq!(erased.status(), StatusCode::OK);
+    let body = json_body(erased).await;
+    assert_eq!(body["erased"], false, "the store has not masked it yet");
+    assert_eq!(body["pending_store_ids"][0], holding.to_string());
+    let node = trees.load(tenant(), holding).await.expect("loads");
+    assert_eq!(
+        requested(node.as_ref().map(|versioned| &versioned.record)),
+        vec![subject_id],
+        "the id is on the holding store's node"
+    );
+
+    let pending = router
+        .clone()
+        .oneshot(get_with_cookie(&stores_uri, &owner))
+        .await
+        .expect("route");
+    assert_eq!(pending.status(), StatusCode::OK);
+    let stores = json_body(pending).await;
+    assert_eq!(stores["stores"][0]["erasure_pending"], true);
+    assert_eq!(stores["stores"][0]["masked"], false);
+
+    // The store confirms; the projector prunes.
+    holders.rows.lock().expect("lock")[0].2 =
+        Some(Timestamp::from_milliseconds_since_epoch(NOW_MS).expect("valid"));
+    let pruned = prune_confirmed(&trees, &holders, &clock(), tenant(), holding)
+        .await
+        .expect("prunes");
+    assert_eq!(pruned, 1);
+    let node = trees.load(tenant(), holding).await.expect("loads");
+    assert!(requested(node.as_ref().map(|versioned| &versioned.record)).is_empty());
+
+    let done = router
+        .oneshot(get_with_cookie(&stores_uri, &owner))
+        .await
+        .expect("route");
+    let stores = json_body(done).await;
+    assert_eq!(stores["stores"][0]["masked"], true);
+    assert_eq!(stores["stores"][0]["erasure_pending"], false);
+}
+
+/// A subject neither the cloud nor any store holds is not found, and nothing is published.
+#[tokio::test]
+async fn erasing_a_subject_nobody_holds_is_not_found() {
+    let admin = provisioned_admin();
+    let router = subjects_app(admin.clone(), FakeSubjects::default());
+    let owner = role_session_cookie(&admin, AdminRole::Owner, "owner-token").await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let sid = Ulid::from_u128(0x0998).to_string();
+    let erased = router
+        .oneshot(post_with_cookie(
+            &format!("/admin/subjects/{sid}/erase?tenant_id={tenant_ulid}"),
+            &serde_json::json!({}),
+            &owner,
+        ))
+        .await
+        .expect("route");
+    assert_eq!(erased.status(), StatusCode::NOT_FOUND);
 }
