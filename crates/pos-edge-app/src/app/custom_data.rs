@@ -146,7 +146,7 @@ impl<S: EventStore + SubjectStore> Edge<S> {
     ) -> Result<CustomDataView, AppError> {
         let ctx = self.decision_ctx(actor)?;
         ctx.require(Permission::WriteDataRecord)?;
-        let _serialised = self.custom_writes.lock().await;
+        let mut writes = self.custom_writes.lock().await;
         let held = match custom_record_id {
             Some(id) => {
                 let projection = self.lock_projection();
@@ -178,6 +178,7 @@ impl<S: EventStore + SubjectStore> Edge<S> {
             package_version_id: package.package_version_id,
         };
         self.commit_custom(&ctx, &event, subject).await?;
+        writes.saved(actor, custom_record_id);
         let mut projection = self.lock_projection();
         projection.fold_custom_record(&event);
         let (_, held) = projection

@@ -124,6 +124,7 @@ export type ObjectType = Schemas["ObjectType"];
 export type CustomFieldValue = Schemas["CustomFieldValue"];
 export type CustomDataResponse = Schemas["CustomDataResponse"];
 export type CustomRecordsResponse = Schemas["CustomRecordsResponse"];
+export type RecordSlipResponse = Schemas["RecordSlipResponse"];
 export type NewRecordRequest = Schemas["NewRecordRequest"];
 export type ValueRequest = Schemas["ValueRequest"];
 export type SubjectResponse = Schemas["SubjectResponse"];

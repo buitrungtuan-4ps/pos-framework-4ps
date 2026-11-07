@@ -308,6 +308,15 @@ data.custom_record.create	permission=data.record.write
 data.custom_record.create	refusal=CUSTOM_ENTRY_REFUSED
 data.custom_record.create	route=POST /api/custom-records
 data.custom_record.create	since=0.14.1
+data.custom_record.print
+data.custom_record.print	effect=ACTION_EFFECT_EDGE_WRITE
+data.custom_record.print	frequency=ACTION_FREQUENCY_RARE
+data.custom_record.print	param=custom_record_id:ACTION_PARAM_KIND_ID:required
+data.custom_record.print	permission=data.record.write
+data.custom_record.print	refusal=NOTHING_TO_PRINT
+data.custom_record.print	refusal=UNKNOWN_CUSTOM_RECORD
+data.custom_record.print	route=POST /api/custom-records/{id}/slip
+data.custom_record.print	since=0.14.1
 reports.shift.print_handover
 reports.shift.print_handover	effect=ACTION_EFFECT_EDGE_WRITE
 reports.shift.print_handover	frequency=ACTION_FREQUENCY_RARE

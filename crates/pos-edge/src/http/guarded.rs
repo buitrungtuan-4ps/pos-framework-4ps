@@ -61,6 +61,10 @@ where
             post(custom_data::change_custom_record::<S>),
         )
         .route(
+            "/api/custom-records/{id}/slip",
+            post(custom_data::print_record_slip::<S>),
+        )
+        .route(
             "/api/subjects/{subject_id}",
             get(custom_data::read_subject::<S>),
         )

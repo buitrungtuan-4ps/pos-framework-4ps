@@ -173,7 +173,7 @@ impl<S: EventStore> Edge<S> {
             package: PackageStanding::default(),
             config_wake: ConfigWakeStanding::default(),
             labels: RwLock::new(Arc::new(crate::labels::LabelGrid::default())),
-            custom_writes: tokio::sync::Mutex::new(()),
+            custom_writes: tokio::sync::Mutex::new(super::record_slip::FreshSlips::default()),
         })
     }
 

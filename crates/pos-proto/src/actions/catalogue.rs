@@ -680,4 +680,15 @@ pub const CATALOGUE: &[Action] = &[
         summary: "Change a custom record's values",
         ..BASE
     },
+    Action {
+        action_id: "data.custom_record.print",
+        effect: EdgeWrite,
+        frequency: Rare,
+        params: &[required("custom_record_id", Id)],
+        routes: &["POST /api/custom-records/{id}/slip"],
+        permissions: DATA_RECORD_WRITE,
+        refusals: &["UNKNOWN_CUSTOM_RECORD", "NOTHING_TO_PRINT"],
+        summary: "Print a custom record's slip",
+        ..BASE
+    },
 ];

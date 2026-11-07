@@ -617,5 +617,7 @@
   "records.invalid_value": "A value is not in the form its field takes.",
   "records.refused_entry": "The store refused a value. Check each field and save again.",
   "records.refused_permission": "You may not do this.",
-  "records.save_failed": "The record could not be saved. Try again."
+  "records.save_failed": "The record could not be saved. Try again.",
+  "records.print_slip": "Print slip",
+  "records.slip_printed": "Slip printed."
 }

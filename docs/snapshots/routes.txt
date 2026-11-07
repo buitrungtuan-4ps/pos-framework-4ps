@@ -48,6 +48,7 @@ POST /api/bills/{id}/void
 POST /api/bills/{id}/void_settled
 POST /api/custom-fields
 POST /api/custom-records
+POST /api/custom-records/{id}/slip
 POST /api/custom-records/{id}/values
 POST /api/drawer/open
 POST /api/kds/bump

@@ -23,6 +23,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
+use pos_core::business_date::local_time;
 use pos_core::decision::Actor;
 use pos_core::package::{EnteredValue, Entry, PersonalText};
 use pos_ports::event_store::EventStore;
@@ -36,10 +37,12 @@ use pos_proto::quantity::Quantity;
 use pos_proto::text::TranslationKey;
 use pos_proto::time::{CalendarDate, Timestamp};
 use pos_proto::ulid::Ulid;
-use pos_proto::{Open, WireEnum};
+use pos_proto::{ClockSource, Open, WireEnum};
 
 use crate::app::{AppError, CustomDataView, Edge};
+use crate::clock::SystemClock;
 use crate::http::{bad_request, error_response, parse_ulid};
+use crate::printing::{PrintOutcome, Printers};
 
 /// The most records `GET /api/custom-records` returns.
 const RECORDS_LISTED_MAX: usize = 200;
@@ -476,6 +479,76 @@ where
         )
         .await,
     )
+}
+
+/// What printing a record's slip answers.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub(crate) struct RecordSlipResponse {
+    /// What came of printing it.
+    slip_print: String,
+}
+
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/custom-records/{id}/slip",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("data.record.write"))),
+    params(("id" = String, Path, description = "The record's id, a ULID")),
+    responses(
+        (status = 200, body = RecordSlipResponse, description = "The slip printed at the receipt printer of the till this device \
+                                      is: the store's receipt template for the record, its personal values only where the \
+                                      template marks the slip as the person's copy, and then only on the first slip its \
+                                      saver asks for or for someone holding `data.personal.read`"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+        (status = 409, description = "Refused: the person lacks `data.record.write` (`PERMISSION_DENIED`), this edge \
+                                      holds no such record (`UNKNOWN_CUSTOM_RECORD`), or the store has no receipt \
+                                      template, so no slip (`NOTHING_TO_PRINT`)"),
+    ),
+    tag = "custom data",
+))]
+/// `POST /api/custom-records/{id}/slip` — prints a record's slip (ADR-0207 decisions 4 and 5). It
+/// records nothing.
+pub(crate) async fn print_record_slip<S>(
+    State(edge): State<Arc<Edge<S>>>,
+    Extension(actor): Extension<Actor>,
+    printers: Option<Extension<Arc<Printers>>>,
+    Path(id): Path<String>,
+) -> Response
+where
+    S: EventStore + SubjectStore + Send + Sync + 'static,
+{
+    let Some(custom_record_id) = parse_ulid(&id).map(CustomRecordId::new) else {
+        return bad_request("the record id is not a ULID");
+    };
+    let slip = match edge.record_slip(actor, custom_record_id).await {
+        Ok(slip) => slip,
+        Err(error) => return error_response(&error),
+    };
+    let outcome = match printers {
+        Some(Extension(printers)) => {
+            let session = edge.session();
+            let printed_at = local_time(SystemClock.now(), &session.timezone)
+                .map_or_else(|_| SystemClock.now().to_string(), |local| local.to_string());
+            printers
+                .print_record_slip(&edge, actor, custom_record_id, &slip, &printed_at)
+                .await
+        }
+        None => edge
+            .session()
+            .receipt
+            .template_for(pos_proto::SalesChannel::Unspecified)
+            .map(|_| PrintOutcome::NoPrinter),
+    };
+    match outcome {
+        Some(outcome) => Json(RecordSlipResponse {
+            slip_print: outcome.as_wire().to_owned(),
+        })
+        .into_response(),
+        None => error_response(&AppError::NothingToPrint),
+    }
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(

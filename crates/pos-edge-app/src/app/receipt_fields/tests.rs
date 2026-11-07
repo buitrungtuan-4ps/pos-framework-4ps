@@ -207,3 +207,39 @@ async fn a_receipt_prints_its_orders_fields() {
         "the order's own channel picks its template"
     );
 }
+
+#[tokio::test]
+async fn a_records_first_slip_is_the_saves_own_and_every_other_is_a_reprint() {
+    let edge = edge();
+    let record = a_reservation(&edge).await;
+    let slip = edge.record_slip(actor(), record).await.expect("a slip");
+    assert_eq!(slip.personal, PersonalOnPaper::Shown, "the save's own slip");
+    assert_eq!(
+        slip.object_label_key,
+        Some(TranslationKey::new("data.reservation"))
+    );
+    assert_eq!(
+        edge.record_slip(actor(), record)
+            .await
+            .expect("a slip")
+            .personal,
+        PersonalOnPaper::Reprinted(actor()),
+        "a second slip is a reprint"
+    );
+    assert!(matches!(
+        edge.record_slip(
+            actor(),
+            CustomRecordId::new(pos_proto::ulid::Ulid::from_u128(9))
+        )
+        .await,
+        Err(crate::app::AppError::UnknownCustomRecord)
+    ));
+
+    let mut session = (*edge.session()).clone();
+    session.granted = PermissionSet::EMPTY.with(Permission::ReadPersonalData);
+    edge.apply_session(session);
+    assert!(
+        edge.record_slip(actor(), record).await.is_err(),
+        "a slip needs data.record.write"
+    );
+}

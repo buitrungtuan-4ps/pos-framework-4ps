@@ -6,6 +6,10 @@
 // save the field is empty, the record says that a value is held, and showing it takes
 // `data.personal.read`, one subject at a time, every read audited by the edge. A personal value is
 // sent only with its consent ticked, and the consent's wording is the tenant's label for its purpose.
+//
+// A record's slip prints what the store's receipt template says (ADR-0207 decisions 4 and 5). Its
+// personal value prints only where the template marks the slip as the person's copy, and the edge
+// decides when: on the slip of the save just made, or for someone holding `data.personal.read`.
 
 import { For, Show, createEffect, createSignal, on, type JSX } from "solid-js";
 
@@ -14,11 +18,13 @@ import type { CustomDataResponse, CustomField, ObjectType, ValueRequest } from "
 import { ReadFailed } from "../components/StoreData";
 import { t, type MessageKey } from "../i18n";
 import { drafted, wire, type Drafted } from "../lib/custom-values";
+import { printOutcomeKey } from "../lib/print";
 import { RegionsContext, type Regions } from "../package/regions";
 import { packageLabel } from "../package/render";
 import { NO_ACTS, PackageScreen } from "../package/screen";
 import { customData } from "../state/custom-data";
 import { can, holdsOwn } from "../state/permissions";
+import { createPrint } from "../state/print-writes";
 import { createScreenRead } from "../state/screen-read";
 
 const INPUT = "mt-1 block min-h-touch w-full rounded-token border border-line bg-surface px-3";
@@ -123,6 +129,44 @@ function ConsentBoxes(props: { purposes: string[]; given: ReadonlySet<string>; o
   );
 }
 
+/** Prints a record's slip at this till's receipt printer, and says what came of the paper. */
+function SlipButton(props: { customRecordId: string }) {
+  const [error, setError] = createSignal<string | null>(null);
+  const [outcome, setOutcome] = createSignal<string | null>(null);
+  const print = createPrint(setError);
+  const printSlip = () =>
+    void print.run("data.custom_record.print", () => api.printRecordSlip(props.customRecordId), (answer) =>
+      setOutcome(answer.slip_print),
+    );
+  return (
+    <Show when={can("data.record.write")}>
+      <button
+        type="button"
+        class="mt-3 min-h-touch rounded-token border border-line px-3 text-sm"
+        disabled={print.printing()}
+        data-step="printSlip"
+        onClick={printSlip}
+      >
+        {t(print.printing() ? "common.sending" : "records.print_slip")}
+      </button>
+      <Show when={outcome()}>
+        {(printed) => (
+          <p class="mt-1 text-sm text-ink-muted" role="status" data-outcome="record-slip">
+            {t(printOutcomeKey(printed(), "records.slip_printed"))}
+          </p>
+        )}
+      </Show>
+      <Show when={error()}>
+        {(message) => (
+          <p class="mt-1 text-sm text-danger" role="alert" data-outcome="record-slip-refused">
+            {message()}
+          </p>
+        )}
+      </Show>
+    </Show>
+  );
+}
+
 type FormProps = {
   kind: ObjectType;
   record: CustomDataResponse | null;
@@ -216,6 +260,7 @@ function RecordForm(props: FormProps) {
           {t("records.show_personal")}
         </button>
       </Show>
+      <Show when={props.record?.custom_record_id}>{(recordId) => <SlipButton customRecordId={recordId()} />}</Show>
       <ConsentBoxes purposes={form.purposes()} given={form.consented()} onTick={form.tick} />
       <Show when={form.error()}>
         {(key) => (
@@ -292,19 +337,19 @@ function RecordsBody() {
   };
   const [records, setRecords] = createSignal<CustomDataResponse[] | null>(null);
   const [editing, setEditing] = createSignal<CustomDataResponse | "new" | null>(null);
-  const [saved, setSaved] = createSignal(false);
+  const [saved, setSaved] = createSignal<CustomDataResponse | null>(null);
   const read = createScreenRead(async () => {
     const shown = kind();
     return shown === undefined ? [] : (await api.customRecords(shown.object_type_id)).records;
   }, setRecords);
   createEffect(on(() => kind()?.object_type_id, () => void read.run()));
 
-  const newRecord = () => (setSaved(false), setEditing("new"));
-  const chooseRecord = (record: CustomDataResponse) => (setSaved(false), setEditing(record));
+  const newRecord = () => (setSaved(null), setEditing("new"));
+  const chooseRecord = (record: CustomDataResponse) => (setSaved(null), setEditing(record));
   const onSaved = (record: CustomDataResponse) => {
     setRecords((held) => [record, ...(held ?? []).filter((other) => other.custom_record_id !== record.custom_record_id)]);
     setEditing(null);
-    setSaved(true);
+    setSaved(record);
   };
 
   return (
@@ -317,10 +362,15 @@ function RecordsBody() {
               {t("records.new", { kind: packageLabel(shown().label_key) })}
             </button>
           </Show>
-          <Show when={saved()}>
-            <p class="mt-3 text-sm" role="status" data-outcome="record-saved">
-              {t("records.saved")}
-            </p>
+          <Show when={saved()} keyed>
+            {(record) => (
+              <>
+                <p class="mt-3 text-sm" role="status" data-outcome="record-saved">
+                  {t("records.saved")}
+                </p>
+                <Show when={record.custom_record_id}>{(recordId) => <SlipButton customRecordId={recordId()} />}</Show>
+              </>
+            )}
           </Show>
           <Show when={editing()} keyed>
             {(form) => <RecordForm kind={shown()} record={form === "new" ? null : form} onSaved={onSaved} onCancel={() => setEditing(null)} />}

@@ -55,6 +55,7 @@ import type {
   SettledBill,
   CustomDataResponse,
   CustomRecordsResponse,
+  RecordSlipResponse,
   NewRecordRequest,
   SubjectResponse,
   SettleRequest,
@@ -485,6 +486,10 @@ export const api = {
     request<CustomDataResponse>("POST", "/api/custom-records", body),
   changeCustomRecord: (customRecordId: string, body: NewRecordRequest) =>
     request<CustomDataResponse>("POST", `/api/custom-records/${customRecordId}/values`, body),
+  // A record's slip, at this till's receipt printer: what the store's receipt template prints for it
+  // (ADR-0207 decisions 4 and 5).
+  printRecordSlip: (customRecordId: string) =>
+    request<RecordSlipResponse>("POST", `/api/custom-records/${customRecordId}/slip`),
   subject: (subjectId: string) => request<SubjectResponse>("GET", `/api/subjects/${subjectId}`),
   // What the store has taken today (ADR-0160): `403` unless the person's own role grants
   // `reports.takings.view`, whether or not the store enforces each person's own set.
