@@ -59,14 +59,13 @@ impl ContentRefusal {
         }
     }
 
-    /// The code the console's field error carries: the data part's own for a data refusal
-    /// (`PERSONAL_FIELD_UNAVAILABLE` for a personal field, ADR-0206 decision 11), `INVALID` for
-    /// every other.
+    /// The code the console's field error carries: `INVALID`. A personal field is no longer refused
+    /// for being personal (ADR-0206 decision 11 was lifted once its expiry and erasure landed).
     #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
-            Self::Data(refusal) => refusal.code(),
-            Self::VersionLabel
+            Self::Data(_)
+            | Self::VersionLabel
             | Self::Screen(_)
             | Self::TooManyTimeSlots
             | Self::TimeSlotId(_)

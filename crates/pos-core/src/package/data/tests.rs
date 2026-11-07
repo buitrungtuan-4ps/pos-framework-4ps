@@ -49,18 +49,16 @@ fn a_well_formed_part_without_personal_fields_passes() {
     assert_eq!(check_data(&PackageData::default()), Ok(()));
 }
 
-/// Every personal field is refused until personal fields are available (ADR-0206 decision 11), with
-/// the code the console shows.
+/// A personal field declared in full is published (ADR-0206: its expiry and its erasure have
+/// landed, so decision 11's refusal is lifted), and every refusal's code is `INVALID`.
 #[test]
-fn a_personal_field_is_unavailable_and_says_so() {
-    let refused = check_data(&data(&[PARTY, CONTACT]));
-    assert_eq!(refused, type_field(1, FieldFault::PersonalUnavailable));
-    let refusal = refused.expect_err("refused");
-    assert_eq!(refusal.code(), "PERSONAL_FIELD_UNAVAILABLE");
-    assert_eq!(refusal.field(), "data.object_types.fields.personal");
-    let content = ContentRefusal::Data(refusal);
-    assert_eq!(content.code(), "PERSONAL_FIELD_UNAVAILABLE");
+fn a_personal_field_declared_in_full_passes() {
+    assert_eq!(check_data(&data(&[PARTY, CONTACT])), Ok(()));
     assert_eq!(ContentRefusal::VersionLabel.code(), "INVALID");
+    assert_eq!(
+        ContentRefusal::Data(DataRefusal::TooManyObjectTypes).code(),
+        "INVALID"
+    );
 }
 
 /// One change to the party-size field, and the fault it earns.
@@ -186,14 +184,19 @@ fn the_content_check_runs_the_data_check() {
     )
     .expect("content parses");
     content.data = data(&[PARTY, CONTACT]);
+    assert_eq!(check_content(&content), Ok(()));
+    let shorter = CONTACT
+        .replace("CF03", "CF04")
+        .replace(r#""retention_days":30"#, r#""retention_days":7"#);
+    content.data = data(&[PARTY, CONTACT, &shorter]);
     assert_eq!(
         check_content(&content),
         Err(ContentRefusal::Data(DataRefusal::Field(
             FieldAt::Type {
                 object_type: 0,
-                field: 1
+                field: 2
             },
-            FieldFault::PersonalUnavailable
+            FieldFault::RetentionDisagrees
         )))
     );
 }

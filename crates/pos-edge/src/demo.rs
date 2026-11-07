@@ -226,13 +226,16 @@ pub fn approvals() -> bool {
 }
 
 /// The `permissions` node: one employee holding every permission, or, where `approvals`, an employee
-/// who holds [`WITH_APPROVAL`] only with approval and a manager who approves them.
+/// who holds [`WITH_APPROVAL`] only with approval and a manager who approves them. On the
+/// `custom-data` profile the employee holds everything but `data.personal.read`, and the manager
+/// holds it too: the till shows a saved personal value only to the manager (ADR-0206 decision 7).
 fn demo_permissions(approvals: bool) -> Option<serde_json::Value> {
     let all: Vec<&str> = Permission::ALL
         .iter()
         .map(|permission| permission.meta().id)
         .collect();
-    if !approvals {
+    let personal_apart = package::custom_data();
+    if !approvals && !personal_apart {
         return Some(serde_json::json!({
             "staff": [{
                 "id": demo_employee().to_string(),
@@ -242,11 +245,17 @@ fn demo_permissions(approvals: bool) -> Option<serde_json::Value> {
             }],
         }));
     }
+    let withheld: &[&str] = if approvals {
+        &WITH_APPROVAL
+    } else {
+        &[PERSONAL_READ]
+    };
     let direct: Vec<&str> = all
         .iter()
         .copied()
-        .filter(|id| !WITH_APPROVAL.contains(id))
+        .filter(|id| !withheld.contains(id))
         .collect();
+    let with_approval: &[&str] = if approvals { &WITH_APPROVAL } else { &[] };
     Some(serde_json::json!({
         "enforced": true,
         "staff": [
@@ -254,7 +263,7 @@ fn demo_permissions(approvals: bool) -> Option<serde_json::Value> {
                 "id": demo_employee().to_string(),
                 "code": DEMO_STAFF_CODE,
                 "permissions": direct,
-                "permissions_with_approval": WITH_APPROVAL,
+                "permissions_with_approval": with_approval,
                 "pin_phc": crate::auth::hash_pin(DEMO_STAFF_PIN)?,
             },
             {
@@ -265,6 +274,16 @@ fn demo_permissions(approvals: bool) -> Option<serde_json::Value> {
             },
         ],
     }))
+}
+
+/// The permission that shows a saved personal value again (ADR-0206 decision 7).
+const PERSONAL_READ: &str = "data.personal.read";
+
+/// Whether this demo store's roster has a manager besides the employee: the `approvals` and
+/// `custom-data` profiles. `examples/minimal-edge` prints the manager's badge on them.
+#[must_use]
+pub fn has_manager() -> bool {
+    approvals() || package::custom_data()
 }
 
 /// Whether this demo store has anybody to sign in: `POS_DEMO_PROFILE=unstaffed` says it has not.

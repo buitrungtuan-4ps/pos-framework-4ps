@@ -45,8 +45,9 @@ async function freePort() {
 /**
  * Starts an edge and waits until it has printed its pairing URL.
  *
- * Resolves to `{ baseURL, pairingCode, staffCode, staffPin, stop() }`. Every field but `baseURL`
- * comes out of the process's own output, so nothing here can disagree with the binary. The
+ * Resolves to `{ baseURL, pairingCode, staffCode, staffPin, log(), stop() }`. Every field but
+ * `baseURL` comes out of the process's own output, so nothing here can disagree with the binary;
+ * `log()` is that output so far, for a test that checks what the edge never logs. The
  * `"unstaffed"` store has no badge, so its `staffCode` and `staffPin` are `undefined`.
  */
 export async function startEdge(profile) {
@@ -94,11 +95,12 @@ export async function startEdge(profile) {
   for (;;) {
     const pairing = /pairing_url=\S*code=(\d{6})/.exec(output);
     const staff = /sign in with code (\S+) and PIN (\S+)/.exec(output);
-    // The `approvals` store's manager, whose badge approves what the employee holds with approval.
+    // The manager of the `approvals` and `custom-data` stores: the one who approves what the employee
+    // holds with approval, and the one who may read a saved personal value back.
     const manager = /approve with code (\S+) and PIN (\S+)/.exec(output);
     // The unstaffed store prints no badge, because it has none to print.
     const unstaffed = /publishes no staff/.test(output);
-    if (pairing !== null && (staff !== null || unstaffed) && (profile !== "approvals" || manager !== null)) {
+    if (pairing !== null && (staff !== null || unstaffed) && (!["approvals", "custom-data"].includes(profile) || manager !== null)) {
       return {
         baseURL,
         pairingCode: pairing[1],
@@ -106,6 +108,7 @@ export async function startEdge(profile) {
         staffPin: staff?.[2],
         managerCode: manager?.[1],
         managerPin: manager?.[2],
+        log: () => output,
         stop,
       };
     }
