@@ -167,6 +167,15 @@ fn custom_data_package() -> serde_json::Value {
     })
 }
 
+/// The `custom-data` profile's receipt template (ADR-0207): a reservation's party size and occasion
+/// print on its slip, which is the person's own copy.
+fn custom_data_receipt() -> serde_json::Value {
+    serde_json::json!({ "templates": { "base": {
+        "custom_field_ids": [Ulid::from_u128(411).to_string(), Ulid::from_u128(412).to_string()],
+        "person_copy": ["PERSON_COPY_RECORD_SLIP"],
+    }}})
+}
+
 /// The labels the `custom-data` profile's grid holds, in English and Vietnamese, as a tenant's
 /// grid would give them (ADR-0043); `None` on every other profile.
 #[must_use]
@@ -209,6 +218,7 @@ pub(super) fn publish_on_its_profile(document: &mut serde_json::Value) {
     }
     if let Some(object) = document.as_object_mut().filter(|_| custom_data()) {
         object.insert("package".to_owned(), custom_data_package());
+        object.insert("receipt".to_owned(), custom_data_receipt());
     }
     if reactions() {
         withhold_x_report(document);
@@ -273,6 +283,13 @@ mod tests {
             .expect("a package");
         assert_eq!(content.data.object_types.len(), 1);
         assert_eq!(content.data.lists.len(), 1);
+        let receipt: pos_proto::receipt::PublishedReceipt =
+            serde_json::from_value(super::custom_data_receipt()).expect("the receipt node parses");
+        assert!(
+            receipt
+                .template_for(pos_proto::SalesChannel::Unspecified)
+                .is_some_and(|base| base.is_person_copy(pos_proto::receipt::PersonCopy::RecordSlip))
+        );
     }
 
     /// The reactions profile's version runs here, and its employee no longer holds the X report.

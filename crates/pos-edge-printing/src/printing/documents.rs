@@ -597,7 +597,7 @@ fn bill_document(
 
 /// Who sold. The trading name leads and the legal name backs it up; the address and registration
 /// follow, each only if it is there.
-fn seller_blocks(profile: &StoreProfile) -> Vec<PrintBlock> {
+pub(super) fn seller_blocks(profile: &StoreProfile) -> Vec<PrintBlock> {
     let mut blocks = Vec::new();
     if let Some(name) = profile.display_name() {
         blocks.push(centred(name, true));

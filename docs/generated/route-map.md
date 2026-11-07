@@ -29,6 +29,7 @@ From [`docs/openapi-edge.json`](../openapi-edge.json).
 | GET | `/api/custom-records` | `list_custom_records` | `till_session` | — | [`crates/pos-edge/src/http/custom_data.rs`](../../crates/pos-edge/src/http/custom_data.rs) |
 | POST | `/api/custom-records` | `create_custom_record` | `till_session` | `data.record.write` | [`crates/pos-edge/src/http/custom_data.rs`](../../crates/pos-edge/src/http/custom_data.rs) |
 | GET | `/api/custom-records/{id}` | `custom_record` | `till_session` | — | [`crates/pos-edge/src/http/custom_data.rs`](../../crates/pos-edge/src/http/custom_data.rs) |
+| POST | `/api/custom-records/{id}/slip` | `print_record_slip` | `till_session` | `data.record.write` | [`crates/pos-edge/src/http/custom_data.rs`](../../crates/pos-edge/src/http/custom_data.rs) |
 | POST | `/api/custom-records/{id}/values` | `change_custom_record` | `till_session` | `data.record.write` | [`crates/pos-edge/src/http/custom_data.rs`](../../crates/pos-edge/src/http/custom_data.rs) |
 | POST | `/api/drawer/open` | `open_drawer` | `till_session` | `cash.drawer.open_no_sale`, `cash.drawer.override_assignment` | [`crates/pos-edge/src/http/cash_movements.rs`](../../crates/pos-edge/src/http/cash_movements.rs) |
 | GET | `/api/floor` | `floor_plan` | `till_session` | — | [`crates/pos-edge/src/http/floor.rs`](../../crates/pos-edge/src/http/floor.rs) |

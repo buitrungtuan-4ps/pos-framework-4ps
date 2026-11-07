@@ -2034,7 +2034,7 @@ test("a reaction prints the check when the bill opens, and one the person may no
 
 // A package's own kind of record (`POS_DEMO_PROFILE=custom-data`, ADR-0194): a reservation is
 // entered on the Records screen, listed with the labels the tenant's grid gives it (ADR-0043),
-// changed, and refused by the edge when its required party size is left out.
+// its slip asked for, changed, and refused by the edge when its required party size is left out.
 test("a reservation is entered and changed on the till, labelled from the tenant's grid", async ({ page }) => {
   const edge = await startEdge("custom-data");
   try {
@@ -2050,6 +2050,13 @@ test("a reservation is entered and changed on the till, labelled from the tenant
     await page.locator('[data-step="saveRecord"]').click();
     await expect(page.locator('[data-outcome="record-saved"]')).toBeVisible();
     await expect(rows.first()).toHaveText("4 · Birthday");
+
+    // Its slip prints what the store's receipt template says (ADR-0207); this store has a template
+    // and no printer, and the till says which.
+    const slip = page.waitForRequest((request) => new URL(request.url()).pathname.endsWith("/slip"));
+    await page.locator('[data-step="printSlip"]').click();
+    await slip;
+    await expect(page.locator('[data-outcome="record-slip"]')).toHaveText("No printer is set up for this store");
 
     await rows.first().click();
     await page.getByLabel("Party size").fill("6");

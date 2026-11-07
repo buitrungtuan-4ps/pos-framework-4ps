@@ -1067,6 +1067,56 @@
         ]
       }
     },
+    "/api/custom-records/{id}/slip": {
+      "post": {
+        "tags": [
+          "custom data"
+        ],
+        "summary": "`POST /api/custom-records/{id}/slip` — prints a record's slip (ADR-0207 decisions 4 and 5). It\nrecords nothing.",
+        "operationId": "print_record_slip",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The record's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The slip printed at the receipt printer of the till this device is: the store's receipt template for the record, its personal values only where the template marks the slip as the person's copy, and then only on the first slip its saver asks for or for someone holding `data.personal.read`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordSlipResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          },
+          "409": {
+            "description": "Refused: the person lacks `data.record.write` (`PERMISSION_DENIED`), this edge holds no such record (`UNKNOWN_CUSTOM_RECORD`), or the store has no receipt template, so no slip (`NOTHING_TO_PRINT`)"
+          }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "data.record.write"
+      }
+    },
     "/api/custom-records/{id}/values": {
       "post": {
         "tags": [
@@ -7714,6 +7764,19 @@
             "items": {
               "$ref": "#/components/schemas/ReasonCodeResponse"
             }
+          }
+        }
+      },
+      "RecordSlipResponse": {
+        "type": "object",
+        "description": "What printing a record's slip answers.",
+        "required": [
+          "slip_print"
+        ],
+        "properties": {
+          "slip_print": {
+            "type": "string",
+            "description": "What came of printing it."
           }
         }
       },

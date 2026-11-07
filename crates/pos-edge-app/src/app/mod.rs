@@ -51,6 +51,7 @@ mod package;
 mod projection;
 mod publish;
 mod receipt_fields;
+mod record_slip;
 mod records;
 mod roster;
 mod session;
@@ -62,6 +63,7 @@ pub use custom_data::{CONSENT_FIELD_PREFIX, CustomDataView};
 pub use error::{AppError, Approval};
 pub use package::{PackageRefusal, PackageStanding, RefusedPackage};
 pub use receipt_fields::{PersonalOnPaper, PrintedField, PrintedObjects, PrintedValue};
+pub use record_slip::{FRESH_SLIPS_MAX, RecordSlipCopy};
 pub(crate) use records::fee_records;
 pub use records::fee_records_in;
 use records::{
@@ -289,8 +291,9 @@ pub struct Edge<S> {
     /// a pull or the copy kept on disk lands.
     labels: RwLock<Arc<crate::labels::LabelGrid>>,
     /// Held by a custom-data write from reading the object's subject to folding its event, so two
-    /// writes to one object cannot each start a subject for it (ADR-0206).
-    custom_writes: tokio::sync::Mutex<()>,
+    /// writes to one object cannot each start a subject for it (ADR-0206). It guards the record each
+    /// person last saved, whose first slip is the save's own (ADR-0207 decision 5).
+    custom_writes: tokio::sync::Mutex<record_slip::FreshSlips>,
 }
 
 /// What [`Edge::open_inbound_order`] opened, and the one acceptance fact the caller must not work

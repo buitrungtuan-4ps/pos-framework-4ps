@@ -1,5 +1,5 @@
 // The till's prints, as edge writes with nothing to read back (ADR-0196 decision 1, ADR-0204
-// decision 5): a pre-bill, a copy of a receipt, an X and a handover slip again. The button says it is
+// decision 5): a pre-bill, a copy of a receipt, an X, a handover slip again and a record's slip. The button says it is
 // printing from the frame the tap lands in, and takes no second tap until the edge answers, while
 // every other act, payment included, goes on taking taps. The edge's answer says what came of the
 // paper; a refusal says why with its own sentence.
@@ -18,7 +18,11 @@ import { editWrite, type EdgeWriteId } from "./edge-write";
 /** The catalogue's prints. */
 export type PrintId = Extract<
   EdgeWriteId,
-  "billing.check.print" | "billing.receipt.reprint" | "reports.shift.print_x" | "reports.shift.print_handover"
+  | "billing.check.print"
+  | "billing.receipt.reprint"
+  | "reports.shift.print_x"
+  | "reports.shift.print_handover"
+  | "data.custom_record.print"
 >;
 
 /** What the operator is told of a print that failed: the refusal, or that it is not confirmed. */

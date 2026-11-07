@@ -617,5 +617,7 @@
   "records.invalid_value": "Có giá trị không đúng dạng của trường.",
   "records.refused_entry": "Cửa hàng từ chối một giá trị. Kiểm tra từng trường rồi lưu lại.",
   "records.refused_permission": "Bạn không được làm việc này.",
-  "records.save_failed": "Không lưu được hồ sơ. Hãy thử lại."
+  "records.save_failed": "Không lưu được hồ sơ. Hãy thử lại.",
+  "records.print_slip": "In phiếu",
+  "records.slip_printed": "Đã in phiếu."
 }

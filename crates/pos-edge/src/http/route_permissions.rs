@@ -133,6 +133,10 @@ pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
         RouteGate::Person(&[Permission::WriteDataRecord]),
     ),
     (
+        "POST /api/custom-records/{id}/slip",
+        RouteGate::Person(&[Permission::WriteDataRecord]),
+    ),
+    (
         "POST /api/custom-records/{id}/values",
         RouteGate::Person(&[Permission::WriteDataRecord]),
     ),

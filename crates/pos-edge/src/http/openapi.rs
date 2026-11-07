@@ -129,6 +129,7 @@ use utoipa::{Modify, OpenApi};
         super::custom_data::create_custom_record,
         super::custom_data::custom_record,
         super::custom_data::change_custom_record,
+        super::custom_data::print_record_slip,
         super::custom_data::read_subject,
     ),
     modifiers(&TillSession),
