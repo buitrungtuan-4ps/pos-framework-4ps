@@ -1726,6 +1726,75 @@ test("an item marked sold out on one till stops selling on every till, until it 
   }
 });
 
+// An item brought back while a read of the price book is out sells again on the till that brought it
+// back. The read went out while the item was sold out, so its answer says sold out; the till heard
+// the item come back before that answer landed. The reads the restore asks for used to join that
+// read rather than follow it, so the old answer was the last word and the dish stayed greyed out
+// on this till alone. Here the read is a `resync`'s, sent to this till alone, answered by the edge
+// at once and held back from the till until the restore has been heard.
+test("an item brought back while the price book is being read sells again on that till", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    let link = null;
+    await page.routeWebSocket(
+      (url) => url.pathname === "/ws",
+      (socket) => {
+        if (socket.protocols().length > 1) {
+          link = socket;
+        }
+        socket.connectToServer();
+      },
+    );
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await expect.poll(() => link !== null).toBe(true);
+
+    await page.locator('[data-step="startMarking"]').click();
+    await page.locator("#menu-search").fill("iced");
+    await page.locator('[data-step="toggleSoldOut"]').click();
+    await expect(page.locator('[data-outcome="item-sold-out"]')).toHaveText("Sold out");
+
+    // The next read of the price book is answered while the item is sold out, and held.
+    let release = () => {};
+    const released = new Promise((resolve) => {
+      release = resolve;
+    });
+    let reached = () => {};
+    const answered = new Promise((resolve) => {
+      reached = resolve;
+    });
+    // Every read that goes out before the restore is heard; the ones after it pass.
+    let holding = true;
+    await page.route("**/api/menu", async (route) => {
+      if (!holding || route.request().method() !== "GET") {
+        await route.fallback();
+        return;
+      }
+      const response = await fetchWhole(route);
+      reached();
+      await released;
+      await route.fulfill({ response });
+    });
+    link.send(JSON.stringify({ type: "resync" }));
+    await answered;
+
+    // Brought back, and heard back, while that answer is out.
+    const heard = page.waitForResponse((response) => new URL(response.url()).pathname.endsWith("/restore"));
+    await page.locator('[data-step="toggleSoldOut"]').click();
+    await heard;
+    holding = false;
+    await expect(page.locator('[data-outcome="item-sold-out"]')).toHaveCount(0);
+    release();
+
+    await page.getByRole("button", { name: "Done" }).click();
+    await expect(page.locator('[data-step="onItem"]')).toBeEnabled();
+    await expect(page.locator('[data-outcome="item-sold-out"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A choice the kitchen has run out of cannot be picked, and the dish still sells without it.
 //
 // A modifier is an item in the price book, so the search finds the extra cheese in marking mode and

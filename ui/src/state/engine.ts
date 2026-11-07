@@ -15,7 +15,7 @@
 // - **When it reads again.** On a `resync`, every entry: the edge's answer to a live link that
 //   cannot be resumed, which is every link that holds no position, its first connect included; and
 //   on `config_applied`, only the entries that derive from the nodes the frame names, or every one
-//   where it names none.
+//   where it names none. Both read fresh: behind a read already out, never joining it.
 // - **The boot gate.** Once the store's load starts, the till is drawn when every required entry
 //   is loaded or absent. *Loaded* means the edge confirmed it in this session, with a body or a
 //   `304`: a copy from the snapshot never opens the gate.
@@ -278,10 +278,15 @@ export async function readAgain(): Promise<void> {
 
 // Reads what a new configuration may have changed. `changed` is the frame's `changed_nodes`: absent
 // from an edge that cannot say, which reads every entry that derives from configuration.
+//
+// Fresh, as `readAgain` is: a read already out may have been answered before the change this one
+// reports. Joining it would apply what the edge held before, and nothing would read again: an item
+// brought back while a read of the price book was out stayed sold out on the till that brought it
+// back.
 export async function configApplied(changed: readonly string[] | undefined): Promise<void> {
   if (changed === undefined) {
     const derived = entries.filter((each) => each.nodes.length > 0 || each.unclaimedNodes === true);
-    await Promise.all(derived.map((each) => load(each.key)));
+    await Promise.all(derived.map((each) => load(each.key, true)));
     return;
   }
   const claimed = new Set(entries.flatMap((each) => each.nodes));
@@ -291,7 +296,7 @@ export async function configApplied(changed: readonly string[] | undefined): Pro
       each.nodes.some((node) => changed.includes(node)) ||
       (unclaimed && each.unclaimedNodes === true),
   );
-  await Promise.all(affected.map((each) => load(each.key)));
+  await Promise.all(affected.map((each) => load(each.key, true)));
 }
 
 // Reads again what derives from `node`, as when the edge has said that node changed: an item brought
