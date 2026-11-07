@@ -12,19 +12,22 @@
 
 use std::borrow::Cow;
 
+use pos_core::decision::Actor;
 use pos_edge_app::app::{
-    Edge, EdgeSession, PersonalOnPaper, PrintedField, PrintedObjects, PrintedValue, ReceiptLine,
+    BuyerDetails, Edge, EdgeSession, PersonalOnPaper, PrintedField, PrintedObjects, PrintedValue,
+    ReceiptCopy, ReceiptLine,
 };
 use pos_edge_app::labels::LabelGrid;
 use pos_ports::event_store::EventStore;
 use pos_ports::printer::{PrintBlock, PrintDocument, TextStyle};
 use pos_ports::subject_store::SubjectStore;
+use pos_proto::ids::BillId;
 use pos_proto::receipt::{PersonCopy, ReceiptSection, ReceiptTemplate};
 
 use crate::paper_labels::PaperLabels;
 use crate::printing::documents::centred;
 use crate::printing::tickets::format_quantity;
-use crate::printing::{Printers, TillPrinting};
+use crate::printing::{PrintOutcome, Printers, TillPrinting};
 
 /// What a template adds to a document and leaves out of it, resolved for one piece of paper.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -194,5 +197,65 @@ impl Printers {
             self.receipt_labels_for(session, till),
             &fields,
         ))
+    }
+
+    /// [`Self::template_for`] a settled bill's receipt (`reprinted_by` `None`) or its copy: a
+    /// receipt with a captured buyer is the buyer's copy of a tax invoice, which the template may
+    /// mark as the person's own; a reprint prints a personal value only for someone holding
+    /// `data.personal.read` (ADR-0207 decision 5).
+    pub async fn bill_template<S>(
+        &self,
+        edge: &Edge<S>,
+        (session, till): (&EdgeSession, &TillPrinting),
+        bill_id: BillId,
+        has_buyer: bool,
+        reprinted_by: Option<Actor>,
+    ) -> Option<TemplatePrint>
+    where
+        S: EventStore + SubjectStore,
+    {
+        let personal = reprinted_by.map_or(PersonalOnPaper::Shown, PersonalOnPaper::Reprinted);
+        self.template_for(
+            edge,
+            session,
+            till,
+            PrintedObjects::Bill(bill_id),
+            has_buyer.then_some((PersonCopy::TaxInvoiceBuyer, personal)),
+        )
+        .await
+    }
+
+    /// Prints `copy` at the printer of the till `actor` asked at, with [`Self::bill_template`]
+    /// for a reprint by `actor`.
+    pub async fn print_bill_copy<S>(
+        &self,
+        edge: &Edge<S>,
+        actor: Actor,
+        copy: &ReceiptCopy,
+        buyer: Option<&BuyerDetails>,
+    ) -> PrintOutcome
+    where
+        S: EventStore + SubjectStore,
+    {
+        let session = edge.session();
+        let till = self.till_for(&session, actor.device_id).await;
+        let template = self
+            .bill_template(
+                edge,
+                (&session, &till),
+                copy.bill_id,
+                buyer.is_some(),
+                Some(actor),
+            )
+            .await;
+        self.print_receipt_copy(
+            &session,
+            &till,
+            edge.store_id(),
+            copy,
+            buyer,
+            template.as_ref(),
+        )
+        .await
     }
 }

@@ -362,8 +362,7 @@ async fn sell(session: EdgeSession, lines: Vec<LineDraft>) -> Sale {
             settled.receipt_number.expect("a number"),
             &settled.lines,
             settled.totals.as_ref().expect("the totals"),
-            None,
-            None,
+            (None, None),
         )
         .await;
     assert_eq!(printed, PrintOutcome::Printed, "the receipt");

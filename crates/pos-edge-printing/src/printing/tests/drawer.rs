@@ -195,8 +195,7 @@ async fn a_drawer_marked_after_its_printer_was_opened_opens_without_a_restart() 
             1,
             &[],
             &totals_of(Money::new(CurrencyCode::VND, 10_000)),
-            None,
-            None,
+            (None, None),
         )
         .await;
     assert_eq!(receipt, PrintOutcome::Printed);

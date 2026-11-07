@@ -36,6 +36,9 @@ impl Printers {
     /// unless the till's terminal names its own that the node lists as a printer serving no
     /// station.
     ///
+    /// The buyer, where one was captured, travels with the template the receipt prints
+    /// ([`TemplatePrint`], ADR-0207), if any.
+    ///
     /// `job_id` is the idempotency key: pass the settle's event id and a retried settle reprints
     /// nothing. Never returns an error — a printer that is down must not roll back a bill the guest
     /// has already paid, so the outcome is reported and the caller decides what to tell the cashier.
@@ -53,8 +56,7 @@ impl Printers {
         receipt_number: u64,
         lines: &[ReceiptLine],
         totals: &BillTotals,
-        buyer: Option<&BuyerDetails>,
-        template: Option<&TemplatePrint>,
+        (buyer, template): (Option<&BuyerDetails>, Option<&TemplatePrint>),
     ) -> PrintOutcome {
         let device = match guest_printer(&session.devices, till) {
             Ok(device) => device,
