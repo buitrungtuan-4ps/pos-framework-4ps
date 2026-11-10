@@ -106,3 +106,30 @@ async fn a_country_lists_the_settings_its_pack_gives_a_new_store() {
         "a pack that gives none lists an empty array"
     );
 }
+
+#[tokio::test]
+async fn a_country_lists_the_receipt_sections_its_law_requires() {
+    // ADR-0207 decision 3: the console's receipt template editor does not offer to turn off a
+    // section a country requires, so the catalogue carries them — Vietnam's modifiers, none for
+    // the reference country.
+    let router = country_app(provisioned_admin());
+    let cookie = admin_cookie(&router).await;
+    let body = json_body(
+        router
+            .oneshot(get_with_cookie("/admin/countries", &cookie))
+            .await
+            .expect("route countries"),
+    )
+    .await;
+    let list = body.as_array().expect("array");
+    let required = |code: &str| {
+        list.iter()
+            .find(|country| country["code"] == code)
+            .map(|country| country["receipt_required_sections"].clone())
+    };
+    assert_eq!(
+        required("VN"),
+        Some(serde_json::json!(["RECEIPT_SECTION_MODIFIERS"]))
+    );
+    assert_eq!(required("ZZ"), Some(serde_json::json!([])));
+}
