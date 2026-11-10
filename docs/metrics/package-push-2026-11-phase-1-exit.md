@@ -101,8 +101,8 @@ none is finished:
 
 ## Found on the way
 
-- **A cloud with `[nats]` will not start before a store has connected.** Its ingest cursor binds to
-  the fleet stream, which the first store to connect creates (ADR-0087 Amendment 1), and refuses to
-  start without it (`message_link: the cloud consumer is unavailable`). The harness creates the
-  stream itself, as a store would. A fresh deployment that starts the cloud first meets the same
-  refusal; `deploy/bootstrap.sh` does not create the stream.
+- **A cloud with `[nats]` would not start before a store had connected.** Its ingest cursor bound
+  only an existing fleet stream, which the first store to connect creates (ADR-0087 Amendment 1), and
+  refused to start without it (`message_link: the cloud consumer is unavailable`). The timed test
+  found it. Fixed in #1224: the cursor creates the stream as a store would, and the timed test now
+  starts the cloud first on a fresh broker, so every run proves it.
