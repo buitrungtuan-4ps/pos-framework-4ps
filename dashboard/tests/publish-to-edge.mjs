@@ -342,11 +342,13 @@ async function main() {
     await until("the edge to stop for its restart", () => (edge.exited() !== null ? true : undefined));
     edge.start();
     // The store's boot report tells the cloud its release, which decides whether a version may
-    // reach it (ADR-0189 decision 5), and its wake subscription must be up before a wake can land.
-    await until("the edge to subscribe to its wake", () =>
+    // reach it (ADR-0189 decision 5), and its wake rides the broker connection it opens. The
+    // untimed first publish below is delivered by the poll if the subscription is not up yet, so
+    // nothing here waits on a guess; every timed one after it must arrive by the wake.
+    await until("the edge to connect to the broker with its wake on", () =>
       edge.exited() !== null
         ? Promise.reject(new Error(`pos-edge exited with ${edge.exited()}:\n${edge.log()}`))
-        : edge.said("the config wake bus is back")
+        : edge.said("config wake enabled over NATS") && edge.said("event: connected")
           ? true
           : undefined,
     );
