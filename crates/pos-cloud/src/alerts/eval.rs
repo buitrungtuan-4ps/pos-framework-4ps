@@ -380,6 +380,7 @@ mod tests {
             print_agents_reported_at: None,
             package: None,
             config_wake: None,
+            devices: None,
         }
     }
 

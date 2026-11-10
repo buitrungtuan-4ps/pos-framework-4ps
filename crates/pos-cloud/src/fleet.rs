@@ -149,6 +149,30 @@ pub struct FleetRow {
     /// ([ADR-0195](../../../docs/adr/0195-the-cloud-wakes-a-store-to-pull-its-config.md)), or `None`
     /// if no heartbeat ever has: an older edge.
     pub config_wake: Option<ReportedConfigWake>,
+    /// Which package version each paired till last read, and when the heartbeat said so (roadmap-v3
+    /// B7.3), or `None` if no heartbeat ever has: an older edge.
+    pub devices: Option<ReportedDevices>,
+}
+
+/// The tills' last reads as a store's heartbeat reported them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportedDevices {
+    /// Each till's last read.
+    pub reads: Vec<crate::config_tree::DeviceReadBeat>,
+    /// When the heartbeat said so.
+    pub reported_at: Timestamp,
+}
+
+impl ReportedDevices {
+    /// The reads as the liveness row stores them (migration 0094), or `None` when no heartbeat
+    /// reported them, or the instant or the stored array cannot be read.
+    #[must_use]
+    pub fn from_row(row: &store_postgres::FleetStoreRow) -> Option<Self> {
+        let reported_at =
+            Timestamp::from_milliseconds_since_epoch(row.device_reads_reported_at_ms?).ok()?;
+        let reads = serde_json::from_str(row.device_reads_json.as_deref()?).ok()?;
+        Some(Self { reads, reported_at })
+    }
 }
 
 /// A store's config delivery as its heartbeat reported it.

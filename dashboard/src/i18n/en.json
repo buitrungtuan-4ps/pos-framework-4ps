@@ -995,6 +995,8 @@
   "fleet.outboxReported": "Backlog reported",
   "fleet.package": "Package",
   "fleet.packageRefused": "Refused: {reason}",
+  "fleet.tillsBehind": "{behind} of {count, plural, one {# till} other {# tills}} on another version",
+  "fleet.tillsCurrent": "{count, plural, one {# till} other {All # tills}} on this version",
   "fleet.placement.hostedByOperator": "Hosted (operator)",
   "fleet.placement.hostedByPlatform": "Hosted (platform)",
   "fleet.placement.inStore": "In store",

@@ -995,6 +995,8 @@
   "fleet.outboxReported": "Báo tồn lúc",
   "fleet.package": "Gói",
   "fleet.packageRefused": "Đã từ chối: {reason}",
+  "fleet.tillsBehind": "{behind} trên {count} máy POS đang chạy phiên bản khác",
+  "fleet.tillsCurrent": "{count, plural, other {Cả # máy POS}} đang chạy phiên bản này",
   "fleet.placement.hostedByOperator": "Đặt ngoài (đơn vị vận hành)",
   "fleet.placement.hostedByPlatform": "Đặt ngoài (nền tảng)",
   "fleet.placement.inStore": "Tại cửa hàng",
