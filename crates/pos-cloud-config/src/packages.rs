@@ -19,8 +19,11 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use serde::{Deserialize, Serialize};
 
+use pos_core::ota::ReleaseVersion;
+use pos_proto::actions::Action;
 use pos_proto::ids::{PackageId, PackageVersionId, TenantId};
 use pos_proto::package::PackageContent;
+use pos_proto::screen::{Component, PropertyValue, ScreenNode};
 use pos_proto::text::{DisplayName, ReleaseTag};
 use pos_proto::time::Timestamp;
 
@@ -65,14 +68,40 @@ pub struct PackageVersionRecord {
 }
 
 /// The oldest edge release that runs `content`: [`PACKAGE_NODE_SINCE`] until a part a version
-/// uses introduces a later one (ADR-0190, ADR-0191). Nobody types it.
+/// uses introduces a later one: the data part, and each component and act its screens name
+/// (ADR-0190, ADR-0191). Nobody types it.
 #[must_use]
 pub fn min_edge_version(content: &PackageContent) -> ReleaseTag {
-    if content.data.is_empty() {
-        ReleaseTag::new(PACKAGE_NODE_SINCE)
+    let floor = if content.data.is_empty() {
+        PACKAGE_NODE_SINCE
     } else {
-        ReleaseTag::new(DATA_PART_SINCE)
+        DATA_PART_SINCE
+    };
+    let mut pending: Vec<&ScreenNode> = content
+        .screens
+        .iter()
+        .map(|variant| &variant.body.root)
+        .collect();
+    let mut latest = floor;
+    while let Some(node) = pending.pop() {
+        let component = Component::find(&node.component_id).map(|found| found.since);
+        let acts = node.properties.values().filter_map(|value| match value {
+            PropertyValue::Action(binding) => Action::find(&binding.action_id).map(|act| act.since),
+            _ => None,
+        });
+        for since in component.into_iter().chain(acts) {
+            if release(since) > release(latest) {
+                latest = since;
+            }
+        }
+        pending.extend(node.children.iter());
     }
+    ReleaseTag::new(latest)
+}
+
+/// A catalogue's `since`, ordered; one that does not parse orders first.
+fn release(text: &str) -> Option<ReleaseVersion> {
+    ReleaseVersion::parse(text)
 }
 
 /// Persists and reads a tenant's packages and their versions.

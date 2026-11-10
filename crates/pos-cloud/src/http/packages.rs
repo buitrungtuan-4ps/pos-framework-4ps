@@ -12,11 +12,12 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::response::Response;
-use axum::routing::get;
+use axum::routing::{get, post};
 use pos_cloud_api::response::api_error;
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
-use pos_proto::package::{PackageData, TimeSlot};
+use pos_proto::package::{PackageData, TimeSlot, Variant};
+use pos_proto::screen::Screen;
 use serde::Deserialize;
 
 use crate::audit::AuditRecorder;
@@ -24,12 +25,14 @@ use crate::auth::admin::AdminStore;
 use pos_cloud_config::packages::{PackageStore, PackageStoreError};
 
 mod authoring;
+mod dry_run;
 
 // The handlers the console's OpenAPI document names.
 pub(crate) use authoring::{
     __path_admin_create_package, __path_admin_list_package_versions, __path_admin_list_packages,
     __path_admin_publish_package_version,
 };
+pub(crate) use dry_run::__path_admin_dry_run_package_version;
 
 /// The state the package routes share.
 #[derive(Clone)]
@@ -64,10 +67,14 @@ struct PackageVersionRequest {
     /// (ADR-0206).
     #[serde(default)]
     data: PackageData,
+    /// The package's screens, every variant of each (ADR-0190, ADR-0203): trees of the release's
+    /// catalogued components, given only literals.
+    #[serde(default)]
+    screens: Vec<Variant<Screen>>,
 }
 
-/// Builds the package sub-router. Reads are `console.data.read`; creating a package and publishing
-/// a version are `console.packages.manage`.
+/// Builds the package sub-router. Reads are `console.data.read`; creating a package, publishing a
+/// version and a publish's dry run are `console.packages.manage`.
 pub fn package_router<P, A, C>(
     packages: P,
     admin: A,
@@ -89,6 +96,10 @@ where
             "/admin/packages/{package_id}/versions",
             get(authoring::admin_list_package_versions::<P, A, C>)
                 .post(authoring::admin_publish_package_version::<P, A, C>),
+        )
+        .route(
+            "/admin/packages/{package_id}/versions/dry-run",
+            post(dry_run::admin_dry_run_package_version::<P, A, C>),
         )
         .with_state(PackageState {
             packages,

@@ -391,7 +391,8 @@ trusted_proxy_hops = $TRUSTED_PROXY_HOPS
 # stream, one subject, fleet-wide: this cursor binds ONE stream, so a fork that renames either must
 # rename it on both sides at once — otherwise the fleet publishes into a stream nobody reads, and
 # nothing anywhere reports an error. `filter_subject` is left unset, which means every subject the
-# stream captures:
+# stream captures. The cloud may start before any store: it then creates the stream itself, capturing
+# `subject` (default `pos.fleet.events`, the subject the wizard writes into each store):
 #
 # `max_messages` and `max_bytes` are the **fleet's** ceiling, and this is the only place that can set
 # it (ADR-0087 Amendment 2). Every store publishes into one stream, so the fill rate is the whole

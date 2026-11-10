@@ -224,7 +224,8 @@ pub use ota::{
 pub use ota_rollout::ota_config_router;
 pub use packages::package_router;
 pub(crate) use packages::{
-    __path_admin_create_package, __path_admin_list_package_versions, __path_admin_list_packages,
+    __path_admin_create_package, __path_admin_dry_run_package_version,
+    __path_admin_list_package_versions, __path_admin_list_packages,
     __path_admin_publish_package_version,
 };
 pub use people::{

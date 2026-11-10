@@ -109,6 +109,9 @@ fn consumer_config(nats: &NatsIngestConfig) -> ConsumerConfig {
         stream: nats.stream.clone(),
         durable: nats.durable.clone(),
         filter_subject: nats.filter_subject.clone(),
+        subject: nats.subject.clone(),
+        max_messages: nats.max_messages,
+        max_bytes: nats.max_bytes,
         batch: nats.batch,
         expires: Duration::from_secs(nats.expires_secs),
     }
