@@ -148,6 +148,21 @@ impl ConfigTreeStore for PostgresConfigTrees {
             .map_err(|error| ConfigStoreError::new(error.to_string()))
     }
 
+    async fn record_device_reads_beat(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        seen_at: Timestamp,
+        reads: &[crate::config_tree::DeviceReadBeat],
+    ) -> Result<(), ConfigStoreError> {
+        let json = serde_json::to_string(reads)
+            .map_err(|error| ConfigStoreError::new(error.to_string()))?;
+        let seen_at_ms = seen_at.as_milliseconds_since_epoch();
+        PostgresConfigTrees::record_device_reads_beat(self, tenant, store, seen_at_ms, &json)
+            .await
+            .map_err(|error| ConfigStoreError::new(error.to_string()))
+    }
+
     async fn record_store_heartbeat(
         &self,
         tenant: TenantId,

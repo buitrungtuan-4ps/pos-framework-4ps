@@ -88,6 +88,8 @@ import {
   createTick,
 } from "../components/SettingConfirmation";
 import { PermissionsReadinessPanel } from "../components/PermissionsReadiness";
+import { isTemplates, templateCount } from "../lib/receipt-templates";
+import { ReceiptTemplatesEditor } from "./settings/receipt/ReceiptTemplatesEditor";
 import { toast } from "../components/Toast";
 import type {
   EffectiveSetting,
@@ -114,6 +116,8 @@ const SCOPES: readonly { readonly scope: SettingScope; readonly label: MessageKe
 const CHOICE = "SETTING_KIND_CHOICE";
 const INT = "SETTING_KIND_INT";
 const BOOL = "SETTING_KIND_BOOL";
+/** A set of receipt templates (ADR-0207), edited by its own structured editor. */
+const RECEIPT = "SETTING_KIND_RECEIPT_TEMPLATES";
 
 /**
  * What a whole number counts, in the operator's words: each unit's key takes the number as `count`.
@@ -203,6 +207,9 @@ function settingHelp(setting: SettingDefinition): string {
  * token otherwise), a whole number in its unit, a switch's value as On or Off.
  */
 function valueLabel(setting: SettingDefinition, value: Json | undefined): string {
+  if (setting.kind === RECEIPT && value !== undefined) {
+    return t("settings.receipt.count", { count: templateCount(value) });
+  }
   if (typeof value === "string") {
     return tFromServer(`settings.value.${value}`, value);
   }
@@ -240,6 +247,8 @@ function takes(setting: SettingDefinition, value: Json | undefined): boolean {
     }
     case BOOL:
       return typeof value === "boolean";
+    case RECEIPT:
+      return isTemplates(value);
     default:
       return false;
   }
@@ -253,6 +262,7 @@ function editable(setting: SettingDefinition): boolean {
     case INT:
       return boundsOf(setting) !== null;
     case BOOL:
+    case RECEIPT:
       return true;
     default:
       return false;
@@ -282,6 +292,10 @@ function explained(caught: unknown, clearing: boolean): unknown {
     reasons.includes("INVALID_VALUE")
   ) {
     key = "settings.refused.value";
+  } else if (reasons.includes("UNKNOWN_TRANSLATION_KEY")) {
+    key = "settings.refused.keyWithoutEnglish";
+  } else if (reasons.includes("SECTION_REQUIRED")) {
+    key = "settings.refused.sectionRequired";
   } else if (reasons.includes("UNKNOWN_SETTING")) {
     key = "settings.refused.unknownSetting";
   } else if (caught.status === 404) {
@@ -945,6 +959,9 @@ export function Settings() {
                     disabled={writing.saving()}
                     hint={switchHint()}
                   />
+                </Match>
+                <Match when={setting().kind === RECEIPT}>
+                  <ReceiptTemplatesEditor tenantId={tenantId()} value={draft() ?? hereValue()} onChange={pick} disabled={writing.saving()} />
                 </Match>
                 <Match when={setting().kind === CHOICE}>
                   <SelectField

@@ -715,6 +715,71 @@ async fn a_heartbeat_reports_how_config_reaches_the_store() {
     assert_eq!(beat(unbounded).await, StatusCode::BAD_REQUEST);
 }
 
+/// A heartbeat carries which package version each paired till last read (B7.3); each report
+/// replaces the last, a beat that says nothing about the tills leaves them, and a report no edge
+/// could send (a till named twice, more than 64) is refused.
+#[tokio::test]
+async fn a_heartbeat_reports_what_each_till_last_read() {
+    let keys = FakeKeys::default();
+    let config_trees = FakeConfigTrees::default();
+    let router = http::router(app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        keys.clone(),
+        provisioned_admin(),
+        config_trees.clone(),
+        FakeWebhooks::default(),
+    ));
+    let uri = format!("/sync/stores/{}/heartbeat", store_id().as_ulid());
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ReadConfig]);
+    let beat = |body: serde_json::Value| {
+        let router = router.clone();
+        let (uri, token) = (uri.clone(), token.clone());
+        async move {
+            router
+                .oneshot(post_json_bearer(&uri, &body, &token))
+                .await
+                .expect("route the heartbeat")
+                .status()
+        }
+    };
+    let recorded = || {
+        let reads = config_trees.device_reads.lock().expect("lock");
+        reads.get(&(tenant(), store_id())).cloned()
+    };
+    let read = |device: &str, version: Option<&str>| serde_json::json!({ "device_id": device, "package_version_id": version, "read_at_ms": 1_700 });
+
+    let two = serde_json::json!({ "devices": [read("D1", Some("V2")), read("D2", None)] });
+    assert_eq!(beat(two).await, StatusCode::NO_CONTENT);
+    let reads = recorded().expect("the reads are recorded");
+    assert_eq!(reads.len(), 2);
+    assert_eq!(reads[0].package_version_id.as_deref(), Some("V2"));
+    assert_eq!(reads[1].package_version_id, None);
+
+    assert_eq!(
+        beat(serde_json::json!({ "outbox_depth": 0 })).await,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        recorded().map(|reads| reads.len()),
+        Some(2),
+        "a beat that says nothing leaves them"
+    );
+    assert_eq!(
+        beat(serde_json::json!({ "devices": [] })).await,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(recorded(), Some(Vec::new()), "an empty list is a report");
+
+    let twice = serde_json::json!({ "devices": [read("D1", None), read("D1", None)] });
+    assert_eq!(beat(twice).await, StatusCode::BAD_REQUEST);
+    let many: Vec<_> = (0..65).map(|n| read(&format!("D{n}"), None)).collect();
+    assert_eq!(
+        beat(serde_json::json!({ "devices": many })).await,
+        StatusCode::BAD_REQUEST
+    );
+}
+
 /// A heartbeat carries the package version the store runs and the configuration it last refused for
 /// its package (ADR-0189 decision 6); each report replaces the last, a beat that says nothing about
 /// it leaves it, and text no id or reason could be is refused.

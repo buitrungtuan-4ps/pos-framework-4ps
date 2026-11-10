@@ -227,15 +227,17 @@ where
         (status = 400, description = "tenant_id or package_id is not a ULID, or the content is refused: a blank or long \
                                       label, a malformed or repeated time slot, a window that is \
                                       not whole, a data part ADR-0194 refuses, a screen ADR-0190 refuses, \
+                                      a translation key with no `en` value in the tenant's grid, \
                                       or content over 1 MiB. \
-                                      The detail names the field: its code is `INVALID`, or \
+                                      The detail names the field: its code is `INVALID`, \
+                                      `UNKNOWN_TRANSLATION_KEY` for a key without English, or \
                                       `NOT_ADDITIVE` for data that removes, moves or retypes what \
                                       an earlier version declared", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
         (status = 403, description = "The role lacks console.packages.manage", body = crate::openapi_admin::ErrorResponse),
         (status = 404, description = "The tenant has no package with that id", body = crate::openapi_admin::ErrorResponse),
         (status = 409, description = "A version already holds that id", body = crate::openapi_admin::ErrorResponse),
-        (status = 503, description = "The package store is unreachable, or the OS would not give the entropy the id needs", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The package store or the translation store is unreachable, or the OS would not give the entropy the id needs", body = crate::openapi_admin::ErrorResponse),
     ),
     tag = "packages",
 )]
@@ -281,7 +283,7 @@ where
         return package_entropy_unavailable();
     };
     let content = version_content(package_id, package_version_id, request);
-    match first_refusal(&state.packages, tenant_id, &content).await {
+    match first_refusal(&state.packages, state.grid.as_ref(), tenant_id, &content).await {
         Ok(None) => {}
         Ok(Some(refusal)) => return refusal.into_response(),
         Err(unavailable) => return unavailable,

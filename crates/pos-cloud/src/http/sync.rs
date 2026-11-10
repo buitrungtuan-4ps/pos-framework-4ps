@@ -18,7 +18,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::apikey::{ApiKeyStore, Scope};
 use crate::auth::bearer::{authenticate, require_scope, require_store};
-use crate::config_tree::{CapabilityValidator, ConfigTree, ConfigTreeStore, SyncOutcome};
+use crate::config_tree::{
+    CapabilityValidator, ConfigTree, ConfigTreeStore, DeviceReadBeat, SyncOutcome,
+};
 use crate::fleet::PrintAgentStanding;
 use crate::http::config_publish::strip_tree_version;
 use crate::http::{
@@ -155,8 +157,9 @@ where
     request_body(
         content = HeartbeatBody, description = "Optional: `outbox_depth`, `lease_generation`, `print_agents`, `package` (the \
                        package version the store runs and the configuration it last refused for its \
-                       package, ADR-0189) and `config_wake` (wake or poll, and the wake-to-apply \
-                       times, ADR-0195), each left out when the store cannot say. An empty body is a \
+                       package, ADR-0189), `config_wake` (wake or poll, and the wake-to-apply \
+                       times, ADR-0195) and `devices` (the package version each paired till last \
+                       read, B7.3), each left out when the store cannot say. An empty body is a \
                        bare ping",
         content_type = "application/json",
     ),
@@ -257,6 +260,14 @@ where
         }
         (outcome, _) => outcome,
     };
+    let recorded = match (recorded, &report.devices) {
+        (Ok(()), Some(reads)) => {
+            app.config_trees
+                .record_device_reads_beat(grant.tenant(), store_id, now, reads)
+                .await
+        }
+        (outcome, _) => outcome,
+    };
     match recorded {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => config_store_error_response(&error),
@@ -264,8 +275,19 @@ where
 }
 
 /// The refusal for a report no edge sends: a package report with text longer than an id or a
-/// reason, or a config delivery report past its bounds; `None` for one that fits.
+/// reason, or a config delivery or tills report past its bounds; `None` for one that fits.
 fn unbounded_report(report: &HeartbeatBody) -> Option<Response> {
+    if report
+        .devices
+        .as_deref()
+        .is_some_and(|reads| !DeviceReadBeat::are_bounded(reads))
+    {
+        return Some(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "the heartbeat's tills report is not one an edge sends",
+            &[("devices", "INVALID_VALUE")],
+        ));
+    }
     if report
         .config_wake
         .as_ref()
@@ -539,6 +561,11 @@ struct HeartbeatBody {
     /// when the store said nothing about it, which leaves what was recorded alone.
     #[serde(default)]
     config_wake: Option<pos_cloud_config::config_tree::ConfigWakeBeat>,
+    /// Which package version each paired till last read, and when (roadmap-v3 B7.3), at most
+    /// [`DeviceReadBeat::DEVICES_MAX`], or `None` when the store said nothing about its tills,
+    /// which leaves what was recorded alone.
+    #[serde(default)]
+    devices: Option<Vec<DeviceReadBeat>>,
 }
 
 /// Reads a heartbeat's optional body. An empty body is the older edge and yields the default —

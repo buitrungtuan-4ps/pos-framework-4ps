@@ -40,6 +40,9 @@ export const SCREENS = {
   devices: { path: "/devices", key: "devices.title" },
   setup: { path: "/setup", key: "setup.title" },
   signIn: { path: "/signin", key: "signin.title" },
+  // A screen the running package version adds, by its `screen_id` (ADR-0190): drawn from the
+  // version, since the release has no screen of that id.
+  versionScreen: { path: "/screen/:id" },
 } as const satisfies Record<string, Screen>;
 
 /** Every screen's id. A `ScreenId` that is not in [`SCREENS`] does not compile. */
