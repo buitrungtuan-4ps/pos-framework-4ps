@@ -249,8 +249,15 @@ async function aTableWithTheDrinkSplitOff(page) {
  * the send, and a kitchen board loaded on its heels showed "Nothing firing" on CI.
  */
 async function sendOrder(page) {
+  // The send's own answer, not a note on screen: the writes-pending note is drawn only beside
+  // Take payment, which a person without `billing.bill.open` never sees, so waiting for it to go
+  // could pass before the request had even left.
+  const answered = page.waitForResponse(
+    (response) => response.request().method() === "POST" && /\/api\/orders\/[^/]+\/fire$/.test(new URL(response.url()).pathname),
+  );
   await page.locator('[data-step="fireOrder"]').click();
   await expect(page.locator('[data-outcome="line-fired"]').first()).toBeVisible();
+  await answered;
   await expect(page.locator('[data-outcome="writes-pending"]')).toHaveCount(0);
 }
 
