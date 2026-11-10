@@ -86,6 +86,9 @@ async fn fresh() -> (NatsLink, NatsConsumer, String) {
             stream,
             durable: format!("cloud_{pid}_{n}"),
             filter_subject: subject.clone(),
+            subject: subject.clone(),
+            max_messages: -1,
+            max_bytes: -1,
             batch: 64,
             expires: Duration::from_secs(1),
         },
@@ -160,4 +163,58 @@ async fn a_poison_frame_is_terminated_and_does_not_block_good_events() {
     // The poison was terminated, not merely skipped, so it is never redelivered.
     let empty = consumer.pull().await.expect("pull again");
     assert!(empty.is_empty(), "the terminated frame does not come back");
+}
+
+/// A cloud that starts before any store creates the fleet stream itself, and the store that
+/// connects later publishes into it: the cursor's create-or-get matches the edge's, so the order
+/// the two start in does not matter. Before this, the cursor only bound an existing stream, and a
+/// cloud with `[nats]` on a fresh broker refused to start.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cursor_started_before_any_store_creates_the_stream_the_store_then_fills() {
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    let stream = format!("POS_FIRST_{pid}_{n}");
+    let subject = format!("pos.first.{pid}.{n}.events");
+
+    let consumer = NatsConsumer::connect(
+        &nats_url(),
+        ConsumerConfig {
+            stream: stream.clone(),
+            durable: format!("cloud_first_{pid}_{n}"),
+            filter_subject: String::new(),
+            subject: subject.clone(),
+            max_messages: 1_000,
+            max_bytes: -1,
+            batch: 64,
+            expires: Duration::from_secs(1),
+        },
+    )
+    .await
+    .expect("the cursor creates the stream nobody has yet");
+    let capacity = consumer
+        .reconcile_capacity(1_000, -1)
+        .await
+        .expect("the created stream is readable");
+    assert_eq!(capacity.messages, 0, "a fresh stream");
+
+    let link = NatsLink::connect(
+        &nats_url(),
+        NatsConfig {
+            stream,
+            subject,
+            max_messages: -1,
+            max_bytes: -1,
+        },
+    )
+    .await
+    .expect("connect the edge link");
+    link.handshake(&hello())
+        .await
+        .expect("the store binds the stream the cloud made");
+    let events = fixtures::activations(store_id(), 1, 3);
+    assert_eq!(link.publish(&events).await.expect("publish").accepted, 3);
+
+    let batch = consumer.pull().await.expect("pull");
+    assert_eq!(batch.len(), 3, "the cloud reads what the store published");
+    batch.ack().await.expect("ack");
 }
