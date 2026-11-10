@@ -79,6 +79,8 @@ Within those jobs, `test`, `lints` (clippy) and `build` work on the **affected c
 
 ```
 + integration tests against real PostgreSQL and NATS service containers
++ publish to running: a package version pinned through the console's /admin calls, timed to the
+  real pos-edge applying it on its NATS wake, under one second at p95 (dashboard/tests/publish-to-edge.mjs)
 + contract tests: every implementation of every port runs the same suite
 + simulator smoke test: virtual stores, order flow, offline/online, reconciliation
 ```

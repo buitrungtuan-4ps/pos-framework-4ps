@@ -24,7 +24,7 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
+import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -85,6 +85,67 @@ async function until(what, check, within = SETTLE_MS) {
       throw new Error(`gave up waiting for ${what} after ${within}ms`);
     }
     await sleep(100);
+  }
+}
+
+/**
+ * Creates the fleet stream on `NATS`, as the first store to connect would.
+ *
+ * The cloud's ingest cursor binds to a stream that exists and refuses to start otherwise, and in a
+ * fleet the stores create it (ADR-0087 Amendment 1). This run starts the cloud before its one
+ * store, so it creates the stream the store would, with the store's subject, over NATS's own
+ * request protocol; an existing stream of that name is taken as it is.
+ */
+async function ensureFleetStream() {
+  const [host, port] = NATS.replace(/^nats:\/\//u, "").split(":");
+  const inbox = `_INBOX.e2e_${randomBytes(4).toString("hex")}`;
+  const request = JSON.stringify({
+    name: "POS_FLEET",
+    subjects: ["pos.fleet.events"],
+    retention: "limits",
+    storage: "file",
+    discard: "new",
+    max_msgs: -1,
+    max_bytes: -1,
+    num_replicas: 1,
+  });
+  const answer = await new Promise((resolve, reject) => {
+    const socket = connect(Number(port ?? "4222"), host);
+    let buffered = "";
+    let sent = false;
+    const timer = setTimeout(() => {
+      socket.destroy();
+      reject(new Error(`NATS at ${NATS} did not answer the stream request`));
+    }, 10_000);
+    socket.on("error", reject);
+    socket.on("data", (chunk) => {
+      buffered += chunk.toString();
+      if (!sent && buffered.includes("INFO ")) {
+        sent = true;
+        socket.write('CONNECT {"verbose":false,"pedantic":false,"headers":false}\r\n');
+        socket.write(`SUB ${inbox} 1\r\n`);
+        socket.write(`PUB $JS.API.STREAM.CREATE.POS_FLEET ${inbox} ${Buffer.byteLength(request)}\r\n${request}\r\n`);
+      }
+      const message = new RegExp(`MSG ${inbox.replaceAll(".", "\\.")} 1 (\\d+)\r\n`, "u").exec(buffered);
+      if (message !== null) {
+        const start = message.index + message[0].length;
+        const body = buffered.slice(start, start + Number(message[1]));
+        if (body.length === Number(message[1])) {
+          clearTimeout(timer);
+          socket.end();
+          resolve(JSON.parse(body));
+        }
+      }
+      if (buffered.includes("-ERR")) {
+        clearTimeout(timer);
+        socket.destroy();
+        reject(new Error(`NATS refused the stream request: ${buffered}`));
+      }
+    });
+  });
+  // 10058: a stream of that name exists, which is what this asks for.
+  if (answer.error !== undefined && answer.error.err_code !== 10058) {
+    throw new Error(`NATS would not create the fleet stream: ${JSON.stringify(answer.error)}`);
   }
 }
 
@@ -203,6 +264,7 @@ async function main() {
   if (NATS === undefined) {
     throw new Error("NATS_URL is unset. Point it at a NATS server with JetStream, e.g. `127.0.0.1:4222`");
   }
+  await ensureFleetStream();
   const cloud = await startCloud({
     extraConfig: [
       "[nats]",
