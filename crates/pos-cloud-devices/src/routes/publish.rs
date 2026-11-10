@@ -320,6 +320,7 @@ pub(super) fn compile_devices(approved: &[DeviceProposalSummary]) -> PublishedDe
                     // reads absent as the store's float (ADR-0167 decision 4), so a store that
                     // sets none publishes the node it did before.
                     opening_float_minor: row.opening_float_minor,
+                    device_class: Open::default(),
                 })
             })
             .collect(),

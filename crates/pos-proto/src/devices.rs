@@ -254,6 +254,15 @@ pub struct PublishedDevice {
     /// as before and an edge that predates the field ignores it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opening_float_minor: Option<i64>,
+    /// On a [`DeviceKind::Terminal`], the class of device this till runs on
+    /// ([ADR-0201](../../../docs/adr/0201-the-till-runs-on-every-device-class.md) decision 3): the
+    /// device dimension a package variant is chosen by. Read it through
+    /// [`PublishedDevice::device_class`]. **Absent means "read it from the screen"**, through the
+    /// till's named breakpoints, as every till did before the field existed, and is left off the
+    /// wire, so a node that sets none is written as before and an edge that predates the field
+    /// ignores it.
+    #[serde(default, skip_serializing_if = "is_absent")]
+    pub device_class: Open<DeviceClass>,
 }
 
 impl PublishedDevice {
@@ -294,6 +303,13 @@ impl PublishedDevice {
     pub fn receipt_second_language(&self) -> Option<ReceiptSecondLanguage> {
         Some(self.receipt_second_language.known())
             .filter(|known| *known != ReceiptSecondLanguage::Unspecified)
+    }
+
+    /// The class of device this till runs on, or `None` where the till reads it from its screen:
+    /// absent, `DEVICE_CLASS_UNSPECIFIED` and a class this release does not know.
+    #[must_use]
+    pub fn device_class(&self) -> Option<DeviceClass> {
+        Some(self.device_class.known()).filter(|known| *known != DeviceClass::Unspecified)
     }
 
     /// The float this till's drawer opens with by default, or `None` for the store's: absent, and a
@@ -337,7 +353,9 @@ impl PublishedDevices {
 
 #[cfg(test)]
 mod tests {
-    use super::{DeviceConnection, DeviceKind, PaperWidth, PublishedDevice, PublishedDevices};
+    use super::{
+        DeviceClass, DeviceConnection, DeviceKind, PaperWidth, PublishedDevice, PublishedDevices,
+    };
     use crate::ids::{DeviceId, StationId};
     use crate::printing::{ReceiptLanguage, ReceiptSecondLanguage};
     use crate::text::DisplayName;
@@ -360,6 +378,7 @@ mod tests {
             receipt_language: Open::default(),
             receipt_second_language: Open::default(),
             opening_float_minor: None,
+            device_class: Open::default(),
         }
     }
 
@@ -677,6 +696,39 @@ mod tests {
             assert!(
                 json.ends_with(&format!(r#""opening_float_minor":{published}}}]}}"#)),
                 "a float goes back out as it came: {json}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_till_may_name_its_device_class_and_one_that_names_none_reads_its_screen() {
+        // ADR-0201 decision 3: absent, unspecified and a newer class are all "read it from the
+        // screen"; a known class is the till's, and every one goes back out as it came.
+        let json = serde_json::to_string(&PublishedDevices::new(vec![device(None)])).expect("json");
+        assert!(
+            !json.contains("device_class"),
+            "a till that names no class is written as before: {json}"
+        );
+        for (published, read) in [
+            ("DEVICE_CLASS_TABLET", Some(DeviceClass::Tablet)),
+            ("DEVICE_CLASS_KIOSK", Some(DeviceClass::Kiosk)),
+            ("DEVICE_CLASS_UNSPECIFIED", None),
+            ("DEVICE_CLASS_WRIST", None),
+        ] {
+            let raw = format!(
+                r#"{{"devices":[{{"device_id":"00000000000000000000000007",
+                    "kind":"DEVICE_KIND_TERMINAL","connection":"DEVICE_CONNECTION_UNSPECIFIED",
+                    "address":"","name":"Bar till","device_class":"{published}"}}]}}"#
+            );
+            let node: PublishedDevices = serde_json::from_str(&raw).expect("the node parses");
+            let till = node.devices().first().expect("the terminal");
+            assert_eq!(till.device_class(), read, "{published}");
+            let json = serde_json::to_string(&node).expect("json");
+            let echoed = published != "DEVICE_CLASS_UNSPECIFIED";
+            assert_eq!(
+                json.contains(&format!(r#""device_class":"{published}""#)),
+                echoed,
+                "{json}"
             );
         }
     }

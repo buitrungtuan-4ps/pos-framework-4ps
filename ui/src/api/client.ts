@@ -279,6 +279,10 @@ export interface SessionState {
   // never signed in draws its sign-in screen in it. Absent where the store sets none, and from an
   // edge too old to send it.
   display_language?: string;
+  // The class of device this one is, where the store's `devices` node names one on the till the
+  // device is bound to (ADR-0201 decision 3). Absent where it names none, and from an edge too old
+  // to send it: the till then reads the class from its screen.
+  device_class?: string;
 }
 
 // The outcome of a sign-in attempt: the signed-in employee, or a refusal the screen can explain
