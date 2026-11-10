@@ -82,3 +82,8 @@
 **Vulnerability:** ISATAP interface identifiers (`<prefix>:<u/g>:5efe:a.b.c.d`) were only checking if segment 4 equaled `0` or `0x0200`, ignoring other valid u/g modifier bit configurations in segment 4 (such as `0x0100` or `0xfe00`), allowing attackers to bypass SSRF validation while targeting internal IPv4 addresses like `127.0.0.1` or `169.254.169.254`.
 **Learning:** In RFC 5214 ISATAP address definitions, segment 4 contains the 16-bit field where universal/local (u) and individual/group (g) bits sit in the top byte, while the lower 8 bits are required to be zero (`0xuu00`). Checking exact values rather than bitwise masking (`segments[4] & 0x00ff == 0`) left other u/g modifier bit combinations uninspected.
 **Prevention:** Inspect ISATAP interface identifiers using `(segments[4] & 0x00ff == 0) && segments[5] == 0x5efe` to ensure all ISATAP modifier bit variants embedding private IPv4 addresses are properly classified.
+
+## 2026-10-07 - [SSRF IPv6 6bone Phaseout Address Bypass]
+**Vulnerability:** Webhook SSRF validation did not check the returned 6bone phaseout address space (`3ffe::/16`, RFC 3701 / RFC 5156), allowing deprecated/historical testbed addresses and legacy Teredo prefix targets to fall through `classify_v6` as ordinary public unicast addresses.
+**Learning:** `3ffe::/16` was formerly used for the 6bone testbed and early Teredo implementations (`3ffe:831f::/32`), but was phased out and returned to IANA. It contains no valid public webhook targets and is marked as RESERVED in IANA IPv6 address assignments.
+**Prevention:** Explicitly check `first == 0x3ffe` in `is_special_purpose_v6` within `classify_v6` to refuse all addresses in `3ffe::/16` as `ForbiddenReason::Reserved`.
