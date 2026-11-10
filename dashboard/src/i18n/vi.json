@@ -2659,5 +2659,13 @@
   "customData.objectLine": "Dòng món",
   "customData.objectBill": "Hóa đơn",
   "customData.objectTable": "Bàn",
-  "customData.objectShift": "Ca"
+  "customData.objectShift": "Ca",
+  "rule.fact.orderChannel": "Kênh của đơn",
+  "rule.fact.lineCount": "Số dòng trong đơn",
+  "rule.fact.guestCount": "Số khách của đơn",
+  "rule.problem.noClause": "Thêm ít nhất một điều kiện.",
+  "rule.problem.unknownFact": "Chọn điều kiện xét theo gì.",
+  "rule.problem.noValue": "Nhập giá trị cho mọi điều kiện.",
+  "rule.problem.notWhole": "Số đếm phải là số nguyên.",
+  "rule.problem.tooLong": "Quy tắc này dài quá mức cho phép. Hãy bỏ bớt một điều kiện."
 }

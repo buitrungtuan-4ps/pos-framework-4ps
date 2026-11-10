@@ -2659,5 +2659,13 @@
   "customData.objectLine": "Order lines",
   "customData.objectBill": "Bills",
   "customData.objectTable": "Tables",
-  "customData.objectShift": "Shifts"
+  "customData.objectShift": "Shifts",
+  "rule.fact.orderChannel": "The order's channel",
+  "rule.fact.lineCount": "Lines on the order",
+  "rule.fact.guestCount": "Guests on the order",
+  "rule.problem.noClause": "Add at least one condition.",
+  "rule.problem.unknownFact": "Pick what the condition looks at.",
+  "rule.problem.noValue": "Give every condition its value.",
+  "rule.problem.notWhole": "A count is a whole number.",
+  "rule.problem.tooLong": "This is longer than a rule may be. Remove a condition."
 }
