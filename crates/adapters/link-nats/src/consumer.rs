@@ -46,6 +46,15 @@ pub struct ConsumerConfig {
     pub durable: String,
     /// Restrict the cursor to this subject, or `""` for every subject the stream captures.
     pub filter_subject: String,
+    /// The subject the stream captures, the one every store publishes to (`pos.fleet.events`).
+    /// Read only when the stream does not exist yet: the cursor then creates it, as the first store
+    /// to connect would, and an existing stream is bound as it is.
+    pub subject: String,
+    /// A created stream's message ceiling, or `-1` for unlimited: the fleet's, which
+    /// [`NatsConsumer::reconcile_capacity`] keeps in force afterwards.
+    pub max_messages: i64,
+    /// A created stream's byte ceiling, or `-1` for unlimited, as [`Self::max_messages`].
+    pub max_bytes: i64,
     /// The most messages one [`pull`](NatsConsumer::pull) gathers before returning.
     pub batch: usize,
     /// How long one [`pull`](NatsConsumer::pull) waits for a full batch before returning what it has
@@ -76,9 +85,9 @@ impl NatsConsumer {
     ///
     /// # Errors
     ///
-    /// [`PortError::unavailable`] if NATS cannot be reached or the stream does not yet exist — the
-    /// stream is created by the edge's handshake, so a cloud that starts first retries until a store
-    /// has connected.
+    /// [`PortError::unavailable`] if NATS cannot be reached, or the stream can be neither read nor
+    /// created. A cloud that starts before any store creates the stream itself, with the subject and
+    /// ceilings in `config`, so the order the two start in does not matter.
     pub async fn connect(url: &str, config: ConsumerConfig) -> Result<Self, PortError> {
         let endpoint = crate::endpoint::split(url);
         let client = async_nats::connect_with_options(endpoint.address(), endpoint.options())
@@ -99,14 +108,24 @@ impl NatsConsumer {
     ///
     /// # Errors
     ///
-    /// [`PortError::unavailable`] if the stream does not exist or the consumer cannot be created.
+    /// [`PortError::unavailable`] if the stream can be neither read nor created, or the consumer
+    /// cannot be created.
     pub async fn from_client(
         client: async_nats::Client,
         config: ConsumerConfig,
     ) -> Result<Self, PortError> {
         let context = jetstream::new(client);
+        // The same create-or-get the edge's handshake makes, with the same shape, so whichever
+        // side starts first creates the stream and the other binds it as it stands.
         let stream = context
-            .get_stream(&config.stream)
+            .get_or_create_stream(jetstream::stream::Config {
+                name: config.stream.clone(),
+                subjects: vec![config.subject.clone()],
+                max_messages: config.max_messages,
+                max_bytes: config.max_bytes,
+                discard: jetstream::stream::DiscardPolicy::New,
+                ..Default::default()
+            })
             .await
             .map_err(unavailable)?;
         // Explicit ack: the server holds a message as pending until we acknowledge it, and

@@ -85,7 +85,10 @@ async fn fresh() -> (NatsLink, NatsConsumer) {
         ConsumerConfig {
             stream,
             durable: format!("cloud_{pid}_{n}"),
-            filter_subject: subject,
+            filter_subject: subject.clone(),
+            subject,
+            max_messages: -1,
+            max_bytes: -1,
             batch: 64,
             expires: Duration::from_secs(1),
         },
