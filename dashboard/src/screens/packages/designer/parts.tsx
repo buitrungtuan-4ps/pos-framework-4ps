@@ -11,6 +11,7 @@ import type { Accessor, Component } from "solid-js";
 import type { PackageRefusal } from "../../../api/schemas";
 import { t, type MessageKey } from "../../../i18n";
 import type { PackageDraft } from "../../../lib/package-draft";
+import { ScreensPart } from "../screens/ScreensPart";
 import { RefusalList } from "./refusals";
 import type { DraftChange } from "./use-draft";
 
@@ -52,7 +53,7 @@ export const DESIGNER_PARTS: readonly DesignerPart[] = [
     key: "screens",
     label: "designer.part.screens",
     field: "screens",
-    Panel: summary((draft) => draft.screens?.length ?? 0, "designer.screensSummary"),
+    Panel: ScreensPart,
   },
   {
     key: "data",
