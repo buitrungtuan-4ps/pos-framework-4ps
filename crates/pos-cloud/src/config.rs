@@ -24,6 +24,13 @@ const fn default_expires_secs() -> u64 {
     5
 }
 
+/// The subject every store publishes to when the config does not say: the one the console's
+/// new-store wizard writes into each store's `config.toml`
+/// ([ADR-0087](../../../docs/adr/0087-edge-relay-and-event-publish.md) Amendment 1).
+fn default_fleet_subject() -> String {
+    "pos.fleet.events".to_owned()
+}
+
 /// The fleet stream's message ceiling when the config does not say — the same figure the edge
 /// creates a fresh stream with, so an operator who never edits it sees no change
 /// ([ADR-0087](../../../docs/adr/0087-edge-relay-and-event-publish.md) Amendment 2).
@@ -535,6 +542,12 @@ pub struct NatsIngestConfig {
     /// Restrict the cursor to this subject, or empty for every subject the stream captures.
     #[serde(default)]
     pub filter_subject: String,
+    /// The subject every store publishes to, which the stream captures. Read only when the stream
+    /// does not exist yet, so a cloud started before any store creates it rather than refusing to
+    /// start. The fleet's one subject by default; a fork that renames it renames it here and in
+    /// every store's `config.toml` together (ADR-0087 Amendment 1).
+    #[serde(default = "default_fleet_subject")]
+    pub subject: String,
     /// The most messages one pull gathers before returning.
     #[serde(default = "default_batch")]
     pub batch: usize,
