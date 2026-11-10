@@ -480,6 +480,29 @@ test("a screen is built by dragging a component onto it, and published", async (
   await context.close();
 });
 
+// The floor plan is drag and drop (roadmap-v3 B8.2): a table dragged onto a cell of its area's grid
+// is saved at that cell. A drag is not a click, so the step gate cannot count it; this test is its
+// browser half.
+test("a table dragged onto the floor plan is saved where it was dropped", async ({ browser }) => {
+  const scope = { tenant_id: fixtures.tenant.tenant_id, store_id: fixtures.store.store_id };
+  const area = await cloud.call("POST", "/admin/floor/areas", { ...scope, name: "Terrace" });
+  const areaId = area.id;
+  await cloud.call("POST", "/admin/floor/tables", { ...scope, area_id: areaId, name: "T1", seats: 4, grid_column: null, grid_row: null });
+  const { context, page } = await openConsole(browser);
+  await page.setViewportSize({ width: 1440, height: 1400 });
+  await openNavGroupFor(page, "floor");
+  await page.locator('[data-nav="floor"]').first().click();
+
+  await page.locator('[data-unplaced] [data-table-id]').first().dragTo(page.locator(`[data-cell="${areaId}:2:1"]`));
+  await expect(page.locator(`[data-cell="${areaId}:2:1"] [data-table-id]`)).toBeVisible();
+  const tables = await cloud.call(
+    "GET",
+    `/admin/floor/tables?tenant_id=${scope.tenant_id}&store_id=${scope.store_id}`,
+  );
+  expect(tables.find((row) => row.label === "T1").position).toEqual({ column: 2, row: 1 });
+  await context.close();
+});
+
 test("the flows this harness skips are exactly the ones that say so", () => {
   // A flow drops out of the browser gate only by declaring why, in `scripts/step-tasks.mjs`. This
   // asserts the count rather than the reasons: the reasons are prose for a reader, and what must not
