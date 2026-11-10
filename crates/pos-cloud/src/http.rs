@@ -114,6 +114,7 @@ pub(crate) mod config_publish;
 pub(crate) mod countries;
 mod custom_values;
 pub(crate) mod fleet;
+mod grid_keys;
 mod grid_sync;
 pub(crate) mod health;
 pub(crate) mod integrations;

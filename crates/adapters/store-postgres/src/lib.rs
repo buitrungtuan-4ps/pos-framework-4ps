@@ -40,6 +40,7 @@ mod fee_rules;
 mod fleet;
 mod floor;
 mod inventory;
+mod liveness_devices;
 mod liveness_wake;
 mod media;
 mod migrations_late;

@@ -895,6 +895,7 @@ fn fleet_row(row: FleetStoreRow) -> Result<FleetRow, FleetStoreError> {
     Ok(FleetRow {
         package: crate::fleet::ReportedPackage::from_row(&row),
         config_wake: crate::fleet::ReportedConfigWake::from_row(&row),
+        devices: crate::fleet::ReportedDevices::from_row(&row),
         store_id: parse_registry_store(&row.store_id)
             .map_err(|error| FleetStoreError::new(error.to_string()))?,
         name: row.name,
@@ -925,9 +926,8 @@ fn fleet_row(row: FleetStoreRow) -> Result<FleetRow, FleetStoreError> {
         region: stored_region(row.region_country.as_deref(), row.region_label.as_deref()),
         // Fails safe too: an unreadable handover reports none, the state showing *less* confidence.
         superseded_generation: stored_count(row.superseded_generation),
-        // An unreadable instant drops the retirement rather than inventing one, and that direction
-        // is deliberate too: a handover reported as *not* retired is the reading that leaves an
-        // operator looking at the machine, which is the safer mistake.
+        // An unreadable instant drops the retirement rather than inventing one: a handover shown as
+        // *not* retired leaves an operator looking at the machine, which is the safer mistake.
         retired_at: stored_instant(row.retired_at),
         retired_by: row.retired_by,
         print_agents: stored_print_agents(row.print_agents.as_deref()),

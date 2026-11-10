@@ -48,7 +48,7 @@ import { fireCourse, fireOrder, voidLine } from "../state/order-writes";
 import { releaseTable, setItemSoldOut } from "../state/floor-writes";
 import { errorMessage } from "../lib/errors";
 import { RegionsContext, type Regions } from "../package/regions";
-import { NO_ACTS, PackageScreen } from "../package/screen";
+import { PackageScreen, orderHost } from "../package/screen";
 import { useInFlight } from "../lib/in-flight";
 import { createTableScoped, resetPerTable, useKeptTable } from "../state/kept-table";
 import { createTableCheck } from "../state/table-check";
@@ -1509,7 +1509,7 @@ export function Order() {
 
   return (
     <RegionsContext.Provider value={regions}>
-      <PackageScreen screenId="order" host={NO_ACTS} />
+      <PackageScreen screenId="order" host={orderHost(walkIn, params)} />
     </RegionsContext.Provider>
   );
 }

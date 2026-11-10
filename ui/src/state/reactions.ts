@@ -13,7 +13,8 @@
 //   directly is not run: a reaction never asks for an approver. The edge checks the command as any.
 // - **A condition the till cannot answer does not run** (the module not loaded, or an error).
 // - **Only acts this till runs.** A UI act opening a screen, and the prints; any other act a
-//   package names is passed over here, and the edge never sees it.
+//   package names is passed over here, and the edge never sees it. A package screen's button runs
+//   the same acts through the same runners (`buttonRuns`, `runButton`), on its own tap.
 
 import { createSignal } from "solid-js";
 
@@ -89,13 +90,18 @@ export function openPackageScreen(screenId: string): boolean {
 let running = 0;
 let openedByReaction: string | undefined;
 
-/** The acts this till runs for a reaction. Each answers whether it ran. */
-const RUNNERS: Readonly<Record<string, (params: Readonly<Record<string, string>>, fired: Fired) => boolean>> = {
-  "ui.screen.open": (params, fired) => {
-    const screenId = params.screen_id ?? "";
-    openedByReaction = screenId;
-    return openScreen?.(screenId, fired) ?? false;
-  },
+/**
+ * What an act run here answers: whether it ran, or, for a request to the edge, the request itself,
+ * whose failure is the caller's to show or to drop.
+ */
+type Ran = boolean | Promise<unknown>;
+
+/**
+ * The acts this till runs for a reaction or a package screen's button: a UI act opening a screen,
+ * and the prints. None of them moves money.
+ */
+const RUNNERS: Readonly<Record<string, (params: Readonly<Record<string, string>>, fired: Fired) => Ran>> = {
+  "ui.screen.open": (params, fired) => openScreen?.(params.screen_id ?? "", fired) ?? false,
   "billing.check.print": (params, fired) => {
     const billId = params.bill_id ?? fired.billId;
     const orderId = params.order_id ?? fired.orderId;
@@ -108,15 +114,16 @@ const RUNNERS: Readonly<Record<string, (params: Readonly<Record<string, string>>
           : tableId !== undefined
             ? () => api.printTableCheck(tableId)
             : undefined;
-    return send !== undefined && sent(printWrite("billing.check.print", send));
+    return send !== undefined && printWrite("billing.check.print", send);
   },
-  "reports.shift.print_x": (params) => sent(printWrite("reports.shift.print_x", () => api.printX(params.shift_id))),
+  "reports.shift.print_x": (params) => printWrite("reports.shift.print_x", () => api.printX(params.shift_id)),
 };
 
 /** A reaction's request is its own: what came of it is the edge's, and nobody waits on it. */
-function sent(request: Promise<unknown>): true {
-  request.catch(() => undefined);
-  return true;
+function sent(ran: Ran): void {
+  if (ran instanceof Promise) {
+    ran.catch(() => undefined);
+  }
 }
 
 /** Whether the signed-in person holds every permission the act needs, without an approver. */
@@ -179,11 +186,41 @@ export function react(trigger: string, fired: Fired): void {
       for (const reaction of reactions) {
         const runner = RUNNERS[reaction.then.action_id];
         if (runner !== undefined && permitted(reaction.then.action_id) && holds(reaction, fired.facts)) {
-          runner(reaction.then.params ?? {}, fired);
+          if (reaction.then.action_id === "ui.screen.open") {
+            openedByReaction = reaction.then.params?.screen_id ?? "";
+          }
+          sent(runner(reaction.then.params ?? {}, fired));
         }
       }
     } finally {
       running -= 1;
     }
   });
+}
+
+/**
+ * Whether a package screen's button may run `actionId` on this till: an act a reaction may run
+ * (`RUNNERS`), which the signed-in person holds outright. Any other draws the button disabled.
+ */
+export function buttonRuns(actionId: string): boolean {
+  return Object.hasOwn(RUNNERS, actionId) && permitted(actionId);
+}
+
+/**
+ * Runs a package button's act on its tap, through the runners reactions use: the parameters the
+ * package fixes, over the ids the screen supplies (its `order_id` and `table_id`). Answers what
+ * the runner answered, so the button can show a print on its way and what came of it; `false`
+ * when the act is not one `buttonRuns` offers.
+ */
+export function runButton(
+  binding: { readonly action_id: string; readonly params?: Readonly<Record<string, unknown>> },
+  supplied: Readonly<Record<string, string>>,
+): Ran {
+  const runner = RUNNERS[binding.action_id];
+  if (runner === undefined || !buttonRuns(binding.action_id)) {
+    return false;
+  }
+  const fixed = Object.entries(binding.params ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === "string");
+  const params = { ...supplied, ...Object.fromEntries(fixed) };
+  return runner(params, { tableId: params.table_id, orderId: params.order_id, billId: params.bill_id, channel: "", facts: {} });
 }
