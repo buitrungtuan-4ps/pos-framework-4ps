@@ -27942,7 +27942,8 @@
           "cash_rounding_increment",
           "cash_denominations",
           "cash_count_denominations",
-          "setting_defaults"
+          "setting_defaults",
+          "receipt_required_sections"
         ],
         "properties": {
           "cash_count_denominations": {
@@ -28003,6 +28004,13 @@
           },
           "prices_include_tax": {
             "type": "boolean"
+          },
+          "receipt_required_sections": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The optional receipt sections the country's law requires, as `RECEIPT_SECTION_*` tokens\n([ADR-0207](../../../docs/adr/0207-a-receipt-is-a-structured-template-per-store-and-channel.md)\ndecision 3): a receipt template written anywhere cannot turn one off. Empty for a country\nthat requires none."
           },
           "setting_defaults": {
             "type": "array",
