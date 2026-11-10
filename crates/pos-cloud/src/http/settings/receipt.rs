@@ -6,59 +6,17 @@
 //! ([ADR-0207](../../../../docs/adr/0207-a-receipt-is-a-structured-template-per-store-and-channel.md)
 //! decision 3, [`pos_cloud_config::receipt_template`]).
 
-use core::future::Future;
-use core::pin::Pin;
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use axum::response::Response;
 use pos_cloud_api::response::service_unavailable;
-use pos_cloud_catalog::translations::{FALLBACK_LOCALE, TranslationStore};
+use pos_cloud_catalog::translations::TranslationStore;
 use pos_cloud_config::receipt_template::{RequiredSections, TEMPLATES_KEY, refusal};
 use pos_country::CountryRegistry;
 use pos_proto::ids::TenantId;
 
+use crate::http::grid_keys::{FallbackKeys, GridKeys, StoreGrid};
 use crate::http::setting_refusal::setting_refusal_response;
-
-/// The keys of a tenant's grid that carry a non-empty `en` value, boxed so the settings state holds
-/// one without a generic of its own.
-type FallbackKeys<'a> = Pin<Box<dyn Future<Output = Result<BTreeSet<String>, String>> + Send + 'a>>;
-
-/// Where the grid's keys are read.
-trait GridKeys: Send + Sync {
-    /// The keys of `tenant`'s grid that a receipt can print in English.
-    fn fallback_keys(&self, tenant: TenantId) -> FallbackKeys<'_>;
-}
-
-/// The grid of a [`TranslationStore`].
-struct StoreGrid<Tr>(Tr);
-
-impl<Tr: TranslationStore + Send + Sync> GridKeys for StoreGrid<Tr> {
-    fn fallback_keys(&self, tenant: TenantId) -> FallbackKeys<'_> {
-        Box::pin(async move {
-            let grid = self
-                .0
-                .load(tenant)
-                .await
-                .map_err(|error| error.to_string())?;
-            Ok(grid
-                .map(|versioned| {
-                    versioned
-                        .record
-                        .as_map()
-                        .iter()
-                        .filter(|(_, texts)| {
-                            texts
-                                .get(FALLBACK_LOCALE)
-                                .is_some_and(|text| !text.trim().is_empty())
-                        })
-                        .map(|(key, _)| key.clone())
-                        .collect()
-                })
-                .unwrap_or_default())
-        })
-    }
-}
 
 /// No grid: the package catch-up's state, which never writes a value. Failing closed, it answers
 /// that the grid is unavailable.

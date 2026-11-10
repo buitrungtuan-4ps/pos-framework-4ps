@@ -13,7 +13,11 @@ use pos_cloud::auth::admin::AdminRole;
 use pos_cloud::{Cloud, http};
 use pos_cloud_config::packages::{DATA_PART_SINCE, InMemoryPackages};
 use pos_fakes::FakeStore;
+use pos_proto::ids::TenantId;
+use pos_proto::ulid::Ulid;
 use tower::ServiceExt;
+
+use crate::translations::FakeTranslations;
 
 use crate::{
     FakeAdmin, FakeAudit, FakeConfigTrees, FakeKeys, FakeRollups, FakeWebhooks, admin_cookie,
@@ -21,8 +25,43 @@ use crate::{
     provisioned_admin, role_session_cookie, ulid_text,
 };
 
-/// The admin surface plus the package router, on fakes, recording into `audit`.
+/// The translation keys these tests' versions name, each with an English text in tenant 1's grid
+/// (ADR-0190 decision 6), and one with only a Vietnamese text.
+const GRID: &[(&str, &[(&str, &str)])] = &[
+    ("package.slot.lunch", &[("en", "Lunch"), ("vi", "Bữa trưa")]),
+    ("welcome.title", &[("en", "Welcome")]),
+    ("welcome.start", &[("en", "Start")]),
+    ("data.order.occasion", &[("en", "Occasion")]),
+    ("data.list.occasion", &[("en", "Occasions")]),
+    ("data.occasion.birthday", &[("en", "Birthday")]),
+    ("data.reservation", &[("en", "Reservation")]),
+    ("data.reservation.party", &[("en", "Party size")]),
+    ("data.reservation.contact", &[("en", "Contact")]),
+    (
+        "data.consent.reservation",
+        &[("en", "To call about the booking")],
+    ),
+    ("data.shift.note", &[("en", "Note")]),
+    ("data.consent.shift", &[("en", "To keep a note")]),
+    ("welcome.untranslated", &[("vi", "Xin chào"), ("en", " ")]),
+];
+
+/// The admin surface plus the package router, on fakes, recording into `audit`, checking keys
+/// against [`GRID`].
 fn package_app(admin: FakeAdmin, audit: Arc<dyn AuditRecorder>) -> axum::Router {
+    package_app_with(
+        admin,
+        audit,
+        FakeTranslations::seeded(TenantId::new(Ulid::from_u128(1)), GRID),
+    )
+}
+
+/// [`package_app`] checking keys against `translations`.
+fn package_app_with(
+    admin: FakeAdmin,
+    audit: Arc<dyn AuditRecorder>,
+    translations: FakeTranslations,
+) -> axum::Router {
     let app = app_all(
         Cloud::new(FakeStore::new()),
         FakeRollups::default(),
@@ -36,6 +75,7 @@ fn package_app(admin: FakeAdmin, audit: Arc<dyn AuditRecorder>) -> axum::Router 
         admin,
         clock(),
         audit,
+        translations,
     ))
 }
 

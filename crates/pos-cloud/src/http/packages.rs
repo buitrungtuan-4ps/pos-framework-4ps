@@ -24,6 +24,8 @@ use serde::Deserialize;
 
 use crate::audit::AuditRecorder;
 use crate::auth::admin::AdminStore;
+use crate::http::grid_keys::{GridKeys, StoreGrid};
+use pos_cloud_catalog::translations::TranslationStore;
 use pos_cloud_config::packages::{PackageStore, PackageStoreError};
 
 mod authoring;
@@ -44,6 +46,9 @@ struct PackageState<P, A, C> {
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
+    /// The tenant's translation grid, which every key a version names needs an `en` value in
+    /// (ADR-0190 decision 6).
+    grid: Arc<dyn GridKeys>,
 }
 
 /// A package create body. The id is server-owned.
@@ -85,17 +90,20 @@ struct PackageVersionRequest {
 }
 
 /// Builds the package sub-router. Reads are `console.data.read`; creating a package, publishing a
-/// version and a publish's dry run are `console.packages.manage`.
-pub fn package_router<P, A, C>(
+/// version and a publish's dry run are `console.packages.manage`. A version is checked against the
+/// tenant's grid in `translations`.
+pub fn package_router<P, A, C, Tr>(
     packages: P,
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
+    translations: Tr,
 ) -> Router
 where
     P: PackageStore + Clone + Send + Sync + 'static,
     A: AdminStore + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    Tr: TranslationStore + Send + Sync + 'static,
 {
     Router::new()
         .route(
@@ -117,6 +125,7 @@ where
             admin,
             clock,
             audit,
+            grid: Arc::new(StoreGrid(translations)),
         })
 }
 

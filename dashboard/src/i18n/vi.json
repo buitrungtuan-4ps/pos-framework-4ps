@@ -2717,6 +2717,7 @@
   "designer.refusal.missingParam": "Màn hình {screen}, thành phần {node}: thao tác cần {name} nhưng không có gì cung cấp.",
   "designer.refusal.notAdditive": "Phiên bản này xóa hoặc thay đổi dữ liệu mà phiên bản trước đã khai báo. Phiên bản sau chỉ được thêm.",
   "designer.refusal.tooLarge": "Phiên bản vượt quá 1 MiB. Hãy bớt màn hình hoặc dữ liệu.",
+  "designer.refusal.unknownTranslationKey": "Nhãn {name} chưa có nội dung tiếng Anh. Hãy thêm trong mục Bản dịch rồi kiểm tra lại.",
   "designer.refusal.versionLabel": "Tên phiên bản dài 1 đến 64 ký tự.",
   "designer.refusal.other": "Đám mây từ chối {field}. Hãy sửa rồi kiểm tra lại.",
   "designer.screens.canvas": "Các thành phần của màn hình",

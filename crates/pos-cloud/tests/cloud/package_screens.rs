@@ -123,3 +123,70 @@ async fn a_dry_run_is_for_authors_of_a_package_the_tenant_has() {
     let (status, _) = send(&router, post_with_cookie(&dry_run, &body, &cookie)).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+/// Every key a version names needs an English text in the tenant's grid (ADR-0190 decision 6): a
+/// heading whose key has only a Vietnamese text and a blank English one is refused where it is,
+/// with the key named, by the dry run and by the publish; a time slot whose key the grid lacks is
+/// refused on its field; and the same draft passes once every key has English.
+#[tokio::test]
+async fn a_key_without_english_is_refused_where_the_version_names_it() {
+    let router = package_app(provisioned_admin(), Arc::new(NoopAuditRecorder));
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+    let (_, package) = send(
+        &router,
+        post_with_cookie(
+            "/admin/packages",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Counter" }),
+            &cookie,
+        ),
+    )
+    .await;
+    let versions = format!(
+        "/admin/packages/{}/versions",
+        package["package_id"].as_str().expect("an id")
+    );
+    let dry_run = format!("{versions}/dry-run");
+
+    let untranslated = screens_body(
+        &tenant,
+        &serde_json::json!({ "component_id": "page_header", "properties": { "title_key": "welcome.untranslated" } }),
+    );
+    let (status, verdict) = send(&router, post_with_cookie(&dry_run, &untranslated, &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{verdict}");
+    assert_eq!(verdict["accepted"], false);
+    let refusal = &verdict["refusals"][0];
+    assert_eq!(refusal["field"], "screens");
+    assert_eq!(refusal["reason"], "UNKNOWN_TRANSLATION_KEY");
+    assert_eq!(refusal["screen_index"], 0);
+    assert_eq!(refusal["node_index"], 1, "the heading, after the frame");
+    assert_eq!(refusal["name"], "welcome.untranslated");
+    let (status, body) = send(&router, post_with_cookie(&versions, &untranslated, &cookie)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body.to_string().contains("UNKNOWN_TRANSLATION_KEY"),
+        "{body}"
+    );
+
+    let mut dinner = screens_body(
+        &tenant,
+        &serde_json::json!({ "component_id": "page_header", "properties": { "title_key": "welcome.title" } }),
+    );
+    dinner["time_slots"] = serde_json::json!([{
+        "time_slot_id": "dinner",
+        "label_key": "package.slot.dinner",
+        "schedules": [{ "days": 31, "start_minute": 1080, "end_minute": 1320 }]
+    }]);
+    let (_, verdict) = send(&router, post_with_cookie(&dry_run, &dinner, &cookie)).await;
+    let refusal = &verdict["refusals"][0];
+    assert_eq!(refusal["field"], "time_slots.label_key", "{verdict}");
+    assert_eq!(refusal["reason"], "UNKNOWN_TRANSLATION_KEY");
+    assert_eq!(refusal["name"], "package.slot.dinner");
+    assert!(refusal.get("screen_index").is_none(), "{verdict}");
+
+    dinner["time_slots"][0]["label_key"] = serde_json::json!("package.slot.lunch");
+    let (_, verdict) = send(&router, post_with_cookie(&dry_run, &dinner, &cookie)).await;
+    assert_eq!(verdict["accepted"], true, "{verdict}");
+    let (status, body) = send(&router, post_with_cookie(&versions, &dinner, &cookie)).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+}
