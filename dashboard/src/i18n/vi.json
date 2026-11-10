@@ -2659,5 +2659,19 @@
   "customData.objectLine": "Dòng món",
   "customData.objectBill": "Hóa đơn",
   "customData.objectTable": "Bàn",
-  "customData.objectShift": "Ca"
+  "customData.objectShift": "Ca",
+  "packageDiff.part.flows": "Quy trình",
+  "packageDiff.part.reactions": "Phản ứng",
+  "packageDiff.part.screens": "Màn hình",
+  "packageDiff.part.timeSlots": "Khung giờ",
+  "packageDiff.part.customFields": "Trường tùy chỉnh",
+  "packageDiff.part.lists": "Danh sách",
+  "packageDiff.part.objectTypes": "Loại đối tượng",
+  "packageDiff.title": "So sánh hai phiên bản",
+  "packageDiff.from": "Phiên bản trước",
+  "packageDiff.to": "Phiên bản sau",
+  "packageDiff.same": "Hai phiên bản chạy cùng màn hình, quy trình, phản ứng và dữ liệu.",
+  "packageDiff.added": "{part}: thêm {id}",
+  "packageDiff.removed": "{part}: bỏ {id}",
+  "packageDiff.changed": "{part}: thay đổi {id}"
 }

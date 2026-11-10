@@ -2659,5 +2659,19 @@
   "customData.objectLine": "Order lines",
   "customData.objectBill": "Bills",
   "customData.objectTable": "Tables",
-  "customData.objectShift": "Shifts"
+  "customData.objectShift": "Shifts",
+  "packageDiff.part.flows": "Flows",
+  "packageDiff.part.reactions": "Reactions",
+  "packageDiff.part.screens": "Screens",
+  "packageDiff.part.timeSlots": "Time slots",
+  "packageDiff.part.customFields": "Custom fields",
+  "packageDiff.part.lists": "Lists",
+  "packageDiff.part.objectTypes": "Object types",
+  "packageDiff.title": "Compare two versions",
+  "packageDiff.from": "Earlier",
+  "packageDiff.to": "Later",
+  "packageDiff.same": "The two versions run the same screens, flows, reactions and data.",
+  "packageDiff.added": "{part}: {id} is added",
+  "packageDiff.removed": "{part}: {id} is removed",
+  "packageDiff.changed": "{part}: {id} is changed"
 }

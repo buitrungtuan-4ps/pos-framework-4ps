@@ -21,6 +21,7 @@ import { apiMessage } from "../lib/errors";
 import { formatInstant } from "../lib/format";
 import { type PackagePin, type PinRequest, pinWrites, tenantPin } from "../lib/package-pin";
 import { ChoiceCard } from "./packages/ChoiceCard";
+import { CompareCard } from "./packages/versions/CompareCard";
 import { StoreChoiceCard } from "./packages/StoreChoiceCard";
 import { StorePackageCard } from "./packages/StorePackageCard";
 
@@ -288,6 +289,9 @@ export function Packages() {
                       onLock={setLocking}
                     />
                   )}
+                </For>
+                <For each={shown().loaded.filter((entry) => entry.versions.length > 1)}>
+                  {(entry) => <CompareCard versions={entry.versions} />}
                 </For>
               </Show>
             </div>

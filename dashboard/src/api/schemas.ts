@@ -142,3 +142,4 @@ export type CustomList = Schemas["CustomList"];
 export type ValueSummary = Schemas["ValueSummary"];
 export type ValueCount = Schemas["ValueCount"];
 export type CustomFieldValue = Schemas["CustomFieldValue"];
+export type PackageContent = Schemas["PackageContent"];
