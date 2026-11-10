@@ -1,12 +1,16 @@
 // The router's half of the package's reactions (`../state/reactions.ts`): a table's order screen
 // entered fires `REACTION_TRIGGER_SCREEN_ENTERED` for the package screen `order`, and a reaction
 // whose act is `ui.screen.open` opens a package screen through the router, as does a package
-// screen's button bound to it (`../package/screen.tsx`). Draws nothing.
+// screen's button bound to it (`../package/screen.tsx`). A screen the running version adds, one
+// the release has no route for, opens at `/screen/:id` (`../screens/VersionScreen.tsx`). Draws
+// nothing.
 
 import { createEffect, on } from "solid-js";
 import { useLocation, useNavigate } from "@solidjs/router";
 
+import { defaultScreen } from "../package/screen";
 import { tableReacts } from "../state/optimistic";
+import { publishedScreen } from "../state/package-screens";
 import { setScreenOpener } from "../state/reactions";
 import { SCREENS } from "../state/screens";
 
@@ -26,11 +30,24 @@ const ROUTES: Readonly<Record<string, string>> = {
 
 const TABLE_ORDER = /^\/table\/([^/]+)$/;
 
+/**
+ * The route the package screen `screenId` is drawn at: its own, for one of the release's screens;
+ * `/screen/:id` for one the running version adds; none for one the till cannot open.
+ */
+export function screenRoute(screenId: string): string | undefined {
+  const own = ROUTES[screenId];
+  if (own !== undefined) {
+    return own;
+  }
+  const added = defaultScreen(screenId) === undefined && publishedScreen(screenId).length > 0;
+  return added ? SCREENS.versionScreen.path.replace(":id", screenId) : undefined;
+}
+
 export function ScreenReactions() {
   const navigate = useNavigate();
   const location = useLocation();
   setScreenOpener((screenId, fired) => {
-    const route = ROUTES[screenId];
+    const route = screenRoute(screenId);
     const path = route?.includes(":id") === true ? (fired.tableId === undefined ? undefined : route.replace(":id", fired.tableId)) : route;
     if (path === undefined) {
       return false;
