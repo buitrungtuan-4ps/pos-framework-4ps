@@ -1,0 +1,22 @@
+# Conditions the console's rule builder writes (dashboard/src/lib/rule-builder.ts), each with an
+# order's facts and whether it holds over them. `crates/pos-rules/tests/console_conditions.rs`
+# compiles and evaluates every line with the evaluator the cloud, the edge and the till run;
+# `rule-builder.test.ts` holds that the builder writes each condition exactly so. A guest count of
+# `-` is an order that has none yet.
+#
+# holds	guest_count	line_count	channel	condition
+true	-	0	SALES_CHANNEL_DINE_IN	order.channel == "SALES_CHANNEL_DINE_IN"
+false	-	0	SALES_CHANNEL_TAKEAWAY	order.channel == "SALES_CHANNEL_DINE_IN"
+true	-	0	SALES_CHANNEL_TAKEAWAY	order.channel in ["SALES_CHANNEL_TAKEAWAY", "SALES_CHANNEL_DELIVERY"]
+false	-	3	SALES_CHANNEL_DINE_IN	order.line_count < 1
+true	-	0	SALES_CHANNEL_DINE_IN	order.line_count < 1
+true	-	0	SALES_CHANNEL_DINE_IN	!has(order.guest_count)
+false	4	0	SALES_CHANNEL_DINE_IN	!has(order.guest_count)
+true	4	0	SALES_CHANNEL_DINE_IN	has(order.guest_count)
+false	-	0	SALES_CHANNEL_DINE_IN	has(order.guest_count) && order.guest_count >= 6
+true	8	0	SALES_CHANNEL_DINE_IN	has(order.guest_count) && order.guest_count >= 6
+false	4	0	SALES_CHANNEL_DINE_IN	has(order.guest_count) && order.guest_count >= 6
+true	8	2	SALES_CHANNEL_DINE_IN	(order.channel == "SALES_CHANNEL_DINE_IN") && (has(order.guest_count) && order.guest_count >= 6)
+false	8	2	SALES_CHANNEL_TAKEAWAY	(order.channel == "SALES_CHANNEL_DINE_IN") && (has(order.guest_count) && order.guest_count >= 6)
+true	-	2	SALES_CHANNEL_TAKEAWAY	(order.channel != "SALES_CHANNEL_DINE_IN") || (!has(order.guest_count))
+false	3	2	SALES_CHANNEL_DINE_IN	(order.channel != "SALES_CHANNEL_DINE_IN") || (!has(order.guest_count))

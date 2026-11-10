@@ -9,10 +9,12 @@
 import type { Accessor, Component } from "solid-js";
 
 import type { PackageRefusal } from "../../../api/schemas";
-import { t, type MessageKey } from "../../../i18n";
+import type { MessageKey } from "../../../i18n";
 import type { PackageDraft } from "../../../lib/package-draft";
+import { DataPanel } from "../data/DataPanel";
+import { FlowsPanel } from "../flows/FlowsPanel";
+import { ReactionsPanel } from "../reactions/ReactionsPanel";
 import { ScreensPart } from "../screens/ScreensPart";
-import { RefusalList } from "./refusals";
 import type { DraftChange } from "./use-draft";
 
 /** What a part's panel is given. */
@@ -37,16 +39,6 @@ export type DesignerPart = {
   readonly Panel: Component<PartProps>;
 };
 
-/** What a part holds, in a line, and its refusals: the panel of a part whose designer is to come. */
-function summary(count: (draft: PackageDraft) => number, key: MessageKey): Component<PartProps> {
-  return (props) => (
-    <div class="flex flex-col gap-3">
-      <p class="text-sm text-ink">{t(key, { count: count(props.draft()) })}</p>
-      <RefusalList refusals={props.refusals} draft={props.draft()} />
-    </div>
-  );
-}
-
 /** Every part, in the order the tabs show them. */
 export const DESIGNER_PARTS: readonly DesignerPart[] = [
   {
@@ -56,15 +48,21 @@ export const DESIGNER_PARTS: readonly DesignerPart[] = [
     Panel: ScreensPart,
   },
   {
+    key: "flows",
+    label: "designer.part.flows",
+    field: "flows",
+    Panel: FlowsPanel,
+  },
+  {
+    key: "reactions",
+    label: "designer.part.reactions",
+    field: "reactions",
+    Panel: ReactionsPanel,
+  },
+  {
     key: "data",
     label: "designer.part.data",
     field: "data",
-    Panel: summary(
-      (draft) =>
-        (draft.data?.custom_fields?.length ?? 0) +
-        (draft.data?.object_types?.length ?? 0) +
-        (draft.data?.lists?.length ?? 0),
-      "designer.dataSummary",
-    ),
+    Panel: DataPanel,
   },
 ];

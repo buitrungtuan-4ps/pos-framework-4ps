@@ -77,7 +77,7 @@ const DOCS: [&str; 10] = [
 /// to one is a change to the crate: it sets `rust` beside its own class, and puts the crate in the
 /// affected set. A test in this module scans the crates for such reads and fails on one missing
 /// here.
-pub const READ_BY: [(&str, &str); 20] = [
+pub const READ_BY: [(&str, &str); 21] = [
     ("docs/snapshots/events.txt", "pos-proto"),
     ("docs/snapshots/actions.txt", "pos-proto"),
     ("ui/src/package/actions.ts", "pos-proto"),
@@ -98,6 +98,7 @@ pub const READ_BY: [(&str, &str); 20] = [
     ("docs/openapi-admin.json", "pos-cloud"),
     ("docs/openapi-device.json", "pos-cloud"),
     ("dashboard/src/i18n/", "pos-cloud"),
+    ("dashboard/tests/rule-conditions.txt", "pos-rules"),
 ];
 
 /// The crates in [`READ_BY`] that read `path`.
