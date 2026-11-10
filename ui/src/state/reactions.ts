@@ -77,6 +77,14 @@ export function setScreenOpener(opener: (screenId: string, fired: Fired) => bool
   openScreen = opener;
 }
 
+/**
+ * Opens the package screen `screenId` for a button a package screen draws, through the router a
+ * reaction uses; `false` when the till cannot (no router yet, or a screen that needs a table).
+ */
+export function openPackageScreen(screenId: string): boolean {
+  return openScreen?.(screenId, { channel: "", facts: {} }) ?? false;
+}
+
 /** Whether reactions are running now, or the screen being entered is one a reaction opened. */
 let running = 0;
 let openedByReaction: string | undefined;
