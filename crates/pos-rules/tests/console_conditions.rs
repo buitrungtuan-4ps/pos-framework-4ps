@@ -17,24 +17,23 @@ use pos_rules::{Fact, Facts, Rules, Variable};
 /// The console's file, read here so the two cannot drift: `xtask`'s `READ_BY` lists it for this crate.
 const VECTORS: &str = include_str!("../../../dashboard/tests/rule-conditions.txt");
 
-/// An order's facts as `pos-edge-app` and the till fill them.
-fn facts(guest_count: &str, line_count: &str, channel: &str) -> Facts {
+/// An order's facts as `pos-edge-app` and the till fill them, or why a vector's numbers do not
+/// read.
+fn facts(guest_count: &str, line_count: &str, channel: &str) -> Result<Facts, String> {
+    let count = |text: &str| {
+        text.parse::<i64>()
+            .map_err(|error| format!("`{text}` is not a count: {error}"))
+    };
     let mut order = BTreeMap::from([
         ("channel".to_owned(), Fact::Text(channel.to_owned())),
-        (
-            "line_count".to_owned(),
-            Fact::Int(line_count.parse().expect("a line count")),
-        ),
+        ("line_count".to_owned(), Fact::Int(count(line_count)?)),
     ]);
     if guest_count != "-" {
-        order.insert(
-            "guest_count".to_owned(),
-            Fact::Int(guest_count.parse().expect("a guest count")),
-        );
+        order.insert("guest_count".to_owned(), Fact::Int(count(guest_count)?));
     }
-    Facts::new()
+    Ok(Facts::new()
         .with(Variable::Order, Fact::Map(order))
-        .with(Variable::Channel, Fact::Text(channel.to_owned()))
+        .with(Variable::Channel, Fact::Text(channel.to_owned())))
 }
 
 #[test]
@@ -52,8 +51,10 @@ fn every_condition_the_console_writes_compiles_and_answers_as_meant() {
         let compiled = rules
             .compile(condition)
             .unwrap_or_else(|error| panic!("`{condition}` compiles: {error}"));
+        let facts = facts(guest_count, line_count, channel)
+            .unwrap_or_else(|error| panic!("a vector's facts read: {error}"));
         let answer = compiled
-            .evaluate(&facts(guest_count, line_count, channel))
+            .evaluate(&facts)
             .unwrap_or_else(|error| panic!("`{condition}` answers: {error}"));
         assert_eq!(
             answer.to_string(),
