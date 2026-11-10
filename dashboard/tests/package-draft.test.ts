@@ -20,8 +20,24 @@ const VERSION = {
     version_label: "March",
     min_edge_version: "0.14.1",
     time_slots: [],
-    flows: [],
-    reactions: [],
+    flows: [
+      {
+        body: {
+          flow_id: "seat",
+          start_action_id: "sales.order.open",
+          steps: [{ step_id: "guests", screen_id: "guest_count", kind: "STEP_KIND_REQUIRED" }],
+        },
+      },
+    ],
+    reactions: [
+      {
+        body: {
+          reaction_id: "open_menu",
+          when: "REACTION_TRIGGER_ORDER_OPENED",
+          then: { action_id: "ui.screen.open", params: { screen_id: "menu" } },
+        },
+      },
+    ],
     data: {},
     screens: [{ selector: {}, body: { screen_id: "welcome", root: { component_id: "stack" } } }],
   },
@@ -38,12 +54,14 @@ describe("a package draft", () => {
   it("opens a version with every part copied, and sends it with the tenant and a trimmed label", () => {
     const draft = draftFromVersion(VERSION);
     expect(draft.screens).toEqual(VERSION.content.screens);
+    expect(draft.flows).toEqual(VERSION.content.flows);
+    expect(draft.reactions).toEqual(VERSION.content.reactions);
     expect(draftRequest("01TENANT", { ...draft, version_label: " April " })).toMatchObject({
       tenant_id: "01TENANT",
       version_label: "April",
       screens: VERSION.content.screens,
     });
-    expect(blankDraft()).toEqual({ version_label: "", time_slots: [], data: {}, screens: [] });
+    expect(blankDraft()).toEqual({ version_label: "", time_slots: [], data: {}, screens: [], flows: [], reactions: [] });
   });
 
   it("gives a part the refusals of its field and the fields below it, and no other", () => {

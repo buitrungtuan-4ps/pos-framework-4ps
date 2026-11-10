@@ -159,6 +159,15 @@ impl Condition {
         self.program.references().has_variable(variable.as_str())
     }
 
+    /// The first view it reads that the edge does not hold ([`Variable::EDGE`]), so an edge guard
+    /// may not be it; `None` when it reads only the edge's (ADR-0192 decision 4).
+    #[must_use]
+    pub fn till_view(&self) -> Option<Variable> {
+        Variable::ALL
+            .into_iter()
+            .find(|variable| !Variable::EDGE.contains(variable) && self.reads(*variable))
+    }
+
     /// Answers the condition over `facts`.
     ///
     /// # Errors

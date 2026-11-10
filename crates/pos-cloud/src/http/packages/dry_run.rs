@@ -17,9 +17,11 @@ use axum::response::{IntoResponse, Response};
 use pos_cloud_api::console::require_permission;
 use pos_cloud_api::response::{api_error_with_details, parse_ulid_fields};
 use pos_cloud_config::packages::{PackageStore, min_edge_version};
+use pos_core::flow::{FlowRefusal, check_flows};
 use pos_core::package::{
     ContentRefusal, EvolutionRefusal, ScreenFault, check_content, check_evolution,
 };
+use pos_core::reaction::{ReactionRefusal, check_reactions};
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{PackageId, PackageVersionId, TenantId};
@@ -28,6 +30,7 @@ use pos_proto::text::ReleaseTag;
 use pos_proto::ulid::Ulid;
 use serde::Serialize;
 
+use super::conditions::PublishConditions;
 use super::{PackageState, PackageVersionRequest, package_error_response};
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
@@ -44,6 +47,18 @@ pub(super) enum Refusal {
     NotAdditive(EvolutionRefusal),
     /// It is over [`CONTENT_BYTES_MAX`] (ADR-0189 decision 3).
     TooLarge,
+    /// A flow is refused (ADR-0192 decision 2): `index` is its variant's position in `flows`, or
+    /// `None` when the refusal is about the flows together.
+    Flow {
+        index: Option<usize>,
+        refusal: FlowRefusal,
+    },
+    /// A reaction is refused (ADR-0193 decision 5): `index` is its variant's position in
+    /// `reactions`, or `None` when the refusal is about several together.
+    Reaction {
+        index: Option<usize>,
+        refusal: ReactionRefusal,
+    },
 }
 
 impl Refusal {
@@ -61,6 +76,16 @@ impl Refusal {
                 &[(refusal.field(), "NOT_ADDITIVE")],
             ),
             Self::TooLarge => FieldRefusal::new(TOO_LARGE, "content", "TOO_LARGE").into_response(),
+            Self::Flow { refusal, .. } => api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                format!("flows: {refusal}"),
+                &[("flows", "INVALID")],
+            ),
+            Self::Reaction { refusal, .. } => api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                format!("reactions: {refusal}"),
+                &[("reactions", "INVALID")],
+            ),
         }
     }
 
@@ -70,6 +95,10 @@ impl Refusal {
             Self::Content(refusal) => (refusal.field(), refusal.code(), refusal.to_string()),
             Self::NotAdditive(refusal) => (refusal.field(), "NOT_ADDITIVE", refusal.to_string()),
             Self::TooLarge => ("content", "TOO_LARGE", TOO_LARGE.to_owned()),
+            Self::Flow { refusal, .. } => ("flows", flow_reason(refusal), refusal.to_string()),
+            Self::Reaction { refusal, .. } => {
+                ("reactions", reaction_reason(refusal), refusal.to_string())
+            }
         };
         let mut located = PackageRefusal {
             field: field.to_owned(),
@@ -78,7 +107,22 @@ impl Refusal {
             screen_index: None,
             node_index: None,
             name: None,
+            flow_index: None,
+            step_id: None,
+            reaction_index: None,
         };
+        match self {
+            Self::Flow { index, refusal } => {
+                located.flow_index = *index;
+                located.step_id = flow_step(refusal).map(str::to_owned);
+                located.name = flow_name(refusal).map(str::to_owned);
+            }
+            Self::Reaction { index, refusal } => {
+                located.reaction_index = *index;
+                located.name = reaction_name(refusal).map(str::to_owned);
+            }
+            _ => {}
+        }
         if let Self::Content(ContentRefusal::Screen(screen)) = self {
             let (reason, node, name) = screen_fault(screen.fault);
             located.reason = String::from(reason);
@@ -110,6 +154,129 @@ const fn screen_fault(fault: ScreenFault) -> (&'static str, Option<usize>, Optio
     }
 }
 
+/// A flow refusal's stable reason token.
+const fn flow_reason(refusal: &FlowRefusal) -> &'static str {
+    match refusal {
+        FlowRefusal::TooManyFlows(_) => "TOO_MANY_FLOWS",
+        FlowRefusal::StepCount { .. } => "STEP_COUNT",
+        FlowRefusal::BadId(_) => "BAD_ID",
+        FlowRefusal::DuplicateStep { .. } => "DUPLICATE_STEP",
+        FlowRefusal::NotOneThing { .. } => "NOT_ONE_THING",
+        FlowRefusal::UnknownKind { .. } => "UNKNOWN_KIND",
+        FlowRefusal::UnknownAction(_) => "UNKNOWN_ACTION",
+        FlowRefusal::UnknownScreen(_) => "UNKNOWN_SCREEN",
+        FlowRefusal::UnknownPrerequisite { .. } => "UNKNOWN_PREREQUISITE",
+        FlowRefusal::Cycle { .. } => "CYCLE",
+        FlowRefusal::Condition { .. } => "CONDITION",
+    }
+}
+
+/// The step a flow refusal is about, when it is about one. A cycle names the first step caught in
+/// it.
+fn flow_step(refusal: &FlowRefusal) -> Option<&str> {
+    match refusal {
+        FlowRefusal::DuplicateStep { step_id, .. }
+        | FlowRefusal::NotOneThing { step_id, .. }
+        | FlowRefusal::UnknownKind { step_id, .. }
+        | FlowRefusal::UnknownPrerequisite { step_id, .. }
+        | FlowRefusal::Condition { step_id, .. } => Some(step_id),
+        FlowRefusal::Cycle { step_ids, .. } => step_ids.first().map(String::as_str),
+        FlowRefusal::TooManyFlows(_)
+        | FlowRefusal::StepCount { .. }
+        | FlowRefusal::BadId(_)
+        | FlowRefusal::UnknownAction(_)
+        | FlowRefusal::UnknownScreen(_) => None,
+    }
+}
+
+/// The id, action, screen or prerequisite a flow refusal names, when it names one.
+fn flow_name(refusal: &FlowRefusal) -> Option<&str> {
+    match refusal {
+        FlowRefusal::BadId(name)
+        | FlowRefusal::UnknownAction(name)
+        | FlowRefusal::UnknownScreen(name) => Some(name),
+        FlowRefusal::UnknownPrerequisite { prerequisite, .. } => Some(prerequisite),
+        _ => None,
+    }
+}
+
+/// A reaction refusal's stable reason token.
+const fn reaction_reason(refusal: &ReactionRefusal) -> &'static str {
+    match refusal {
+        ReactionRefusal::BadId(_) => "BAD_ID",
+        ReactionRefusal::UnknownTrigger(_) => "UNKNOWN_TRIGGER",
+        ReactionRefusal::Qualifier(_) => "QUALIFIER",
+        ReactionRefusal::UnknownTarget { .. } => "UNKNOWN_TARGET",
+        ReactionRefusal::TooManyForTrigger { .. } => "TOO_MANY_FOR_TRIGGER",
+        ReactionRefusal::UnknownAction(_) => "UNKNOWN_ACTION",
+        ReactionRefusal::ActNotAllowed { .. } => "ACT_NOT_ALLOWED",
+        ReactionRefusal::Param { .. } => "PARAM",
+        ReactionRefusal::Condition { .. } => "CONDITION",
+    }
+}
+
+/// The id, target, action or parameter a reaction refusal names, when it names one.
+fn reaction_name(refusal: &ReactionRefusal) -> Option<&str> {
+    match refusal {
+        ReactionRefusal::BadId(name)
+        | ReactionRefusal::UnknownTrigger(name)
+        | ReactionRefusal::UnknownAction(name) => Some(name),
+        ReactionRefusal::UnknownTarget { target, .. } => Some(target),
+        ReactionRefusal::ActNotAllowed { action_id, .. } => Some(action_id),
+        ReactionRefusal::Param { param, .. } => Some(param),
+        ReactionRefusal::Qualifier(_)
+        | ReactionRefusal::TooManyForTrigger { .. }
+        | ReactionRefusal::Condition { .. } => None,
+    }
+}
+
+/// The first refusal of a version's flows, then of its reactions: each variant alone, so a
+/// refusal says which, then all of them together for what only the whole can break (how many flows,
+/// how many reactions to one trigger). A step's or a reaction's screen is not resolved here, as the
+/// edge does not resolve it on apply: one the version does not declare is drawn from the release's
+/// default package (ADR-0190).
+fn first_part_refusal(content: &PackageContent) -> Option<Refusal> {
+    let conditions = PublishConditions::new();
+    let any_screen = |_screen: &str| true;
+    let flows = &content.flows;
+    let flow = flows
+        .iter()
+        .enumerate()
+        .find_map(|(index, variant)| {
+            check_flows(core::slice::from_ref(variant), &any_screen, &conditions)
+                .err()
+                .map(|refusal| (Some(index), refusal))
+        })
+        .or_else(|| {
+            check_flows(flows, &any_screen, &conditions)
+                .err()
+                .map(|refusal| (None, refusal))
+        });
+    if let Some((index, refusal)) = flow {
+        return Some(Refusal::Flow { index, refusal });
+    }
+    let reactions = &content.reactions;
+    reactions
+        .iter()
+        .enumerate()
+        .find_map(|(index, variant)| {
+            check_reactions(
+                core::slice::from_ref(variant),
+                flows,
+                &any_screen,
+                &conditions,
+            )
+            .err()
+            .map(|refusal| (Some(index), refusal))
+        })
+        .or_else(|| {
+            check_reactions(reactions, flows, &any_screen, &conditions)
+                .err()
+                .map(|refusal| (None, refusal))
+        })
+        .map(|(index, refusal)| Refusal::Reaction { index, refusal })
+}
+
 /// What a publish would store for `request`, under `package_version_id`, with the minimum edge
 /// release the server computes.
 pub(super) fn version_content(
@@ -123,19 +290,17 @@ pub(super) fn version_content(
         version_label: request.version_label.trim().to_owned(),
         min_edge_version: ReleaseTag::new(""),
         time_slots: request.time_slots,
-        // A version is authored with no flows or reactions until the console designs them
-        // (ADR-0192, ADR-0193, phase 4).
-        flows: Vec::new(),
+        flows: request.flows,
         screens: request.screens,
         data: request.data,
-        reactions: Vec::new(),
+        reactions: request.reactions,
     };
     content.min_edge_version = min_edge_version(&content);
     content
 }
 
 /// The first reason `content` cannot be published, in the order the publish checks: the content,
-/// then that its data only adds to every earlier version's, then its size.
+/// then its flows and reactions, then that its data only adds to every earlier version's, then its size.
 ///
 /// # Errors
 ///
@@ -147,6 +312,9 @@ pub(super) async fn first_refusal<P: PackageStore>(
 ) -> Result<Option<Refusal>, Response> {
     if let Err(refusal) = check_content(content) {
         return Ok(Some(Refusal::Content(refusal)));
+    }
+    if let Some(refusal) = first_part_refusal(content) {
+        return Ok(Some(refusal));
     }
     let earlier = packages
         .list_versions(tenant_id, content.package_id)
@@ -194,10 +362,25 @@ pub(super) struct PackageRefusal {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     node_index: Option<usize>,
-    /// The property or act parameter at fault, when the fault names one.
+    /// The property or act parameter at fault, when the fault names one; for a flow or a reaction,
+    /// the id, action, screen, prerequisite, target or parameter its fault names.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     name: Option<String>,
+    /// For a flow, the variant's position in `flows`. Absent on a flow refusal about the flows
+    /// together, such as too many.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    flow_index: Option<usize>,
+    /// For a flow's step, its `step_id`; a cycle names the first step caught in it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    step_id: Option<String>,
+    /// For a reaction, the variant's position in `reactions`. Absent on a refusal about several
+    /// together, such as too many for one trigger.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    reaction_index: Option<usize>,
 }
 
 #[utoipa::path(

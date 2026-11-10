@@ -99,6 +99,7 @@ flowchart LR
   pos_cloud --> pos_ports
   pos_cloud --> pos_proto
   pos_cloud --> pos_providers
+  pos_cloud --> pos_rules
   pos_cloud --> shipping_ahamove
   pos_cloud --> shipping_grabexpress
   pos_cloud --> store_postgres
@@ -253,7 +254,7 @@ flowchart LR
 | `pos-proto` | core | `crates/pos-proto` | Wire types, the event catalogue and envelope, value types, and PROTOCOL_VERSION. | `cloud-sync-http`, `erp-sap`, `link-nats`, `metrics-vm`, `minimal-edge`, `pos-cloud`, `pos-cloud-api`, `pos-cloud-catalog`, `pos-cloud-config`, `pos-cloud-devices`, `pos-cloud-floor`, `pos-cloud-inventory`, `pos-cloud-people`, `pos-cloud-reports`, `pos-contract-tests`, `pos-core`, `pos-country`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-edge`, `pos-edge-app`, `pos-edge-printing`, `pos-fakes`, `pos-ports`, `pos-print-agent`, `pos-providers`, `pos-till-rules`, `printer-escpos`, `shipping-ahamove`, `shipping-grabexpress`, `store-postgres`, `store-sqlite` | `pos-proto` |
 | `pos-providers` | port | `crates/pos-providers` | The vendor catalogue: the descriptor each vendor adapter exports, and the registry built from them. | `erp-sap`, `pos-cloud`, `shipping-ahamove`, `shipping-grabexpress` | — |
 | `pos-render` | app | `crates/pos-render` | Turns a line of text in any script into the 1-bit raster a thermal printer prints. | `pos-edge`, `pos-edge-printing` | — |
-| `pos-rules` | core | `crates/pos-rules` | Compiles and evaluates a package's CEL conditions in a restricted dialect, the same on the cloud, the edge and the till. | `pos-edge-app`, `pos-till-rules` | — |
+| `pos-rules` | core | `crates/pos-rules` | Compiles and evaluates a package's CEL conditions in a restricted dialect, the same on the cloud, the edge and the till. | `pos-cloud`, `pos-edge-app`, `pos-till-rules` | — |
 | `pos-simulator` | testing | `crates/pos-simulator` | The virtual-fleet simulator: an executable capacity model and deterministic fleet scenarios. | — | — |
 | `pos-till-rules` | adapter | `crates/pos-till-rules` | The till's rules module: pos-rules and pos-core's flow engine compiled to wasm32, answered over a JSON boundary. | — | — |
 | `printer-escpos` | adapter | `crates/adapters/printer-escpos` | The ESC/POS thermal-printer adapter for the PrinterDriver port. | `pos-edge`, `pos-edge-printing`, `pos-print-agent` | — |

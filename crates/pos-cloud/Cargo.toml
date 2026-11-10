@@ -86,6 +86,11 @@ metrics-vm = { path = "../adapters/metrics-vm" }
 # publishing (ADR-0033), reusing the domain's own rule set so the cloud and edge cannot disagree.
 # pos-core is pure (the dependency-rule test keeps it I/O-free), so composing it here is sound.
 pos-core = { path = "../pos-core" }
+# A version's conditions are compiled at publish with the evaluator the edge and the till run
+# ([ADR-0193](../../docs/adr/0193-conditions-and-reactions-are-written-in-cel.md) decision 2: "the
+# cloud uses pos-rules to validate at publish"). A workspace crate whose one dependency, `cel`, is
+# already in the lock through the edge, so the graph gains no crate.
+pos-rules = { path = "../pos-rules" }
 
 # Country modules the cloud surfaces as master data (ADR-0027, ADR-0074): the currency picker and the
 # locale catalogue read from the registry built over these. Selected per binary as features like the

@@ -42,6 +42,9 @@ fn package_app(admin: FakeAdmin, audit: Arc<dyn AuditRecorder>) -> axum::Router 
 #[path = "package_screens.rs"]
 mod screens;
 
+#[path = "package_flows.rs"]
+mod flows;
+
 const LUNCH: &str = r#"{"time_slot_id":"lunch","label_key":"package.slot.lunch","schedules":[{"days":31,"start_minute":660,"end_minute":840}]}"#;
 
 fn version_body(tenant: &str, label: &str, slots: &str) -> serde_json::Value {
