@@ -1,16 +1,51 @@
-// A tenant's packages and their published versions (ADR-0189), read to pin them. A pin is the
-// `package` node's settings, written with `api.putSetting` in the order `lib/package-pin.ts` gives;
-// publishing a version is the package builder's, not this console's yet. Typed from the generated
-// OpenAPI schema (ADR-0177).
+// A tenant's packages and their published versions (ADR-0189): created and published from the
+// package designer, and read to pin them. A pin is the `package` node's settings, written with
+// `api.putSetting` in the order `lib/package-pin.ts` gives. Typed from the generated OpenAPI schema
+// (ADR-0177).
 
 import { requestJson } from "./client";
-import type { PackageRecord, PackageVersionRecord, StorePackage } from "./schemas";
+import type {
+  PackageRecord,
+  PackageVersionDryRun,
+  PackageVersionRecord,
+  PackageVersionRequest,
+  StorePackage,
+} from "./schemas";
 
 /** `GET /admin/packages`: the tenant's packages, in id order. */
 export const listPackages = (tenantId: string): Promise<PackageRecord[]> =>
   requestJson<PackageRecord[]>(
     "GET",
     `/admin/packages?tenant_id=${encodeURIComponent(tenantId)}`,
+  );
+
+/** `POST /admin/packages`: a new package, its id minted by the server. */
+export const createPackage = (tenantId: string, name: string): Promise<PackageRecord> =>
+  requestJson<PackageRecord>("POST", "/admin/packages", { tenant_id: tenantId, name });
+
+/**
+ * `POST /admin/packages/{package_id}/versions/dry-run`: what a publish of `request` would find,
+ * and where, with nothing stored (ADR-0190 decision 8).
+ */
+export const dryRunPackageVersion = (
+  packageId: string,
+  request: PackageVersionRequest,
+): Promise<PackageVersionDryRun> =>
+  requestJson<PackageVersionDryRun>(
+    "POST",
+    `/admin/packages/${encodeURIComponent(packageId)}/versions/dry-run`,
+    request,
+  );
+
+/** `POST /admin/packages/{package_id}/versions`: publishes `request` as a version, for good. */
+export const publishPackageVersion = (
+  packageId: string,
+  request: PackageVersionRequest,
+): Promise<PackageVersionRecord> =>
+  requestJson<PackageVersionRecord>(
+    "POST",
+    `/admin/packages/${encodeURIComponent(packageId)}/versions`,
+    request,
   );
 
 /** `GET /admin/packages/{package_id}/versions`: its published versions, in publish order. */

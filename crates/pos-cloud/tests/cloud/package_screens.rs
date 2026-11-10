@@ -10,14 +10,14 @@ use axum::http::StatusCode;
 use pos_cloud::audit::NoopAuditRecorder;
 use pos_cloud::auth::admin::AdminRole;
 
-use crate::packages::{package_app, send, version_body};
+use super::{package_app, send, version_body};
 use crate::{
     admin_cookie, get_with_cookie, post_with_cookie, provisioned_admin, role_session_cookie,
     ulid_text,
 };
 
 /// A screen: a frame holding a heading and a button that opens another screen.
-fn screens(heading: serde_json::Value) -> serde_json::Value {
+fn screens(heading: &serde_json::Value) -> serde_json::Value {
     serde_json::json!([{
         "body": {
             "screen_id": "welcome",
@@ -38,7 +38,7 @@ fn screens(heading: serde_json::Value) -> serde_json::Value {
     }])
 }
 
-fn screens_body(tenant: &str, heading: serde_json::Value) -> serde_json::Value {
+fn screens_body(tenant: &str, heading: &serde_json::Value) -> serde_json::Value {
     let mut body = version_body(tenant, "March", "[]");
     body["screens"] = screens(heading);
     body
@@ -69,7 +69,7 @@ async fn a_dry_run_says_where_a_screen_is_refused_and_stores_nothing() {
 
     let untitled = screens_body(
         &tenant,
-        serde_json::json!({ "component_id": "page_header" }),
+        &serde_json::json!({ "component_id": "page_header" }),
     );
     let (status, verdict) = send(&router, post_with_cookie(&dry_run, &untitled, &cookie)).await;
     assert_eq!(status, StatusCode::OK, "{verdict}");
@@ -86,7 +86,7 @@ async fn a_dry_run_says_where_a_screen_is_refused_and_stores_nothing() {
 
     let titled = screens_body(
         &tenant,
-        serde_json::json!({ "component_id": "page_header", "properties": { "title_key": "welcome.title" } }),
+        &serde_json::json!({ "component_id": "page_header", "properties": { "title_key": "welcome.title" } }),
     );
     let (status, verdict) = send(&router, post_with_cookie(&dry_run, &titled, &cookie)).await;
     assert_eq!(status, StatusCode::OK, "{verdict}");
@@ -101,7 +101,7 @@ async fn a_dry_run_says_where_a_screen_is_refused_and_stores_nothing() {
     assert_eq!(status, StatusCode::CREATED, "{published}");
     assert_eq!(
         published["content"]["screens"],
-        screens(titled["screens"][0]["body"]["root"]["children"][0].clone())
+        screens(&titled["screens"][0]["body"]["root"]["children"][0])
     );
 }
 

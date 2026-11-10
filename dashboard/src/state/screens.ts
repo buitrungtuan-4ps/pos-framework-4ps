@@ -286,6 +286,18 @@ export const SCREENS = {
     inPalette: true,
     icon: "package",
   },
+  // The package designer (ADR-0189, ADR-0190 decision 8): a version opened as a draft, its parts
+  // edited, checked by the cloud and published. Owner/admin only, matching the server's
+  // console.packages.manage. `layout-grid` because what it builds is the till's screens.
+  packageDesigner: {
+    path: "/packages/design",
+    key: "nav.packageDesigner",
+    scope: "tenant",
+    roles: ADMIN_MANAGERS,
+    tenantScoped: true,
+    inPalette: true,
+    icon: "layout-grid",
+  },
   settings: {
     path: "/settings",
     key: "nav.settings",
@@ -470,7 +482,7 @@ export const NAV_GROUPS: readonly {
   // What the tills run: the package versions HQ publishes and pins (ADR-0189). Its own group
   // because the settings group is full and a package is not a setting: it is the product a store
   // runs, and its screens and flows (ADR-0190, ADR-0192) join it here.
-  { key: "nav.group.packages", items: ["packages"] },
+  { key: "nav.group.packages", items: ["packages", "packageDesigner"] },
   // Who and what may reach this console, or be reached from it: console users, machine keys, the
   // endpoints it calls out to, and the vendors it connects to. All four answer "who is allowed in,
   // or out". Integrations moved here from Settings when Shared settings filled that group's sixth

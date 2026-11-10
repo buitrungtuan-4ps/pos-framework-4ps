@@ -33,6 +33,9 @@ use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::http::{FieldRefusal, Json, not_found};
 
+/// What a version over [`CONTENT_BYTES_MAX`] is told.
+const TOO_LARGE: &str = "a version's content is at most 1 MiB";
+
 /// Why a version's content cannot be published.
 pub(super) enum Refusal {
     /// The content itself is refused (ADR-0189, ADR-0190, ADR-0194).
@@ -57,48 +60,31 @@ impl Refusal {
                 refusal.to_string(),
                 &[(refusal.field(), "NOT_ADDITIVE")],
             ),
-            Self::TooLarge => FieldRefusal::new(
-                "a version's content is at most 1 MiB",
-                "content",
-                "TOO_LARGE",
-            )
-            .into_response(),
+            Self::TooLarge => FieldRefusal::new(TOO_LARGE, "content", "TOO_LARGE").into_response(),
         }
     }
 
     /// The refusal as a dry run reports it.
     fn located(&self) -> PackageRefusal {
+        let (field, reason, message) = match self {
+            Self::Content(refusal) => (refusal.field(), refusal.code(), refusal.to_string()),
+            Self::NotAdditive(refusal) => (refusal.field(), "NOT_ADDITIVE", refusal.to_string()),
+            Self::TooLarge => ("content", "TOO_LARGE", TOO_LARGE.to_owned()),
+        };
         let mut located = PackageRefusal {
-            field: String::new(),
-            reason: String::new(),
-            message: String::new(),
+            field: field.to_owned(),
+            reason: reason.to_owned(),
+            message,
             screen_index: None,
             node_index: None,
             name: None,
         };
-        match self {
-            Self::Content(refusal) => {
-                refusal.field().clone_into(&mut located.field);
-                located.message = refusal.to_string();
-                located.reason = refusal.code().to_owned();
-                if let ContentRefusal::Screen(screen) = refusal {
-                    let (reason, node, name) = screen_fault(screen.fault);
-                    reason.clone_into(&mut located.reason);
-                    located.screen_index = Some(screen.screen);
-                    located.node_index = node;
-                    located.name = name.map(str::to_owned);
-                }
-            }
-            Self::NotAdditive(refusal) => {
-                refusal.field().clone_into(&mut located.field);
-                located.message = refusal.to_string();
-                "NOT_ADDITIVE".clone_into(&mut located.reason);
-            }
-            Self::TooLarge => {
-                "content".clone_into(&mut located.field);
-                "a version's content is at most 1 MiB".clone_into(&mut located.message);
-                "TOO_LARGE".clone_into(&mut located.reason);
-            }
+        if let Self::Content(ContentRefusal::Screen(screen)) = self {
+            let (reason, node, name) = screen_fault(screen.fault);
+            located.reason = String::from(reason);
+            located.screen_index = Some(screen.screen);
+            located.node_index = node;
+            located.name = name.map(str::to_owned);
         }
         located
     }

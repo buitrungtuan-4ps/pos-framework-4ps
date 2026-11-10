@@ -796,8 +796,7 @@ impl Modify for SessionCookie {
 ///
 /// Axum's `Router` does not expose its routes, so the registered set is recovered from the source
 /// the way the `xtask` gates read the tree: take each `.route(` and the next string literal after
-/// it. That literal is the path, whether rustfmt kept it on the same line or wrapped it onto the
-/// next.
+/// it. That literal is the path, whether rustfmt kept it on its line or wrapped it onto the next.
 ///
 /// Deliberately not a regex: the tree carries no regex dependency, and the grammar here is one
 /// token wide.
