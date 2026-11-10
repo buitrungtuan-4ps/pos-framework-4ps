@@ -2147,6 +2147,7 @@
           "receipt_language",
           "receipt_second_language",
           "opening_float_minor",
+          "device_class",
           "status",
           "version"
         ],
@@ -2175,6 +2176,13 @@
               "null"
             ],
             "description": "Whether an operator says this printer cuts its paper. `None` until somebody says, which the\nedge reads as `true`."
+          },
+          "device_class": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "On a `terminal`, the class of device an operator says this till runs on, as its wire token\n(`DEVICE_CLASS_…`,\n[ADR-0201](../../../docs/adr/0201-the-till-runs-on-every-device-class.md) decision 3).\n`None` until somebody says, which the till reads from its screen."
           },
           "drawer_attached": {
             "type": "boolean",

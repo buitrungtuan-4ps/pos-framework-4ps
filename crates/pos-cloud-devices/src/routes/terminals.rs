@@ -10,6 +10,7 @@ use axum::response::{IntoResponse, Response};
 use pos_cloud_api::console::{audit_action, mint_ulid, require_permission};
 use pos_cloud_api::response::{api_error_with_details, parse_ulid_fields, service_unavailable};
 use pos_proto::determinism::ClockSource;
+use pos_proto::devices::DeviceClass;
 use pos_proto::ids::{StoreId, TenantId};
 use pos_proto::printing::{ReceiptLanguage, ReceiptSecondLanguage};
 use pos_proto::{ErrorStatus, WireEnum};
@@ -506,6 +507,133 @@ where
         (tenant_id, id),
         "device_proposal.set_float",
         serde_json::json!({ "opening_float_minor": request.opening_float_minor }),
+        written,
+    )
+    .await
+}
+
+/// An operator says which class of device an approved terminal is.
+///
+/// The class is the till's whole class state, as the float is its float state: an absent or `null`
+/// class is "read it from the screen" again.
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
+pub(super) struct SetDeviceClassRequest {
+    /// The tenant the terminal belongs to (a 26-character ULID).
+    tenant_id: String,
+    /// The class, as its wire token (`DEVICE_CLASS_TERMINAL`, `_TABLET`, `_PHONE`,
+    /// `_KITCHEN_DISPLAY` or `_KIOSK`), or `null` for the class the till's screen says.
+    #[serde(default)]
+    device_class: Option<String>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/admin/devices/proposals/{id}/device-class",
+    security(("session_cookie" = [])),
+    extensions(("x-permission" = json!("console.devices.manage"))),
+    params(
+        ("id" = String, Path, description = "The terminal's 26-character ULID"),
+        ("If-Match" = String, Header, description = "The version the terminal was read at \
+                                                     (ADR-0094). Required; a wildcard is refused"),
+    ),
+    request_body(
+        content = SetDeviceClassRequest, description = "`tenant_id`; and `device_class`, a \
+                       `DEVICE_CLASS_…` token other than `DEVICE_CLASS_UNSPECIFIED`, or `null` or \
+                       absent for the class the till's screen says. It is the till's whole class \
+                       state, so a class left out is the screen's again",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 204, description = "Saved. It reaches the store on the next devices publish, \
+                                      `POST /admin/devices/publish`, and the till bound to the \
+                                      terminal draws a package screen's layout for that class; \
+                                      an edge older than 0.14.1 ignores it and the till reads its \
+                                      screen"),
+        (status = 400, description = "The device is not a terminal (`id`, `WRONG_KIND`), the \
+                                      class is not one this release knows (`device_class`, \
+                                      `INVALID_ENUM_VALUE`), an id is not a ULID, or If-Match is \
+                                      absent, malformed, or a wildcard", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 403, description = "The role lacks console.devices.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 404, description = "The tenant has no approved device with that id", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 412, description = "The terminal changed since you read it: re-read it and try \
+                                      again", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 503, description = "The device store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
+    ),
+    tag = "printers",
+)]
+/// A super-admin says which class of device a till is
+/// ([ADR-0201](../../../docs/adr/0201-the-till-runs-on-every-device-class.md) decision 3).
+///
+/// The float's guards, for the same reasons: `ManageDevices`, an `If-Match`, and an audit entry,
+/// since the class decides which layout of every package screen the till draws.
+pub(super) async fn admin_set_terminal_device_class<D, A, K, C>(
+    State(state): State<DeviceState<D, A, K, C>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<SetDeviceClassRequest>,
+) -> Response
+where
+    D: DeviceProposalStore + Clone + Send + Sync + 'static,
+    A: AdminStore + Clone + Send + Sync + 'static,
+    K: Clone + Send + Sync + 'static,
+    C: ClockSource + Clone + Send + Sync + 'static,
+{
+    let context = match require_permission(
+        &state.admin,
+        &state.clock,
+        &headers,
+        ConsolePermission::ManageDevices,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(denied) => return denied,
+    };
+    let (tenant_id, id) = match parse_ulid_fields([("tenant_id", &request.tenant_id), ("id", &id)])
+    {
+        Ok([tenant_id, id]) => (TenantId::new(tenant_id), DeviceProposalId::new(id)),
+        Err(refusal) => return refusal,
+    };
+    let device_class =
+        match optional_choice::<DeviceClass>("device_class", request.device_class.as_deref()) {
+            Ok(device_class) => device_class,
+            Err(refusal) => return refusal,
+        };
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    let approved = match state
+        .devices
+        .list(tenant_id, None, DeviceProposalStatus::Approved)
+        .await
+    {
+        Ok(approved) => approved,
+        Err(error) => return device_error_response(&error),
+    };
+    let terminal = id.to_string();
+    match approved.iter().find(|row| row.id == terminal) {
+        None => return not_found("device"),
+        Some(row) if row.kind != DeviceKind::Terminal.as_wire() => {
+            return api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                "only a terminal runs the till, and so has a device class",
+                &[("id", "WRONG_KIND")],
+            );
+        }
+        Some(_) => {}
+    }
+    let written = state
+        .devices
+        .set_device_class(tenant_id, id, device_class, expected.as_str())
+        .await;
+    device_write_response(
+        &state,
+        &context,
+        (tenant_id, id),
+        "device_proposal.set_device_class",
+        serde_json::json!({ "device_class": device_class.map(WireEnum::as_wire) }),
         written,
     )
     .await

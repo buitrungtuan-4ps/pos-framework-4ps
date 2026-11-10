@@ -190,7 +190,8 @@ pub(crate) use custom_values::{
     __path_admin_custom_value_summary, __path_admin_custom_value_summary_csv,
 };
 pub(crate) use devices::{
-    __path_admin_revoke_device, __path_admin_set_printer_paper, __path_admin_set_terminal_float,
+    __path_admin_revoke_device, __path_admin_set_printer_paper,
+    __path_admin_set_terminal_device_class, __path_admin_set_terminal_float,
     __path_admin_set_terminal_receipt,
 };
 pub use devices::{

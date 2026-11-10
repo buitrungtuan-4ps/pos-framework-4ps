@@ -11,7 +11,8 @@
 //! `store-postgres`.
 
 use pos_core::activation::CodeStatus;
-use pos_proto::devices::{DeviceConnection, PaperWidth};
+use pos_proto::WireEnum;
+use pos_proto::devices::{DeviceClass, DeviceConnection, PaperWidth};
 use pos_proto::ids::{DeviceId, StationId, StoreId, TenantId};
 use pos_proto::printing::{ReceiptLanguage, ReceiptSecondLanguage};
 use pos_proto::time::Timestamp;
@@ -235,6 +236,7 @@ impl DeviceProposalStore for PostgresDeviceProposals {
                 receipt_language: row.receipt_language,
                 receipt_second_language: row.receipt_second_language,
                 opening_float_minor: row.opening_float_minor,
+                device_class: row.device_class,
                 status: row.status,
                 version: row.version,
             })
@@ -374,6 +376,23 @@ impl DeviceProposalStore for PostgresDeviceProposals {
         let id = id.to_string();
         let changed =
             PostgresDeviceProposals::set_float(self, &tenant, &id, opening_float_minor, expected)
+                .await
+                .map_err(|error| DeviceProposalError::new(error.to_string()))?;
+        device_write_outcome(self, &tenant, &id, changed).await
+    }
+
+    async fn set_device_class(
+        &self,
+        tenant: TenantId,
+        id: DeviceProposalId,
+        device_class: Option<DeviceClass>,
+        expected: &str,
+    ) -> Result<DeviceWriteOutcome, DeviceProposalError> {
+        let tenant = tenant.to_string();
+        let id = id.to_string();
+        let token = device_class.map(DeviceClass::as_wire);
+        let changed =
+            PostgresDeviceProposals::set_device_class(self, &tenant, &id, token, expected)
                 .await
                 .map_err(|error| DeviceProposalError::new(error.to_string()))?;
         device_write_outcome(self, &tenant, &id, changed).await
