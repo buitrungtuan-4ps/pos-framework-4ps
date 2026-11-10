@@ -23,7 +23,10 @@ use proposals::{
     approve_device, list_pending_devices, list_store_devices, propose_device, reject_device,
 };
 use serde::Deserialize;
-use terminals::{admin_set_terminal_float, admin_set_terminal_receipt, create_terminal};
+use terminals::{
+    admin_set_terminal_device_class, admin_set_terminal_float, admin_set_terminal_receipt,
+    create_terminal,
+};
 
 use crate::audit::AuditRecorder;
 use crate::auth::admin::{AdminContext, AdminStore};
@@ -61,7 +64,8 @@ pub use claims::{__path_collect_claim, __path_open_claim};
 pub use proposals::{__path_list_store_devices, __path_propose_device};
 pub use revoke::__path_admin_revoke_device;
 pub use terminals::{
-    __path_admin_set_terminal_float, __path_admin_set_terminal_receipt, __path_create_terminal,
+    __path_admin_set_terminal_device_class, __path_admin_set_terminal_float,
+    __path_admin_set_terminal_receipt, __path_create_terminal,
 };
 
 // --- Device onboarding (`/sync/.../devices` + `/admin/devices/proposals`) ------------------------
@@ -138,6 +142,10 @@ where
         .route(
             "/admin/devices/proposals/{id}/float",
             post(admin_set_terminal_float::<D, A, K, C>),
+        )
+        .route(
+            "/admin/devices/proposals/{id}/device-class",
+            post(admin_set_terminal_device_class::<D, A, K, C>),
         )
         .with_state(DeviceState {
             devices,
@@ -285,6 +293,7 @@ mod devices_compile_tests {
             receipt_language: None,
             receipt_second_language: None,
             opening_float_minor: None,
+            device_class: None,
             status: "approved".to_owned(),
             version: "1".to_owned(),
         }
@@ -375,6 +384,25 @@ mod devices_compile_tests {
         assert_eq!(compiled(&rows, 8).opening_float_minor(), Some(0));
         let door = serde_json::to_value(compiled(&rows, 9)).expect("json");
         assert!(door.get("opening_float_minor").is_none(), "{door}");
+    }
+
+    #[test]
+    fn a_till_carries_its_device_class_and_one_nobody_set_carries_no_key() {
+        // ADR-0201 decision 3: what the console saved, verbatim; nothing where nobody said.
+        let class = |id, token: &str| DeviceProposalSummary {
+            device_class: Some(token.to_owned()),
+            ..row(id, "terminal", None, None)
+        };
+        let rows = [
+            class(7, "DEVICE_CLASS_TABLET"),
+            row(9, "terminal", None, None),
+        ];
+        assert_eq!(
+            compiled(&rows, 7).device_class(),
+            Some(pos_proto::devices::DeviceClass::Tablet)
+        );
+        let door = serde_json::to_value(compiled(&rows, 9)).expect("json");
+        assert!(door.get("device_class").is_none(), "{door}");
     }
 
     #[test]

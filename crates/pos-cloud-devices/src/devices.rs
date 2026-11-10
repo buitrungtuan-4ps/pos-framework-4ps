@@ -12,7 +12,7 @@
 use core::fmt;
 use core::future::Future;
 
-use pos_proto::devices::{DeviceConnection, PaperWidth};
+use pos_proto::devices::{DeviceClass, DeviceConnection, PaperWidth};
 use pos_proto::ids::{StationId, StoreId, TenantId};
 use pos_proto::printing::{ReceiptLanguage, ReceiptSecondLanguage};
 use pos_proto::ulid::Ulid;
@@ -181,6 +181,12 @@ pub struct DeviceProposalSummary {
     /// until somebody says, which is the store's `shift.opening_float_minor`.
     #[schema(required = true)]
     pub opening_float_minor: Option<i64>,
+    /// On a `terminal`, the class of device an operator says this till runs on, as its wire token
+    /// (`DEVICE_CLASS_…`,
+    /// [ADR-0201](../../../docs/adr/0201-the-till-runs-on-every-device-class.md) decision 3).
+    /// `None` until somebody says, which the till reads from its screen.
+    #[schema(required = true)]
+    pub device_class: Option<String>,
     /// `pending`, `approved`, or `rejected`.
     pub status: String,
     /// The version the row was read at, for a conditional write
@@ -390,6 +396,24 @@ pub trait DeviceProposalStore {
         tenant: TenantId,
         id: DeviceProposalId,
         opening_float_minor: Option<i64>,
+        expected: &str,
+    ) -> impl Future<Output = Result<DeviceWriteOutcome, DeviceProposalError>> + Send;
+
+    /// Says which class of device an approved terminal is, or `None` for the class its screen
+    /// says ([ADR-0201](../../../docs/adr/0201-the-till-runs-on-every-device-class.md) decision 3).
+    ///
+    /// Conditional on `expected` and scoped as [`Self::set_agent`] is. Like [`Self::set_float`],
+    /// this seam does not check that the device is a terminal: the route checks it before it
+    /// writes.
+    ///
+    /// # Errors
+    ///
+    /// [`DeviceProposalError`] if the store could not be written.
+    fn set_device_class(
+        &self,
+        tenant: TenantId,
+        id: DeviceProposalId,
+        device_class: Option<DeviceClass>,
         expected: &str,
     ) -> impl Future<Output = Result<DeviceWriteOutcome, DeviceProposalError>> + Send;
 }

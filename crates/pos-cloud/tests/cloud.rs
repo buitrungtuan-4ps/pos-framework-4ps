@@ -2853,6 +2853,9 @@ struct DeviceRow {
     receipt_second_language: Option<ReceiptSecondLanguage>,
     /// A till's own float, set in the console (ADR-0167 decision 4). `None` is the store's.
     opening_float_minor: Option<i64>,
+    /// A till's device class token, set in the console (ADR-0201 decision 3). `None` is the
+    /// screen's.
+    device_class: Option<String>,
     status: DeviceProposalStatus,
     /// This row's version, as the adapter's `xmin::text` is: a token, not a number a caller may
     /// reason about. Bumped by every write that changes the row.
@@ -2918,6 +2921,7 @@ impl DeviceProposalStore for FakeDevices {
             receipt_language: None,
             receipt_second_language: None,
             opening_float_minor: None,
+            device_class: None,
             status: DeviceProposalStatus::Pending,
             version: self.mint(),
         });
@@ -2960,6 +2964,7 @@ impl DeviceProposalStore for FakeDevices {
                     .receipt_second_language
                     .map(|language| language.as_wire().to_owned()),
                 opening_float_minor: row.opening_float_minor,
+                device_class: row.device_class.clone(),
                 status: row.status.as_wire().to_owned(),
                 version: row.version.to_string(),
             })
@@ -3014,6 +3019,7 @@ impl DeviceProposalStore for FakeDevices {
             receipt_language: None,
             receipt_second_language: None,
             opening_float_minor: None,
+            device_class: None,
             // Created resolved. The console write by a named admin *is* the decision, because
             // nothing on a LAN announces itself as a till for anyone to approve (ADR-0112).
             status: DeviceProposalStatus::Approved,
@@ -3085,6 +3091,18 @@ impl DeviceProposalStore for FakeDevices {
     ) -> Result<DeviceWriteOutcome, DeviceProposalError> {
         Ok(self.write_approved(tenant, id, expected, |row| {
             row.opening_float_minor = opening_float_minor;
+        }))
+    }
+
+    async fn set_device_class(
+        &self,
+        tenant: TenantId,
+        id: DeviceProposalId,
+        device_class: Option<pos_proto::devices::DeviceClass>,
+        expected: &str,
+    ) -> Result<DeviceWriteOutcome, DeviceProposalError> {
+        Ok(self.write_approved(tenant, id, expected, |row| {
+            row.device_class = device_class.map(|class| class.as_wire().to_owned());
         }))
     }
 }

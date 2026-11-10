@@ -316,7 +316,7 @@ mod tests {
             include_str!("main.rs").to_owned(),
             include_str!("relay.rs").to_owned(),
         ];
-        sources.extend(crate::openapi_admin::router_sources());
+        sources.extend(crate::openapi_routes::router_sources());
         let mut found: Vec<&str> = Vec::new();
         for source in &sources {
             for (index, _) in source.match_indices("\"/") {

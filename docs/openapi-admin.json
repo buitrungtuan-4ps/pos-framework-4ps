@@ -10841,6 +10841,118 @@
         "x-permission": "console.devices.manage"
       }
     },
+    "/admin/devices/proposals/{id}/device-class": {
+      "post": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "A super-admin says which class of device a till is\n([ADR-0201](../../../docs/adr/0201-the-till-runs-on-every-device-class.md) decision 3).",
+        "description": "The float's guards, for the same reasons: `ManageDevices`, an `If-Match`, and an audit entry,\nsince the class decides which layout of every package screen the till draws.",
+        "operationId": "admin_set_terminal_device_class",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The terminal's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The version the terminal was read at (ADR-0094). Required; a wildcard is refused",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`tenant_id`; and `device_class`, a `DEVICE_CLASS_…` token other than `DEVICE_CLASS_UNSPECIFIED`, or `null` or absent for the class the till's screen says. It is the till's whole class state, so a class left out is the screen's again",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetDeviceClassRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved. It reaches the store on the next devices publish, `POST /admin/devices/publish`, and the till bound to the terminal draws a package screen's layout for that class; an edge older than 0.14.1 ignores it and the till reads its screen"
+          },
+          "400": {
+            "description": "The device is not a terminal (`id`, `WRONG_KIND`), the class is not one this release knows (`device_class`, `INVALID_ENUM_VALUE`), an id is not a ULID, or If-Match is absent, malformed, or a wildcard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.devices.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no approved device with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The terminal changed since you read it: re-read it and try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The device store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.devices.manage"
+      }
+    },
     "/admin/devices/proposals/{id}/drawer": {
       "post": {
         "tags": [
@@ -29306,6 +29418,7 @@
           "receipt_language",
           "receipt_second_language",
           "opening_float_minor",
+          "device_class",
           "status",
           "version"
         ],
@@ -29334,6 +29447,13 @@
               "null"
             ],
             "description": "Whether an operator says this printer cuts its paper. `None` until somebody says, which the\nedge reads as `true`."
+          },
+          "device_class": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "On a `terminal`, the class of device an operator says this till runs on, as its wire token\n(`DEVICE_CLASS_…`,\n[ADR-0201](../../../docs/adr/0201-the-till-runs-on-every-device-class.md) decision 3).\n`None` until somebody says, which the till reads from its screen."
           },
           "drawer_attached": {
             "type": "boolean",
@@ -35026,6 +35146,26 @@
             "propertyNames": {
               "type": "string"
             }
+          }
+        }
+      },
+      "SetDeviceClassRequest": {
+        "type": "object",
+        "description": "An operator says which class of device an approved terminal is.\n\nThe class is the till's whole class state, as the float is its float state: an absent or `null`\nclass is \"read it from the screen\" again.",
+        "required": [
+          "tenant_id"
+        ],
+        "properties": {
+          "device_class": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The class, as its wire token (`DEVICE_CLASS_TERMINAL`, `_TABLET`, `_PHONE`,\n`_KITCHEN_DISPLAY` or `_KIOSK`), or `null` for the class the till's screen says."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "The tenant the terminal belongs to (a 26-character ULID)."
           }
         }
       },

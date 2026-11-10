@@ -150,7 +150,7 @@ fn is_device_path(path: &str) -> bool {
 /// still found.
 #[cfg(test)]
 fn registered_device_paths() -> std::collections::BTreeSet<String> {
-    let mut sources = crate::openapi_admin::router_sources();
+    let mut sources = crate::openapi_routes::router_sources();
     let relay = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/relay.rs");
     sources.push(std::fs::read_to_string(relay).unwrap_or_default());
     let constant = |name: &str| {

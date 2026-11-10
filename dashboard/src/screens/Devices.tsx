@@ -63,6 +63,7 @@ import { AuditTrail } from "../components/AuditTrail";
 import { apiMessage, withStaleReload } from "../lib/errors";
 import type { DeviceProposalSummary, Station, Store } from "../api/schemas";
 import { tokenLabel } from "../lib/tokens";
+import { createTerminalClass } from "./devices/terminal-class";
 
 // What each paper is called on screen (ADR-0160). 80 mm at 42 characters a line is what every
 // printer was taken to be before an operator could say, so it is what a printer nobody set shows.
@@ -128,6 +129,23 @@ const RECEIPT_SECOND_LANGUAGES = [
 // cloud knows and this console does not.
 const languageLabel = (token: string | null) =>
   token === null ? t("devices.receiptLanguageStore") : tFromServer(`settings.value.${token}`, token);
+
+// The first release whose till draws for the device class its terminal names (ADR-0201 decision 3).
+// An older edge ignores the field, and its tills read their class from the screen.
+const DEVICE_CLASS_SINCE = "0.14.1";
+
+/** A terminal's ids, folded away. */
+function terminalIdColumn(): Column<DeviceProposalSummary> {
+  return {
+    key: "id",
+    header: t("devices.id"),
+    cell: (row) => (
+      <TechnicalDetails label={t("common.technicalDetails")}>
+        <div>{row.id}</div>
+      </TechnicalDetails>
+    ),
+  };
+}
 
 export function Devices() {
   const [rows, setRows] = createSignal<DeviceProposalSummary[] | null>(null);
@@ -279,7 +297,7 @@ export function Devices() {
   const offersPaper = () => offersDeviceField(PAPER_SINCE);
   const tillFloat = () => deviceFieldStanding(TILL_FLOAT_SINCE);
   const offersTillFloat = () => offersDeviceField(TILL_FLOAT_SINCE);
-  const offersTillActions = () => offersTillReceipts() || offersTillFloat();
+  const offersTillActions = () => offersTillReceipts() || offersTillFloat() || offersDeviceField(DEVICE_CLASS_SINCE);
   // The currency a float is typed in, once the store's config is read and names one.
   const floatCurrency = () => {
     const config = storeConfig();
@@ -298,6 +316,8 @@ export function Devices() {
   // (ADR-0094) — so it owes the reader a reload and a sentence when somebody else got there first.
   const conditionalFleet = <T,>(write: () => Promise<T>) =>
     withStaleReload(write, loadFleet, t("devices.stale"));
+  // A till's device class: its column, action and form (`./devices/terminal-class.tsx`).
+  const tillClass = createTerminalClass({ conditional: conditionalFleet, reload: loadFleet });
 
   // Memoized device filters avoid re-filtering `fleet()` on every table render or accessor call.
   const terminals = createMemo(() => (fleet() ?? []).filter((device) => device.kind === "terminal"));
@@ -589,15 +609,9 @@ export function Devices() {
         </span>
       ),
     },
-    {
-      key: "id",
-      header: t("devices.id"),
-      cell: (row) => (
-        <TechnicalDetails label={t("common.technicalDetails")}>
-          <div>{row.id}</div>
-        </TechnicalDetails>
-      ),
-    },
+    // Shown on every release, as the float is (ADR-0201 decision 3).
+    tillClass.column,
+    terminalIdColumn(),
   ];
 
   // A till's receipts, offered only where the store's release honours them or cannot say.
@@ -807,6 +821,7 @@ export function Devices() {
                               {t("devices.chooseFloat")}
                             </Button>
                           </Show>
+                          <Show when={offersDeviceField(DEVICE_CLASS_SINCE)}>{tillClass.action(row)}</Show>
                         </div>
                       )
                     : undefined
@@ -1063,6 +1078,8 @@ export function Devices() {
             placeholder={t("devices.floatStore")}
           />
         </FormPanel>
+
+        <tillClass.Panel />
 
         <ConfirmDialog
           open={rejection.mode() === "confirming"}

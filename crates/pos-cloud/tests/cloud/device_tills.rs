@@ -502,6 +502,132 @@ async fn a_tills_float_is_published_as_set_cleared_to_the_stores_and_audited() {
     );
 }
 
+/// Says which class of device the terminal `id` is, at `version`, and answers the status and the
+/// body, `null` for a `204`.
+async fn post_till_device_class(
+    router: &axum::Router,
+    cookie: &str,
+    id: &str,
+    version: &str,
+    body: &serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let response = router
+        .clone()
+        .oneshot(post_config_with_etag(
+            &format!("/admin/devices/proposals/{id}/device-class"),
+            body,
+            cookie,
+            version,
+        ))
+        .await
+        .expect("route the till's device class");
+    let status = response.status();
+    let body = body_bytes(response).await;
+    (
+        status,
+        serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+/// A till's device class (**ADR-0201** decision 3): a token this release does not know, the
+/// unspecified one, and a device that is not a terminal are refused and write nothing; a class is
+/// saved under the conditional write, published verbatim, cleared back to the screen's, and each
+/// save is audited. A terminal nobody set publishes no class at all.
+#[tokio::test]
+async fn a_tills_device_class_is_checked_published_as_set_cleared_and_audited() {
+    let keys = FakeKeys::default();
+    let audit = FakeAudit::default();
+    let router = device_publish_app_with(
+        &keys,
+        FakeConfigTrees::default(),
+        FakeRollups::default(),
+        Arc::new(AuditSink::new(audit.clone())),
+    );
+    let cookie = admin_cookie(&router).await;
+    let token = issue_store_key(&keys, tenant(), store_id(), &[Scope::ManageDevices]);
+    let store_ulid = store_id().as_ulid().to_string();
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let counter = propose_printer(&router, &token, &store_ulid, "Counter", "192.0.2.10:9100").await;
+    approve_on_network(&router, &cookie, &tenant_ulid, &counter, None).await;
+    let bar = create_terminal(&router, &cookie, &tenant_ulid, &store_ulid, "Bar till").await;
+    let body = |class: &str| serde_json::json!({ "tenant_id": tenant_ulid.clone(), "device_class": class });
+    let unset = published_device(&router, &cookie, &tenant_ulid, &store_ulid, &bar).await;
+    assert!(
+        unset.get("device_class").is_none(),
+        "a terminal nobody set publishes no class: {unset}"
+    );
+
+    let version = approved_device_version(&router, &token, &store_ulid, &bar).await;
+    for refused_class in ["DEVICE_CLASS_WRIST", "DEVICE_CLASS_UNSPECIFIED", "tablet"] {
+        let (status, refused) =
+            post_till_device_class(&router, &cookie, &bar, &version, &body(refused_class)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{refused_class}");
+        assert_eq!(
+            refused["error"]["details"][0]["field"], "device_class",
+            "{refused}"
+        );
+        assert_eq!(
+            refused["error"]["details"][0]["reason"], "INVALID_ENUM_VALUE",
+            "{refused}"
+        );
+    }
+    let at = approved_device_version(&router, &token, &store_ulid, &counter).await;
+    let (status, refused) = post_till_device_class(
+        &router,
+        &cookie,
+        &counter,
+        &at,
+        &body("DEVICE_CLASS_TABLET"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "a printer runs no till");
+    assert_eq!(
+        refused["error"]["details"][0]["reason"], "WRONG_KIND",
+        "{refused}"
+    );
+
+    let tablet = body("DEVICE_CLASS_TABLET");
+    let (status, _) = post_till_device_class(&router, &cookie, &bar, &version, &tablet).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = post_till_device_class(&router, &cookie, &bar, &version, &tablet).await;
+    assert_eq!(
+        status,
+        StatusCode::PRECONDITION_FAILED,
+        "a second manager holding the old version is told to re-read"
+    );
+    let published = published_device(&router, &cookie, &tenant_ulid, &store_ulid, &bar).await;
+    assert_eq!(
+        published["device_class"], "DEVICE_CLASS_TABLET",
+        "{published}"
+    );
+
+    let version = approved_device_version(&router, &token, &store_ulid, &bar).await;
+    let cleared = serde_json::json!({ "tenant_id": tenant_ulid.clone() });
+    let (status, _) = post_till_device_class(&router, &cookie, &bar, &version, &cleared).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let cleared = published_device(&router, &cookie, &tenant_ulid, &store_ulid, &bar).await;
+    assert!(
+        cleared.get("device_class").is_none(),
+        "a class left out is the screen's again: {cleared}"
+    );
+
+    let recorded = audit.list(None, 50).await.expect("list audit entries");
+    let classes: Vec<_> = recorded
+        .iter()
+        .rev()
+        .filter(|entry| entry.action == "device_proposal.set_device_class")
+        .map(|entry| entry.after.clone())
+        .collect();
+    assert_eq!(
+        classes,
+        [
+            Some(serde_json::json!({ "device_class": "DEVICE_CLASS_TABLET" })),
+            Some(serde_json::json!({ "device_class": null })),
+        ],
+        "each saved class is recorded, and the refused ones are not"
+    );
+}
+
 /// The X/Z report names each till among the day's drawers from the store's published devices node
 /// as it is served (**ADR-0167** decision 13): a till the node lists by the name it gives there, and
 /// neither the store's drawer nor a till the node no longer lists, which the console labels itself.
