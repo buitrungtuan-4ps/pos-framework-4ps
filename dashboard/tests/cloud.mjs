@@ -440,7 +440,7 @@ export async function seedFixtures(cloud) {
     group.etag,
   );
   // A package with one published version, so the pin flow has a version to run on every store
-  // (ADR-0189). Publishing a version is the package builder's; the seed stands in for it.
+  // (ADR-0189). The seed publishes it as the package designer would.
   const pkg = await cloud.call("POST", "/admin/packages", {
     tenant_id: tenant.tenant_id,
     name: "Dine-in",

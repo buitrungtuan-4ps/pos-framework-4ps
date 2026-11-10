@@ -132,6 +132,7 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::admin_create_package,
         crate::http::admin_list_package_versions,
         crate::http::admin_publish_package_version,
+        crate::http::admin_dry_run_package_version,
         crate::http::admin_custom_value_summary,
         crate::http::admin_custom_value_summary_csv,
         crate::http::admin_admitted_devices,
@@ -795,8 +796,7 @@ impl Modify for SessionCookie {
 ///
 /// Axum's `Router` does not expose its routes, so the registered set is recovered from the source
 /// the way the `xtask` gates read the tree: take each `.route(` and the next string literal after
-/// it. That literal is the path, whether rustfmt kept it on the same line or wrapped it onto the
-/// next.
+/// it. That literal is the path, whether rustfmt kept it on its line or wrapped it onto the next.
 ///
 /// Deliberately not a regex: the tree carries no regex dependency, and the grammar here is one
 /// token wide.

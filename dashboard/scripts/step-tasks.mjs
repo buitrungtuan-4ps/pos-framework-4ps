@@ -133,6 +133,18 @@ export const TASKS = [
     outcome: { screen: "packages", mark: "package-pinned" },
   },
   {
+    task: "Publish a new package's first version from the designer",
+    budget: 4,
+    note: "Four: open the designer, start a new package, create it, publish. Naming the package and its version is typing, not clicking. Publish asks the cloud's dry run first and publishes only a draft it accepts, so there is no separate check click on the way (ADR-0190 decision 8); Check exists for a designer who wants the verdict without publishing.",
+    steps: [
+      { nav: "packageDesigner" },
+      { screen: "packageDesigner", action: "newPackage" },
+      { screen: "packageDesigner", action: "createNamed" },
+      { screen: "packageDesigner", action: "publishDraft" },
+    ],
+    outcome: { screen: "packageDesigner", mark: "package-version-published" },
+  },
+  {
     task: "Roll every store back to an earlier package version",
     budget: 3,
     note: "Three, the same as running a version: open Packages, roll back to the earlier version, confirm. A rollback is pinning the earlier version (ADR-0189), so it is the same act with the earlier version's own button, and the confirm says every store is republished.",
