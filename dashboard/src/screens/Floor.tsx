@@ -4,9 +4,9 @@
 // carry both tenant and store. None of this is PII.
 //
 // Write affordances are gated on the operator holding console.floor.manage (owner/admin) — the server
-// re-checks every route, so the gate here only hides what a role cannot do. The visual pointer-drag
-// editor is deliberately deferred to F3; placement is set here by numeric grid column/row (or left
-// unplaced), which is enough for the plan the edge and the QR sheet consume.
+// re-checks every route, so the gate here only hides what a role cannot do. Tables are placed by
+// dragging them on the plan (`floor/PlanView.tsx`, roadmap-v3 B8.2), or by grid column and row in
+// the table form, which the list keeps as the accessible fallback.
 
 import { createMemo, createSignal, Show } from "solid-js";
 
@@ -39,9 +39,12 @@ import {
   EmptyState,
   FormPanel,
   PublishBar,
+  Tabs,
   TechnicalDetails,
 } from "../components/kit";
 import { toast } from "../components/Toast";
+import { PlanView, type Placement } from "./floor/PlanView";
+import { tableColumns } from "./floor/table-columns";
 import { apiMessage, isStale } from "../lib/errors";
 
 export function Floor() {
@@ -97,6 +100,7 @@ export function Floor() {
   const [tableColumn, setTableColumn] = createSignal("");
   const [tableRow, setTableRow] = createSignal("");
   const [pendingTableArchive, setPendingTableArchive] = createSignal<FloorTable | null>(null);
+  const [view, setView] = createSignal<"plan" | "list">("plan");
 
   // QR sheet (loaded on demand). `null` = not loaded; the route is absent when no table-token secret
   // is configured on the cloud, which surfaces as a 404 → a gentle "unavailable" note, not an error.
@@ -302,6 +306,22 @@ export function Floor() {
     }
   };
 
+  /** A table dragged on the plan: its new cell and area, with the version it was read at. */
+  const moveTable = async (table: FloorTable, placement: Placement) => {
+    setBusy(true);
+    try {
+      const { areaId, cell } = placement;
+      const fields = { areaId, name: table.label, seats: table.seats, status: table.status };
+      await api.updateTable(table.table_id, tenantId(), { ...fields, gridColumn: cell?.column ?? null, gridRow: cell?.row ?? null }, table.etag);
+      setSavedAtMs(Date.now());
+      await plan.refetch();
+    } catch (caught) {
+      await fail(caught);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const publish = async () => {
     setBusy(true);
     try {
@@ -386,54 +406,6 @@ export function Floor() {
     },
   ];
 
-  const tableColumns = (): Column<FloorTable>[] => [
-    {
-      key: "label",
-      header: t("floor.label"),
-      sortValue: (row) => row.label,
-      cell: (row) => <span>{row.label}</span>,
-    },
-    {
-      key: "area",
-      header: t("floor.area"),
-      sortValue: (row) => areaName(row.area_id),
-      cell: (row) => <span class="text-ink-muted">{areaName(row.area_id)}</span>,
-    },
-    {
-      key: "seats",
-      header: t("floor.seats"),
-      sortValue: (row) => row.seats,
-      cell: (row) => <span class="text-ink-muted">{row.seats}</span>,
-    },
-    {
-      key: "position",
-      header: t("floor.position"),
-      cell: (row) => (
-        <span class="text-ink-muted">
-          {row.position
-            ? t("floor.gridAt", { column: row.position.column, row: row.position.row })
-            : t("floor.unplaced")}
-        </span>
-      ),
-    },
-    {
-      key: "status",
-      header: t("floor.status"),
-      cell: (row) => (
-        <StatusBadge
-          tone={row.status === "archived" ? "archived" : "active"}
-          label={row.status === "archived" ? t("status.archived") : t("status.active")}
-        />
-      ),
-    },
-    {
-      key: "id",
-      header: t("common.technicalDetails"),
-      cell: (row) => (
-        <TechnicalDetails label={t("common.technicalDetails")}>{row.table_id}</TechnicalDetails>
-      ),
-    },
-  ];
 
   return (
     <div>
@@ -521,8 +493,10 @@ export function Floor() {
               when={activeAreas().length > 0}
               fallback={<p class="text-sm text-ink-muted">{t("floor.needAreaFirst")}</p>}
             >
+              <Tabs label={t("floor.tables")} tabs={[{ key: "plan", label: t("floor.planView") }, { key: "list", label: t("floor.listView") }]} active={view()} onSelect={setView} />
+              <Show when={view() === "list"} fallback={<PlanView areas={areas() ?? []} tables={tables()} canManage={canManage()} busy={busy()} onMove={(table, at) => void moveTable(table, at)} />}>
               <DataTable
-                columns={tableColumns()}
+                columns={tableColumns(areaName)}
                 rows={tables()}
                 searchText={(row) => `${row.label} ${areaName(row.area_id)}`}
                 pageSize={12}
@@ -562,6 +536,7 @@ export function Floor() {
                   </Show>
                 )}
               />
+              </Show>
             </Show>
           </Card>
 
