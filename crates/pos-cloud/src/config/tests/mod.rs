@@ -330,6 +330,10 @@ fn parses_the_nats_cursor_section_with_defaults() {
     );
     assert_eq!(nats.batch, 256, "the batch default");
     assert_eq!(nats.expires_secs, 5, "the expiry default");
+    assert_eq!(
+        nats.subject, "pos.fleet.events",
+        "the stream it creates, when none exists yet, captures the fleet's one subject"
+    );
 }
 
 // --- pinned before `CloudConfig::validate` is split (ADR-0170 decision 7) -----------------------

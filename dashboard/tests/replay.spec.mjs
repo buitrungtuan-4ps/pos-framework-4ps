@@ -221,6 +221,15 @@ async function press(page, action, description, value) {
  * not part of the map.
  */
 const AFTER_STEP = {
+  "Publish a new package's first version from the designer": async (page, index) => {
+    if (index === 1) {
+      // The new-package dialog's one field is the package's name.
+      await page.locator('[data-step="setPackageName"]').fill("Designer replay");
+    } else if (index === 2) {
+      // A new package opens a blank draft, whose version needs a name before it publishes.
+      await page.locator('[data-step="setVersionLabel"]').fill("First");
+    }
+  },
   "Provision a new store and get its installer": async (page, index) => {
     if (index === 1) {
       // Step 2 followed the link into the wizard; its first field is the shop's name.
@@ -427,6 +436,47 @@ test("a fee is tried on a sample bill before it is saved", async ({ browser }) =
   const bill = page.locator('[data-preview="sample-bill"]').first();
   await expect(bill, "the seventh click asked for a sample bill, and none was drawn").toBeVisible();
   await expect(bill, "the sample bill carries the fee the editor holds").toContainText("150000");
+  await context.close();
+});
+
+// The screen designer is drag and drop (ADR-0190): a component dragged from the palette lands in
+// the slot it is dropped on, and the version the designer publishes carries the screen as built.
+// The step gate counts clicks, and a drag is not one, so this is its own test.
+test("a screen is built by dragging a component onto it, and published", async ({ browser }) => {
+  const designer = replayed.find((task) => task.task.startsWith("Publish a new package"));
+  expect(designer, "the designer flow names the package and version this test builds on").toBeDefined();
+  const { context, page } = await openConsole(browser);
+  // The designer flow up to its last click: a new package with a named, empty draft.
+  await walk(page, designer, designer.steps.length - 1);
+
+  await page.locator('[data-step="setScreenId"]').fill("welcome");
+  await page.locator('[data-step="addScreen"]').click();
+  // A drag scrolls nothing: the palette's entry and the slot it is dropped on are both in view,
+  // on a screen as tall as a console's usually is.
+  await page.setViewportSize({ width: 1440, height: 1400 });
+  await page.locator('[data-component-id="page_header"]').dragTo(page.locator('[data-drop-slot=":0"]'));
+  await page.locator('[data-node-path="0"] button').first().click();
+  await page.getByLabel(/^Title \(required\)/).fill("welcome.title");
+  await page.locator('[data-step="publishDraft"]').click();
+  await expect(page.locator('[data-outcome="package-version-published"]').first()).toBeVisible();
+
+  const packages = await cloud.call("GET", `/admin/packages?tenant_id=${fixtures.tenant.tenant_id}`);
+  const built = packages.filter((entry) => entry.name === "Designer replay").at(-1);
+  const versions = await cloud.call(
+    "GET",
+    `/admin/packages/${built.package_id}/versions?tenant_id=${fixtures.tenant.tenant_id}`,
+  );
+  expect(versions.at(-1).content.screens).toEqual([
+    {
+      body: {
+        screen_id: "welcome",
+        root: {
+          component_id: "screen_frame",
+          children: [{ component_id: "page_header", properties: { title_key: "welcome.title" } }],
+        },
+      },
+    },
+  ]);
   await context.close();
 });
 

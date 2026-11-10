@@ -131,9 +131,10 @@ The console's guided new-store wizard produces both files an operator carries to
 
 **The `[nats]` values are fleet-wide, not per store** ([ADR-0087](adr/0087-edge-relay-and-event-publish.md)
 Amendment 1): `stream = "POS_FLEET"`, `subject = "pos.fleet.events"`, identical on every box and
-matching `cloud.toml`'s `[nats]`. A fork that renames them must rename them on **both** sides at once
-— `pos_cloud` binds one durable consumer to one named stream, so a mismatch is a fleet that publishes
-into a stream nobody reads, with no error anywhere.
+matching `cloud.toml`'s `[nats]` `stream` and `subject`. A fork that renames them must rename them on
+**both** sides at once — `pos_cloud` binds one durable consumer to one named stream, so a mismatch is
+a fleet that publishes into a stream nobody reads, with no error anywhere. Whichever starts first, the
+cloud or a store, creates the stream with that subject; the other binds it as it stands.
 
 **A store key, if you issue one, needs both `read_config` and `relay_orders`.** With only
 `read_config` a store looks healthy — configuration syncs, the dashboard shows it alive — while the
