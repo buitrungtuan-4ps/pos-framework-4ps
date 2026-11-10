@@ -145,6 +145,9 @@ const Stations = lazy(() =>
 const Packages = lazy(() =>
   import("./screens/Packages").then((module) => ({ default: module.Packages })),
 );
+const PackageDesigner = lazy(() =>
+  import("./screens/PackageDesigner").then((module) => ({ default: module.PackageDesigner })),
+);
 const Settings = lazy(() =>
   import("./screens/Settings").then((module) => ({ default: module.Settings })),
 );
@@ -211,6 +214,7 @@ const COMPONENTS: Record<ScreenId, Component> = {
   people: People,
   config: Config,
   packages: Packages,
+  packageDesigner: PackageDesigner,
   settings: Settings,
   storeSettings: StoreSettings,
   taxRates: TaxRates,

@@ -221,6 +221,15 @@ async function press(page, action, description, value) {
  * not part of the map.
  */
 const AFTER_STEP = {
+  "Publish a new package's first version from the designer": async (page, index) => {
+    if (index === 1) {
+      // The new-package dialog's one field is the package's name.
+      await page.locator('[data-step="setPackageName"]').fill("Designer replay");
+    } else if (index === 2) {
+      // A new package opens a blank draft, whose version needs a name before it publishes.
+      await page.locator('[data-step="setVersionLabel"]').fill("First");
+    }
+  },
   "Provision a new store and get its installer": async (page, index) => {
     if (index === 1) {
       // Step 2 followed the link into the wizard; its first field is the shop's name.
