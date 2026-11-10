@@ -41,6 +41,18 @@ impl Variable {
         Self::Now,
     ];
 
+    /// The views the edge holds, so the only ones an edge guard may read: a step's `done_when`,
+    /// and its `applies_when` when it has one
+    /// ([ADR-0192](../../../docs/adr/0192-a-flow-is-a-graph-of-steps-the-edge-re-checks.md)
+    /// decision 4). The device and the signed-in person's role are the till's.
+    pub const EDGE: [Self; 5] = [
+        Self::Order,
+        Self::Line,
+        Self::Bill,
+        Self::Channel,
+        Self::Now,
+    ];
+
     /// The name a condition reads it by.
     #[must_use]
     pub const fn as_str(self) -> &'static str {

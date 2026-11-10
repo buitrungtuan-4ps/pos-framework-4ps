@@ -31943,17 +31943,27 @@
             "type": "string",
             "description": "The request field at fault, as a publish's field error names it, such as `version_label`,\n`screens` or `data.object_types`."
           },
+          "flow_index": {
+            "type": "integer",
+            "description": "For a flow, the variant's position in `flows`. Absent on a flow refusal about the flows\ntogether, such as too many.",
+            "minimum": 0
+          },
           "message": {
             "type": "string",
             "description": "The fault in one English sentence, for a log; the console words it from `reason`."
           },
           "name": {
             "type": "string",
-            "description": "The property or act parameter at fault, when the fault names one."
+            "description": "The property or act parameter at fault, when the fault names one; for a flow or a reaction,\nthe id, action, screen, prerequisite, target or parameter its fault names."
           },
           "node_index": {
             "type": "integer",
             "description": "For a screen's node, its position in the tree's pre-order, the root being 0.",
+            "minimum": 0
+          },
+          "reaction_index": {
+            "type": "integer",
+            "description": "For a reaction, the variant's position in `reactions`. Absent on a refusal about several\ntogether, such as too many for one trigger.",
             "minimum": 0
           },
           "reason": {
@@ -31964,6 +31974,10 @@
             "type": "integer",
             "description": "For a screen, the variant's position in `screens`.",
             "minimum": 0
+          },
+          "step_id": {
+            "type": "string",
+            "description": "For a flow's step, its `step_id`; a cycle names the first step caught in it."
           }
         }
       },
@@ -32044,6 +32058,20 @@
           "data": {
             "$ref": "#/components/schemas/PackageData",
             "description": "The package's data part: custom fields, object types and lists (ADR-0194). Each field says\nwhether it is personal; publishing a personal field is the tenant's decision on its lawful\nbasis, consent wording and retention, and is refused until personal fields are available\n(ADR-0206)."
+          },
+          "flows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Variant_Flow"
+            },
+            "description": "The package's flows, every variant of each (ADR-0192): graphs of required, optional and\nconditional steps with their prerequisites. Their conditions are compiled at publish."
+          },
+          "reactions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Variant_Reaction"
+            },
+            "description": "The package's reactions, every variant of each (ADR-0193 decision 5): when a trigger fires,\nif a condition holds, one UI act or edge write."
           },
           "screens": {
             "type": "array",

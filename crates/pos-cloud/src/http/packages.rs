@@ -16,7 +16,9 @@ use axum::routing::{get, post};
 use pos_cloud_api::response::api_error;
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
+use pos_proto::flow::Flow;
 use pos_proto::package::{PackageData, TimeSlot, Variant};
+use pos_proto::reaction::Reaction;
 use pos_proto::screen::Screen;
 use serde::Deserialize;
 
@@ -25,6 +27,7 @@ use crate::auth::admin::AdminStore;
 use pos_cloud_config::packages::{PackageStore, PackageStoreError};
 
 mod authoring;
+mod conditions;
 mod dry_run;
 
 // The handlers the console's OpenAPI document names.
@@ -71,6 +74,14 @@ struct PackageVersionRequest {
     /// catalogued components, given only literals.
     #[serde(default)]
     screens: Vec<Variant<Screen>>,
+    /// The package's flows, every variant of each (ADR-0192): graphs of required, optional and
+    /// conditional steps with their prerequisites. Their conditions are compiled at publish.
+    #[serde(default)]
+    flows: Vec<Variant<Flow>>,
+    /// The package's reactions, every variant of each (ADR-0193 decision 5): when a trigger fires,
+    /// if a condition holds, one UI act or edge write.
+    #[serde(default)]
+    reactions: Vec<Variant<Reaction>>,
 }
 
 /// Builds the package sub-router. Reads are `console.data.read`; creating a package, publishing a

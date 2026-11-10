@@ -68,8 +68,8 @@ pub struct PackageVersionRecord {
 }
 
 /// The oldest edge release that runs `content`: [`PACKAGE_NODE_SINCE`] until a part a version
-/// uses introduces a later one: the data part, and each component and act its screens name
-/// (ADR-0190, ADR-0191). Nobody types it.
+/// uses introduces a later one: the data part, each component and act its screens name, and each
+/// act its flows and reactions run (ADR-0190, ADR-0191). Nobody types it.
 #[must_use]
 pub fn min_edge_version(content: &PackageContent) -> ReleaseTag {
     let floor = if content.data.is_empty() {
@@ -95,6 +95,28 @@ pub fn min_edge_version(content: &PackageContent) -> ReleaseTag {
             }
         }
         pending.extend(node.children.iter());
+    }
+    // The acts its flows start with and run, and its reactions run (ADR-0192, ADR-0193).
+    let flow_acts = content.flows.iter().flat_map(|variant| {
+        core::iter::once(variant.body.start_action_id.as_str()).chain(
+            variant
+                .body
+                .steps
+                .iter()
+                .filter_map(|step| step.action_id.as_deref()),
+        )
+    });
+    let reaction_acts = content
+        .reactions
+        .iter()
+        .map(|variant| variant.body.then.action_id.as_str());
+    for since in flow_acts
+        .chain(reaction_acts)
+        .filter_map(|action_id| Action::find(action_id).map(|act| act.since))
+    {
+        if release(since) > release(latest) {
+            latest = since;
+        }
     }
     ReleaseTag::new(latest)
 }

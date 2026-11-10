@@ -1845,6 +1845,7 @@ dependencies = [
  "pos-ports",
  "pos-proto",
  "pos-providers",
+ "pos-rules",
  "rust-embed",
  "serde",
  "serde_json",
