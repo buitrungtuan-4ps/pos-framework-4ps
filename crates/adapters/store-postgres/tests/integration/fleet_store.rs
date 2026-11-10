@@ -735,3 +735,53 @@ fn a_config_delivery_report_reaches_the_fleet_row_and_the_next_replaces_it() {
         );
     });
 }
+
+/// A heartbeat's tills report lands on the liveness row as JSON and comes back out of the fleet read
+/// at its columns, 35 and 36 (migration 0094, B7.3); the next report replaces it.
+#[test]
+fn a_tills_report_reaches_the_fleet_row_and_the_next_replaces_it() {
+    block_on(async {
+        let (store, _admin) = prepared().await.expect("prepare the database");
+        let trees = store.config_trees();
+        let tenant = TenantId::new(Ulid::from_u128(0x000F_1EE9));
+        let shop = StoreId::new(Ulid::from_u128(0x570D));
+        store
+            .registry()
+            .insert_store(&shop.to_string(), &tenant.to_string(), None, "Tills")
+            .await
+            .expect("insert the store");
+        trees
+            .record_seen(tenant, shop, None, 1000)
+            .await
+            .expect("a liveness row");
+        let read = || async {
+            let rows = store.fleet().list(&tenant.to_string()).await.expect("list");
+            let row = rows.into_iter().next().expect("the store");
+            let reads = row.device_reads_json.map(|json| {
+                serde_json::from_str::<serde_json::Value>(&json).expect("the column holds JSON")
+            });
+            (reads, row.device_reads_reported_at_ms)
+        };
+        assert_eq!(read().await, (None, None), "never reported");
+
+        let two = r#"[{"device_id":"D1","package_version_id":"V2","read_at_ms":1500},{"device_id":"D2","package_version_id":null,"read_at_ms":1600}]"#;
+        trees
+            .record_device_reads_beat(tenant, shop, 2000, two)
+            .await
+            .expect("record");
+        assert_eq!(
+            read().await,
+            (Some(serde_json::from_str(two).expect("json")), Some(2000))
+        );
+
+        trees
+            .record_device_reads_beat(tenant, shop, 3000, "[]")
+            .await
+            .expect("record");
+        assert_eq!(
+            read().await,
+            (Some(serde_json::json!([])), Some(3000)),
+            "the next report replaces the last"
+        );
+    });
+}

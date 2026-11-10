@@ -172,6 +172,7 @@ impl<S: EventStore> Edge<S> {
             pin_lockout: Arc::new(Lockout::new()),
             package: PackageStanding::default(),
             config_wake: ConfigWakeStanding::default(),
+            device_reads: super::DeviceReads::default(),
             labels: RwLock::new(Arc::new(crate::labels::LabelGrid::default())),
             custom_writes: tokio::sync::Mutex::new(super::record_slip::FreshSlips::default()),
         })
@@ -201,6 +202,12 @@ impl<S: EventStore> Edge<S> {
     #[must_use]
     pub const fn config_wake_standing(&self) -> &ConfigWakeStanding {
         &self.config_wake
+    }
+
+    /// Which package version each paired till last read (roadmap-v3 B7.3).
+    #[must_use]
+    pub const fn device_reads(&self) -> &super::DeviceReads {
+        &self.device_reads
     }
 
     /// What the status bar shows: how many events wait for the cloud, how worried to be about it,

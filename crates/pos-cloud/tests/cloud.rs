@@ -72,6 +72,9 @@ mod fee_preview;
 mod fees;
 #[path = "cloud/fleet.rs"]
 mod fleet;
+#[path = "cloud/fleet_rows.rs"]
+mod fleet_rows;
+use fleet_rows::store_in_handover;
 #[path = "cloud/floor.rs"]
 mod floor;
 #[path = "cloud/hq_rollups.rs"]
@@ -192,7 +195,7 @@ use pos_cloud::http::CloudApp;
 use pos_cloud::inventory::{InventoryStore, InventoryStoreError};
 use pos_cloud::lease::{
     Region, RegionAcknowledgement, RegionAcknowledgementError, RegionAcknowledgementStore,
-    RegionWrite, StorePlacement,
+    RegionWrite,
 };
 use pos_cloud::media::{
     MediaId, MediaStore, MediaStoreError, MediaSummary, NewMediaAsset, Rendition,
@@ -1019,6 +1022,9 @@ type Retirements = HashMap<(TenantId, StoreId), (i64, String)>;
 /// The print-agent standings a store last reported, keyed as `store_liveness` is (ADR-0112).
 type RecordedAgents = HashMap<(TenantId, StoreId), Vec<PrintAgentStanding>>;
 
+/// The tills' last reads one heartbeat reported (B7.3).
+type DeviceReads = Vec<pos_cloud::config_tree::DeviceReadBeat>;
+
 /// The config-tree store, keyed by `(tenant, store)` exactly as the real table. `seen` mirrors the
 /// `store_liveness` upsert so a test can assert the config pull recorded the store's contact.
 #[derive(Clone, Default)]
@@ -1037,6 +1043,8 @@ struct FakeConfigTrees {
     /// The package a heartbeat last reported (migration 0090, ADR-0189).
     packages: Arc<Mutex<HashMap<(TenantId, StoreId), pos_cloud::config_tree::PackageBeat>>>,
     config_wakes: Arc<Mutex<HashMap<(TenantId, StoreId), pos_cloud::config_tree::ConfigWakeBeat>>>,
+    /// The tills' last reads a heartbeat reported (migration 0094, B7.3).
+    device_reads: Arc<Mutex<HashMap<(TenantId, StoreId), DeviceReads>>>,
     /// A store's recorded answer to its region difference, mirroring
     /// `store_region_acknowledgement` ([ADR-0114](../../../docs/adr/0114-region-is-required-recorded-visible.md)).
     /// One row per store and overwritten, exactly as the table is.
@@ -1451,6 +1459,16 @@ impl ConfigTreeStore for FakeConfigTrees {
         beat: &pos_cloud::config_tree::ConfigWakeBeat,
     ) -> Result<(), ConfigStoreError> {
         sync::record_beat(&self.config_wakes, (tenant, store), beat)
+    }
+
+    async fn record_device_reads_beat(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        _seen_at: Timestamp,
+        reads: &[pos_cloud::config_tree::DeviceReadBeat],
+    ) -> Result<(), ConfigStoreError> {
+        sync::record_beat(&self.device_reads, (tenant, store), &reads.to_vec())
     }
 
     async fn record_store_heartbeat(
@@ -5608,45 +5626,6 @@ fn fleet_app_with_audit(
         config_trees,
         audit,
     ))
-}
-
-/// One fleet row in a chosen handover state, so the four wire answers can be asserted side by side.
-fn store_in_handover(
-    store_id: StoreId,
-    authoritative: Option<u64>,
-    superseded: Option<u64>,
-    retired_at: Option<Timestamp>,
-) -> FleetRow {
-    FleetRow {
-        store_id,
-        name: "Thảo Điền".to_owned(),
-        status: EntityStatus::Active,
-        last_seen_at: Some(seen_ago(1_000)),
-        last_config_pull_at: Some(seen_ago(1_000)),
-        config_version_held: Some("v-current".to_owned()),
-        config_version_published: Some("v-current".to_owned()),
-        relay_backlog: 0,
-        relay_oldest_pending_at: None,
-        installed_version: None,
-        self_test_ok: None,
-        reported_at: None,
-        // Reporting the authoritative generation, empty, from one beat — the shape that reads as
-        // settled once a handover has actually happened.
-        outbox_depth: Some(0),
-        outbox_reported_at: Some(seen_ago(1_000)),
-        lease_generation_held: authoritative,
-        lease_reported_at: Some(seen_ago(1_000)),
-        lease_generation_authoritative: authoritative,
-        edge_placement: StorePlacement::NeverIssued,
-        region: None,
-        superseded_generation: superseded,
-        retired_at,
-        retired_by: retired_at.map(|_| "01ADMINADMINADMINADMINADMI".to_owned()),
-        print_agents: None,
-        print_agents_reported_at: None,
-        package: None,
-        config_wake: None,
-    }
 }
 
 // --- Background-task health (ADR-0068 slice 4) -------------------------------------------------

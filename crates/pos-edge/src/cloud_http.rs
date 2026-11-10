@@ -589,6 +589,7 @@ impl HeartbeatTransport for HeartbeatHttpTransport {
         if let Some(generation) = report.lease_generation {
             fields.insert("lease_generation".to_owned(), generation.into());
         }
+        crate::heartbeat_client::insert_delivery_fields(&mut fields, &report);
         // The same rule one level down (ADR-0112): the key is absent when the box did not look, and
         // present-and-empty when it looked and the store has no bound agent — which a manager
         // releasing the last terminal produces, and which the cloud has to record rather than ignore.
@@ -617,12 +618,6 @@ impl HeartbeatTransport for HeartbeatHttpTransport {
         }
         if let Some(package) = &report.package {
             fields.insert("package".to_owned(), package.to_json());
-        }
-        if let Some(config_wake) = &report.config_wake {
-            fields.insert(
-                "config_wake".to_owned(),
-                crate::heartbeat_client::config_wake_json(config_wake),
-            );
         }
         let body = if fields.is_empty() {
             Vec::new()

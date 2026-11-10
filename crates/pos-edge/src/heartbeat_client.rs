@@ -55,7 +55,7 @@ use pos_ports::event_store::EventStore;
 use pos_proto::ClockSource as _;
 use pos_proto::ids::DeviceId;
 
-use crate::app::{ConfigWakeReport, Edge, RefusedPackage};
+use crate::app::{ConfigWakeReport, DeviceRead, Edge, RefusedPackage};
 use crate::clock::SystemClock;
 use crate::lease_state::LeaseAuthority;
 use crate::print_agent::{AgentBacklog, PrintAgents};
@@ -110,6 +110,40 @@ pub struct HeartbeatReport {
     /// ([ADR-0195](../../../docs/adr/0195-the-cloud-wakes-a-store-to-pull-its-config.md)), or `None`
     /// if this source did not look.
     pub config_wake: Option<ConfigWakeReport>,
+    /// Which package version each paired till last read and when (roadmap-v3 B7.3), or `None` if
+    /// this source did not look. `Some(empty)` is a store none of whose tills has read since it
+    /// started.
+    pub devices: Option<Vec<DeviceRead>>,
+}
+
+/// Adds a report's `config_wake` and `devices` fields to a heartbeat body, each only when the
+/// source looked.
+pub fn insert_delivery_fields(
+    fields: &mut serde_json::Map<String, serde_json::Value>,
+    report: &HeartbeatReport,
+) {
+    if let Some(config_wake) = &report.config_wake {
+        fields.insert("config_wake".to_owned(), config_wake_json(config_wake));
+    }
+    if let Some(devices) = &report.devices {
+        fields.insert("devices".to_owned(), devices_json(devices));
+    }
+}
+
+/// The heartbeat body's `devices` field: one `{device_id, package_version_id, read_at_ms}` per till,
+/// `package_version_id` `null` for the release's default package.
+#[must_use]
+pub fn devices_json(reads: &[DeviceRead]) -> serde_json::Value {
+    reads
+        .iter()
+        .map(|read| {
+            serde_json::json!({
+                "device_id": read.device_id.to_string(),
+                "package_version_id": read.package_version_id,
+                "read_at_ms": read.read_at_ms,
+            })
+        })
+        .collect()
 }
 
 /// The heartbeat body's `config_wake` field: `delivery`, `samples`, and `p95_ms` and `max_ms` once
@@ -245,6 +279,7 @@ where
             print_agents: None,
             package: Some(PackageReport::of(self)),
             config_wake: Some(self.config_wake_standing().report()),
+            devices: Some(self.device_reads().snapshot()),
         }
     }
 }
@@ -312,6 +347,7 @@ where
             print_agents,
             package: Some(PackageReport::of(&self.edge)),
             config_wake: Some(self.edge.config_wake_standing().report()),
+            devices: Some(self.edge.device_reads().snapshot()),
         }
     }
 }
@@ -521,6 +557,42 @@ mod tests {
         );
     }
 
+    /// The heartbeat's `devices` field: each till's last read, the default package as `null`.
+    #[test]
+    fn a_devices_report_is_each_tills_last_read() {
+        use crate::app::DeviceRead;
+        use pos_proto::ids::DeviceId;
+        use pos_proto::ulid::Ulid;
+        let reads = [
+            DeviceRead {
+                device_id: DeviceId::new(Ulid::from_u128(1)),
+                package_version_id: Some("01J00000000000000000000V01".to_owned()),
+                read_at_ms: 1_700,
+            },
+            DeviceRead {
+                device_id: DeviceId::new(Ulid::from_u128(2)),
+                package_version_id: None,
+                read_at_ms: 1_800,
+            },
+        ];
+        assert_eq!(
+            super::devices_json(&reads),
+            serde_json::json!([
+                {
+                    "device_id": Ulid::from_u128(1).to_string(),
+                    "package_version_id": "01J00000000000000000000V01",
+                    "read_at_ms": 1_700,
+                },
+                {
+                    "device_id": Ulid::from_u128(2).to_string(),
+                    "package_version_id": null,
+                    "read_at_ms": 1_800,
+                },
+            ])
+        );
+        assert_eq!(super::devices_json(&[]), serde_json::json!([]));
+    }
+
     #[test]
     fn a_package_report_is_the_running_version_and_any_refusal() {
         use super::PackageReport;
@@ -595,6 +667,7 @@ mod tests {
                 print_agents: None,
                 package: None,
                 config_wake: None,
+                devices: None,
             }
         }
     }
@@ -610,6 +683,7 @@ mod tests {
                 print_agents: None,
                 package: None,
                 config_wake: None,
+                devices: None,
             }
         }
     }
@@ -721,6 +795,7 @@ mod tests {
                 print_agents: None,
                 package: None,
                 config_wake: None,
+                devices: None,
             }),
             "the last beat carries the drained zero and the generation this box held — the two \
              facts the cloud's clear is keyed on"
@@ -747,6 +822,7 @@ mod tests {
                 print_agents: None,
                 package: None,
                 config_wake: None,
+                devices: None,
             }),
             "the depth the source read is the depth the transport sent"
         );

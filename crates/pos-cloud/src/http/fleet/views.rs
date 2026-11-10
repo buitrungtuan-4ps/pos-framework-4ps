@@ -82,6 +82,11 @@ pub(super) struct FleetStoreView {
     /// Unix ms of the heartbeat that reported config delivery, or `null`.
     #[schema(required = true)]
     config_wake_reported_at_ms: Option<i64>,
+    /// Which package version each paired till last read, and whether it is behind the version the
+    /// store runs (roadmap-v3 B7.3): a till that missed a `config_applied` still draws the version
+    /// it read before. `null` until a heartbeat reports it, which an older edge never does.
+    #[schema(required = true)]
+    devices: Option<FleetDevicesView>,
     /// The lease generation the box last reported holding
     /// ([ADR-0108](../../../docs/adr/0108-the-lease-generation-is-authority.md)), or `null` if it
     /// has never said.
@@ -226,6 +231,7 @@ impl FleetStoreView {
             (Some(held), Some(authoritative)) if held < authoritative
         );
         Self {
+            devices: devices_view(&row),
             store_id: row.store_id.to_string(),
             name: row.name,
             status: row.status,
@@ -319,5 +325,51 @@ fn config_wake_view(
             Some(wake.beat.clone()),
             Some(wake.reported_at.as_milliseconds_since_epoch()),
         )
+    })
+}
+
+/// One paired till as the fleet view shows it (B7.3).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+pub(super) struct FleetDeviceView {
+    /// The till.
+    device_id: String,
+    /// The package version it last read, or `null` for its release's default package.
+    #[schema(required = true)]
+    package_version_id: Option<String>,
+    /// When it read it, in Unix ms on the store's clock.
+    read_at_ms: i64,
+    /// Whether it read another version than the one the store's heartbeat says it runs. `false`
+    /// while the store has not reported its package, as there is nothing to be behind.
+    behind: bool,
+}
+
+/// A store's paired tills as its heartbeat last reported them (B7.3).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+pub(super) struct FleetDevicesView {
+    /// Each till's last read, by device id. Empty for a store none of whose tills has read since
+    /// the edge started.
+    tills: Vec<FleetDeviceView>,
+    /// Unix ms of the heartbeat that reported them.
+    reported_at_ms: i64,
+}
+
+/// The tills' reads, each marked behind when it differs from the package the store reports running.
+fn devices_view(row: &FleetRow) -> Option<FleetDevicesView> {
+    let reported = row.devices.as_ref()?;
+    let running = row.package.as_ref();
+    let tills = reported
+        .reads
+        .iter()
+        .map(|read| FleetDeviceView {
+            device_id: read.device_id.clone(),
+            package_version_id: read.package_version_id.clone(),
+            read_at_ms: read.read_at_ms,
+            behind: running
+                .is_some_and(|running| running.beat.package_version_id != read.package_version_id),
+        })
+        .collect();
+    Some(FleetDevicesView {
+        tills,
+        reported_at_ms: reported.reported_at.as_milliseconds_since_epoch(),
     })
 }

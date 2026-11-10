@@ -30111,6 +30111,60 @@
           }
         }
       },
+      "FleetDeviceView": {
+        "type": "object",
+        "description": "One paired till as the fleet view shows it (B7.3).",
+        "required": [
+          "device_id",
+          "package_version_id",
+          "read_at_ms",
+          "behind"
+        ],
+        "properties": {
+          "behind": {
+            "type": "boolean",
+            "description": "Whether it read another version than the one the store's heartbeat says it runs. `false`\nwhile the store has not reported its package, as there is nothing to be behind."
+          },
+          "device_id": {
+            "type": "string",
+            "description": "The till."
+          },
+          "package_version_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The package version it last read, or `null` for its release's default package."
+          },
+          "read_at_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When it read it, in Unix ms on the store's clock."
+          }
+        }
+      },
+      "FleetDevicesView": {
+        "type": "object",
+        "description": "A store's paired tills as its heartbeat last reported them (B7.3).",
+        "required": [
+          "tills",
+          "reported_at_ms"
+        ],
+        "properties": {
+          "reported_at_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix ms of the heartbeat that reported them."
+          },
+          "tills": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FleetDeviceView"
+            },
+            "description": "Each till's last read, by device id. Empty for a store none of whose tills has read since\nthe edge started."
+          }
+        }
+      },
       "FleetPrintAgent": {
         "type": "object",
         "description": "One bound print agent as the fleet console sees it\n([ADR-0112](../../../docs/adr/0112-print-agents.md)).\n\nTwo opaque identifiers and a duration, carried verbatim from what the store reported. No document,\nno line, no name: nothing a ticket *says* helps diagnose a stalled agent, so nothing a ticket says\ncrosses this wire either.",
@@ -30161,6 +30215,7 @@
           "package_reported_at_ms",
           "config_wake",
           "config_wake_reported_at_ms",
+          "devices",
           "lease_generation_held",
           "lease_reported_at_ms",
           "lease_generation_authoritative",
@@ -30207,6 +30262,17 @@
             ],
             "format": "int64",
             "description": "Unix ms of the heartbeat that reported config delivery, or `null`."
+          },
+          "devices": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FleetDevicesView",
+                "description": "Which package version each paired till last read, and whether it is behind the version the\nstore runs (roadmap-v3 B7.3): a till that missed a `config_applied` still draws the version\nit read before. `null` until a heartbeat reports it, which an older edge never does."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "edge_placement": {
             "$ref": "#/components/schemas/EdgePlacement",
