@@ -22,7 +22,7 @@ use crate::{
 };
 
 /// The admin surface plus the package router, on fakes, recording into `audit`.
-fn package_app(admin: FakeAdmin, audit: Arc<dyn AuditRecorder>) -> axum::Router {
+pub(crate) fn package_app(admin: FakeAdmin, audit: Arc<dyn AuditRecorder>) -> axum::Router {
     let app = app_all(
         Cloud::new(FakeStore::new()),
         FakeRollups::default(),
@@ -41,7 +41,7 @@ fn package_app(admin: FakeAdmin, audit: Arc<dyn AuditRecorder>) -> axum::Router 
 
 const LUNCH: &str = r#"{"time_slot_id":"lunch","label_key":"package.slot.lunch","schedules":[{"days":31,"start_minute":660,"end_minute":840}]}"#;
 
-fn version_body(tenant: &str, label: &str, slots: &str) -> serde_json::Value {
+pub(crate) fn version_body(tenant: &str, label: &str, slots: &str) -> serde_json::Value {
     serde_json::json!({
         "tenant_id": tenant,
         "version_label": label,
@@ -49,7 +49,7 @@ fn version_body(tenant: &str, label: &str, slots: &str) -> serde_json::Value {
     })
 }
 
-async fn send(
+pub(crate) async fn send(
     router: &axum::Router,
     request: axum::http::Request<axum::body::Body>,
 ) -> (StatusCode, serde_json::Value) {

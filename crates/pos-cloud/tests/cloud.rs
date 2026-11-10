@@ -96,6 +96,8 @@ mod ota_rollout;
 mod package_compile;
 #[path = "cloud/package_pin.rs"]
 mod package_pin;
+#[path = "cloud/package_screens.rs"]
+mod package_screens;
 #[path = "cloud/packages.rs"]
 mod packages;
 #[path = "cloud/people.rs"]
