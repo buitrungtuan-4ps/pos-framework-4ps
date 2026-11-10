@@ -66,6 +66,7 @@ To find the files a change touches, start from the **[repository map](repository
 | [metrics/baseline-2026-10.md](metrics/baseline-2026-10.md) | The size and shape of the code before the standardisation work |
 | [metrics/ci-2026-10-phase3.md](metrics/ci-2026-10-phase3.md) | What CI costs after phase 3 (CI runs what a change affects), against the baseline |
 | [metrics/till-latency-2026-11-baseline.md](metrics/till-latency-2026-11-baseline.md) | Every till act against 10 ms, at full speed and with the CPU slowed 4× (emulated), and where the slowest three spend their time |
+| [metrics/package-push-2026-11-phase-1-exit.md](metrics/package-push-2026-11-phase-1-exit.md) | Phases 0 and 1's exit record: the decisions and baselines, and a package version pinned in the console running on a real edge in 118 ms at p95, timed on every merge |
 | [metrics/till-latency-2026-11-phase-2-exit.md](metrics/till-latency-2026-11-phase-2-exit.md) | Phase 2's exit proof: every till act against ADR-0208's gate at 2×, on CI and locally, and the replays green normally and on two CPUs |
 | [metrics/custom-data-2026-11-phase-3-exit.md](metrics/custom-data-2026-11-phase-3-exit.md) | Phase 3's exit proof: a custom object type designed, synced, entered on a till, reported and printed, and a test that a personal value reaches no event and no log |
 | [../CHANGELOG.md](../CHANGELOG.md) | What changed, when, and the upgrade notes |
