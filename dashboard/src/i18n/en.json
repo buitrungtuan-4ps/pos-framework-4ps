@@ -2667,5 +2667,19 @@
   "rule.problem.unknownFact": "Pick what the condition looks at.",
   "rule.problem.noValue": "Give every condition its value.",
   "rule.problem.notWhole": "A count is a whole number.",
-  "rule.problem.tooLong": "This is longer than a rule may be. Remove a condition."
+  "rule.problem.tooLong": "This is longer than a rule may be. Remove a condition.",
+  "flow.problem.flowId": "A flow's id is lower-case letters, digits and underscores.",
+  "flow.problem.noStart": "Choose the action that starts this flow.",
+  "flow.problem.stepCount": "A flow has 1 to 64 steps.",
+  "flow.problem.stepId": "Give this step a name no other step has.",
+  "flow.problem.oneThing": "A step shows one screen or runs one action.",
+  "flow.problem.cycle": "This step waits, through others, on itself.",
+  "flow.problem.prerequisite": "This step waits on a step the flow does not have.",
+  "packageDiff.part.flows": "Flows",
+  "packageDiff.part.reactions": "Reactions",
+  "packageDiff.part.screens": "Screens",
+  "packageDiff.part.timeSlots": "Time slots",
+  "packageDiff.part.customFields": "Custom fields",
+  "packageDiff.part.lists": "Lists",
+  "packageDiff.part.objectTypes": "Object types"
 }

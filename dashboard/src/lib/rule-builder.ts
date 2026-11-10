@@ -224,54 +224,55 @@ function clauseFrom(text: string): Clause | null {
   return null;
 }
 
-/** Splits `text` at top-level ` && ` or ` || ` between parenthesised clauses, or `null`. */
-function splitJoined(text: string): { join: "all" | "any"; parts: string[] } | null {
-  if (!text.startsWith("(") || !text.endsWith(")")) {
-    return null;
+/** Where the string literal opening at `index` ends: the index of its closing quote. */
+function stringEnd(text: string, index: number): number {
+  let at = index + 1;
+  while (at < text.length && text[at] !== '"') {
+    at += text[at] === "\\" ? 2 : 1;
   }
-  const parts: string[] = [];
-  const joins = new Set<string>();
+  return at;
+}
+
+/** Where the group opening at `index` closes: the index of its matching `)`, or -1. */
+function groupEnd(text: string, index: number): number {
   let depth = 0;
-  let inString = false;
-  let start = 0;
-  for (let index = 0; index < text.length; index += 1) {
-    const character = text[index];
-    if (inString) {
-      if (character === "\\") {
-        index += 1;
-      } else if (character === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (character === '"') {
-      inString = true;
-    } else if (character === "(") {
-      if (depth === 0) {
-        start = index + 1;
-      }
+  for (let at = index; at < text.length; at += 1) {
+    if (text[at] === '"') {
+      at = stringEnd(text, at);
+    } else if (text[at] === "(") {
       depth += 1;
-    } else if (character === ")") {
+    } else if (text[at] === ")") {
       depth -= 1;
       if (depth === 0) {
-        parts.push(text.slice(start, index));
-        const join = text.slice(index + 1, index + 5);
-        if (index + 1 < text.length) {
-          if (join !== " && " && join !== " || ") {
-            return null;
-          }
-          joins.add(join);
-          index += 4;
-        }
+        return at;
       }
-    } else if (depth === 0) {
-      return null;
     }
   }
-  if (joins.size > 1 || parts.length < 2) {
+  return -1;
+}
+
+/** Splits `text` into parenthesised clauses joined by one of ` && ` or ` || `, or `null`. */
+function splitJoined(text: string): { join: "all" | "any"; parts: string[] } | null {
+  const parts: string[] = [];
+  const joins = new Set<string>();
+  let at = 0;
+  while (at < text.length) {
+    const end = text[at] === "(" ? groupEnd(text, at) : -1;
+    if (end < 0) {
+      return null;
+    }
+    parts.push(text.slice(at + 1, end));
+    at = end + 1;
+    if (at < text.length) {
+      joins.add(text.slice(at, at + 4));
+      at += 4;
+    }
+  }
+  const [join, ...others] = [...joins];
+  if (parts.length < 2 || others.length > 0 || (join !== " && " && join !== " || ")) {
     return null;
   }
-  return { join: joins.has(" || ") ? "any" : "all", parts };
+  return { join: join === " || " ? "any" : "all", parts };
 }
 
 /**

@@ -2667,5 +2667,19 @@
   "rule.problem.unknownFact": "Chọn điều kiện xét theo gì.",
   "rule.problem.noValue": "Nhập giá trị cho mọi điều kiện.",
   "rule.problem.notWhole": "Số đếm phải là số nguyên.",
-  "rule.problem.tooLong": "Quy tắc này dài quá mức cho phép. Hãy bỏ bớt một điều kiện."
+  "rule.problem.tooLong": "Quy tắc này dài quá mức cho phép. Hãy bỏ bớt một điều kiện.",
+  "flow.problem.flowId": "Mã quy trình chỉ gồm chữ thường, chữ số và dấu gạch dưới.",
+  "flow.problem.noStart": "Chọn thao tác bắt đầu quy trình này.",
+  "flow.problem.stepCount": "Một quy trình có từ 1 đến 64 bước.",
+  "flow.problem.stepId": "Đặt cho bước này một tên chưa bước nào dùng.",
+  "flow.problem.oneThing": "Mỗi bước hiển thị một màn hình hoặc chạy một thao tác.",
+  "flow.problem.cycle": "Bước này, qua các bước khác, lại chờ chính nó.",
+  "flow.problem.prerequisite": "Bước này chờ một bước không có trong quy trình.",
+  "packageDiff.part.flows": "Quy trình",
+  "packageDiff.part.reactions": "Phản ứng",
+  "packageDiff.part.screens": "Màn hình",
+  "packageDiff.part.timeSlots": "Khung giờ",
+  "packageDiff.part.customFields": "Trường tùy chỉnh",
+  "packageDiff.part.lists": "Danh sách",
+  "packageDiff.part.objectTypes": "Loại đối tượng"
 }

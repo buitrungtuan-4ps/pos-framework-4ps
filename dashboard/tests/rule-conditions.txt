@@ -1,7 +1,8 @@
 # Conditions the console's rule builder writes (dashboard/src/lib/rule-builder.ts), each with an
-# order's facts and whether it holds over them. `console_conditions.rs` compiles and evaluates every
-# line with this crate; `dashboard/tests/rule-builder.test.ts` holds that the builder writes each
-# condition exactly so. A guest count of `-` is an order that has none yet.
+# order's facts and whether it holds over them. `crates/pos-rules/tests/console_conditions.rs`
+# compiles and evaluates every line with the evaluator the cloud, the edge and the till run;
+# `rule-builder.test.ts` holds that the builder writes each condition exactly so. A guest count of
+# `-` is an order that has none yet.
 #
 # holds	guest_count	line_count	channel	condition
 true	-	0	SALES_CHANNEL_DINE_IN	order.channel == "SALES_CHANNEL_DINE_IN"

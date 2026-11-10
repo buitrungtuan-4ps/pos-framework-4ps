@@ -142,3 +142,11 @@ export type CustomList = Schemas["CustomList"];
 export type ValueSummary = Schemas["ValueSummary"];
 export type ValueCount = Schemas["ValueCount"];
 export type CustomFieldValue = Schemas["CustomFieldValue"];
+
+// A package's flows and reactions, as a version carries them (ADR-0192, ADR-0193).
+export type FlowVariant = Schemas["Variant_Flow"];
+export type Flow = FlowVariant["body"];
+export type FlowStep = Schemas["FlowStep"];
+export type ReactionVariant = Schemas["Variant_Reaction"];
+export type Reaction = ReactionVariant["body"];
+export type PackageContent = Schemas["PackageContent"];

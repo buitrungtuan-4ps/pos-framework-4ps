@@ -1,12 +1,9 @@
 // The rule builder writes CEL so nobody types it (ADR-0193), and reads back what it wrote.
 //
-// Every condition here is also a line of `crates/pos-rules/tests/console-conditions.txt`, which the
+// Every condition here is also a line of `rule-conditions.txt`, which the
 // evaluator the cloud, the edge and the till run compiles and answers over that line's facts. So a
 // condition this builder writes is one the cloud's publish check accepts, and it means what the
 // builder shows.
-
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
@@ -21,9 +18,13 @@ import {
   toCel,
 } from "../src/lib/rule-builder";
 
-// Read from disk rather than imported: the file is the evaluator crate's, outside this package.
-// Vitest runs from `dashboard/`.
-const VECTORS = readFileSync(resolve(process.cwd(), "../crates/pos-rules/tests/console-conditions.txt"), "utf8")
+const files: Record<string, string> = import.meta.glob("./rule-conditions.txt", {
+  query: "?raw",
+  import: "default",
+  eager: true,
+});
+
+const VECTORS = (files["./rule-conditions.txt"] ?? "")
   .split("\n")
   .filter((line) => line.trim() !== "" && !line.startsWith("#"))
   .map((line) => line.split("\t")[4]);

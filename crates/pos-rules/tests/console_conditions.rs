@@ -14,7 +14,8 @@ use std::collections::BTreeMap;
 
 use pos_rules::{Fact, Facts, Rules, Variable};
 
-const VECTORS: &str = include_str!("console-conditions.txt");
+/// The console's file, read here so the two cannot drift: `xtask`'s `READ_BY` lists it for this crate.
+const VECTORS: &str = include_str!("../../../dashboard/tests/rule-conditions.txt");
 
 /// An order's facts as `pos-edge-app` and the till fill them.
 fn facts(guest_count: &str, line_count: &str, channel: &str) -> Facts {
