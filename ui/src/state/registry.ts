@@ -30,6 +30,7 @@ import { configApplied, load, loadAll, register, type Entry } from "./engine";
 import { readLiveOrders, type LiveOrdersRead } from "./live-orders-read";
 import { takeSession } from "./session";
 import { applyPackage } from "./flows";
+import { applyScreens } from "./package-screens";
 import { applyReactions } from "./reactions";
 import { applyLabels } from "./labels";
 import { applyCustomData } from "./custom-data";
@@ -107,14 +108,15 @@ const ENTRIES: readonly Entry[] = [
   },
   {
     // The running package version's flows and reactions, which the till runs (ADR-0192 decision 3,
-    // `./flows.ts`; ADR-0193 decision 5, `./reactions.ts`). A store on the default package is
-    // answered `running: null`.
+    // `./flows.ts`; ADR-0193 decision 5, `./reactions.ts`), and its screens, which it draws
+    // (ADR-0190, `./package-screens.ts`). A store on the default package is answered `running: null`.
     key: "package",
     kind: "configuration",
     path: () => "/api/package",
     apply: (body) => {
       applyPackage(body);
       applyReactions(body);
+      applyScreens(body);
       applyLabels(body);
       applyCustomData(body);
     },

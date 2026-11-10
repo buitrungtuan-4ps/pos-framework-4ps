@@ -1,6 +1,7 @@
 // The router's half of the package's reactions (`../state/reactions.ts`): a table's order screen
 // entered fires `REACTION_TRIGGER_SCREEN_ENTERED` for the package screen `order`, and a reaction
-// whose act is `ui.screen.open` opens a package screen through the router. Draws nothing.
+// whose act is `ui.screen.open` opens a package screen through the router, as does a package
+// screen's button bound to it (`../package/screen.tsx`). Draws nothing.
 
 import { createEffect, on } from "solid-js";
 import { useLocation, useNavigate } from "@solidjs/router";

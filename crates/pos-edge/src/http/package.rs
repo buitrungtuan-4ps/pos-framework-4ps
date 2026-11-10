@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! `GET /api/package`: which package version this store runs, its flows and reactions for the till
-//! to run, and
+//! `GET /api/package`: which package version this store runs, its flows, reactions and screens for
+//! the till to run and draw, and
 //! whether the last configuration was refused for its package ([ADR-0189](../../../../docs/adr/0189-a-store-runs-a-package-version-hq-pins.md)
 //! decision 6). Read-only: a store's package is chosen in the console, never here (roadmap-v3
 //! D18), so this is what the edge's diagnostics show (B7.5).
@@ -20,6 +20,7 @@ use pos_ports::event_store::EventStore;
 use pos_proto::flow::Flow;
 use pos_proto::package::{PackageData, Variant};
 use pos_proto::reaction::Reaction;
+use pos_proto::screen::Screen;
 
 use crate::app::Edge;
 
@@ -54,6 +55,11 @@ pub(crate) struct RunningPackage {
     /// a reaction sends as any other. Left out when the version has none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     reactions: Vec<Variant<Reaction>>,
+    /// The version's screens, every variant of each in the version's order, for the till to draw
+    /// in place of the default package's screens of the same `screen_id` (ADR-0190 decision 3).
+    /// The edge checked them on apply. Left out when the version has none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    screens: Vec<Variant<Screen>>,
     /// The tenant's labels for the translation keys this version names, `key → { locale → text }`,
     /// from the grid the store pulled (ADR-0043): every key with `en`. A key the grid lacks is not
     /// here. Left out when there are none.
@@ -107,6 +113,7 @@ where
             min_edge_version: content.min_edge_version.to_string(),
             flows: content.flows.clone(),
             reactions: content.reactions.clone(),
+            screens: content.screens.clone(),
             data: content.data.clone(),
             labels: if grid.is_empty() {
                 BTreeMap::new()
@@ -250,6 +257,40 @@ mod tests {
         ));
         edge.apply_session(session);
         assert_eq!(body(edge).await["running"]["flows"], flows);
+    }
+
+    /// A version's screens ride the answer for the till to draw, every variant in order.
+    #[tokio::test]
+    async fn the_running_version_carries_its_screens() {
+        let edge = Arc::new(
+            Edge::new(
+                FakeStore::default(),
+                StoreIdentity::for_store(pos_proto::ids::StoreId::new(
+                    pos_proto::ulid::Ulid::from_u128(7),
+                )),
+                EdgeSession::bootstrap(),
+                Arc::new(InMemoryReceipts::new()),
+            )
+            .expect("an edge"),
+        );
+        let screens = serde_json::json!([
+            { "body": { "screen_id": "floor", "root": { "component_id": "floor_plan" } } },
+            { "selector": { "device_class": "DEVICE_CLASS_PHONE" },
+              "body": { "screen_id": "floor", "root": { "component_id": "floor_alerts" } } },
+        ]);
+        let mut session = (*edge.session()).clone();
+        session.package = Some(Arc::new(
+            serde_json::from_value::<PackageContent>(serde_json::json!({
+                "package_id": "01J00000000000000000000P01",
+                "package_version_id": V1,
+                "version_label": "March",
+                "min_edge_version": "0.14.1",
+                "screens": screens,
+            }))
+            .expect("content"),
+        ));
+        edge.apply_session(session);
+        assert_eq!(body(edge).await["running"]["screens"], screens);
     }
 
     /// A version's reactions ride the answer beside its flows.

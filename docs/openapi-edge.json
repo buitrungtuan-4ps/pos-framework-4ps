@@ -4681,6 +4681,29 @@
   },
   "components": {
     "schemas": {
+      "ActionBinding": {
+        "type": "object",
+        "description": "An action property: a catalogue act and the parameters the package fixes for it.",
+        "required": [
+          "action_id"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "string",
+            "description": "The act, by its catalogue id."
+          },
+          "params": {
+            "type": "object",
+            "description": "The parameters fixed here, by name. An amount and anything a person enters are never fixed\nby a package (ADR-0191 decision 2).",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ParamValue"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "ActivateAccepted": {
         "type": "object",
         "description": "The identity a successful activation grants.",
@@ -7303,6 +7326,27 @@
           }
         }
       },
+      "ParamValue": {
+        "oneOf": [
+          {
+            "type": "integer",
+            "format": "int64",
+            "description": "A count."
+          },
+          {
+            "type": "string",
+            "description": "An id, a token or text."
+          },
+          {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "A list of ids."
+          }
+        ],
+        "description": "A fixed parameter's value."
+      },
       "PaymentRequest": {
         "type": "object",
         "description": "One payment a device applies to a bill: how it was paid, what the guest handed over, what was put\nagainst the total, and what they left. Change is what is left of `tendered` once\n`applied_to_bill` and `tip` are taken out of it.\n\n`method` arrives as an [`Open`] enum so an unrecognised token is a clean rejection rather than a\ndeserialise failure; [`Self::into_payment`] is the domain boundary that refuses an unspecified or\nunknown method.",
@@ -7649,6 +7693,28 @@
           }
         }
       },
+      "PropertyValue": {
+        "oneOf": [
+          {
+            "type": "boolean",
+            "description": "A [`PropertyKind::Bool`]."
+          },
+          {
+            "type": "integer",
+            "format": "int64",
+            "description": "A [`PropertyKind::Int`]."
+          },
+          {
+            "type": "string",
+            "description": "A [`PropertyKind::TranslationKey`] or a [`PropertyKind::Token`]."
+          },
+          {
+            "$ref": "#/components/schemas/ActionBinding",
+            "description": "A [`PropertyKind::Action`]."
+          }
+        ],
+        "description": "A property's value: the literal itself, read by the kind the catalogue gives the property.\n\nUntagged, so `true`, `3` and `\"order.send\"` are the values themselves. A\n[`PropertyKind::TranslationKey`] and a [`PropertyKind::Token`] are both text."
+      },
       "Quantity": {
         "type": "object",
         "description": "A quantity, counted in thousandths of a unit.\n\nThe wire form is the integer count of thousandths, so 1.5 is `1500`. Naming it\n`milli` rather than `value` keeps the scale visible at every use site.",
@@ -7951,9 +8017,46 @@
             },
             "description": "The version's reactions, every variant of each in the version's order, for the till to run\nunder the signed-in person's permissions (ADR-0193 decision 5); the edge checks each command\na reaction sends as any other. Left out when the version has none."
           },
+          "screens": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Variant_Screen"
+            },
+            "description": "The version's screens, every variant of each in the version's order, for the till to draw\nin place of the default package's screens of the same `screen_id` (ADR-0190 decision 3).\nThe edge checked them on apply. Left out when the version has none."
+          },
           "version_label": {
             "type": "string",
             "description": "The version's name in the console."
+          }
+        }
+      },
+      "ScreenNode": {
+        "type": "object",
+        "description": "One node of a screen: a component and what the package gives it.",
+        "required": [
+          "component_id"
+        ],
+        "properties": {
+          "children": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScreenNode"
+            },
+            "description": "The nodes it holds, in order, when its component holds children."
+          },
+          "component_id": {
+            "type": "string",
+            "description": "The catalogue component it draws."
+          },
+          "properties": {
+            "type": "object",
+            "description": "Its properties, by name. Left off the wire while it gives none.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PropertyValue"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           }
         }
       },
@@ -8971,6 +9074,37 @@
               "when": {
                 "$ref": "#/components/schemas/OpenReactionTrigger_ReactionTrigger",
                 "description": "What fires it."
+              }
+            }
+          },
+          "selector": {
+            "$ref": "#/components/schemas/VariantSelector",
+            "description": "When the variant applies. Empty for the part's base variant."
+          }
+        }
+      },
+      "Variant_Screen": {
+        "type": "object",
+        "description": "One variant of a package part: what a till shows or runs when its selector is the one chosen.",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "object",
+            "description": "One screen of a package.",
+            "required": [
+              "screen_id",
+              "root"
+            ],
+            "properties": {
+              "root": {
+                "$ref": "#/components/schemas/ScreenNode",
+                "description": "The tree the screen is drawn from."
+              },
+              "screen_id": {
+                "type": "string",
+                "description": "The screen's id within its package, which an `ui.screen.open` act and a flow step name. Its\nvariants share it."
               }
             }
           },
