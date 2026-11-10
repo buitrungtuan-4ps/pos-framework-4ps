@@ -154,9 +154,10 @@ const ENTRIES: readonly Entry[] = [
     path: () => "/api/session",
     apply: (body) => takeSession(body as SessionState),
     // Who is signed in and what they may do; the permissions are the published `permissions`
-    // node, and the idle lock and opening float are settings (ADR-0158, ADR-0160).
+    // node, and the idle lock and opening float are settings (ADR-0158, ADR-0160). The device's
+    // class is its till's, on the `devices` node (ADR-0201 decision 3).
     required: true,
-    nodes: ["permissions"],
+    nodes: ["permissions", "devices"],
     unclaimedNodes: true,
   },
   {

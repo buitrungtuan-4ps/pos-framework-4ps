@@ -114,6 +114,7 @@ impl Harness {
                 receipt_language: Open::default(),
                 receipt_second_language: Open::default(),
                 opening_float_minor: None,
+                device_class: Open::default(),
             }]),
             ..EdgeSession::bootstrap()
         };

@@ -13,6 +13,7 @@
 import { createSignal } from "solid-js";
 
 import type { SessionState } from "../api/client";
+import { publishDeviceClass } from "../lib/device-class";
 import { load } from "./engine";
 import { clearSnapshot } from "./snapshot";
 import { adoptSession, forgetPermissions } from "./permissions";
@@ -26,7 +27,8 @@ let staffCode: string | null = null;
 
 export { employeeId, idleLockSeconds, locked, openingFloatMinor, signedIn };
 
-// Takes what a session read says: who is signed in, the store's idle lock and opening float, and
+// Takes what a session read says: who is signed in, the store's idle lock and opening float, this
+// device's class where its till names one (`../lib/device-class.ts`), and
 // what the person may do. An edge too old to send `idle_lock_seconds` never locks, and one too old
 // to send `opening_float_minor` fills in no float, which is what every till did before the settings.
 export function takeSession(session: SessionState): void {
@@ -34,6 +36,7 @@ export function takeSession(session: SessionState): void {
   setEmployeeId(session.employee_id ?? null);
   setIdleLockSeconds(session.idle_lock_seconds ?? 0);
   setOpeningFloatMinor(session.opening_float_minor ?? 0);
+  publishDeviceClass(session.device_class);
   adoptSession(session);
 }
 

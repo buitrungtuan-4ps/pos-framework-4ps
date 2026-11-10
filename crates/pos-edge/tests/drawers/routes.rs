@@ -365,6 +365,47 @@ async fn the_drawers_read_names_the_till_the_device_asking_is() {
     );
 }
 
+/// The session read names the class the `TERMINAL` entry the device is bound to names (ADR-0201
+/// decision 3): the bar's till is a tablet, the counter's names none, a device bound to no till is
+/// told nothing, and a binding that cannot be read is answered as none, so the till reads its
+/// screen.
+#[tokio::test]
+async fn the_session_read_names_the_class_of_the_till_the_device_is() {
+    use pos_proto::devices::DeviceClass;
+    for unreadable in [false, true] {
+        let tills = drawers_app(unreadable).await;
+        let mut session = (*tills.edge.session()).clone();
+        let devices = session
+            .devices
+            .devices()
+            .iter()
+            .cloned()
+            .map(|mut device| {
+                if device.device_id == till(BAR) {
+                    device.device_class = DeviceClass::Tablet.into();
+                }
+                device
+            })
+            .collect();
+        session.devices = PublishedDevices::new(devices);
+        tills.edge.apply_session(session);
+        for (token, class) in [
+            (&tills.bar, (!unreadable).then_some("DEVICE_CLASS_TABLET")),
+            (&tills.counter, None),
+            (&tills.stranger, None),
+        ] {
+            let (status, _, read) =
+                send(tills.app.clone(), token, "GET", "/api/session", None).await;
+            assert_eq!(status, StatusCode::OK, "{read}");
+            assert_eq!(
+                read.get("device_class").and_then(Value::as_str),
+                class,
+                "{read}"
+            );
+        }
+    }
+}
+
 /// A drawer whose shift is open says when it opened on the shop's wall clock, which a till's own
 /// clock may not keep, so the list of every till's drawer can show it as it is.
 #[tokio::test]

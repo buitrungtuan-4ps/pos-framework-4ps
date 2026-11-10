@@ -41,12 +41,15 @@ use pos_core::decision::Actor;
 use pos_core::permission::{Permission, PermissionSet};
 use pos_ports::event_store::EventStore;
 use pos_proto::ClockSource;
+use pos_proto::devices::{DeviceClass, PublishedDevice, PublishedDevices};
 use pos_proto::ids::DeviceId;
+use pos_proto::wire_enum::Open;
 
 use crate::app::Edge;
 use crate::auth::{Lockout, LockoutPolicy, Sessions, SignIn};
 use crate::clock::SystemClock;
 use crate::pairing::{DeviceToken, Pairing};
+use crate::printing::{Printers, published_terminals};
 
 /// The `tracing` target every event in this module carries.
 ///
@@ -285,6 +288,40 @@ pub(crate) struct SessionState {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(nullable = false))]
     display_language: Option<String>,
+    /// The class of device this one is, where the store's `devices` node names one on the
+    /// `TERMINAL` entry the device is bound to through its print-agent binding
+    /// ([ADR-0201](../../../../docs/adr/0201-the-till-runs-on-every-device-class.md) decision 3,
+    /// [ADR-0112](../../../../docs/adr/0112-print-agents.md)). Absent means "read it from the
+    /// screen": no terminal names a class, this device is bound to none, or the binding could not
+    /// be read. A fact about the device, sent whoever is signed in; the till chooses a package
+    /// screen's variant by it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    device_class: Option<Open<DeviceClass>>,
+}
+
+/// The class the `TERMINAL` entry `device` is bound to names, if any. The binding is read only
+/// when some terminal in the node names a class, so a store that names none reads nothing more
+/// than before; one that cannot be read is logged and answered as none, so the till reads its
+/// screen rather than guess.
+async fn device_class_of(
+    devices: &PublishedDevices,
+    printers: Option<&Arc<Printers>>,
+    device: DeviceId,
+) -> Option<DeviceClass> {
+    if !published_terminals(devices).any(|entry| entry.device_class().is_some()) {
+        return None;
+    }
+    let terminal = match printers?.terminal_of(device).await {
+        Ok(terminal) => terminal?,
+        Err(error) => {
+            tracing::warn!(target: "pos_edge::http::auth", %device, %error, "the terminal a device is bound to could not be read");
+            return None;
+        }
+    };
+    published_terminals(devices)
+        .find(|entry| entry.device_id == terminal)
+        .and_then(PublishedDevice::device_class)
 }
 
 /// The ids of the permissions in `set`, sorted, as the session read reports them.
@@ -431,7 +468,7 @@ where
     responses(
         (status = 200, body = SessionState, description = "Whether anyone is signed in on this device and who; the box's lease \
                                       standing; whether anyone can sign in; the person's permissions, held \
-                                      directly and with approval; the till's idle lock; the opening float; and the store's display language"),
+                                      directly and with approval; the till's idle lock; the opening float; the store's display language; and this device's class, where its till names one"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
     ),
     tag = "session",
@@ -441,6 +478,7 @@ where
 pub(crate) async fn current_session<S>(
     State(deps): State<SignInDeps<S>>,
     Extension(device_id): Extension<DeviceId>,
+    printers: Option<Extension<Arc<Printers>>>,
 ) -> Response
 where
     S: EventStore + Send + Sync + 'static,
@@ -455,6 +493,9 @@ where
     let idle_lock_seconds = session.session_settings.idle_lock_seconds();
     let opening_float_minor = session.shift.opening_float_minor();
     let display_language = session.display_language.clone();
+    let device_class = device_class_of(&session.devices, printers.as_deref(), device_id)
+        .await
+        .map(Open::from_known);
     let state = match deps.sessions.employee_now(device_id, || SystemClock.now()) {
         Some(employee_id) => SessionState {
             signed_in: true,
@@ -474,6 +515,7 @@ where
             idle_lock_seconds,
             opening_float_minor,
             display_language,
+            device_class,
         },
         None => SessionState {
             signed_in: false,
@@ -486,6 +528,7 @@ where
             idle_lock_seconds,
             opening_float_minor,
             display_language,
+            device_class,
         },
     };
     Json(state).into_response()
