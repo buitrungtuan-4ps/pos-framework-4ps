@@ -14,7 +14,7 @@ The evaluator for a package's conditions, in a restricted dialect of CEL. The cl
 ## Depends on / used by
 
 - **Depends on** (workspace crates): no workspace crate.
-- **Used by** (workspace crates): `pos-edge-app`, `pos-till-rules`.
+- **Used by** (workspace crates): `pos-cloud`, `pos-edge-app`, `pos-till-rules`.
 
 ## Entry points
 
