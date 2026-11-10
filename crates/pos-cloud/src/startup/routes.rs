@@ -674,12 +674,13 @@ fn catalog_routes(deps: &RouteDeps<'_>) -> Router {
         ))
         // Packages (ADR-0189 decision 1): create a package and publish its versions, each stored
         // once and never changed (behind console.packages.manage; reads console.data.read).
-        // Pinning a store to a version is a settings write.
+        // Pinning a store to a version is a settings write. Its keys need `en` (ADR-0190 d. 6).
         .merge(http::package_router(
             store.packages(),
             store.admin(),
             SystemClock,
             Arc::clone(audit),
+            store.translations(),
         ))
         // The custom-data report (ADR-0194 decision 7): how many of a store's objects hold each
         // value of one non-personal field (console.data.read; a personal field is refused).

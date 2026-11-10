@@ -15,11 +15,12 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use pos_cloud_api::console::require_permission;
-use pos_cloud_api::response::{api_error_with_details, parse_ulid_fields};
+use pos_cloud_api::response::{api_error_with_details, parse_ulid_fields, service_unavailable};
 use pos_cloud_config::packages::{PackageStore, min_edge_version};
 use pos_core::flow::{FlowRefusal, check_flows};
 use pos_core::package::{
-    ContentRefusal, EvolutionRefusal, ScreenFault, check_content, check_evolution,
+    ContentRefusal, EvolutionRefusal, KeyAt, KeyRefusal, ScreenFault, check_content,
+    check_evolution, check_keys,
 };
 use pos_core::reaction::{ReactionRefusal, check_reactions};
 use pos_proto::ErrorStatus;
@@ -34,7 +35,11 @@ use super::conditions::PublishConditions;
 use super::{PackageState, PackageVersionRequest, package_error_response};
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
+use crate::http::grid_keys::GridKeys;
 use crate::http::{FieldRefusal, Json, not_found};
+
+/// The reason a key without an `en` value is refused with, as a receipt template's is.
+const UNKNOWN_TRANSLATION_KEY: &str = "UNKNOWN_TRANSLATION_KEY";
 
 /// What a version over [`CONTENT_BYTES_MAX`] is told.
 const TOO_LARGE: &str = "a version's content is at most 1 MiB";
@@ -59,6 +64,8 @@ pub(super) enum Refusal {
         index: Option<usize>,
         refusal: ReactionRefusal,
     },
+    /// A translation key it names has no `en` value in the tenant's grid (ADR-0190 decision 6).
+    Key(KeyRefusal),
 }
 
 impl Refusal {
@@ -86,6 +93,11 @@ impl Refusal {
                 format!("reactions: {refusal}"),
                 &[("reactions", "INVALID")],
             ),
+            Self::Key(refusal) => api_error_with_details(
+                ErrorStatus::InvalidArgument,
+                refusal.to_string(),
+                &[(refusal.field(), UNKNOWN_TRANSLATION_KEY)],
+            ),
         }
     }
 
@@ -99,6 +111,11 @@ impl Refusal {
             Self::Reaction { refusal, .. } => {
                 ("reactions", reaction_reason(refusal), refusal.to_string())
             }
+            Self::Key(refusal) => (
+                refusal.field(),
+                UNKNOWN_TRANSLATION_KEY,
+                refusal.to_string(),
+            ),
         };
         let mut located = PackageRefusal {
             field: field.to_owned(),
@@ -120,6 +137,13 @@ impl Refusal {
             Self::Reaction { index, refusal } => {
                 located.reaction_index = *index;
                 located.name = reaction_name(refusal).map(str::to_owned);
+            }
+            Self::Key(refusal) => {
+                located.name = Some(refusal.key.clone());
+                if let KeyAt::Screen { screen, node } = refusal.at {
+                    located.screen_index = Some(screen);
+                    located.node_index = Some(node);
+                }
             }
             _ => {}
         }
@@ -300,13 +324,15 @@ pub(super) fn version_content(
 }
 
 /// The first reason `content` cannot be published, in the order the publish checks: the content,
-/// then its flows and reactions, then that its data only adds to every earlier version's, then its size.
+/// then its flows and reactions, then that every key it names has an `en` value in `grid`, then
+/// that its data only adds to every earlier version's, then its size.
 ///
 /// # Errors
 ///
-/// The `503` a package store failure earns.
+/// The `503` a package store or translation store failure earns.
 pub(super) async fn first_refusal<P: PackageStore>(
     packages: &P,
+    grid: &dyn GridKeys,
     tenant_id: TenantId,
     content: &PackageContent,
 ) -> Result<Option<Refusal>, Response> {
@@ -315,6 +341,13 @@ pub(super) async fn first_refusal<P: PackageStore>(
     }
     if let Some(refusal) = first_part_refusal(content) {
         return Ok(Some(refusal));
+    }
+    let keys = grid.fallback_keys(tenant_id).await.map_err(|error| {
+        tracing::warn!(%error, "a package version's check could not read the translation grid");
+        service_unavailable("translation store")
+    })?;
+    if let Err(refusal) = check_keys(content, |key| keys.contains(key)) {
+        return Ok(Some(Refusal::Key(refusal)));
     }
     let earlier = packages
         .list_versions(tenant_id, content.package_id)
@@ -350,7 +383,8 @@ pub(super) struct PackageRefusal {
     /// `screens` or `data.object_types`.
     field: String,
     /// A stable token naming the fault: a publish's code (`INVALID`, `NOT_ADDITIVE`,
-    /// `TOO_LARGE`), or for a screen what is wrong with it, such as `MISSING_PROPERTY`.
+    /// `TOO_LARGE`, `UNKNOWN_TRANSLATION_KEY` with the key in `name`), or for a screen what is
+    /// wrong with it, such as `MISSING_PROPERTY`.
     reason: String,
     /// The fault in one English sentence, for a log; the console words it from `reason`.
     message: String,
@@ -363,7 +397,8 @@ pub(super) struct PackageRefusal {
     #[schema(nullable = false)]
     node_index: Option<usize>,
     /// The property or act parameter at fault, when the fault names one; for a flow or a reaction,
-    /// the id, action, screen, prerequisite, target or parameter its fault names.
+    /// the id, action, screen, prerequisite, target or parameter its fault names; for a key without
+    /// an `en` value, the key.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     name: Option<String>,
@@ -400,7 +435,7 @@ pub(super) struct PackageRefusal {
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
         (status = 403, description = "The role lacks console.packages.manage", body = crate::openapi_admin::ErrorResponse),
         (status = 404, description = "The tenant has no package with that id", body = crate::openapi_admin::ErrorResponse),
-        (status = 503, description = "The package store is unreachable", body = crate::openapi_admin::ErrorResponse),
+        (status = 503, description = "The package store or the translation store is unreachable", body = crate::openapi_admin::ErrorResponse),
     ),
     tag = "packages",
 )]
@@ -440,10 +475,11 @@ where
     }
     // No version is stored, so none is minted: the checks never read the id.
     let content = version_content(package_id, PackageVersionId::new(Ulid::NIL), request);
-    let refusals = match first_refusal(&state.packages, tenant_id, &content).await {
-        Ok(found) => found.iter().map(Refusal::located).collect::<Vec<_>>(),
-        Err(unavailable) => return unavailable,
-    };
+    let refusals =
+        match first_refusal(&state.packages, state.grid.as_ref(), tenant_id, &content).await {
+            Ok(found) => found.iter().map(Refusal::located).collect::<Vec<_>>(),
+            Err(unavailable) => return unavailable,
+        };
     let verdict = PackageVersionDryRun {
         accepted: refusals.is_empty(),
         min_edge_version: content.min_edge_version.as_str().to_owned(),
