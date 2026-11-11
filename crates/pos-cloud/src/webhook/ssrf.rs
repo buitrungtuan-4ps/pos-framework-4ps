@@ -481,7 +481,14 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
     } else if first == 0x2001 && (second & 0xfff0 == 0x0010 || second & 0xfff0 == 0x0020) {
         // 2001:10::/28 (ORCHIDv1, RFC 4843) and 2001:20::/28 (ORCHIDv2, RFC 7343).
         Some(ForbiddenReason::Reserved)
-    } else if is_special_purpose_v6(first, second, third) {
+    } else if is_special_purpose_v6(first, second, third)
+        || (segments[4] == 0 && segments[5] == 0 && segments[6] == 0 && segments[7] == 0)
+        || (segments[4] == 0xfdff
+            && segments[5] == 0xffff
+            && segments[6] == 0xffff
+            && segments[7] >= 0xff80)
+    {
+        // Subnet-Router anycast (RFC 4291) and reserved subnet anycast (RFC 2526).
         Some(ForbiddenReason::Reserved)
     } else {
         None

@@ -673,3 +673,29 @@ fn a_host_that_does_not_resolve_is_refused() {
         Err(SsrfRejection::Unresolved)
     );
 }
+
+#[test]
+fn v6_subnet_anycast_addresses_are_reserved() {
+    // Subnet-Router anycast (RFC 4291 §2.6.1, interface ID ::0) and reserved subnet anycast
+    // (RFC 2526, interface ID fdff:ffff:ffff:ff80..=ffff, including Mobile IPv6 Home-Agents
+    // anycast at 0xfffe): reach network infrastructure, never a webhook receiver.
+    for address in [
+        "2606:2800:220:1::",
+        "2606:2800:220:1:fdff:ffff:ffff:ff80",
+        "2606:2800:220:1:fdff:ffff:ffff:fffe",
+        "2606:2800:220:1:fdff:ffff:ffff:ffff",
+    ] {
+        assert_eq!(
+            classify_ip(ip(address)),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip(address),
+                ForbiddenReason::Reserved
+            )),
+            "{address}"
+        );
+    }
+    // Neighbours on the same public subnet stay allowed.
+    for address in ["2606:2800:220:1::1", "2606:2800:220:1:fdff:ffff:ffff:ff7f"] {
+        assert_eq!(classify_ip(ip(address)), Ok(()), "{address}");
+    }
+}
