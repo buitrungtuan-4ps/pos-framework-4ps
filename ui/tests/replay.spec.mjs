@@ -65,7 +65,15 @@ const test = base.extend({
     };
     page.unroute = (url, handler) =>
       handler === undefined ? unroute(url) : unroute(url, wrapped.get(handler) ?? handler);
+    // The edge lets the till connect to itself alone (ADR-0198 decision 1, `connect-src`). Chromium
+    // reports a connection the policy refused on the console; any one fails the test, so a flow that
+    // quietly lost its socket or a read cannot pass.
+    const refused = [];
+    page.on("console", (message) => {
+      if (message.text().includes("Content Security Policy")) refused.push(message.text());
+    });
     await use(page);
+    expect(refused, "connections the till's content security policy refused").toEqual([]);
   },
 });
 
