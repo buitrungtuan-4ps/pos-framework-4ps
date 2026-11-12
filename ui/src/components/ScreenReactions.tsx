@@ -14,6 +14,7 @@ import { tableReacts } from "../state/optimistic";
 import { homeScreenId, publishedScreen } from "../state/package-screens";
 import { setScreenOpener } from "../state/reactions";
 import { SCREENS } from "../state/screens";
+import { roleIds } from "../state/session";
 
 /** The package's screens a reaction may open, by the route each is drawn at. */
 const ROUTES: Readonly<Record<string, string>> = {
@@ -45,12 +46,13 @@ export function screenRoute(screenId: string): string | undefined {
 }
 
 /**
- * Where a sign-in lands: the screen the running version names as this device's home (ADR-0210
- * decision 1), else `/` as before. A home the till cannot open, or one that needs a table, lands on
+ * Where a sign-in lands: the screen the running version names as home for this device and the
+ * signed-in person's roles (ADR-0210 decision 1, ADR-0213 decision 3), else `/` as before. Of two
+ * of the person's roles with a home, the one listed first in the version wins. A home the till cannot open, or one that needs a table, lands on
  * `/` too.
  */
 export function homeRoute(): string {
-  const home = homeScreenId({ device_class: deviceClass() });
+  const home = homeScreenId({ device_class: deviceClass(), role_ids: roleIds() });
   const route = home === undefined ? undefined : screenRoute(home);
   return route === undefined || route.includes(":id") ? "/" : route;
 }

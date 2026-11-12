@@ -4,7 +4,8 @@
 // package with `pos_core::package::check_screens`, and a `pos-core` test runs the same check on
 // this file, so the default package cannot hold a screen a published one could not.
 //
-// The variant drawn is the one for this device's class (`../lib/device-class.ts`). A new tree is
+// The variant drawn is the one for this device's class (`../lib/device-class.ts`) and the signed-in
+// person's roles (`../state/session.ts`, ADR-0213). A new tree is
 // mounted only when the variant chosen changes: a new version, or the screen crossing a breakpoint
 // into a class the screen has its own variant for.
 
@@ -14,6 +15,7 @@ import { deviceClass } from "../lib/device-class";
 import { DRAFT } from "../state/draft-walk-in";
 import { publishedScreen } from "../state/package-screens";
 import { buttonRuns, runButton } from "../state/reactions";
+import { roleIds } from "../state/session";
 import type { Screen } from "../../../packages/package-renderer/src/components";
 import { PackageTree, type ScreenHost, type Supplied } from "../../../packages/package-renderer/src/render";
 import { resolveVariant, type Variant, type VariantContext } from "../../../packages/package-renderer/src/variant";
@@ -76,7 +78,8 @@ export function orderHost(walkIn: () => boolean, shown: { readonly id: string })
  * the default package holds draws the slot that says the till needs an update.
  */
 export function PackageScreen(props: { screenId: string; host: ScreenHost }): JSX.Element {
-  const screen = createMemo(() => packageScreen(props.screenId, { device_class: deviceClass() }));
+  // The person's roles choose a role variant (ADR-0213 decision 3).
+  const screen = createMemo(() => packageScreen(props.screenId, { device_class: deviceClass(), role_ids: roleIds() }));
   return (
     <Show when={screen()} keyed fallback={<NeedsUpdate />}>
       {(drawn) => <PackageTree root={drawn.root} host={props.host} implementations={IMPLEMENTATIONS} words={TILL_WORDS} fallback={<NeedsUpdate />} />}

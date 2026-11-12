@@ -39,8 +39,8 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use pos_core::permission::{Permission, PermissionSet};
 use pos_edge::{
-    Edge, EdgeOrderIn, EdgeSession, InMemoryQueueNumbers, InMemoryReceipts, StaffAuth, StaffRoster,
-    StoreIdentity,
+    Edge, EdgeOrderIn, EdgeSession, InMemoryQueueNumbers, InMemoryReceipts, RoleIds, StaffAuth,
+    StaffRoster, StoreIdentity,
 };
 use pos_fakes::FakeStore;
 use pos_ports::order_in::{ExternalReference, InboundOrder, InboundOrderLine, OrderIn};
@@ -2127,6 +2127,9 @@ async fn a_paired_device_with_no_one_signed_in_can_only_sign_in() {
     );
 }
 
+const ROLE_A: &str = "01J00000000000000000000R01";
+const ROLE_B: &str = "01J00000000000000000000R02";
+
 /// The session read tells the till what the signed-in person may do, and whether the store enforces
 /// it ([ADR-0158](../../../docs/adr/0158-the-till-enforces-each-persons-own-permissions.md) decision 6),
 /// so the till can hide a control and ask for an approver before it sends.
@@ -2134,7 +2137,7 @@ async fn a_paired_device_with_no_one_signed_in_can_only_sign_in() {
 async fn the_session_read_says_what_the_signed_in_person_may_do() {
     let store = a_store_where(|mut session| {
         session.permissions_enforced = true;
-        session.staff.insert(
+        session.staff.insert_with_roles(
             STAFF_CODE,
             StaffAuth {
                 employee_id: Some(pos_proto::ids::EmployeeId::new(Ulid::from_u128(11))),
@@ -2145,6 +2148,7 @@ async fn the_session_read_says_what_the_signed_in_person_may_do() {
                 discount_ceiling: None,
                 pin_phc: Some(hash_of(STAFF_PIN)),
             },
+            RoleIds::from_published(&[ROLE_B.to_owned(), ROLE_A.to_owned()]),
         );
         session
     })
@@ -2162,6 +2166,8 @@ async fn the_session_read_says_what_the_signed_in_person_may_do() {
         session["permissions_with_approval"],
         json!(["sales.line.void_fired"])
     );
+    // And which roles they hold, sorted, for the till to choose its screens by (ADR-0213).
+    assert_eq!(session["role_ids"], json!([ROLE_A, ROLE_B]));
 
     // Signed out, the lists are empty and the switch is still said.
     let (status, _) = post(
@@ -2176,6 +2182,7 @@ async fn the_session_read_says_what_the_signed_in_person_may_do() {
     assert_eq!(signed_out["signed_in"], json!(false));
     assert_eq!(signed_out["permissions_enforced"], json!(true));
     assert_eq!(signed_out["permissions"], json!([]));
+    assert_eq!(signed_out["role_ids"], json!([]));
 }
 
 /// The session read tells the till when it locks (ADR-0160): the store's `idle_lock_seconds`,

@@ -71,7 +71,7 @@ use pos_proto::shift::PublishedShift;
 use pos_proto::store_profile::StoreProfile;
 use pos_proto::tender_keys::PublishedTenderKeys;
 
-use crate::app::{Edge, EdgeSession, StaffAuth, StaffRoster};
+use crate::app::{Edge, EdgeSession, RoleIds, StaffAuth, StaffRoster};
 use crate::device_revocations::DeviceRevocations;
 use crate::lease_state::LeaseWatch;
 use crate::origins::Origins;
@@ -113,7 +113,7 @@ fn roster_from(staff: Vec<PublishedStaffMember>, currency: CurrencyCode) -> Staf
                 listed_with_approval.contains(*permission) && !permissions.contains(*permission)
             })
             .collect();
-        roster.insert(
+        roster.insert_with_roles(
             member.code,
             StaffAuth {
                 // The employee a sign-in under this code acts as (S0b/ADR-0084). A missing or
@@ -137,6 +137,7 @@ fn roster_from(staff: Vec<PublishedStaffMember>, currency: CurrencyCode) -> Staf
                     .map(|minor| Money::new(currency, minor)),
                 pin_phc: member.pin_phc,
             },
+            RoleIds::from_published(&member.role_ids),
         );
     }
     roster

@@ -269,6 +269,12 @@ pub(crate) struct SessionState {
     /// The permission ids the signed-in person holds only with approval, sorted: the till asks for
     /// an approver before sending the act.
     permissions_with_approval: Vec<&'static str>,
+    /// The ids of the roles the signed-in person holds, sorted, from the roster the sign-in was
+    /// authorised against; empty when nobody is signed in or the person holds none. The till
+    /// chooses a package's role variants and a role's home with them
+    /// ([ADR-0213](../../../../docs/adr/0213-a-store-knows-each-persons-roles.md) decision 2).
+    /// They grant nothing, and are never logged.
+    role_ids: Vec<String>,
     /// How many seconds an attended till may sit untouched before it signs its person out and
     /// locks, from the store's `session` node
     /// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md));
@@ -512,6 +518,12 @@ where
             permissions_with_approval: permission_ids(
                 session.staff.permissions_with_approval_for(employee_id),
             ),
+            role_ids: session
+                .staff
+                .role_ids_for(employee_id)
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
             idle_lock_seconds,
             opening_float_minor,
             display_language,
@@ -525,6 +537,7 @@ where
             permissions_enforced,
             permissions: Vec::new(),
             permissions_with_approval: Vec::new(),
+            role_ids: Vec::new(),
             idle_lock_seconds,
             opening_float_minor,
             display_language,

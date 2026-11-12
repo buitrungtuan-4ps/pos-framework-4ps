@@ -73,7 +73,7 @@ use records::{
     BillRecord, LineRecord, LiveSnapshot, OrderOrigin, OrderSnapshot, PaidBill, SettleDrawer,
     SettledReceipt, ShiftRecord, StaffDecision, StaffStanding, another_till, is_till,
 };
-pub use roster::{StaffAuth, StaffRoster, StoreIdentity};
+pub use roster::{RoleIds, StaffAuth, StaffRoster, StoreIdentity};
 pub use session::EdgeSession;
 pub use views::{
     BillCheckView, BillView, BumpView, BuyerDetails, CashMovement, ClosedDrawers, CombinedReport,
