@@ -17,6 +17,7 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 - [ADR-0205](../adr/0205-a-refusal-any-act-can-meet-is-not-listed-per-act.md) A refusal any act can meet is not listed per act
 - [ADR-0209](../adr/0209-the-console-previews-a-screen-with-the-tills-renderer.md) The console previews a screen with the till's own renderer, shared as its own package
 - [ADR-0210](../adr/0210-a-role-names-its-home-screen-in-the-package.md) A role names its home screen in the package, and taps are counted from it
+- [ADR-0211](../adr/0211-an-area-may-sit-inside-another-area.md) An area may sit inside another area, and the cloud publishes the tree resolved
 - [ADR-0212](../adr/0212-the-heartbeat-names-the-version-each-till-last-read.md) The heartbeat names the package version each till last read
 
 ## Citations of ADRs that do not exist
