@@ -9,18 +9,18 @@
 import { createSignal, For, Show } from "solid-js";
 
 import { api } from "../../../api/client";
-import type { ScreenVariant } from "../../../api/schemas";
+import type { PackageWarning, ScreenVariant } from "../../../api/schemas";
 import { Button, SelectField, TextField } from "../../../components/ui";
 import { t } from "../../../i18n";
-import { COMPONENTS } from "../../../../../packages/package-renderer/src/components";
-import { DEVICE_CLASSES, drawnOn } from "../../../lib/screen-tree";
+import { COMPONENTS, type ScreenNode } from "../../../../../packages/package-renderer/src/components";
+import { DEVICE_CLASSES, drawnOn, pathAtPreorder } from "../../../lib/screen-tree";
 import { tenantId } from "../../../state/session";
 import type { PartProps } from "../designer/parts";
 import { useScreens } from "./use-screens";
 import { refusalText } from "../designer/refusals";
 import { Canvas, dragComponent } from "./Canvas";
 import { Inspector } from "./Inspector";
-import { componentName, deviceName } from "./names";
+import { actionName, componentName, deviceName } from "./names";
 import { previewWords, ScreenPreview, type Grid } from "./Preview";
 
 /** A screen id the cloud accepts: 1 to 64 of `a`–`z`, `0`–`9` and `_`. */
@@ -124,6 +124,35 @@ function HomeField(props: PartProps) {
   );
 }
 
+/**
+ * The notes beside each node of the variant at `screenIndex`: its acts over their tap budget
+ * (ADR-0210 decision 5), one line per act, role and cost, naming the device classes it holds on.
+ */
+export function tapNotes(
+  warnings: readonly PackageWarning[],
+  screenIndex: number,
+  root: ScreenVariant["body"]["root"] | undefined,
+): ReadonlyMap<string, readonly string[]> {
+  const grouped = new Map<string, { path: string; warning: PackageWarning; devices: string[] }>();
+  for (const warning of warnings) {
+    const path = root && warning.screen_index === screenIndex ? pathAtPreorder(root as ScreenNode, warning.node_index) : undefined;
+    if (path === undefined) {
+      continue;
+    }
+    const key = [path.join("."), warning.action_id, warning.role_id ?? "", warning.taps].join("|");
+    const held = grouped.get(key) ?? { path: path.join("."), warning, devices: [] };
+    held.devices.push(deviceName(warning.device_class));
+    grouped.set(key, held);
+  }
+  const notes = new Map<string, string[]>();
+  for (const { path, warning, devices } of grouped.values()) {
+    const args = { act: actionName(warning.action_id), taps: warning.taps, devices: devices.join(", "), role: warning.role_id ?? "" };
+    const note = warning.role_id === undefined ? t("designer.screens.tapWarning", args) : t("designer.screens.tapWarningRole", args);
+    notes.set(path, [...(notes.get(path) ?? []), note]);
+  }
+  return notes;
+}
+
 /** The components a variant may hold, each dragged or added. */
 function Palette(props: { deviceClass: string | undefined; onAdd: (componentId: string) => void }) {
   const offered = () => COMPONENTS.filter((component) => drawnOn(component, props.deviceClass));
@@ -189,7 +218,14 @@ export function ScreensPart(props: PartProps) {
         <Show when={edit.root()} fallback={<p class="text-sm text-ink-muted">{t("designer.screens.empty")}</p>}>
           {(tree) => (
             <div class="flex min-w-0 flex-col gap-4">
-              <Canvas root={tree()} selected={edit.selected()} faulty={edit.faulty()} onSelect={edit.setSelected} onDrop={edit.drop} />
+              <Canvas
+                root={tree()}
+                selected={edit.selected()}
+                faulty={edit.faulty()}
+                notes={tapNotes(props.warnings ?? [], edit.chosen(), edit.variant()?.body.root)}
+                onSelect={edit.setSelected}
+                onDrop={edit.drop}
+              />
               <ScreenPreview root={tree()} deviceClass={edit.variant()?.selector?.device_class} words={words} />
             </div>
           )}

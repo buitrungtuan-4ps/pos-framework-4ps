@@ -9,6 +9,7 @@ use axum::response::{IntoResponse, Response};
 use pos_cloud_api::console::{audit_action, mint_ulid, require_permission};
 use pos_cloud_api::response::parse_ulid_fields;
 use pos_cloud_config::packages::{PackageRecord, PackageStore, PackageVersionRecord};
+use pos_core::package::tap_warnings;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{PackageId, PackageVersionId, TenantId};
 use pos_proto::package::LABEL_CHARS_MAX;
@@ -288,9 +289,12 @@ where
         Ok(Some(refusal)) => return refusal.into_response(),
         Err(unavailable) => return unavailable,
     }
+    // A publish refused nothing, so every act over its budget is counted (ADR-0210 decision 5).
+    let tap_warning_count = u32::try_from(tap_warnings(&content).len()).unwrap_or(u32::MAX);
     let version = PackageVersionRecord {
         content,
         create_time: now,
+        tap_warning_count,
     };
     match state.packages.publish_version(tenant_id, &version).await {
         Ok(CreateOutcome::Created(_)) => {

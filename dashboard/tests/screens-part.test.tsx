@@ -83,3 +83,46 @@ describe("the screen designer", () => {
     expect(document.querySelector('[data-node-path="0"]')?.className).toContain("border-danger");
   });
 });
+
+describe("the tap budget in the screen designer", () => {
+  afterEach(cleanup);
+
+  it("notes an act over its budget beside the node offering it, once per role and cost", () => {
+    const initial: PackageDraft = {
+      ...blankDraft("May"),
+      screens: [
+        {
+          selector: {},
+          body: {
+            screen_id: "far",
+            root: {
+              component_id: "stack",
+              children: [{ component_id: "action_button", properties: { label_key: "welcome.title", action: { action_id: "billing.check.print", params: {} } } }],
+            },
+          },
+        },
+      ],
+    };
+    const warning = (device_class: string) => ({
+      reason: "TAP_BUDGET",
+      device_class,
+      action_id: "billing.check.print",
+      screen_index: 0,
+      node_index: 1,
+      taps: 3,
+    });
+    const [draft, setDraft] = createSignal<PackageDraft>(initial);
+    render(() => (
+      <ScreensPart
+        draft={draft}
+        change={(next) => setDraft(next(draft()))}
+        refusals={[]}
+        warnings={[warning("DEVICE_CLASS_TERMINAL"), warning("DEVICE_CLASS_PHONE")]}
+      />
+    ));
+    const notes = document.querySelectorAll('[data-node-path="0"] [data-outcome="tap-warning"]');
+    expect(notes).toHaveLength(1);
+    expect(notes[0]?.textContent).toContain("3 taps");
+    expect(document.querySelectorAll('[data-node-path=""] > [data-outcome="tap-warning"]')).toHaveLength(0);
+  });
+});

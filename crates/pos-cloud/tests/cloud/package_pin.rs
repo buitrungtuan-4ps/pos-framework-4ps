@@ -48,6 +48,7 @@ async fn packages() -> InMemoryPackages {
                 home_screens: Vec::new(),
             },
             create_time: Timestamp::EPOCH,
+            tap_warning_count: 0,
         };
         store
             .publish_version(tenant(), &version)

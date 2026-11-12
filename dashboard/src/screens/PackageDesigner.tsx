@@ -47,6 +47,9 @@ function CheckBar(props: { state: DraftState; onCheck: () => void; onPublish: ()
               fallback={t("designer.refused", { count: verdict().refusals.length })}
             >
               <span data-outcome="draft-accepted">{t("designer.accepted", { release: verdict().min_edge_version })}</span>
+              <Show when={state.warnings().length > 0}>
+                <span data-outcome="draft-warned"> {t("designer.tapWarnings", { count: state.warnings().length })}</span>
+              </Show>
             </Show>
           )}
         </Show>
@@ -110,7 +113,7 @@ function DraftEditor(props: { opened: Opened; state: DraftState; onPublished: (v
         onSelect={setTab}
       />
       <Show when={active()} keyed>
-        {(part) => <part.Panel draft={state.draft} change={state.change} refusals={partRefusals(part.field)} />}
+        {(part) => <part.Panel draft={state.draft} change={state.change} refusals={partRefusals(part.field)} warnings={state.warnings()} />}
       </Show>
       <CheckBar state={state} onCheck={checkDraft} onPublish={publishDraft} />
     </div>

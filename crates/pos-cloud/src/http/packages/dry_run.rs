@@ -19,8 +19,8 @@ use pos_cloud_api::response::{api_error_with_details, parse_ulid_fields, service
 use pos_cloud_config::packages::{PackageStore, min_edge_version};
 use pos_core::flow::{FlowRefusal, check_flows};
 use pos_core::package::{
-    ContentRefusal, EvolutionRefusal, KeyAt, KeyRefusal, ScreenFault, check_content,
-    check_evolution, check_keys,
+    ContentRefusal, EvolutionRefusal, KeyAt, KeyRefusal, ScreenFault, TapWarning, check_content,
+    check_evolution, check_keys, tap_warnings,
 };
 use pos_core::reaction::{ReactionRefusal, check_reactions};
 use pos_proto::ErrorStatus;
@@ -29,6 +29,7 @@ use pos_proto::ids::{PackageId, PackageVersionId, TenantId};
 use pos_proto::package::{CONTENT_BYTES_MAX, PackageContent};
 use pos_proto::text::ReleaseTag;
 use pos_proto::ulid::Ulid;
+use pos_proto::wire_enum::WireEnum as _;
 use serde::Serialize;
 
 use super::conditions::PublishConditions;
@@ -370,6 +371,16 @@ pub(super) async fn first_refusal<P: PackageStore>(
     Ok(None)
 }
 
+/// The acts `content` offers over their tap budget (ADR-0210 decision 5), once the checks the
+/// count follows have passed: the content's, the flows' and reactions', and the keys'
+/// (decision 6). A version they refuse has none, as its graph may not hold together.
+fn warnings_after(refusal: Option<&Refusal>, content: &PackageContent) -> Vec<TapWarning> {
+    match refusal {
+        None | Some(Refusal::NotAdditive(_) | Refusal::TooLarge) => tap_warnings(content),
+        Some(_) => Vec::new(),
+    }
+}
+
 /// What a dry run found.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(super) struct PackageVersionDryRun {
@@ -379,6 +390,46 @@ pub(super) struct PackageVersionDryRun {
     min_edge_version: String,
     /// Why it would be refused: the first fault the publish's checks meet, or none.
     refusals: Vec<PackageRefusal>,
+    /// What would publish but is worth a look: each act a role reaches in more taps than its
+    /// budget from its home (ADR-0210 decision 5). Never a reason to refuse. Empty for a draft that
+    /// states no homes, or one refused before the count.
+    warnings: Vec<PackageWarning>,
+}
+
+/// An act over its tap budget for one role on one device class, at the node offering it most
+/// cheaply (ADR-0210 decision 5).
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub(super) struct PackageWarning {
+    /// `TAP_BUDGET`.
+    reason: &'static str,
+    /// The role, by its id; absent for the base: every role without a home of its own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    role_id: Option<String>,
+    /// The device class.
+    device_class: &'static str,
+    /// The act, by its catalogue id.
+    action_id: String,
+    /// The screen variant offering it most cheaply, by its position in `screens`.
+    screen_index: usize,
+    /// The node offering it, by its position in that tree's pre-order, the root being 0.
+    node_index: usize,
+    /// What it costs from the home, in taps: over two for a common act, over three for a rare one.
+    taps: u32,
+}
+
+impl From<&TapWarning> for PackageWarning {
+    fn from(warning: &TapWarning) -> Self {
+        Self {
+            reason: TapWarning::REASON,
+            role_id: warning.role_id.map(|role| role.to_string()),
+            device_class: warning.device_class.as_wire(),
+            action_id: warning.action_id.clone(),
+            screen_index: warning.screen_index,
+            node_index: warning.node_index,
+            taps: warning.taps,
+        }
+    }
 }
 
 /// One reason a draft would be refused, and where.
@@ -481,15 +532,18 @@ where
     }
     // No version is stored, so none is minted: the checks never read the id.
     let content = version_content(package_id, PackageVersionId::new(Ulid::NIL), request);
-    let refusals =
-        match first_refusal(&state.packages, state.grid.as_ref(), tenant_id, &content).await {
-            Ok(found) => found.iter().map(Refusal::located).collect::<Vec<_>>(),
-            Err(unavailable) => return unavailable,
-        };
+    let found = match first_refusal(&state.packages, state.grid.as_ref(), tenant_id, &content).await
+    {
+        Ok(found) => found,
+        Err(unavailable) => return unavailable,
+    };
+    let warnings = warnings_after(found.as_ref(), &content);
+    let refusals = found.iter().map(Refusal::located).collect::<Vec<_>>();
     let verdict = PackageVersionDryRun {
         accepted: refusals.is_empty(),
         min_edge_version: content.min_edge_version.as_str().to_owned(),
         refusals,
+        warnings: warnings.iter().map(PackageWarning::from).collect(),
     };
     (StatusCode::OK, Json(verdict)).into_response()
 }

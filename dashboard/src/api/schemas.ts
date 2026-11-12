@@ -140,6 +140,7 @@ export type StorePackage = Schemas["StorePackage"];
 export type PackageVersionRequest = Schemas["PackageVersionRequest"];
 export type PackageVersionDryRun = Schemas["PackageVersionDryRun"];
 export type PackageRefusal = Schemas["PackageRefusal"];
+export type PackageWarning = Schemas["PackageWarning"];
 export type ScreenVariant = Schemas["Variant_Screen"];
 export type CustomField = Schemas["CustomField"];
 export type CustomList = Schemas["CustomList"];

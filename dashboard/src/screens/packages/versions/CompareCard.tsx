@@ -1,7 +1,8 @@
 // Two versions of a package, compared before one is pinned or a store is rolled back to it
 // (ADR-0189 decisions 1 and 6): which screens, flows, reactions, time slots, custom fields, lists
-// and object types the later one adds, removes or changes. A published version never changes, so
-// the comparison is of what the stores would run, part by part.
+// and object types the later one adds, removes or changes, and how many acts each offers over its
+// tap budget (ADR-0210 decision 5). A published version never changes, so the comparison is of what
+// the stores would run, part by part.
 
 import { createSignal, For, Show } from "solid-js";
 
@@ -36,6 +37,11 @@ export function CompareCard(props: { versions: readonly PackageVersionRecord[] }
           <SelectField label={t("packageDiff.from")} value={from()} options={options()} onChange={setFrom} />
           <SelectField label={t("packageDiff.to")} value={to()} options={options()} onChange={setTo} />
         </div>
+        <Show when={at(from()) !== undefined && at(to()) !== undefined}>
+          <p class="text-sm text-ink-muted" data-outcome="tap-warning-counts">
+            {t("packageDiff.tapWarnings", { from: at(from())?.tap_warning_count ?? 0, to: at(to())?.tap_warning_count ?? 0 })}
+          </p>
+        </Show>
         <Show when={entries()}>
           {(found) => (
             <Show when={found().length > 0} fallback={<p class="text-sm text-ink-muted">{t("packageDiff.same")}</p>}>

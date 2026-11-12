@@ -87,7 +87,11 @@ export function useDraft(tenantId: () => string, packageId: () => string, initia
   /** The refusals of the last check, none before one. */
   const refusals = () => verdict()?.refusals ?? [];
 
-  return { draft, change, reset, verdict, refusals, busy, error, check, publish };
+  /** The acts over their tap budget the last check found, none before one (ADR-0210). */
+  // A cloud too old to count answers none.
+  const warnings = () => verdict()?.warnings ?? [];
+
+  return { draft, change, reset, verdict, refusals, warnings, busy, error, check, publish };
 }
 
 /** What `useDraft` gives the screen. */

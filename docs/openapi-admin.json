@@ -32244,7 +32244,8 @@
         "required": [
           "accepted",
           "min_edge_version",
-          "refusals"
+          "refusals",
+          "warnings"
         ],
         "properties": {
           "accepted": {
@@ -32261,6 +32262,13 @@
               "$ref": "#/components/schemas/PackageRefusal"
             },
             "description": "Why it would be refused: the first fault the publish's checks meet, or none."
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PackageWarning"
+            },
+            "description": "What would publish but is worth a look: each act a role reaches in more taps than its\nbudget from its home (ADR-0210 decision 5). Never a reason to refuse. Empty for a draft that\nstates no homes, or one refused before the count."
           }
         }
       },
@@ -32284,6 +32292,12 @@
           "create_time": {
             "$ref": "#/components/schemas/Timestamp",
             "description": "When it was published."
+          },
+          "tap_warning_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many acts it offers over their tap budget, counted at publish\n([ADR-0210](../../../docs/adr/0210-a-role-names-its-home-screen-in-the-package.md)\ndecision 5): warnings, which never refuse a version. `0` for a version published before it\nwas counted.",
+            "minimum": 0
           }
         }
       },
@@ -32340,6 +32354,52 @@
           "version_label": {
             "type": "string",
             "description": "The version's name in the console."
+          }
+        }
+      },
+      "PackageWarning": {
+        "type": "object",
+        "description": "An act over its tap budget for one role on one device class, at the node offering it most\ncheaply (ADR-0210 decision 5).",
+        "required": [
+          "reason",
+          "device_class",
+          "action_id",
+          "screen_index",
+          "node_index",
+          "taps"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "string",
+            "description": "The act, by its catalogue id."
+          },
+          "device_class": {
+            "type": "string",
+            "description": "The device class."
+          },
+          "node_index": {
+            "type": "integer",
+            "description": "The node offering it, by its position in that tree's pre-order, the root being 0.",
+            "minimum": 0
+          },
+          "reason": {
+            "type": "string",
+            "description": "`TAP_BUDGET`."
+          },
+          "role_id": {
+            "type": "string",
+            "description": "The role, by its id; absent for the base: every role without a home of its own."
+          },
+          "screen_index": {
+            "type": "integer",
+            "description": "The screen variant offering it most cheaply, by its position in `screens`.",
+            "minimum": 0
+          },
+          "taps": {
+            "type": "integer",
+            "format": "int32",
+            "description": "What it costs from the home, in taps: over two for a common act, over three for a rare one.",
+            "minimum": 0
           }
         }
       },
