@@ -14,20 +14,22 @@ use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{AreaId, StoreId, TenantId};
 
-use super::requests::{CreateAreaRequest, FloorListQuery, FloorTenantQuery, UpdateAreaRequest};
+use super::requests::{
+    CreateAreaRequest, FloorListQuery, FloorTenantQuery, ParentMove, UpdateAreaRequest,
+};
 use super::{
     FloorState, floor_entropy_unavailable, floor_error_response, floor_tenant, floor_tenant_store,
 };
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::catalog::CatalogStore;
-use crate::floorplan::{Area, AreaStore, AreaUpdate, NewArea};
+use crate::floorplan::{Area, AreaStore, AreaUpdate, AreaWriteOutcome, FloorStoreError, NewArea};
 use crate::registry::EntityStatus;
-use crate::version::UpdateOutcome;
 use axum::Json;
 use pos_cloud_api::conditional::{if_match, version_mismatch, versioned_ok, with_etag};
 use pos_cloud_api::refusal::not_found;
 use pos_cloud_config::route::{entity_status_refusal, parse_entity_status};
+use pos_core::floor::area_tree::AreaTreeRefusal;
 
 #[utoipa::path(
     get,
@@ -142,15 +144,18 @@ where
     extensions(("x-permission" = json!("console.floor.manage"))),
     security(("session_cookie" = [])),
     request_body(
-        content = CreateAreaRequest, description = "`tenant_id` and `store_id`, and the area's `name`, which may not be blank",
+        content = CreateAreaRequest, description = "`tenant_id` and `store_id`, the area's `name`, which may not be blank, and the \
+                       `parent_area_id` it sits inside, absent or `null` for the top (ADR-0211)",
         content_type = "application/json",
     ),
     responses(
         (status = 201, body = CreatedId, description = "Created, active, with the id minted here. The body carries `id`, and the ETag carries \
                                       its version. Audited"),
-        (status = 400, description = "tenant_id or store_id is absent or not a ULID, or name is blank", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 400, description = "tenant_id, store_id or parent_area_id is not a ULID, or name is blank", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 403, description = "The role lacks console.floor.manage", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 409, description = "The tree refuses the parent: `AREA_PARENT_NOT_FOUND`, `AREA_PARENT_ARCHIVED` or `AREA_TOO_DEEP` on \
+                                      `parent_area_id`", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 503, description = "The floor store or the entropy source is unavailable", body = pos_cloud_api::error_schema::ErrorResponse),
     ),
     tag = "floor",
@@ -192,6 +197,10 @@ where
             &[("name", "REQUIRED")],
         );
     }
+    let parent_area_id = match parse_parent(request.parent_area_id.as_deref()) {
+        Ok(parent) => parent,
+        Err(refusal) => return refusal,
+    };
     let Some(area_id) = mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(AreaId::new)
     else {
         return floor_entropy_unavailable();
@@ -201,14 +210,16 @@ where
         tenant_id,
         store_id,
         name: request.name.clone(),
+        parent_area_id,
     };
     match AreaStore::create(&state.floor, &new_area).await {
-        Ok(version) => {
+        Ok(AreaWriteOutcome::Written(version)) => {
             let after = serde_json::json!({
                 "id": area_id.to_string(),
                 "store_id": store_id.to_string(),
                 "name": request.name,
                 "status": EntityStatus::Active.as_str(),
+                "parent_area_id": parent_area_id.map(|parent| parent.to_string()),
             });
             audit_action(
                 &state.audit,
@@ -227,8 +238,51 @@ where
                 &version,
             )
         }
+        Ok(AreaWriteOutcome::Refused(refusal)) => tree_refusal(refusal),
+        Ok(AreaWriteOutcome::VersionMismatch | AreaWriteOutcome::NotFound) => {
+            floor_error_response(&FloorStoreError::new("an insert reported a version"))
+        }
         Err(error) => floor_error_response(&error),
     }
+}
+
+/// Parses an optional parent area id.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — the shared 400 these route helpers return"
+)]
+fn parse_parent(parent: Option<&str>) -> Result<Option<AreaId>, Response> {
+    parent
+        .map(|parent| {
+            parse_ulid_fields([("parent_area_id", parent)]).map(|[parent]| AreaId::new(parent))
+        })
+        .transpose()
+}
+
+/// The `409` the tree rule answers with, naming the field the caller changes to fix it
+/// ([ADR-0211](../../../../docs/adr/0211-an-area-may-sit-inside-another-area.md)).
+fn tree_refusal(refusal: AreaTreeRefusal) -> Response {
+    let (field, message) = match refusal {
+        AreaTreeRefusal::ParentNotFound => (
+            "parent_area_id",
+            "the parent is not one of this store's areas",
+        ),
+        AreaTreeRefusal::ParentArchived => ("parent_area_id", "the parent is archived"),
+        AreaTreeRefusal::Cycle => (
+            "parent_area_id",
+            "an area cannot sit inside itself or an area inside it",
+        ),
+        AreaTreeRefusal::TooDeep => (
+            "parent_area_id",
+            "the branch would be deeper than eight levels",
+        ),
+        AreaTreeRefusal::HasLiveChildren => ("status", "move or archive the areas inside it first"),
+    };
+    api_error_with_details(
+        ErrorStatus::FailedPrecondition,
+        message,
+        &[(field, refusal.reason())],
+    )
 }
 
 #[utoipa::path(
@@ -243,7 +297,7 @@ where
     ),
     request_body(
         content = UpdateAreaRequest, description = "`tenant_id`, and the area's `name` and `status` (`active` or `archived`) as they should now \
-                       stand",
+                       stand; `parent_area_id` moves it (`null` to the top), and absent leaves it where it is (ADR-0211)",
         content_type = "application/json",
     ),
     responses(
@@ -253,6 +307,8 @@ where
         (status = 401, description = "No session", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 403, description = "The role lacks console.floor.manage", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 404, description = "The tenant has no area with that id", body = pos_cloud_api::error_schema::ErrorResponse),
+        (status = 409, description = "The tree refuses the change: `AREA_PARENT_NOT_FOUND`, `AREA_PARENT_ARCHIVED`, `AREA_CYCLE` or \
+                                      `AREA_TOO_DEEP` on `parent_area_id`, or `AREA_HAS_LIVE_CHILDREN` on `status`", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 412, description = "The area changed since you read it: re-read it and try again", body = pos_cloud_api::error_schema::ErrorResponse),
         (status = 503, description = "The floor store is unreachable", body = pos_cloud_api::error_schema::ErrorResponse),
     ),
@@ -297,22 +353,37 @@ where
     let Some(status) = parse_entity_status(&request.status) else {
         return entity_status_refusal();
     };
+    let expected = match if_match(&headers) {
+        Ok(expected) => expected,
+        Err(refusal) => return refusal,
+    };
+    let parent_area_id = match &request.parent_area_id {
+        ParentMove::To(parent) => match parse_parent(parent.as_deref()) {
+            Ok(parent) => parent,
+            Err(refusal) => return refusal,
+        },
+        // Absent: where it is now. The write is conditional on the version the caller read, so a
+        // parent that moved since then is a 412, not a silent move back.
+        ParentMove::Keep => match AreaStore::get(&state.floor, tenant_id, area_id).await {
+            Ok(Some(area)) => area.record.parent_area_id,
+            Ok(None) => return not_found("area"),
+            Err(error) => return floor_error_response(&error),
+        },
+    };
     let update = AreaUpdate {
         area_id,
         tenant_id,
         name: request.name.clone(),
         status,
-    };
-    let expected = match if_match(&headers) {
-        Ok(expected) => expected,
-        Err(refusal) => return refusal,
+        parent_area_id,
     };
     match AreaStore::update(&state.floor, &update, &expected).await {
-        Ok(UpdateOutcome::Updated(version)) => {
+        Ok(AreaWriteOutcome::Written(version)) => {
             let after = serde_json::json!({
                 "id": area_id.to_string(),
                 "name": request.name,
                 "status": status.as_str(),
+                "parent_area_id": parent_area_id.map(|parent| parent.to_string()),
             });
             audit_action(
                 &state.audit,
@@ -328,8 +399,9 @@ where
             .await;
             with_etag(StatusCode::NO_CONTENT.into_response(), &version)
         }
-        Ok(UpdateOutcome::VersionMismatch) => version_mismatch(),
-        Ok(UpdateOutcome::NotFound) => not_found("area"),
+        Ok(AreaWriteOutcome::VersionMismatch) => version_mismatch(),
+        Ok(AreaWriteOutcome::NotFound) => not_found("area"),
+        Ok(AreaWriteOutcome::Refused(refusal)) => tree_refusal(refusal),
         Err(error) => floor_error_response(&error),
     }
 }

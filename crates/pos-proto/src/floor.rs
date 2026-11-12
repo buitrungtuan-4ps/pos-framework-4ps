@@ -62,6 +62,55 @@ pub struct FloorArea {
     /// The tables in this area, in display order.
     #[serde(default)]
     pub tables: Vec<FloorTable>,
+    /// The area this one sits inside, or `None` for an area at the top: a floor is simply a
+    /// top-level area ([ADR-0211](../../../docs/adr/0211-an-area-may-sit-inside-another-area.md)).
+    /// Omitted from the wire when absent, so a store whose areas are all at the top publishes
+    /// exactly what it published before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    pub parent_area_id: Option<AreaId>,
+    /// How many areas this one sits inside: zero at the top, and always `path.len()`. Computed by
+    /// the cloud when it publishes, so a reader never walks the tree. Omitted while zero.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub depth: u8,
+    /// The ids of the areas this one sits inside, from the top down to its parent; empty at the
+    /// top. The area itself is not in it, so a breadcrumb is the path's names and then this
+    /// area's. Computed by the cloud when it publishes. Omitted while empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub path: Vec<AreaId>,
+}
+
+impl FloorArea {
+    /// An area at the top of the tree, which sits inside no other area: what every area was before
+    /// [ADR-0211](../../../docs/adr/0211-an-area-may-sit-inside-another-area.md).
+    #[must_use]
+    pub const fn top(area_id: AreaId, name: DisplayName, tables: Vec<FloorTable>) -> Self {
+        Self {
+            area_id,
+            name,
+            tables,
+            parent_area_id: None,
+            depth: 0,
+            path: Vec::new(),
+        }
+    }
+}
+
+/// How many levels a branch of areas may hold, the top level counting as one: the cloud refuses a
+/// write that would go deeper ([ADR-0211](../../../docs/adr/0211-an-area-may-sit-inside-another-area.md)
+/// decision 2). A published area's `depth` is therefore at most `MAX_AREA_LEVELS - 1`.
+pub const MAX_AREA_LEVELS: u8 = 8;
+
+/// Past this many levels the console warns that a plan is deep, and never refuses it
+/// ([ADR-0211](../../../docs/adr/0211-an-area-may-sit-inside-another-area.md) decision 2).
+pub const WARN_AREA_LEVELS: u8 = 3;
+
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if hands the field by reference"
+)]
+const fn is_zero(depth: &u8) -> bool {
+    *depth == 0
 }
 
 /// The store's floor plan: its areas and the tables in each.
@@ -361,6 +410,9 @@ mod tests {
                     position: None,
                 },
             ],
+            parent_area_id: None,
+            depth: 0,
+            path: Vec::new(),
         })
     }
 
@@ -386,6 +438,42 @@ mod tests {
         let json = serde_json::to_string(&plan).expect("serialises");
         // T1 has a position; T2 does not — exactly one `position` key survives.
         assert_eq!(json.matches("\"position\"").count(), 1);
+    }
+
+    #[test]
+    fn a_top_level_area_writes_none_of_the_tree_fields() {
+        let json = serde_json::to_string(&sample_floor()).expect("serialises");
+        for key in ["parent_area_id", "depth", "path"] {
+            assert!(!json.contains(key), "{key} stays off the wire at the top");
+        }
+    }
+
+    #[test]
+    fn a_nested_area_carries_its_parent_depth_and_path_and_round_trips() {
+        let plan = sample_floor().with(FloorArea {
+            area_id: area_id(3),
+            name: DisplayName::new("VIP"),
+            tables: Vec::new(),
+            parent_area_id: Some(area_id(1)),
+            depth: 1,
+            path: vec![area_id(1)],
+        });
+        let json = serde_json::to_string(&plan).expect("serialises");
+        assert_eq!(json.matches("\"parent_area_id\"").count(), 1);
+        assert_eq!(json.matches("\"depth\":1").count(), 1);
+        let back: FloorPlan = serde_json::from_str(&json).expect("deserialises");
+        assert_eq!(back, plan);
+    }
+
+    #[test]
+    fn an_area_from_before_the_tree_reads_as_a_top_level_area() {
+        let id = area_id(1).to_string();
+        let area: FloorArea =
+            serde_json::from_str(&format!(r#"{{"area_id":"{id}","name":"Terrace"}}"#))
+                .expect("an area from before the fields parses");
+        assert_eq!(area.parent_area_id, None);
+        assert_eq!(area.depth, 0);
+        assert!(area.path.is_empty());
     }
 
     fn sample_stations() -> StationPlan {

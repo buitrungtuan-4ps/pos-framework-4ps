@@ -814,11 +814,11 @@ async fn the_floor_says_when_each_seated_table_sat_down() {
         position: None,
     };
     let store = a_store_where(|session| {
-        session.with_floor(FloorPlan::new().with(FloorArea {
-            area_id: AreaId::new(Ulid::from_u128(1)),
-            name: DisplayName::new("Main hall"),
-            tables: vec![table(seated, "6"), table(free, "7")],
-        }))
+        session.with_floor(FloorPlan::new().with(FloorArea::top(
+            AreaId::new(Ulid::from_u128(1)),
+            DisplayName::new("Main hall"),
+            vec![table(seated, "6"), table(free, "7")],
+        )))
     })
     .await;
 
@@ -906,11 +906,11 @@ async fn guests_move_to_another_table_on_the_composed_edge() {
         position: None,
     };
     let store = a_store_where(|session| {
-        session.with_floor(FloorPlan::new().with(FloorArea {
-            area_id: AreaId::new(Ulid::from_u128(1)),
-            name: DisplayName::new("Main hall"),
-            tables: vec![table(from, "9"), table(to, "10")],
-        }))
+        session.with_floor(FloorPlan::new().with(FloorArea::top(
+            AreaId::new(Ulid::from_u128(1)),
+            DisplayName::new("Main hall"),
+            vec![table(from, "9"), table(to, "10")],
+        )))
     })
     .await;
     a_fired_and_prepared_order(&store, from).await;

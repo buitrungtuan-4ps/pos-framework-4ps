@@ -32,14 +32,43 @@ pub(super) struct CreateAreaRequest {
     pub(super) tenant_id: String,
     pub(super) store_id: String,
     pub(super) name: String,
+    /// The area it sits inside (a ULID of the same store), or absent or `null` for the top
+    /// (ADR-0211).
+    #[serde(default)]
+    #[schema(nullable)]
+    pub(super) parent_area_id: Option<String>,
 }
 
-/// Rename an area and/or set its status.
+/// Rename an area, set its status, and/or move it.
 #[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct UpdateAreaRequest {
     pub(super) tenant_id: String,
     pub(super) name: String,
     pub(super) status: String,
+    /// The area it now sits inside, `null` to move it to the top, or absent to leave it where it
+    /// is (ADR-0211).
+    #[serde(default, deserialize_with = "parent_move")]
+    #[schema(value_type = Option<String>, nullable)]
+    pub(super) parent_area_id: ParentMove,
+}
+
+/// What an update says about an area's parent.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) enum ParentMove {
+    /// The field is absent: the area stays where it is.
+    #[default]
+    Keep,
+    /// The field is present: inside this area, or at the top for `null`.
+    To(Option<String>),
+}
+
+/// Reads a present `parent_area_id`, `null` included, as [`ParentMove::To`]; with
+/// `#[serde(default)]` an absent one stays [`ParentMove::Keep`].
+fn parent_move<'de, D>(deserializer: D) -> Result<ParentMove, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(ParentMove::To)
 }
 
 /// Create a floor table.

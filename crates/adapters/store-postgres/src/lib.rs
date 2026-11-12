@@ -96,7 +96,10 @@ pub use data_migrations::PostgresDataMigrations;
 pub use devices::{DeviceProposalRow, PostgresDeviceProposals};
 pub use fee_rules::{FeeRuleRow, FeeRuleSlot, FeeRuleWrite, PostgresFeeRules};
 pub use fleet::{FleetStoreRow, PostgresFleet};
-pub use floor::{AreaRow, PostgresFloor, RoutingRuleRow, StationRow, TableRow};
+pub use floor::{
+    AreaFields, AreaLinkRow, AreaRow, AreaWrite, PostgresFloor, RoutingRuleRow, StationRow,
+    TableRow,
+};
 pub use inventory::{InventoryRow, PostgresInventory};
 pub use liveness_wake::ConfigWakeRow;
 pub use media::{MediaAssetRow, PostgresMedia};

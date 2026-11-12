@@ -6,7 +6,10 @@
 //! `persistence.rs` with their traits. A trait can be implemented for another crate's type only in
 //! the trait's crate, so the glue lives here; all SQL stays in the adapter.
 
-use store_postgres::{AreaRow, PostgresFloor, RoutingRuleRow, StationRow, TableRow};
+use store_postgres::{
+    AreaFields, AreaLinkRow, AreaRow, AreaWrite, PostgresFloor, RoutingRuleRow, StationRow,
+    TableRow,
+};
 
 use pos_proto::display::GridPosition;
 use pos_proto::ids::{AreaId, CourseId, MenuItemId, StationId, StoreId, TableId, TenantId};
@@ -14,10 +17,12 @@ use pos_proto::printing::ReceiptLanguage;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::WireEnum;
 
+use pos_core::floor::area_tree::{AreaLink, AreaTreeRefusal, area_change_refusal};
+
 use crate::floorplan::{
-    Area, AreaStore, AreaUpdate, FloorStoreError, NewArea, NewRoutingRule, NewStation, NewTable,
-    RoutingRule, RoutingRuleId, RoutingRuleStore, Station, StationStore, StationUpdate, Table,
-    TableStore, TableUpdate,
+    Area, AreaStore, AreaUpdate, AreaWriteOutcome, FloorStoreError, NewArea, NewRoutingRule,
+    NewStation, NewTable, RoutingRule, RoutingRuleId, RoutingRuleStore, Station, StationStore,
+    StationUpdate, Table, TableStore, TableUpdate,
 };
 use crate::registry::EntityStatus;
 use crate::version::{UpdateOutcome, Version, Versioned};
@@ -39,6 +44,11 @@ fn area_record(row: AreaRow) -> Result<Versioned<Area>, FloorStoreError> {
         store_id: StoreId::new(parse_floor_ulid(&row.store_id, "store")?),
         name: row.name,
         status: EntityStatus::from_db(&row.status),
+        parent_area_id: row
+            .parent_area_id
+            .as_deref()
+            .map(|parent| parse_floor_ulid(parent, "parent area").map(AreaId::new))
+            .transpose()?,
     };
     Ok(Versioned::new(record, Version::new(row.version)))
 }
@@ -66,17 +76,69 @@ fn table_record(row: TableRow) -> Result<Versioned<Table>, FloorStoreError> {
     Ok(Versioned::new(record, Version::new(row.version)))
 }
 
+/// The tree rule over the store's areas as the write found them (ADR-0211). A stored id that is not
+/// a ULID fails the write rather than being read past.
+fn tree_check(
+    links: &[AreaLinkRow],
+    change: &AreaLink,
+) -> Option<Result<AreaTreeRefusal, FloorStoreError>> {
+    let mut areas = Vec::with_capacity(links.len());
+    for link in links {
+        let parsed = parse_floor_ulid(&link.id, "area").and_then(|id| {
+            let parent = link
+                .parent_area_id
+                .as_deref()
+                .map(|parent| parse_floor_ulid(parent, "parent area"))
+                .transpose()?;
+            Ok(AreaLink {
+                area_id: AreaId::new(id),
+                parent_area_id: parent.map(AreaId::new),
+                active: EntityStatus::from_db(&link.status) == EntityStatus::Active,
+            })
+        });
+        match parsed {
+            Ok(area) => areas.push(area),
+            Err(error) => return Some(Err(error)),
+        }
+    }
+    area_change_refusal(&areas, change).map(Ok)
+}
+
+/// Reads an adapter area write into the seam's outcome.
+fn area_outcome(
+    write: AreaWrite<Result<AreaTreeRefusal, FloorStoreError>>,
+) -> Result<AreaWriteOutcome, FloorStoreError> {
+    match write {
+        AreaWrite::Written(version) => Ok(AreaWriteOutcome::Written(Version::new(version))),
+        AreaWrite::VersionMismatch => Ok(AreaWriteOutcome::VersionMismatch),
+        AreaWrite::NotFound => Ok(AreaWriteOutcome::NotFound),
+        AreaWrite::Refused(refusal) => refusal.map(AreaWriteOutcome::Refused),
+    }
+}
+
 impl AreaStore for PostgresFloor {
-    async fn create(&self, area: &NewArea) -> Result<Version, FloorStoreError> {
-        self.insert_area(
-            &area.area_id.to_string(),
-            &area.tenant_id.to_string(),
-            &area.store_id.to_string(),
-            &area.name,
-        )
-        .await
-        .map(Version::new)
-        .map_err(|error| FloorStoreError::new(error.to_string()))
+    async fn create(&self, area: &NewArea) -> Result<AreaWriteOutcome, FloorStoreError> {
+        let id = area.area_id.to_string();
+        let parent = area.parent_area_id.map(|parent| parent.to_string());
+        let change = AreaLink {
+            area_id: area.area_id,
+            parent_area_id: area.parent_area_id,
+            active: true,
+        };
+        let fields = AreaFields {
+            tenant_id: &area.tenant_id.to_string(),
+            id: &id,
+            name: &area.name,
+            status: EntityStatus::Active.as_str(),
+            parent_area_id: parent.as_deref(),
+        };
+        let write = self
+            .insert_area(&area.store_id.to_string(), fields, |links| {
+                tree_check(links, &change)
+            })
+            .await
+            .map_err(|error| FloorStoreError::new(error.to_string()))?;
+        area_outcome(write)
     }
 
     async fn list(
@@ -107,17 +169,28 @@ impl AreaStore for PostgresFloor {
         &self,
         area: &AreaUpdate,
         expected: &Version,
-    ) -> Result<UpdateOutcome, FloorStoreError> {
-        self.set_area(
-            &area.tenant_id.to_string(),
-            &area.area_id.to_string(),
-            &area.name,
-            area.status.as_str(),
-            expected.as_str(),
-        )
-        .await
-        .map(update_outcome)
-        .map_err(|error| FloorStoreError::new(error.to_string()))
+    ) -> Result<AreaWriteOutcome, FloorStoreError> {
+        let id = area.area_id.to_string();
+        let parent = area.parent_area_id.map(|parent| parent.to_string());
+        let change = AreaLink {
+            area_id: area.area_id,
+            parent_area_id: area.parent_area_id,
+            active: area.status == EntityStatus::Active,
+        };
+        let fields = AreaFields {
+            tenant_id: &area.tenant_id.to_string(),
+            id: &id,
+            name: &area.name,
+            status: area.status.as_str(),
+            parent_area_id: parent.as_deref(),
+        };
+        let write = self
+            .set_area(fields, expected.as_str(), |links| {
+                tree_check(links, &change)
+            })
+            .await
+            .map_err(|error| FloorStoreError::new(error.to_string()))?;
+        area_outcome(write)
     }
 }
 

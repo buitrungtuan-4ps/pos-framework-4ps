@@ -381,7 +381,7 @@ async fn a_routing_rule_may_not_name_an_archived_course() {
 
 /// The main app (sharing one config-tree store) merged with the floor CRUD and floor-publish routers,
 /// so a test can author master data and then publish it, reading the effective config back (ADR-0072).
-fn floor_publish_app(
+pub(super) fn floor_publish_app(
     admin: FakeAdmin,
     floor: FakeFloor,
     config: FakeConfigTrees,

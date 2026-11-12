@@ -20,6 +20,7 @@
 use core::fmt;
 use core::future::Future;
 
+use pos_core::floor::area_tree::AreaTreeRefusal;
 use pos_proto::display::GridPosition;
 use pos_proto::ids::{AreaId, CourseId, MenuItemId, StationId, StoreId, TableId, TenantId};
 use pos_proto::printing::ReceiptLanguage;
@@ -41,6 +42,10 @@ pub struct Area {
     pub name: String,
     /// Active or archived.
     pub status: EntityStatus,
+    /// The area it sits inside, or `None` at the top
+    /// ([ADR-0211](../../../docs/adr/0211-an-area-may-sit-inside-another-area.md)).
+    #[schema(required = true)]
+    pub parent_area_id: Option<AreaId>,
 }
 
 /// A new area to create — identity + name; status starts active.
@@ -54,9 +59,11 @@ pub struct NewArea {
     pub store_id: StoreId,
     /// The name.
     pub name: String,
+    /// The area it sits inside, or `None` at the top.
+    pub parent_area_id: Option<AreaId>,
 }
 
-/// An update to an area's name and/or status, addressed by id within its tenant.
+/// An update to an area's name, status and/or parent, addressed by id within its tenant.
 #[derive(Debug, Clone)]
 pub struct AreaUpdate {
     /// The area to change.
@@ -67,6 +74,23 @@ pub struct AreaUpdate {
     pub name: String,
     /// The new status (archiving retires the area without deleting it).
     pub status: EntityStatus,
+    /// The area it now sits inside, or `None` for the top.
+    pub parent_area_id: Option<AreaId>,
+}
+
+/// What an area write did. The store checks the tree rule
+/// ([`pos_core::floor::area_tree::area_change_refusal`], ADR-0211) inside the write, over the
+/// store's areas as the write finds them, so two writes cannot together make a cycle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AreaWriteOutcome {
+    /// Written. Carries the row's new version.
+    Written(Version),
+    /// The area is there, at a different version. Never for a create.
+    VersionMismatch,
+    /// No such area in the tenant. Never for a create.
+    NotFound,
+    /// The tree rule refused the write. Nothing was written.
+    Refused(AreaTreeRefusal),
 }
 
 /// A table as the console reads it: a table on one store's floor, in an area, optionally placed on the
@@ -132,7 +156,7 @@ pub struct TableUpdate {
 
 /// Persists and reads a store's floor areas. Archived, never deleted.
 pub trait AreaStore {
-    /// Inserts an area.
+    /// Inserts an area, unless the tree rule refuses it.
     ///
     /// # Errors
     ///
@@ -140,7 +164,7 @@ pub trait AreaStore {
     fn create(
         &self,
         area: &NewArea,
-    ) -> impl Future<Output = Result<Version, FloorStoreError>> + Send;
+    ) -> impl Future<Output = Result<AreaWriteOutcome, FloorStoreError>> + Send;
 
     /// Lists a store's areas, newest first.
     ///
@@ -164,7 +188,8 @@ pub trait AreaStore {
         area_id: AreaId,
     ) -> impl Future<Output = Result<Option<Versioned<Area>>, FloorStoreError>> + Send;
 
-    /// Renames an area and/or sets its status. Applies only at `expected`.
+    /// Renames an area and/or sets its status and parent. Applies only at `expected`, and only if
+    /// the tree rule passes.
     ///
     /// # Errors
     ///
@@ -173,7 +198,7 @@ pub trait AreaStore {
         &self,
         area: &AreaUpdate,
         expected: &Version,
-    ) -> impl Future<Output = Result<UpdateOutcome, FloorStoreError>> + Send;
+    ) -> impl Future<Output = Result<AreaWriteOutcome, FloorStoreError>> + Send;
 }
 
 /// Persists and reads a store's floor tables. Archived, never deleted.
