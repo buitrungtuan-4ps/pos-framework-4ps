@@ -8,8 +8,8 @@
 
 import { createSignal } from "solid-js";
 
-import type { Screen } from "../package/components";
-import type { Variant } from "../package/variant";
+import type { Screen } from "../../../packages/package-renderer/src/components";
+import type { Variant } from "../../../packages/package-renderer/src/variant";
 
 const [published, setPublished] = createSignal<readonly Variant<Screen>[]>([]);
 let kept = "[]";

@@ -17,7 +17,7 @@ import { createSignal } from "solid-js";
 
 import { ApiError } from "../api/client";
 import { afterPaint } from "../lib/after-paint";
-import type { ACTIONS } from "../package/actions";
+import type { ACTIONS } from "../../../packages/package-renderer/src/actions";
 import { state } from "./store";
 
 /** The catalogue's edge writes: the only acts this path takes, checked when the till is built. */

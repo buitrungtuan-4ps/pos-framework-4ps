@@ -29,8 +29,8 @@ import { SendFirst } from "../components/SendFirst";
 import { counterKey, createSendFirst } from "../state/unsent";
 import { draftWalkIn } from "../state/draft-walk-in";
 import { createPrint } from "../state/print-writes";
-import { Children } from "../package/render";
-import { RegionsContext, type Regions } from "../package/regions";
+import { Children } from "../../../packages/package-renderer/src/render";
+import { RegionsContext, type Regions } from "../../../packages/package-renderer/src/regions";
 import { NO_ACTS, PackageScreen } from "../package/screen";
 
 // The table pay screen's guard on the cash snap, kept in step with `Pay.tsx` by hand rather than

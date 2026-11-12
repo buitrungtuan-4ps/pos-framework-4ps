@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { ACTIONS } from "../src/package/actions";
+import { ACTIONS } from "../../packages/package-renderer/src/actions";
 import { PRECHECKED, WRITES_PENDING } from "../src/package/prechecks";
 
 describe("the till's pre-checks", () => {

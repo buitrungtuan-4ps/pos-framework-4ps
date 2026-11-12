@@ -1,7 +1,7 @@
-// Which variant of a package part the till shows (ADR-0189 decision 4): the till's half of the one
-// rule `pos_core::package` implements for the edge. Both run the shared vectors in
-// `crates/pos-proto/testdata/package_variants.json` (`unit/package-variant.test.ts`), so the two
-// stay equal. `docs/architecture.md` §3.1 states the rule.
+// Which variant of a package part the till shows, and the console previews (ADR-0189 decision 4):
+// the front ends' half of the one rule `pos_core::package` implements for the edge. Both run the
+// shared vectors in `crates/pos-proto/testdata/package_variants.json` (the till's
+// `unit/package-variant.test.ts`), so the two stay equal. `docs/architecture.md` §3.1 states the rule.
 //
 // The shapes below mirror `pos_proto::package` and are local to this module until the edge serves
 // a package's content through a route of its OpenAPI document; then they become aliases in

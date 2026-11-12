@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { ACTIONS } from "../src/package/actions";
+import { ACTIONS } from "../../packages/package-renderer/src/actions";
 
 /** Edge writes the till does not send through `editWrite`, and why. */
 const EXEMPT: Readonly<Record<string, string>> = {

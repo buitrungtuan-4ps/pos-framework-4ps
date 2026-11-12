@@ -9,7 +9,7 @@ import { errorMessage } from "../lib/errors";
 import { can } from "../state/permissions";
 import { createScreenRead } from "../state/screen-read";
 import { confirmGuestOrder, rejectGuestOrder } from "../state/kitchen-writes";
-import { RegionsContext, type Regions } from "../package/regions";
+import { RegionsContext, type Regions } from "../../../packages/package-renderer/src/regions";
 import { NO_ACTS, PackageScreen } from "../package/screen";
 
 // The staff-confirmation queue: the guest orders waiting, and the two ways one leaves this screen

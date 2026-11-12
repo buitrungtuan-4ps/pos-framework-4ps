@@ -4,7 +4,7 @@ import { useNavigate, useSearchParams } from "@solidjs/router";
 import { ApiError, api } from "../api/client";
 import { t } from "../i18n";
 import { errorMessage } from "../lib/errors";
-import { RegionsContext, type Regions } from "../package/regions";
+import { RegionsContext, type Regions } from "../../../packages/package-renderer/src/regions";
 import { NO_ACTS, PackageScreen } from "../package/screen";
 
 // What a refused code tells the operator. The edge answers `403` for a code that is wrong, spent or

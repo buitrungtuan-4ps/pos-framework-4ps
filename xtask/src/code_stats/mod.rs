@@ -37,7 +37,13 @@ const SKIPPED_DIRS: [&str; 7] = [
 ];
 
 /// The front-end build roots, each measured on its own.
-const FRONTEND_ROOTS: [&str; 4] = ["ui", "dashboard", "apps/pos-station/ui", "packages/shared"];
+const FRONTEND_ROOTS: [&str; 5] = [
+    "ui",
+    "dashboard",
+    "apps/pos-station/ui",
+    "packages/shared",
+    "packages/package-renderer",
+];
 
 /// The source extensions a front-end root is measured by.
 const FRONTEND_EXTENSIONS: [&str; 6] = ["ts", "tsx", "mjs", "js", "css", "html"];

@@ -8,7 +8,7 @@
 // `WRITES_PENDING` is the till's own: a write to the bill still on its way (ADR-0196 safeguard 2,
 // "no write still pending on the bill"), which the edge never sees as such.
 
-import type { ActionId } from "./actions";
+import type { ActionId } from "../../../packages/package-renderer/src/actions";
 
 export const WRITES_PENDING = "WRITES_PENDING";
 

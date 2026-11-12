@@ -16,7 +16,7 @@ import { printOutcomeKey } from "../lib/print";
 import { can } from "../state/permissions";
 import { createScreenRead, onStatus } from "../state/screen-read";
 import { loadDrawers, loadShift, loadSync, state } from "../state/store";
-import { RegionsContext, type Regions } from "../package/regions";
+import { RegionsContext, type Regions } from "../../../packages/package-renderer/src/regions";
 import { NO_ACTS, PackageScreen } from "../package/screen";
 
 // Retiring a till (ADR-0091, production-readiness O1). `POST /api/pair/revoke` and

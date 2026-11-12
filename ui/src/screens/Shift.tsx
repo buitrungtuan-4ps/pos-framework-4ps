@@ -37,7 +37,7 @@ import { printOutcomeKey } from "../lib/print";
 import { asksApprover, can } from "../state/permissions";
 import { overrideAsks } from "../state/drawer-access";
 import { EMPTY_COUNT, fieldAmount } from "../state/cash-count";
-import { RegionsContext, type Regions } from "../package/regions";
+import { RegionsContext, type Regions } from "../../../packages/package-renderer/src/regions";
 import { NO_ACTS, PackageScreen } from "../package/screen";
 
 // The reason list's three acts for the drawer (ADR-0115), as `/api/reason-codes` spells them.

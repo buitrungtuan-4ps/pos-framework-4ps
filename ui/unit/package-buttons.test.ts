@@ -7,8 +7,9 @@ import { render } from "solid-js/web";
 
 import { ApiError, api } from "../src/api/client";
 import { IMPLEMENTATIONS } from "../src/package/registry";
-import { PackageTree, type ScreenHost } from "../src/package/render";
+import { PackageTree, type ScreenHost } from "../../packages/package-renderer/src/render";
 import { NO_ACTS, orderHost } from "../src/package/screen";
+import { TILL_WORDS } from "../src/package/words";
 import { adoptSession } from "../src/state/permissions";
 import { setScreenOpener } from "../src/state/reactions";
 
@@ -19,7 +20,7 @@ function button(actionId: string, params: Record<string, string> = {}) {
 function draw(host: ScreenHost, ...buttons: object[]): HTMLElement {
     const target = document.createElement("div");
     document.body.append(target);
-    render(() => PackageTree({ root: { component_id: "stack", children: buttons as never }, host, implementations: IMPLEMENTATIONS, fallback: null }), target);
+    render(() => PackageTree({ root: { component_id: "stack", children: buttons as never }, host, implementations: IMPLEMENTATIONS, words: TILL_WORDS, fallback: null }), target);
     return target;
 }
 

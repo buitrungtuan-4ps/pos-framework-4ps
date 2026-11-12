@@ -14,6 +14,11 @@
 //! as `../packages/shared/…`: a CSS `@import`, a `node ../packages/shared/scripts/…` in its
 //! `package.json`, and an import in its `eslint.config.mjs`.
 //!
+//! The package renderer's core lives the same way in `packages/package-renderer/`
+//! ([ADR-0209](../../../docs/adr/0209-the-console-previews-a-screen-with-the-tills-renderer.md)
+//! decision 1): the tree walk, the contexts, variant resolution, the components that draw from the
+//! package alone and the two catalogues `pos-proto` writes. Neither front end keeps a copy.
+//!
 //! So the check is now the other way round. It fails if a shared file is missing from
 //! `packages/shared/`, or if a copy reappears in a front end, which is how the drift started. The
 //! two `eslint.config.mjs` files that import the shared rules are the one remaining pair, and must
@@ -62,6 +67,47 @@ const SHARED: &[(&str, &[&str])] = &[
         ],
     ),
     ("packages/shared/eslint/size.mjs", &[]),
+    // The package renderer's core (ADR-0209): the till drew from these, and the console kept its
+    // own copy of the two catalogues `pos-proto` writes.
+    (
+        "packages/package-renderer/src/components.ts",
+        &[
+            "ui/src/package/components.ts",
+            "dashboard/src/package/components.ts",
+        ],
+    ),
+    (
+        "packages/package-renderer/src/actions.ts",
+        &[
+            "ui/src/package/actions.ts",
+            "dashboard/src/package/actions.ts",
+        ],
+    ),
+    (
+        "packages/package-renderer/src/render.tsx",
+        &[
+            "ui/src/package/render.tsx",
+            "dashboard/src/package/render.tsx",
+        ],
+    ),
+    (
+        "packages/package-renderer/src/base.tsx",
+        &["dashboard/src/package/base.tsx"],
+    ),
+    (
+        "packages/package-renderer/src/regions.tsx",
+        &[
+            "ui/src/package/regions.tsx",
+            "dashboard/src/package/regions.tsx",
+        ],
+    ),
+    (
+        "packages/package-renderer/src/variant.ts",
+        &[
+            "ui/src/package/variant.ts",
+            "dashboard/src/package/variant.ts",
+        ],
+    ),
 ];
 
 /// The one pair still held identical: each front end's thin ESLint entry point.
@@ -79,16 +125,17 @@ pub fn run(_args: &[String]) -> Result<Vec<Finding>, Error> {
         if !root.join(shared).is_file() {
             findings.push(
                 Finding::new(*shared, RULE, "the shared file is missing")
-                    .with_hint("both front ends import it from packages/shared; restore it there"),
+                    .with_hint("both front ends import it from packages/; restore it there"),
             );
         }
         for copy in *old_copies {
             if root.join(copy).exists() {
                 findings.push(
-                    Finding::new(*copy, RULE, format!("is a copy of `{shared}`"))
-                        .with_hint(format!(
-                            "delete it and use `{shared}` from both front ends, as `../packages/shared/…`"
-                        )),
+                    Finding::new(*copy, RULE, format!("is a copy of `{shared}`")).with_hint(
+                        format!(
+                            "delete it and use `{shared}` from both front ends, as `../packages/…`"
+                        ),
+                    ),
                 );
             }
         }

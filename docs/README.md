@@ -72,6 +72,7 @@ To find the files a change touches, start from the **[repository map](repository
 | [../CHANGELOG.md](../CHANGELOG.md) | What changed, when, and the upgrade notes |
 | [../SECURITY.md](../SECURITY.md) · [../MAINTAINERS.md](../MAINTAINERS.md) | Reporting a vulnerability; who owns which area |
 | [../packages/shared/README.md](../packages/shared/README.md) | The design tokens and the scripts both front ends share, and how they reach them |
+| [../packages/package-renderer/README.md](../packages/package-renderer/README.md) | The renderer of a package screen, which the till draws with and the console previews with |
 | `README.md` in every workspace crate, for example [pos-core](../crates/pos-core/README.md), [pos-edge](../crates/pos-edge/README.md), [store-sqlite](../crates/adapters/store-sqlite/README.md) | One crate each: what it is, what it owns, its workspace dependencies and dependents, entry points, governing ADRs, how to test it |
 | [../ui/README.md](../ui/README.md) · [../dashboard/public/fonts/README.md](../dashboard/public/fonts/README.md) · [../countries/vn/README.md](../countries/vn/README.md) · [../countries/jp/README.md](../countries/jp/README.md) · [../countries/in/README.md](../countries/in/README.md) | The till's front end, the console's self-hosted typeface, and each shipped country module |
 

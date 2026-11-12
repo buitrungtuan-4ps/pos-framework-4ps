@@ -2,7 +2,7 @@
 // with or run, and which a reaction may run. The catalogue itself is generated from `pos-proto`
 // into `src/package/`; this module is the one place the designers reach it from.
 
-import { ACTIONS, type Action } from "../package/actions";
+import { ACTIONS, type Action } from "../../../packages/package-renderer/src/actions";
 
 export type { Action };
 

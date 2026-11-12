@@ -22,7 +22,15 @@
     "isolatedModules": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    "paths": {
+      "solid-js": [
+        "./node_modules/solid-js"
+      ],
+      "solid-js/*": [
+        "./node_modules/solid-js/*"
+      ]
+    }
   },
   "include": [
     "src",

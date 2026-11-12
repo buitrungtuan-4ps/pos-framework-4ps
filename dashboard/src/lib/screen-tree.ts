@@ -6,7 +6,7 @@
 // root's path is `[]`. The cloud names a refused node by its position in the tree's pre-order, the
 // root being 0 (`pathAtPreorder` turns one into the other).
 
-import { COMPONENTS, type Component, type PropertyValue, type ScreenNode } from "../package/components";
+import { COMPONENTS, type Component, type PropertyValue, type ScreenNode } from "../../../packages/package-renderer/src/components";
 
 /** Where a node is: the positions of its ancestors' children, from the root down. */
 export type NodePath = readonly number[];

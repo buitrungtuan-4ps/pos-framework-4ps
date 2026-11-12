@@ -11,12 +11,9 @@ use core::fmt::Write as _;
 use super::{CATALOGUE, PropertyKind};
 use crate::wire_enum::WireEnum;
 
-/// Where the rendered module is committed, relative to the repository root.
-pub const TYPESCRIPT_PATH: &str = "ui/src/package/components.ts";
-
-/// Where the same module is committed for the console's designers, which build without `ui/`
-/// on disk.
-pub const CONSOLE_TYPESCRIPT_PATH: &str = "dashboard/src/package/components.ts";
+/// Where the rendered module is committed, relative to the repository root: the package renderer
+/// both front ends build from ([ADR-0209](../../../../docs/adr/0209-the-console-previews-a-screen-with-the-tills-renderer.md)).
+pub const TYPESCRIPT_PATH: &str = "packages/package-renderer/src/components.ts";
 
 /// `"A" | "B" | …` over every token of a wire enum.
 fn union<E: WireEnum>() -> String {

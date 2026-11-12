@@ -8,7 +8,7 @@ import { adoptStoreLanguage, t } from "../i18n";
 import { signedInAs } from "../state/session";
 import { loadStore } from "../state/registry";
 import { errorMessage } from "../lib/errors";
-import { RegionsContext, type Regions } from "../package/regions";
+import { RegionsContext, type Regions } from "../../../packages/package-renderer/src/regions";
 import { NO_ACTS, PackageScreen } from "../package/screen";
 
 // A device already signed in has no business on the sign-in screen; a device not paired must pair

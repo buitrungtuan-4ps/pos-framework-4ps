@@ -4,10 +4,10 @@
 
 import { describe, expect, it } from "vitest";
 
-import type { ScreenNode } from "../src/package/components";
+import type { ScreenNode } from "../../packages/package-renderer/src/components";
 import DEFAULT_PACKAGE from "../src/package/default-package.json";
 import { IMPLEMENTATIONS } from "../src/package/registry";
-import { withinLimits } from "../src/package/render";
+import { withinLimits } from "../../packages/package-renderer/src/render";
 import { defaultScreen } from "../src/package/screen";
 import { SCREENS, type ScreenId } from "../src/state/screens";
 

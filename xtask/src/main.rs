@@ -44,7 +44,7 @@ cargo xtask <check>
                   and refuses to raise it (ADR-0177)
   i18n            every supported UI language is complete in ui/ and dashboard/, settings included;
                   a country's language not yet supported is reported (packages/shared/i18n/languages.json)
-  mirrored-files  the files ui/ and dashboard/ share live once, in packages/shared, and nowhere else
+  mirrored-files  the files ui/ and dashboard/ share live once, in packages/shared or packages/package-renderer, and nowhere else
   print-agent-deps  pos-print-agent links only the three workspace crates ADR-0112 allows
   repo-map        every path docs/repository-map.md names in backticks exists
   tls-modes       every accepted TLS_MODE has its Caddyfile, and it imports the shared block

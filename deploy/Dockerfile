@@ -18,13 +18,16 @@ COPY dashboard/package.json dashboard/pnpm-lock.yaml ./
 RUN npm install --global pnpm@10 && pnpm install --frozen-lockfile
 COPY dashboard/ ./
 # The files both front ends share (design tokens and the i18n, contrast and ESLint scripts) sit in
-# `packages/shared/`, which `dashboard/` reaches as `../packages/shared`, so they go beside it.
+# `packages/shared/`, which `dashboard/` reaches as `../packages/shared`, so they go beside it. The
+# package renderer the designer previews with (ADR-0209) sits in `packages/package-renderer/`, reached
+# the same way.
 COPY packages/shared/ /packages/shared/
+COPY packages/package-renderer/ /packages/package-renderer/
 # `pnpm build` = tsc --noEmit, the no-hardcoded-strings lint, i18n parity, the WCAG contrast
 # audit, the installer check, the step budget, the unit tests, then vite build.
 #
-# THE CONSTRAINT: this stage copies `dashboard/` and `packages/shared/` and nothing else, so
-# anything chained into that script may read only those two. That has been violated twice by the same check — the
+# THE CONSTRAINT: this stage copies `dashboard/`, `packages/shared/` and `packages/package-renderer/`
+# and nothing else, so anything chained into that script may read only those three. That has been violated twice by the same check — the
 # installer-template gate reads `deploy/edge/*.ps1`, two directories up. Each time the image died
 # on `ENOENT` while every PR gate stayed green, because CI runs the same script against a full
 # checkout where the path resolves. #228 unchained it; #269 chained it back to give the drift gate
@@ -35,8 +38,8 @@ COPY packages/shared/ /packages/shared/
 # invocation, whose only purpose is handing them to a PowerShell parser — still refuses their
 # absence. So the script knows where it is instead of the build chain having to remember.
 #
-# `pr.yml`'s `dashboard` job now also builds from a copy of `dashboard/` and `packages/shared/`
-# with nothing else beside them, which is this stage's condition reproduced. A third violation fails there rather than here.
+# `pr.yml`'s `dashboard` job now also builds from a copy of `dashboard/` and the two `packages/`
+# directories with nothing else beside them, which is this stage's condition reproduced. A third violation fails there rather than here.
 RUN pnpm build
 
 # ---- builder (runs natively on the runner) --------------------------------------------

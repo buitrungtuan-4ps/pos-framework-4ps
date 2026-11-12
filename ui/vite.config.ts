@@ -9,6 +9,9 @@ import tailwindcss from "@tailwindcss/vite";
 export default defineConfig({
   plugins: [solid(), tailwindcss()],
   base: "/",
+  // `packages/package-renderer` sits outside this root and imports `solid-js`: resolve it from
+  // here, so the renderer and this front end share one Solid (ADR-0209).
+  resolve: { dedupe: ["solid-js"] },
   build: {
     outDir: "dist",
     emptyOutDir: true,

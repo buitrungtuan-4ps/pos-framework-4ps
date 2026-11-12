@@ -13,7 +13,7 @@
 //! |---|---|
 //! | `rust_all` | `crates/pos-proto`, `pos-core`, `pos-ports`, `Cargo.lock`, the root `Cargo.toml`, `rust-toolchain.toml`, `rustfmt.toml`, `clippy.toml`, `deny.toml`, `.cargo/`, `.config/` (nextest), `.github/`, `xtask/`, `tools/` |
 //! | `rust` | any other file under `crates/`, `countries/`, `examples/` or `apps/`, any `*.rs` or `Cargo.toml`, the `justfile`; and `rust_all` |
-//! | `ui`, `dashboard`, `shared` | `ui/`, `dashboard/`, `packages/shared/` |
+//! | `ui`, `dashboard`, `shared` | `ui/`, `dashboard/`, and `packages/shared/` or `packages/package-renderer/` (both front ends build from each) |
 //! | `deploy` | `deploy/`, `k8s/`, `.dockerignore` |
 //! | `workflows` | `.github/` |
 //! | `docs_only` | true when every file is documentation: `docs/`, `changes/`, `.jules/`, any `*.md` outside `.github/`, `LICENSE`, `CODEOWNERS`, `.gitignore`, `.gitattributes`, `.editorconfig`, `.git-blame-ignore-revs` |
@@ -80,9 +80,9 @@ const DOCS: [&str; 10] = [
 pub const READ_BY: [(&str, &str); 21] = [
     ("docs/snapshots/events.txt", "pos-proto"),
     ("docs/snapshots/actions.txt", "pos-proto"),
-    ("ui/src/package/actions.ts", "pos-proto"),
+    ("packages/package-renderer/src/actions.ts", "pos-proto"),
     ("docs/snapshots/components.txt", "pos-proto"),
-    ("ui/src/package/components.ts", "pos-proto"),
+    ("packages/package-renderer/src/components.ts", "pos-proto"),
     ("ui/src/package/default-package.json", "pos-core"),
     ("docs/snapshots/settings.txt", "pos-proto"),
     ("docs/configuration.md", "pos-proto"),
@@ -152,7 +152,9 @@ pub fn classify<S: AsRef<str>>(paths: &[S]) -> BTreeSet<&'static str> {
             add("ui");
         } else if path.starts_with("dashboard/") {
             add("dashboard");
-        } else if path.starts_with("packages/shared/") {
+        } else if path.starts_with("packages/shared/")
+            || path.starts_with("packages/package-renderer/")
+        {
             add("shared");
         } else if path.starts_with("deploy/") || path.starts_with("k8s/") || path == ".dockerignore"
         {
@@ -413,6 +415,16 @@ mod tests {
         assert_eq!(
             classes(&["dashboard/src/App.tsx", "packages/shared/styles/tokens.css"]),
             ["dashboard", "shared"]
+        );
+        assert_eq!(
+            classes(&["packages/package-renderer/src/render.tsx"]),
+            ["shared"],
+            "both front ends build the package renderer (ADR-0209)"
+        );
+        assert_eq!(
+            classes(&["packages/package-renderer/src/components.ts"]),
+            ["rust", "shared"],
+            "pos-proto holds the generated catalogue to its rendering"
         );
         assert_eq!(
             classes(&["deploy/compose.yml", "k8s/pos-cloud.yaml"]),

@@ -1,6 +1,7 @@
 // The implementation of every component in the catalogue `pos-proto` declares
-// (`components.ts`, ADR-0190 decision 2). A `Record<ComponentId, Implementation>`: a component
-// catalogued without one here does not compile, and one here that the catalogue does not hold is an
+// (`components.ts`, ADR-0190 decision 2): the five that draw from the package alone, from the
+// package renderer (`BASE`, ADR-0209), and the till's regions. A `Record<ComponentId,
+// Implementation>`: a component catalogued without one here does not compile, and one here that the catalogue does not hold is an
 // excess property, so the till and the validator cannot disagree on what exists.
 //
 // Each implementation reads its node's literals and its own part of the screen's context, and
@@ -12,121 +13,15 @@
 // components), which is safe only because every implementation is a function declaration: hoisted,
 // so it exists before either module finishes evaluating. Never make one a `const`.
 
-import { createSignal, Show, type JSX } from "solid-js";
-
-import { PageHeader } from "../components/ui";
+import { BASE } from "../../../packages/package-renderer/src/base";
+import { region } from "../../../packages/package-renderer/src/regions";
+import type { Implementations } from "../../../packages/package-renderer/src/render";
 import { FloorAlerts, FloorPlan } from "../screens/Floor";
-import { printFailure } from "../state/print-writes";
-import type { ActionBinding } from "./components";
 import { OrderColumn, OrderLayout, OrderMenu } from "./order-regions";
-import { region } from "./regions";
-import { actionProperty, Children, packageLabel, textProperty, useHost, type Implementations, type NodeProps } from "./render";
-
-/** Its children down the screen, or across it. */
-function Stack(props: NodeProps): JSX.Element {
-  const across = () => textProperty(props.node, "direction") === "horizontal";
-  return (
-    <div class="flex gap-2" classList={{ "flex-col": !across(), "flex-wrap items-center": across() }}>
-      <Children {...props} />
-    </div>
-  );
-}
-
-const TEXT_CLASS: Readonly<Record<string, string>> = {
-  title: "text-lg font-semibold",
-  body: "text-base",
-  muted: "text-sm text-ink-muted",
-};
-
-/** One line of text from the translation grid. */
-function Text(props: NodeProps): JSX.Element {
-  const variant = () => textProperty(props.node, "variant") ?? "body";
-  return <p class={TEXT_CLASS[variant()] ?? TEXT_CLASS["body"]}>{packageLabel(textProperty(props.node, "text_key"))}</p>;
-}
-
-const BUTTON_CLASS: Readonly<Record<string, string>> = {
-  primary: "bg-primary text-primary-ink",
-  secondary: "border border-line bg-surface text-ink",
-  danger: "bg-danger text-danger-ink",
-};
-
-/**
- * A button that does one act on the order or table the screen is for. An act the host sends to the
- * edge takes no second tap until it is answered, and a failure is said under the button, in the
- * till's words for a print that failed or was not confirmed.
- */
-function ActionButton(props: NodeProps): JSX.Element {
-  const host = useHost();
-  const binding = () => actionProperty(props.node, "action");
-  const variant = () => textProperty(props.node, "variant") ?? "secondary";
-  const [sending, setSending] = createSignal(false);
-  const [failure, setFailure] = createSignal<string | null>(null);
-  const offered = () => {
-    const act = binding();
-    return host !== undefined && act !== undefined && host.offers(act.action_id);
-  };
-  const tap = (act: ActionBinding) => {
-    if (host === undefined || sending()) {
-      return;
-    }
-    setFailure(null);
-    const ran = host.run(act, host.subject());
-    if (ran instanceof Promise) {
-      setSending(true);
-      ran.catch((caught: unknown) => setFailure(printFailure(caught))).finally(() => setSending(false));
-    }
-  };
-  return (
-    <Show when={binding()}>
-      {(act) => (
-        <>
-          <button
-            type="button"
-            class={`min-h-touch rounded-token px-4 font-semibold disabled:opacity-50 ${BUTTON_CLASS[variant()] ?? BUTTON_CLASS["secondary"]}`}
-            disabled={!offered() || sending()}
-            aria-busy={sending() ? true : undefined}
-            data-action-id={act().action_id}
-            onClick={() => tap(act())}
-          >
-            {packageLabel(textProperty(props.node, "label_key"))}
-          </button>
-          <Show when={failure()}>{(message) => <p role="alert" class="text-sm text-danger">{message()}</p>}</Show>
-        </>
-      )}
-    </Show>
-  );
-}
-
-const FRAME_CLASS: Readonly<Record<string, string>> = {
-  full: "p-4",
-  narrow: "mx-auto max-w-xl p-4",
-  medium: "mx-auto max-w-2xl p-4",
-  small: "mx-auto max-w-sm p-4",
-};
-
-/** A whole screen's frame. */
-function ScreenFrame(props: NodeProps): JSX.Element {
-  const width = () => FRAME_CLASS[textProperty(props.node, "width") ?? "full"] ?? FRAME_CLASS["full"];
-  return (
-    <section class={width()}>
-      <Children {...props} />
-    </section>
-  );
-}
-
-/** A screen's heading. */
-function Header(props: NodeProps): JSX.Element {
-  const size = textProperty(props.node, "size") === "extra_large" ? "xl" : "lg";
-  return <PageHeader title={packageLabel(textProperty(props.node, "title_key"))} size={size} />;
-}
 
 /** Every catalogued component's implementation. */
 export const IMPLEMENTATIONS: Implementations = {
-  stack: Stack,
-  text: Text,
-  action_button: ActionButton,
-  screen_frame: ScreenFrame,
-  page_header: Header,
+  ...BASE,
   floor_alerts: FloorAlerts,
   floor_plan: FloorPlan,
   order_layout: OrderLayout,

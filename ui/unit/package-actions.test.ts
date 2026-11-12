@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { ACTIONS, type ActionId } from "../src/package/actions";
+import { ACTIONS, type ActionId } from "../../packages/package-renderer/src/actions";
 
 describe("the till's action catalogue", () => {
     it("lists each act once, by a three-word id", () => {

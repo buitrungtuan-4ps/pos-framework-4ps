@@ -25,6 +25,9 @@ export default defineConfig({
   // single test run anyway.
   plugins: [solid({ hot: false })],
   resolve: {
+    // `packages/package-renderer` sits outside this root and imports `solid-js`: resolve it from
+    // here, so the renderer and this front end share one Solid (ADR-0209).
+    dedupe: ["solid-js"],
     conditions: ["development", "browser"],
   },
   test: {
