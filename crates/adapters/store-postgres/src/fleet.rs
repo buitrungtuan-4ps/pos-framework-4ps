@@ -141,6 +141,11 @@ pub struct FleetStoreRow {
     pub config_wake_max_ms: Option<i64>,
     /// Unix ms of the heartbeat that reported them.
     pub config_wake_reported_at_ms: Option<i64>,
+    /// Which package version each paired till last read (migration 0094, B7.3), as the JSON array
+    /// the heartbeat sent, or `None` until a heartbeat reports.
+    pub device_reads_json: Option<String>,
+    /// Unix ms of the heartbeat that reported them.
+    pub device_reads_reported_at_ms: Option<i64>,
 }
 
 /// The columns and joins shared by the list and the single-store read. `$1` is always the tenant.
@@ -183,7 +188,9 @@ const FLEET_SELECT: &str = "SELECT \
      l.config_wake_samples, \
      l.config_wake_p95_ms, \
      l.config_wake_max_ms, \
-     l.config_wake_reported_at \
+     l.config_wake_reported_at, \
+     l.device_reads::text, \
+     l.device_reads_reported_at \
      FROM stores s \
      LEFT JOIN store_liveness l ON l.tenant_id = s.tenant_id AND l.store_id = s.store_id \
      LEFT JOIN store_lease lease \
@@ -284,5 +291,7 @@ fn fleet_row(row: &tokio_postgres::Row) -> FleetStoreRow {
         config_wake_p95_ms: row.get(32),
         config_wake_max_ms: row.get(33),
         config_wake_reported_at_ms: row.get(34),
+        device_reads_json: row.get(35),
+        device_reads_reported_at_ms: row.get(36),
     }
 }

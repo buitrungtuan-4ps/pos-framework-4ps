@@ -42,6 +42,7 @@ mod bills;
 mod composition;
 mod config_wake;
 mod custom_data;
+mod device_reads;
 mod erasures;
 mod error;
 mod floor;
@@ -61,6 +62,7 @@ mod views;
 
 pub use config_wake::{ConfigDelivery, ConfigWakeReport, ConfigWakeStanding, WAKE_SAMPLES_MAX};
 pub use custom_data::{CONSENT_FIELD_PREFIX, CustomDataView};
+pub use device_reads::{DEVICE_READS_MAX, DeviceRead, DeviceReads};
 pub use error::{AppError, Approval};
 pub use package::{PackageRefusal, PackageStanding, RefusedPackage};
 pub use receipt_fields::{PersonalOnPaper, PrintedField, PrintedObjects, PrintedValue};
@@ -288,6 +290,8 @@ pub struct Edge<S> {
     package: PackageStanding,
     /// How configuration reaches the store and how fast (ADR-0195).
     config_wake: ConfigWakeStanding,
+    /// Which package version each paired till last read (B7.3), for the heartbeat.
+    device_reads: DeviceReads,
     /// The tenant's translation grid, pulled whole beside the configuration (ADR-0043). Empty until
     /// a pull or the copy kept on disk lands.
     labels: RwLock<Arc<crate::labels::LabelGrid>>,

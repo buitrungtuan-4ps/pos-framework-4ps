@@ -39,6 +39,7 @@ const PRINTER: DeviceProposalSummary = {
   receipt_language: null,
   receipt_second_language: null,
   opening_float_minor: null,
+  device_class: null,
   status: "approved",
   version: "7",
 };

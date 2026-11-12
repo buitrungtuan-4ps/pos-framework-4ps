@@ -320,6 +320,12 @@ pub(super) fn compile_devices(approved: &[DeviceProposalSummary]) -> PublishedDe
                     // reads absent as the store's float (ADR-0167 decision 4), so a store that
                     // sets none publishes the node it did before.
                     opening_float_minor: row.opening_float_minor,
+                    // Verbatim, as the float is, and absent where nobody has said: the edge and
+                    // the till read absent as the class the screen says (ADR-0201 decision 3).
+                    device_class: row
+                        .device_class
+                        .as_deref()
+                        .map_or_else(Open::default, Open::parse),
                 })
             })
             .collect(),

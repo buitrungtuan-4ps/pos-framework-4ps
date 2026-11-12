@@ -12,10 +12,12 @@
 // components), which is safe only because every implementation is a function declaration: hoisted,
 // so it exists before either module finishes evaluating. Never make one a `const`.
 
-import { Show, type JSX } from "solid-js";
+import { createSignal, Show, type JSX } from "solid-js";
 
 import { PageHeader } from "../components/ui";
 import { FloorAlerts, FloorPlan } from "../screens/Floor";
+import { printFailure } from "../state/print-writes";
+import type { ActionBinding } from "./components";
 import { OrderColumn, OrderLayout, OrderMenu } from "./order-regions";
 import { region } from "./regions";
 import { actionProperty, Children, packageLabel, textProperty, useHost, type Implementations, type NodeProps } from "./render";
@@ -48,27 +50,48 @@ const BUTTON_CLASS: Readonly<Record<string, string>> = {
   danger: "bg-danger text-danger-ink",
 };
 
-/** A button that does one act on the order or table the screen is for. */
+/**
+ * A button that does one act on the order or table the screen is for. An act the host sends to the
+ * edge takes no second tap until it is answered, and a failure is said under the button, in the
+ * till's words for a print that failed or was not confirmed.
+ */
 function ActionButton(props: NodeProps): JSX.Element {
   const host = useHost();
   const binding = () => actionProperty(props.node, "action");
   const variant = () => textProperty(props.node, "variant") ?? "secondary";
+  const [sending, setSending] = createSignal(false);
+  const [failure, setFailure] = createSignal<string | null>(null);
   const offered = () => {
     const act = binding();
     return host !== undefined && act !== undefined && host.offers(act.action_id);
   };
+  const tap = (act: ActionBinding) => {
+    if (host === undefined || sending()) {
+      return;
+    }
+    setFailure(null);
+    const ran = host.run(act, host.subject());
+    if (ran instanceof Promise) {
+      setSending(true);
+      ran.catch((caught: unknown) => setFailure(printFailure(caught))).finally(() => setSending(false));
+    }
+  };
   return (
     <Show when={binding()}>
       {(act) => (
-        <button
-          type="button"
-          class={`min-h-touch rounded-token px-4 font-semibold disabled:opacity-50 ${BUTTON_CLASS[variant()] ?? BUTTON_CLASS["secondary"]}`}
-          disabled={!offered()}
-          data-action-id={act().action_id}
-          onClick={() => host?.run(act(), host.subject())}
-        >
-          {packageLabel(textProperty(props.node, "label_key"))}
-        </button>
+        <>
+          <button
+            type="button"
+            class={`min-h-touch rounded-token px-4 font-semibold disabled:opacity-50 ${BUTTON_CLASS[variant()] ?? BUTTON_CLASS["secondary"]}`}
+            disabled={!offered() || sending()}
+            aria-busy={sending() ? true : undefined}
+            data-action-id={act().action_id}
+            onClick={() => tap(act())}
+          >
+            {packageLabel(textProperty(props.node, "label_key"))}
+          </button>
+          <Show when={failure()}>{(message) => <p role="alert" class="text-sm text-danger">{message()}</p>}</Show>
+        </>
       )}
     </Show>
   );

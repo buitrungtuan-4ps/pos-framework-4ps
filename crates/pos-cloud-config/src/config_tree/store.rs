@@ -170,6 +170,62 @@ pub trait ConfigTreeStore {
         let _ = (tenant, store, seen_at, beat);
         async { Ok(()) }
     }
+
+    /// Records which package version each of the store's paired tills last read, as a heartbeat
+    /// said (roadmap-v3 B7.3), replacing what was recorded. A heartbeat that said nothing about its
+    /// tills is not passed here.
+    ///
+    /// The default records nothing, for a store that keeps no fleet row.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigStoreError`] if the liveness row could not be written.
+    fn record_device_reads_beat(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        seen_at: Timestamp,
+        reads: &[DeviceReadBeat],
+    ) -> impl Future<Output = Result<(), ConfigStoreError>> + Send {
+        let _ = (tenant, store, seen_at, reads);
+        async { Ok(()) }
+    }
+}
+
+/// What one heartbeat said about one paired till (B7.3): the package version it last read from the
+/// edge, and when. A device id names a device, never a person.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize, utoipa::ToSchema)]
+pub struct DeviceReadBeat {
+    /// The till, a ULID.
+    pub device_id: String,
+    /// The package version it was served, or `null` for its release's default package.
+    #[schema(required = true)]
+    pub package_version_id: Option<String>,
+    /// When it read it, in Unix milliseconds on the store's clock.
+    pub read_at_ms: i64,
+}
+
+impl DeviceReadBeat {
+    /// The most tills one heartbeat reports, as the edge holds at most that many.
+    pub const DEVICES_MAX: usize = 64;
+
+    /// The longest id a beat keeps, in characters.
+    pub const TEXT_MAX: usize = 64;
+
+    /// Whether `reads` is a report an edge could have sent: at most [`Self::DEVICES_MAX`] tills,
+    /// each named once, with ids no longer than an id.
+    #[must_use]
+    pub fn are_bounded(reads: &[Self]) -> bool {
+        let short = |text: &str| text.chars().count() <= Self::TEXT_MAX;
+        let mut ids: Vec<&str> = reads.iter().map(|read| read.device_id.as_str()).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        reads.len() <= Self::DEVICES_MAX
+            && ids.len() == reads.len()
+            && reads.iter().all(|read| {
+                short(&read.device_id) && read.package_version_id.as_deref().is_none_or(short)
+            })
+    }
 }
 
 /// What one heartbeat said about config delivery (ADR-0195): whether the store hears the cloud's

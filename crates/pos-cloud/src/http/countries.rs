@@ -16,6 +16,7 @@ use axum::routing::get;
 use pos_cloud_api::console::require_permission;
 use pos_country::CountryRegistry;
 use pos_proto::determinism::ClockSource;
+use pos_proto::wire_enum::WireEnum;
 
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
@@ -60,6 +61,11 @@ struct CountryView {
     /// Store settings writes where no scope sets them when it publishes a locale naming the country.
     /// Empty for a pack that gives none.
     setting_defaults: Vec<CountrySettingDefault>,
+    /// The optional receipt sections the country's law requires, as `RECEIPT_SECTION_*` tokens
+    /// ([ADR-0207](../../../docs/adr/0207-a-receipt-is-a-structured-template-per-store-and-channel.md)
+    /// decision 3): a receipt template written anywhere cannot turn one off. Empty for a country
+    /// that requires none.
+    receipt_required_sections: Vec<String>,
 }
 
 /// One setting a country pack seeds: the register's key and the value, as the setting's node
@@ -121,6 +127,11 @@ where
                     setting_key: seeded.setting_key.to_owned(),
                     value: as_node_value(seeded.value),
                 })
+                .collect(),
+            receipt_required_sections: module
+                .receipt_required_sections()
+                .into_iter()
+                .map(|section| section.as_wire().to_owned())
                 .collect(),
         });
     }
