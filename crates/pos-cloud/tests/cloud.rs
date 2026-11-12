@@ -77,6 +77,8 @@ mod fleet;
 #[path = "cloud/fleet_rows.rs"]
 mod fleet_rows;
 use fleet_rows::store_in_handover;
+#[path = "cloud/connectors.rs"]
+mod connectors;
 #[path = "cloud/floor.rs"]
 mod floor;
 #[path = "cloud/floor_tree.rs"]

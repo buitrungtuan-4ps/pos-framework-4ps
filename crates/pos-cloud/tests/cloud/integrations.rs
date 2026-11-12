@@ -100,7 +100,7 @@ async fn the_provider_catalogue_serves_each_vendors_form_to_any_admin() {
 type ConnectionRow = (TenantId, Versioned<pos_cloud::connections::Connection>);
 
 #[derive(Default, Clone)]
-struct FakeConnections {
+pub(crate) struct FakeConnections {
     rows: Arc<Mutex<Vec<ConnectionRow>>>,
     next_version: Arc<Mutex<u64>>,
 }

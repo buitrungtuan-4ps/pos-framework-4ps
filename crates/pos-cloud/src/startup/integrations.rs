@@ -9,6 +9,7 @@ use std::sync::Arc;
 use axum::Router;
 use pos_cloud::clock::SystemClock;
 use pos_cloud::http;
+use pos_cloud::relay::OrderRelay;
 
 use super::routes::RouteDeps;
 
@@ -20,6 +21,7 @@ pub(super) fn integration_routes(deps: &RouteDeps<'_>) -> Router {
         audit,
         providers,
         cell,
+        relay_wake,
         ..
     } = *deps;
     Router::new()
@@ -52,6 +54,22 @@ pub(super) fn integration_routes(deps: &RouteDeps<'_>) -> Router {
             store.admin(),
             SystemClock,
             Arc::clone(audit),
+        ))
+        // A delivery vendor's own webhook (ADR-0083 decision 3): verified under the secret sealed on
+        // the tenant's store-scoped connection, mapped through its item map, and submitted to the
+        // same relay `POST /v1/orders` uses. One connector per vendor; the sandbox one for now.
+        .merge(pos_cloud::connectors::route::connector_router(
+            store.connections(),
+            OrderRelay::new(
+                store.store_directory(),
+                store.config_trees(),
+                store.order_queue(),
+                SystemClock,
+                relay_wake.clone(),
+            ),
+            SystemClock,
+            vec![Arc::new(pos_cloud::connectors::demo::DemoConnector)],
+            config.integration_secret.clone(),
         ))
         // Sending a store the connections that serve it (ADR-0153 decision 5): its own, its
         // brand's, its tenant's, resolved into the `integrations` node on its Store layer. A
