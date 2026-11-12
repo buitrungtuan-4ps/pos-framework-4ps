@@ -70,6 +70,9 @@ pub struct Job {
 /// The two front ends: the name the report gives each, and its directory.
 const FRONT_ENDS: [(&str, &str); 2] = [("till", "ui/"), ("console", "dashboard/")];
 
+/// The directories both front ends build from: a change to one is code every screen of each can use.
+const SHARED_ROOTS: [&str; 2] = ["packages/shared/", "packages/package-renderer/"];
+
 const RUST: &[&str] = &["rust"];
 const UI: &[&str] = &["ui", "shared", "rust"];
 
@@ -271,11 +274,11 @@ impl Impact<'_> {
             }
             let common = self.files.iter().any(|file| {
                 (file.starts_with(&format!("{root}src/")) && !file.starts_with(&screens_dir))
-                    || file.starts_with("packages/shared/")
+                    || SHARED_ROOTS.iter().any(|shared| file.starts_with(shared))
             });
             if common {
                 parts.push(format!(
-                    "{app}: code every screen can use (`{root}src/` outside `screens/`, or `packages/shared/`)"
+                    "{app}: code every screen can use (`{root}src/` outside `screens/`, `packages/shared/` or `packages/package-renderer/`)"
                 ));
             }
         }
@@ -552,6 +555,9 @@ mod tests {
         );
         assert!(text.contains("**Screens:** till: `Order`, `Pay`; console: `catalog`\n"));
         let text = report(&["packages/shared/styles/tokens.css"], &up_to_date());
+        assert!(text.contains("till: code every screen can use"));
+        assert!(text.contains("console: code every screen can use"));
+        let text = report(&["packages/package-renderer/src/base.tsx"], &up_to_date());
         assert!(text.contains("till: code every screen can use"));
         assert!(text.contains("console: code every screen can use"));
         assert!(report(&["docs/x.md"], &up_to_date()).contains("**Screens:** none\n"));

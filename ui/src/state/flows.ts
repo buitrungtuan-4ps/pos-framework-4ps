@@ -16,7 +16,7 @@
 import { createEffect, createRoot, createSignal } from "solid-js";
 
 import DEFAULT_PACKAGE from "../package/default-package.json";
-import { resolveVariant, type Variant } from "../package/variant";
+import { resolveVariant, type Variant } from "../../../packages/package-renderer/src/variant";
 import { t } from "../i18n";
 import { needsRules, startTillRules, tillRules, type Fact, type Facts, type Flow, type FlowStep } from "../rules/till-rules";
 import { reactionsNeedRules } from "./reactions";

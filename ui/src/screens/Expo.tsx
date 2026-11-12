@@ -10,7 +10,7 @@ import {
   type KitchenLine,
 } from "../state/store";
 import { queueNumberFor, refreshQueueNumbers } from "../state/queue-numbers";
-import { RegionsContext, type Regions } from "../package/regions";
+import { RegionsContext, type Regions } from "../../../packages/package-renderer/src/regions";
 import { NO_ACTS, PackageScreen } from "../package/screen";
 
 interface TableGroup {

@@ -14,13 +14,14 @@ import { deviceClass } from "../lib/device-class";
 import { DRAFT } from "../state/draft-walk-in";
 import { publishedScreen } from "../state/package-screens";
 import { buttonRuns, runButton } from "../state/reactions";
+import type { Screen } from "../../../packages/package-renderer/src/components";
+import { PackageTree, type ScreenHost, type Supplied } from "../../../packages/package-renderer/src/render";
+import { resolveVariant, type Variant, type VariantContext } from "../../../packages/package-renderer/src/variant";
 import { PENDING, state } from "../state/store";
 
-import type { Screen } from "./components";
 import DEFAULT_PACKAGE from "./default-package.json";
 import { IMPLEMENTATIONS } from "./registry";
-import { NeedsUpdate, PackageTree, type ScreenHost, type Supplied } from "./render";
-import { resolveVariant, type Variant, type VariantContext } from "./variant";
+import { NeedsUpdate, TILL_WORDS } from "./words";
 
 /** The default package's screens, each with its variants. */
 const SCREENS: readonly Variant<Screen>[] = DEFAULT_PACKAGE.screens;
@@ -78,7 +79,7 @@ export function PackageScreen(props: { screenId: string; host: ScreenHost }): JS
   const screen = createMemo(() => packageScreen(props.screenId, { device_class: deviceClass() }));
   return (
     <Show when={screen()} keyed fallback={<NeedsUpdate />}>
-      {(drawn) => <PackageTree root={drawn.root} host={props.host} implementations={IMPLEMENTATIONS} fallback={<NeedsUpdate />} />}
+      {(drawn) => <PackageTree root={drawn.root} host={props.host} implementations={IMPLEMENTATIONS} words={TILL_WORDS} fallback={<NeedsUpdate />} />}
     </Show>
   );
 }

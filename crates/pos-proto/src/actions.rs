@@ -34,7 +34,7 @@ use crate::wire_enum;
 use crate::wire_enum::WireEnum;
 
 pub use catalogue::CATALOGUE;
-pub use typescript::{CONSOLE_TYPESCRIPT_PATH, TYPESCRIPT_PATH, render_typescript};
+pub use typescript::{TYPESCRIPT_PATH, render_typescript};
 
 /// Where the rendered snapshot is committed, relative to the repository root.
 pub const SNAPSHOT_PATH: &str = "docs/snapshots/actions.txt";

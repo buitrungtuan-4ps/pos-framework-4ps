@@ -47,7 +47,7 @@ import { writesPending } from "../state/edge-write";
 import { fireCourse, fireOrder, voidLine } from "../state/order-writes";
 import { releaseTable, setItemSoldOut } from "../state/floor-writes";
 import { errorMessage } from "../lib/errors";
-import { RegionsContext, type Regions } from "../package/regions";
+import { RegionsContext, type Regions } from "../../../packages/package-renderer/src/regions";
 import { PackageScreen, orderHost } from "../package/screen";
 import { useInFlight } from "../lib/in-flight";
 import { createTableScoped, resetPerTable, useKeptTable } from "../state/kept-table";

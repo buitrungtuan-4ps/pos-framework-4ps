@@ -6,7 +6,7 @@ import { ReadFailed } from "../components/StoreData";
 import { t } from "../i18n";
 import { errorMessage } from "../lib/errors";
 import { createScreenRead, onStatus } from "../state/screen-read";
-import { RegionsContext, type Regions } from "../package/regions";
+import { RegionsContext, type Regions } from "../../../packages/package-renderer/src/regions";
 import { NO_ACTS, PackageScreen } from "../package/screen";
 
 // Activating the store server: the operator reads the `XXXX-XXXX-XXXX` code off the box's setup sheet

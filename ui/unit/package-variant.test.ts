@@ -9,7 +9,7 @@ import {
     type TimeSlot,
     type Variant,
     type VariantContext,
-} from "../src/package/variant";
+} from "../../packages/package-renderer/src/variant";
 
 interface ResolveCase {
     name: string;

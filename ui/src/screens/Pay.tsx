@@ -55,7 +55,7 @@ import { openForPay } from "../state/open-for-pay";
 import { useSplitPlan } from "../state/split-plan";
 import { useSplitActs } from "../state/split-acts";
 import { printOutcomeKey } from "../lib/print";
-import { RegionsContext, type Regions } from "../package/regions";
+import { RegionsContext, type Regions } from "../../../packages/package-renderer/src/regions";
 import { NO_ACTS, PackageScreen } from "../package/screen";
 import { asksApprover, can } from "../state/permissions";
 import { createPrint } from "../state/print-writes";

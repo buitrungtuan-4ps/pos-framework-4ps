@@ -136,7 +136,7 @@ jobs:
           else
             cargo run -q -p xtask -- code-stats --check --base HEAD^ --baseline-growth warn
           fi
-      - name: the files both front ends share live once, in packages/shared
+      - name: the files both front ends share live once, in packages/shared or packages/package-renderer
         run: cargo run -q -p xtask -- mirrored-files
       - name: the front ends mirror no more wire types by hand than the baseline allows (ADR-0177)
         run: cargo run -q -p xtask -- hand-types
@@ -819,7 +819,7 @@ jobs:
       # This reproduces the image's condition exactly and cheaply: the same tree the Dockerfile
       # copies, nothing above it, node_modules reused so there is no second install. It fails on
       # any future script that reaches outside `dashboard/`, not just the two that already have.
-      - name: the image condition — pnpm build with only dashboard/ and packages/shared/ on disk
+      - name: the image condition — pnpm build with only dashboard/ and its two packages/ directories on disk
         working-directory: .
         run: |
           set -euo pipefail
@@ -827,10 +827,11 @@ jobs:
           cp -r dashboard "$isolated/dashboard"
           mkdir -p "$isolated/packages"
           cp -r packages/shared "$isolated/packages/shared"
+          cp -r packages/package-renderer "$isolated/packages/package-renderer"
           test ! -e "$isolated/deploy" # the whole point: deploy/ is out of reach
           cd "$isolated/dashboard"
           pnpm build
-          echo "ok: the dashboard builds with only packages/shared beside it, so the cloud image will too"
+          echo "ok: the dashboard builds with only packages/shared and packages/package-renderer beside it, so the cloud image will too"
 
   # ---------------------------------------------------------------------------
   # Licences and advisories. The other check that turns architecture into law:

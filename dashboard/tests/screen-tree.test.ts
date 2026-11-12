@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import type { ScreenNode } from "../src/package/components";
+import type { ScreenNode } from "../../packages/package-renderer/src/components";
 import {
   insertAt,
   moveNode,

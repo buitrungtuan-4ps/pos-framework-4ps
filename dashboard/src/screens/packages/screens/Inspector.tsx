@@ -7,8 +7,8 @@ import { For, Show } from "solid-js";
 
 import { Button, CheckboxField, NumberField, SelectField, TextField } from "../../../components/ui";
 import { t } from "../../../i18n";
-import { ACTIONS, type ActionParam } from "../../../package/actions";
-import type { ActionBinding, ComponentProperty, ParamValue, PropertyValue, ScreenNode } from "../../../package/components";
+import { ACTIONS, type ActionParam } from "../../../../../packages/package-renderer/src/actions";
+import type { ActionBinding, ComponentProperty, ParamValue, PropertyValue, ScreenNode } from "../../../../../packages/package-renderer/src/components";
 import { componentOf } from "../../../lib/screen-tree";
 import { actionName, propertyName, tokenName } from "./names";
 

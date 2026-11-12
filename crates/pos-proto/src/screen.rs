@@ -16,7 +16,7 @@
 //! apply, the till's renderer mounts the component it names, and the console will offer it. It is
 //! held by `docs/snapshots/components.txt` ([`render_snapshot`]), which `cargo xtask snapshot`
 //! diffs against the base branch: a component, a property and its kind are deprecated, never
-//! removed or renamed. The till's view is `ui/src/package/components.ts` ([`render_typescript`]).
+//! removed or renamed. The front ends' view is `packages/package-renderer/src/components.ts` ([`render_typescript`]).
 //!
 //! No `deny_unknown_fields`, as for every published node.
 
@@ -34,7 +34,7 @@ mod tests;
 mod typescript;
 
 pub use catalogue::CATALOGUE;
-pub use typescript::{CONSOLE_TYPESCRIPT_PATH, TYPESCRIPT_PATH, render_typescript};
+pub use typescript::{TYPESCRIPT_PATH, render_typescript};
 
 /// Where the rendered snapshot is committed, relative to the repository root.
 pub const SNAPSHOT_PATH: &str = "docs/snapshots/components.txt";

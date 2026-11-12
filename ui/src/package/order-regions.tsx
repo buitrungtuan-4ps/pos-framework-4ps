@@ -5,7 +5,7 @@
 
 import type { JSX } from "solid-js";
 
-import { Children, type NodeProps } from "./render";
+import { Children, type NodeProps } from "../../../packages/package-renderer/src/render";
 
 // `order_layout`: the order column and the menu side by side on a terminal, one above the other on a
 // phone; on a tablet the menu is the screen and the bill a panel over its foot.

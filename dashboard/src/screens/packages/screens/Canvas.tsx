@@ -6,7 +6,7 @@
 import { For, Show } from "solid-js";
 
 import { t } from "../../../i18n";
-import type { ScreenNode } from "../../../package/components";
+import type { ScreenNode } from "../../../../../packages/package-renderer/src/components";
 import { holdsChildren, type NodePath } from "../../../lib/screen-tree";
 import { componentName } from "./names";
 

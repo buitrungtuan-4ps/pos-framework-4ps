@@ -8,7 +8,7 @@
 import { Show } from "solid-js";
 import { useParams } from "@solidjs/router";
 
-import { NeedsUpdate } from "../package/render";
+import { NeedsUpdate } from "../package/words";
 import { NO_ACTS, PackageScreen, defaultScreen } from "../package/screen";
 
 export function VersionScreen() {

@@ -1,4 +1,4 @@
-// A screen's own regions as catalogued components (ADR-0190, ADR-0203 decision 1).
+// A screen's own regions as catalogued components (ADR-0190, ADR-0203 decision 1; ADR-0209 decision 3).
 //
 // A till screen that moves into the default package keeps its state and its taps in
 // `screens/<Name>.tsx`, where the step gate resolves them, and hands each region it draws to the

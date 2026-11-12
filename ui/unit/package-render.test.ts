@@ -5,9 +5,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "solid-js/web";
 
-import { COMPONENTS, DEPTH_MAX, NODES_MAX, type ActionBinding, type ScreenNode } from "../src/package/components";
+import { COMPONENTS, DEPTH_MAX, NODES_MAX, type ActionBinding, type ScreenNode } from "../../packages/package-renderer/src/components";
 import { IMPLEMENTATIONS } from "../src/package/registry";
-import { PackageTree, withinLimits, type ScreenHost, type Supplied } from "../src/package/render";
+import { TILL_WORDS } from "../src/package/words";
+import { PackageTree, withinLimits, type ScreenHost, type Supplied } from "../../packages/package-renderer/src/render";
 
 let dispose: (() => void) | undefined;
 
@@ -26,6 +27,7 @@ function draw(root: ScreenNode, host: ScreenHost): HTMLElement {
                 root,
                 host,
                 implementations: IMPLEMENTATIONS,
+                words: TILL_WORDS,
                 fallback: "own screen",
             }),
         target,

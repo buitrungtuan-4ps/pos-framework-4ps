@@ -4,7 +4,7 @@
 import { createMemo, createSignal } from "solid-js";
 
 import type { ScreenVariant } from "../../../api/schemas";
-import type { ScreenNode } from "../../../package/components";
+import type { ScreenNode } from "../../../../../packages/package-renderer/src/components";
 import {
   insertAt,
   moveNode,
@@ -17,7 +17,7 @@ import {
   setProperty,
   type NodePath,
 } from "../../../lib/screen-tree";
-import type { PropertyValue } from "../../../package/components";
+import type { PropertyValue } from "../../../../../packages/package-renderer/src/components";
 import type { PartProps } from "../designer/parts";
 import type { Dropped, Slot } from "./Canvas";
 

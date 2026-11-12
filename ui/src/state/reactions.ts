@@ -20,8 +20,8 @@ import { createSignal } from "solid-js";
 
 import { api } from "../api/client";
 import { afterPaint } from "../lib/after-paint";
-import { ACTIONS } from "../package/actions";
-import { resolveVariant, type Variant } from "../package/variant";
+import { ACTIONS } from "../../../packages/package-renderer/src/actions";
+import { resolveVariant, type Variant } from "../../../packages/package-renderer/src/variant";
 import { tillRules, type Facts } from "../rules/till-rules";
 import { can, needsApprover, type PermissionId } from "./permissions";
 import { printWrite } from "./print-writes";

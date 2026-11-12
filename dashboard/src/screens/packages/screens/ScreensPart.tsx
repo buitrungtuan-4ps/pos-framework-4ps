@@ -12,7 +12,7 @@ import { api } from "../../../api/client";
 import type { ScreenVariant } from "../../../api/schemas";
 import { Button, SelectField, TextField } from "../../../components/ui";
 import { t } from "../../../i18n";
-import { COMPONENTS } from "../../../package/components";
+import { COMPONENTS } from "../../../../../packages/package-renderer/src/components";
 import { DEVICE_CLASSES, drawnOn } from "../../../lib/screen-tree";
 import { tenantId } from "../../../state/session";
 import type { PartProps } from "../designer/parts";

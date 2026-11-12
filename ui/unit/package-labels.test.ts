@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { setLocale } from "../src/i18n";
-import { packageLabel } from "../src/package/render";
+import { packageLabel } from "../src/package/words";
 import { applyLabels } from "../src/state/labels";
 
 describe("a package label", () => {

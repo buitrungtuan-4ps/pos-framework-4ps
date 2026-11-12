@@ -23,8 +23,8 @@ import { createBumper } from "../state/kitchen-writes";
 import { WriteRefused } from "../components/WriteRefused";
 import { setItemSoldOut } from "../state/floor-writes";
 import { queueNumberFor, refreshQueueNumbers } from "../state/queue-numbers";
-import { Children } from "../package/render";
-import { RegionsContext, type Regions } from "../package/regions";
+import { Children } from "../../../packages/package-renderer/src/render";
+import { RegionsContext, type Regions } from "../../../packages/package-renderer/src/regions";
 import { NO_ACTS, PackageScreen } from "../package/screen";
 
 // The kitchen display: fired lines gathered into tickets — one per order, station and course, the

@@ -154,24 +154,23 @@ fn the_committed_snapshot_matches_the_catalogue() {
     );
 }
 
-/// The till's and the console's modules are the catalogue as rendered, so neither can drift from
+/// The module both front ends build from is the component catalogue as rendered, so neither can drift from
 /// the validator.
 #[test]
 fn the_tills_snapshot_of_the_components_matches_it() {
     let rendered = render_typescript();
-    for module in [super::TYPESCRIPT_PATH, super::CONSOLE_TYPESCRIPT_PATH] {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join(module);
-        if std::env::var("POS_UPDATE_SNAPSHOTS").is_ok() {
-            std::fs::write(&path, &rendered).expect("write the module");
-            continue;
-        }
-        let committed = std::fs::read_to_string(&path).unwrap_or_default();
-        assert!(
-            committed == rendered,
-            "{module} no longer matches the component catalogue. Regenerate it with:\n\
-             \n    POS_UPDATE_SNAPSHOTS=1 cargo test -p pos-proto snapshot\n"
-        );
+    let module = super::TYPESCRIPT_PATH;
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(module);
+    if std::env::var("POS_UPDATE_SNAPSHOTS").is_ok() {
+        std::fs::write(&path, &rendered).expect("write the module");
+        return;
     }
+    let committed = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(
+        committed == rendered,
+        "{module} no longer matches the component catalogue. Regenerate it with:\n\
+         \n    POS_UPDATE_SNAPSHOTS=1 cargo test -p pos-proto snapshot\n"
+    );
 }

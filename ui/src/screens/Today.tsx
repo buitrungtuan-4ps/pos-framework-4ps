@@ -27,7 +27,7 @@ import {
   tableLabel,
 } from "../state/store";
 import { createPrint } from "../state/print-writes";
-import { RegionsContext, type Regions } from "../package/regions";
+import { RegionsContext, type Regions } from "../../../packages/package-renderer/src/regions";
 import { NO_ACTS, PackageScreen } from "../package/screen";
 
 const ORDER = [

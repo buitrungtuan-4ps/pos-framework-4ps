@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "../../packages/shared/styles/tokens.css";
+@source "../../packages/package-renderer/src";
 
 /*
  * Base: paint the ground with a token (never borrow the host's), set the body type, and keep the
