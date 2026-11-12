@@ -1,13 +1,15 @@
 # ADR-0210 — A role names its home screen in the package, and taps are counted from it
 
 **Status** Proposed · **Owner** @maintainers-architecture · **Date** 2026-11-10
-· Amends [ADR-0190](0190-a-screen-is-drawn-from-the-package.md) decisions 1 and 7
+· Amends [ADR-0190](0190-a-screen-is-drawn-from-the-package.md) decisions 1 and 7 (decision 7
+  now warns instead of refusing)
 · Relates to [ADR-0109](0109-counting-the-taps-an-operator-makes.md),
 [ADR-0189](0189-a-store-runs-a-package-version-hq-pins.md),
 [ADR-0191](0191-every-act-is-in-a-typed-catalogue.md),
 [ADR-0192](0192-a-flow-is-a-graph-of-steps-the-edge-re-checks.md)
 
-Drafted by an AI agent and not decided. It needs the owner's choice of option before any code.
+Drafted by an AI agent. On 2026-11-12 the owner chose that an act over its tap budget is a
+warning, never a refusal (decision 5). The choice of option 2 for the home still waits on the owner.
 
 ## Context
 
@@ -66,11 +68,14 @@ count, and what happens to a screen the version does not declare.
    taps.
 4. **Screens the version does not declare** are drawn from the release's default package, which
    ADR-0109's replay already holds. They end the graph: acts on them are not counted here.
-5. **What is refused.** An act the role can reach that is `COMMON` and costs more than two taps,
-   or `RARE` and costs more than three. The refusal names the role (its id, or base), the device
-   class, the act, the screen and the node that offers it at the cheapest cost, and the cost. The
-   dry run locates it with `screen_index` and `node_index`, reason `TAP_BUDGET`. An act the role
-   cannot reach at all is not offered to it, and is not refused.
+5. **What is warned, never refused.** An act the role can reach that is `COMMON` and costs more
+   than two taps, or `RARE` and costs more than three, is a warning, reason `TAP_BUDGET`. The
+   version still publishes. The warning names the role (its id, or base), the device class, the
+   act, the screen and the node that offers it at the cheapest cost, and the cost. The designer
+   shows it beside that node, the dry run lists it with `screen_index` and `node_index`, and the
+   published version keeps the count of its warnings, which the version comparison shows beside
+   the previous version's. An act the role cannot reach at all is not offered to it, and is not
+   warned. The budgets stay two and three; making them a setting is left for when a tenant needs it.
 6. **Order.** The check runs after the content, flow, reaction and key checks, and before the
    evolution check.
 
@@ -80,7 +85,8 @@ count, and what happens to a screen the version does not declare.
   homes, with the owner's review of `pos-proto`.
 - The till's post-sign-in route depends on package data for a version that states homes, and the
   hand-written route stays for the default package.
-- Permissions are not part of the graph: an act the role may not perform still counts against the
-  budget wherever it is offered. That is stricter, never looser.
-- The browser replay of ADR-0109 keeps running against the default package. A published version is
-  held by this check alone.
+- Permissions are not part of the graph: an act the role may not perform still counts wherever it
+  is offered. That warns more often, never less, and keeps the count simple.
+- ADR-0190 decision 7 no longer refuses a version. A slow design can be published, and is visible
+  only through its warnings. The browser replay of ADR-0109 keeps running against the default
+  package, where ADR-0208's gate still blocks a slow till.
