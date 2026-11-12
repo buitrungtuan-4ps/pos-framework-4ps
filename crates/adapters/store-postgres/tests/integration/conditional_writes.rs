@@ -4,7 +4,7 @@
 //! Conditional writes over the `xmin` system column (ADR-0094).
 
 use super::{block_on, prepared};
-use store_postgres::RowUpdate;
+use store_postgres::{AreaFields, AreaWrite, RowUpdate};
 
 /// The compare-and-swap itself, against the real planner.
 ///
@@ -90,10 +90,20 @@ fn a_floor_row_carries_the_version_it_was_read_at_and_a_stale_write_is_refused()
         let area = "0000000000000000AREAXMINAA";
         let station = "000000000000000STATIONXMIN";
 
-        let area_version = floor
-            .insert_area(area, tenant, store_id, "Terrace")
+        let fields = AreaFields {
+            tenant_id: tenant,
+            id: area,
+            name: "Terrace",
+            status: "active",
+            parent_area_id: None,
+        };
+        let AreaWrite::<()>::Written(area_version) = floor
+            .insert_area(store_id, fields, |_| None)
             .await
-            .expect("insert the area");
+            .expect("insert the area")
+        else {
+            panic!("an unchecked insert is written");
+        };
         let station_version = floor
             .insert_station(station, tenant, store_id, "Oven", None, true, None, None)
             .await

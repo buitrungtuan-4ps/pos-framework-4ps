@@ -780,6 +780,10 @@ mod inventory_authoring;
 #[path = "integration/conditional_writes.rs"]
 mod conditional_writes;
 
+// An area inside another (ADR-0211): the parent column, and the store lock the tree check runs in.
+#[path = "integration/floor_tree.rs"]
+mod floor_tree;
+
 // ---------------------------------------------------------------------------
 // Catalog placements and layout buttons: the two caller-keyed rows, on the insert/update-at split
 // (ADR-0095). Both were single upserts, and both have their whole write path here for the first

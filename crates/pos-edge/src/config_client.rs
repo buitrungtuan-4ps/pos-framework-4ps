@@ -1345,16 +1345,16 @@ mod tests {
 
         let table_id = TableId::new(Ulid::from_u128(0xA1));
         let station_id = StationId::new(Ulid::from_u128(1));
-        let floor = FloorPlan::new().with(FloorArea {
-            area_id: AreaId::new(Ulid::from_u128(1)),
-            name: DisplayName::new("Terrace"),
-            tables: vec![FloorTable {
+        let floor = FloorPlan::new().with(FloorArea::top(
+            AreaId::new(Ulid::from_u128(1)),
+            DisplayName::new("Terrace"),
+            vec![FloorTable {
                 table_id,
                 label: DisplayName::new("T1"),
                 seats: 4,
                 position: None,
             }],
-        });
+        ));
         let stations = StationPlan::new()
             .with_station(KitchenStation {
                 station_id,
@@ -2675,16 +2675,16 @@ mod tests {
         use pos_proto::ids::{AreaId, TableId};
 
         let table_id = TableId::new(Ulid::from_u128(0xA2));
-        let base = EdgeSession::bootstrap().with_floor(FloorPlan::new().with(FloorArea {
-            area_id: AreaId::new(Ulid::from_u128(2)),
-            name: DisplayName::new("Main"),
-            tables: vec![FloorTable {
+        let base = EdgeSession::bootstrap().with_floor(FloorPlan::new().with(FloorArea::top(
+            AreaId::new(Ulid::from_u128(2)),
+            DisplayName::new("Main"),
+            vec![FloorTable {
                 table_id,
                 label: DisplayName::new("M1"),
                 seats: 2,
                 position: None,
             }],
-        }));
+        )));
 
         // No floor/stations node: the seeded floor survives.
         let no_node = session_from_config(&base, &serde_json::json!({ "other": true }));

@@ -16,11 +16,12 @@
 //! itself) is cleared; a routing rule whose target station is not in the active set is dropped. So the
 //! compiled plan references only things that exist — the §10 referential validation the publish runs
 //! (`pos_core::floor`) then passes on a plan authored consistently, and only a genuine inconsistency
-//! surfaces as a `422`. Output is sorted (areas/tables/stations by id, rules by `sort`) so two publishes
-//! of the same state produce byte-identical JSON.
+//! surfaces as a `422`. Output is sorted (areas in tree order with siblings by id, tables and stations
+//! by id, rules by `sort`) so two publishes of the same state produce byte-identical JSON.
 
 use std::collections::BTreeSet;
 
+use pos_core::floor::area_tree::resolve_area_tree;
 use pos_proto::floor::{
     FloorArea, FloorPlan, FloorTable, KitchenStation, RoutingRule as PlanRoutingRule, StationPlan,
 };
@@ -31,10 +32,13 @@ use crate::floorplan::{Area, RoutingRule, Station, Table};
 use crate::registry::EntityStatus;
 
 /// Compiles a store's areas and tables into its `floor` node — active areas, each with its active
-/// tables, in id order.
+/// tables, in tree order with each area's parent, depth and path resolved
+/// ([ADR-0211](../../../docs/adr/0211-an-area-may-sit-inside-another-area.md)): the top-level areas
+/// in id order, each followed by the areas inside it. A store whose areas are all at the top
+/// compiles in id order, byte for byte the node it compiled before areas nested.
 #[must_use]
 pub fn compile_floor(areas: &[Area], tables: &[Table]) -> FloorPlan {
-    let mut plan_areas: Vec<FloorArea> = areas
+    let plan_areas: Vec<FloorArea> = areas
         .iter()
         .filter(|area| area.status == EntityStatus::Active)
         .map(|area| {
@@ -52,14 +56,16 @@ pub fn compile_floor(areas: &[Area], tables: &[Table]) -> FloorPlan {
                 .collect();
             floor_tables.sort_by_key(|table| table.table_id.to_string());
             FloorArea {
-                area_id: area.area_id,
-                name: DisplayName::new(area.name.clone()),
-                tables: floor_tables,
+                parent_area_id: area.parent_area_id,
+                ..FloorArea::top(
+                    area.area_id,
+                    DisplayName::new(area.name.clone()),
+                    floor_tables,
+                )
             }
         })
         .collect();
-    plan_areas.sort_by_key(|area| area.area_id.to_string());
-    FloorPlan::from_areas(plan_areas)
+    FloorPlan::from_areas(resolve_area_tree(plan_areas))
 }
 
 /// Compiles a store's stations and routing rules into its `stations` node — active stations (their
@@ -148,6 +154,7 @@ mod tests {
             store_id: store(),
             name: name.to_owned(),
             status,
+            parent_area_id: None,
         }
     }
 
@@ -217,6 +224,70 @@ mod tests {
         assert_eq!(plan.areas().len(), 1);
         assert_eq!(plan.areas()[0].tables.len(), 1);
         assert_eq!(plan.tables().count(), 1);
+    }
+
+    #[test]
+    fn a_flat_floor_publishes_exactly_what_it_did_before_areas_nested() {
+        let areas = vec![
+            area(2, "Hall", EntityStatus::Active),
+            area(1, "Terrace", EntityStatus::Active),
+        ];
+        let tables = vec![table(10, 1, "T1", EntityStatus::Active)];
+        let node = serde_json::to_value(compile_floor(&areas, &tables)).expect("serialise");
+        let id = |n: u128| AreaId::new(Ulid::from_u128(n)).to_string();
+        let table_id = TableId::new(Ulid::from_u128(10)).to_string();
+        assert_eq!(
+            node,
+            serde_json::json!({ "areas": [
+                { "area_id": id(1), "name": "Terrace", "tables": [
+                    { "table_id": table_id, "label": "T1", "seats": 2 }
+                ] },
+                { "area_id": id(2), "name": "Hall", "tables": [] },
+            ] })
+        );
+    }
+
+    #[test]
+    fn a_tree_publishes_in_tree_order_with_parent_depth_and_path() {
+        let under = |id: u128, name: &str, parent: u128| Area {
+            parent_area_id: Some(AreaId::new(Ulid::from_u128(parent))),
+            ..area(id, name, EntityStatus::Active)
+        };
+        // Floor 2 (1) holds VIP (3), which holds Room 1 (4); the ground floor (2) is a sibling of 1.
+        let areas = vec![
+            under(4, "Phòng 1", 3),
+            area(2, "Tầng 1", EntityStatus::Active),
+            under(3, "VIP", 1),
+            area(1, "Tầng 2", EntityStatus::Active),
+            // An area under an archived one is published at the top rather than lost.
+            area(5, "Old", EntityStatus::Archived),
+            under(6, "Patio", 5),
+        ];
+        let plan = compile_floor(&areas, &[]);
+        let id = |n: u128| AreaId::new(Ulid::from_u128(n));
+        let order: Vec<(AreaId, Option<AreaId>, u8, Vec<AreaId>)> = plan
+            .areas()
+            .iter()
+            .map(|area| {
+                (
+                    area.area_id,
+                    area.parent_area_id,
+                    area.depth,
+                    area.path.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                (id(1), None, 0, vec![]),
+                (id(3), Some(id(1)), 1, vec![id(1)]),
+                (id(4), Some(id(3)), 2, vec![id(1), id(3)]),
+                (id(2), None, 0, vec![]),
+                (id(6), None, 0, vec![]),
+            ]
+        );
+        assert!(pos_core::floor::floor_violations(&plan).is_empty());
     }
 
     #[test]

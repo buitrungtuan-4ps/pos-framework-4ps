@@ -17,6 +17,8 @@
 
 use std::collections::BTreeSet;
 
+pub mod area_tree;
+
 use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::{CourseId, MenuItemId, StationId};
 
@@ -53,7 +55,8 @@ pub fn route_station(
 /// The referential problems in a floor plan, in reading order. Empty means the plan is valid.
 ///
 /// A table id must be unique across the whole floor — events key a table by its id, so the same id in
-/// two areas would be one table pretending to be two. Area ids must likewise be distinct.
+/// two areas would be one table pretending to be two. Area ids must likewise be distinct, and the
+/// areas must come resolved as a tree ([`area_tree::area_tree_violations`], ADR-0211).
 #[must_use]
 pub fn floor_violations(plan: &FloorPlan) -> Vec<String> {
     let mut violations = Vec::new();
@@ -72,6 +75,7 @@ pub fn floor_violations(plan: &FloorPlan) -> Vec<String> {
             }
         }
     }
+    violations.extend(area_tree::area_tree_violations(plan.areas()));
     violations
 }
 
@@ -175,6 +179,9 @@ mod tests {
                 seats: 2,
                 position: None,
             }],
+            parent_area_id: None,
+            depth: 0,
+            path: Vec::new(),
         }
     }
 

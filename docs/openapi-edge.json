@@ -5907,9 +5907,26 @@
             "$ref": "#/components/schemas/AreaId",
             "description": "The area's identity."
           },
+          "depth": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many areas this one sits inside: zero at the top, and always `path.len()`. Computed by\nthe cloud when it publishes, so a reader never walks the tree. Omitted while zero.",
+            "minimum": 0
+          },
           "name": {
             "$ref": "#/components/schemas/DisplayName",
             "description": "The name to show: \"Terrace\", \"Main hall\"."
+          },
+          "parent_area_id": {
+            "$ref": "#/components/schemas/AreaId",
+            "description": "The area this one sits inside, or `None` for an area at the top: a floor is simply a\ntop-level area ([ADR-0211](../../../docs/adr/0211-an-area-may-sit-inside-another-area.md)).\nOmitted from the wire when absent, so a store whose areas are all at the top publishes\nexactly what it published before."
+          },
+          "path": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AreaId"
+            },
+            "description": "The ids of the areas this one sits inside, from the top down to its parent; empty at the\ntop. The area itself is not in it, so a breadcrumb is the path's names and then this\narea's. Computed by the cloud when it publishes. Omitted while empty."
           },
           "tables": {
             "type": "array",

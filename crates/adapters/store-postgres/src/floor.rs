@@ -16,6 +16,10 @@ use pos_ports::PortError;
 
 use crate::store::{RowUpdate, pool_unavailable, unavailable};
 
+mod tree;
+
+pub use tree::{AreaFields, AreaLinkRow, AreaWrite};
+
 /// An area as listed — identity, its store, name, and status.
 #[derive(Clone, Debug)]
 pub struct AreaRow {
@@ -33,10 +37,13 @@ pub struct AreaRow {
     /// ([ADR-0094](../../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
     /// `xmin::text`, and nothing above this crate may assume that.
     pub version: String,
+    /// The area it sits inside, or `None` at the top
+    /// ([ADR-0211](../../../../docs/adr/0211-an-area-may-sit-inside-another-area.md)).
+    pub parent_area_id: Option<String>,
 }
 
 /// The area columns a read returns, in a stable order matching [`area_row`].
-const AREA_COLUMNS: &str = "id, tenant_id, store_id, name, status, xmin::text";
+const AREA_COLUMNS: &str = "id, tenant_id, store_id, name, status, xmin::text, parent_area_id";
 
 /// A table as listed — identity, its store and area, label, seat count, optional grid position, status.
 #[derive(Clone, Debug)]
@@ -79,30 +86,6 @@ pub struct PostgresFloor {
 impl PostgresFloor {
     pub(crate) fn new(pool: Pool) -> Self {
         Self { pool }
-    }
-
-    /// Inserts an area.
-    ///
-    /// # Errors
-    ///
-    /// [`PortError::unavailable`] if the database cannot be reached or the insert fails.
-    pub async fn insert_area(
-        &self,
-        id: &str,
-        tenant_id: &str,
-        store_id: &str,
-        name: &str,
-    ) -> Result<String, PortError> {
-        let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        let row = connection
-            .query_one(
-                "INSERT INTO floor_areas (id, tenant_id, store_id, name) VALUES ($1, $2, $3, $4) \
-                 RETURNING xmin::text",
-                &[&id, &tenant_id, &store_id, &name],
-            )
-            .await
-            .map_err(unavailable)?;
-        Ok(row.get(0))
     }
 
     /// Lists a store's areas, newest first.
@@ -148,46 +131,6 @@ impl PostgresFloor {
             .await
             .map_err(unavailable)?;
         Ok(row.as_ref().map(area_row))
-    }
-
-    /// Renames an area and sets its status, within its tenant. Applies only if the row is still at `expected`.
-    ///
-    /// # Errors
-    ///
-    /// [`PortError::unavailable`] if the database cannot be reached.
-    pub async fn set_area(
-        &self,
-        tenant_id: &str,
-        id: &str,
-        name: &str,
-        status: &str,
-        expected: &str,
-    ) -> Result<RowUpdate, PortError> {
-        let connection = self.pool.get().await.map_err(pool_unavailable)?;
-        let updated = connection
-            .query_opt(
-                "UPDATE floor_areas SET name = $3, status = $4, updated_at = now() \
-                 WHERE tenant_id = $1 AND id = $2 \
-                 AND xmin::text = $5 RETURNING xmin::text",
-                &[&tenant_id, &id, &name, &status, &expected],
-            )
-            .await
-            .map_err(unavailable)?;
-        if let Some(row) = updated {
-            return Ok(RowUpdate::Updated(row.get(0)));
-        }
-        let present = connection
-            .query_opt(
-                "SELECT 1 FROM floor_areas WHERE tenant_id = $1 AND id = $2",
-                &[&tenant_id, &id],
-            )
-            .await
-            .map_err(unavailable)?;
-        Ok(if present.is_some() {
-            RowUpdate::VersionMismatch
-        } else {
-            RowUpdate::NotFound
-        })
     }
 
     /// Inserts a table.
@@ -352,6 +295,7 @@ fn area_row(row: &tokio_postgres::Row) -> AreaRow {
         name: row.get(3),
         status: row.get(4),
         version: row.get(5),
+        parent_area_id: row.get(6),
     }
 }
 

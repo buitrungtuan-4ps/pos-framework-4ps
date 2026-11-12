@@ -13134,7 +13134,7 @@
         "summary": "A super-admin creates a floor area; its id is minted here and returned once.",
         "operationId": "admin_create_area",
         "requestBody": {
-          "description": "`tenant_id` and `store_id`, and the area's `name`, which may not be blank",
+          "description": "`tenant_id` and `store_id`, the area's `name`, which may not be blank, and the `parent_area_id` it sits inside, absent or `null` for the top (ADR-0211)",
           "content": {
             "application/json": {
               "schema": {
@@ -13156,7 +13156,7 @@
             }
           },
           "400": {
-            "description": "tenant_id or store_id is absent or not a ULID, or name is blank",
+            "description": "tenant_id, store_id or parent_area_id is not a ULID, or name is blank",
             "content": {
               "application/json": {
                 "schema": {
@@ -13177,6 +13177,16 @@
           },
           "403": {
             "description": "The role lacks console.floor.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The tree refuses the parent: `AREA_PARENT_NOT_FOUND`, `AREA_PARENT_ARCHIVED` or `AREA_TOO_DEEP` on `parent_area_id`",
             "content": {
               "application/json": {
                 "schema": {
@@ -13327,7 +13337,7 @@
           }
         ],
         "requestBody": {
-          "description": "`tenant_id`, and the area's `name` and `status` (`active` or `archived`) as they should now stand",
+          "description": "`tenant_id`, and the area's `name` and `status` (`active` or `archived`) as they should now stand; `parent_area_id` moves it (`null` to the top), and absent leaves it where it is (ADR-0211)",
           "content": {
             "application/json": {
               "schema": {
@@ -13373,6 +13383,16 @@
           },
           "404": {
             "description": "The tenant has no area with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The tree refuses the change: `AREA_PARENT_NOT_FOUND`, `AREA_PARENT_ARCHIVED`, `AREA_CYCLE` or `AREA_TOO_DEEP` on `parent_area_id`, or `AREA_HAS_LIVE_CHILDREN` on `status`",
             "content": {
               "application/json": {
                 "schema": {
@@ -26615,7 +26635,8 @@
           "tenant_id",
           "store_id",
           "name",
-          "status"
+          "status",
+          "parent_area_id"
         ],
         "properties": {
           "area_id": {
@@ -26625,6 +26646,17 @@
           "name": {
             "type": "string",
             "description": "The name to show (\"Terrace\")."
+          },
+          "parent_area_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AreaId",
+                "description": "The area it sits inside, or `None` at the top\n([ADR-0211](../../../docs/adr/0211-an-area-may-sit-inside-another-area.md))."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "status": {
             "$ref": "#/components/schemas/EntityStatus",
@@ -28237,6 +28269,13 @@
         "properties": {
           "name": {
             "type": "string"
+          },
+          "parent_area_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The area it sits inside (a ULID of the same store), or absent or `null` for the top\n(ADR-0211)."
           },
           "store_id": {
             "type": "string"
@@ -36656,7 +36695,7 @@
       },
       "UpdateAreaRequest": {
         "type": "object",
-        "description": "Rename an area and/or set its status.",
+        "description": "Rename an area, set its status, and/or move it.",
         "required": [
           "tenant_id",
           "name",
@@ -36665,6 +36704,13 @@
         "properties": {
           "name": {
             "type": "string"
+          },
+          "parent_area_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The area it now sits inside, `null` to move it to the top, or absent to leave it where it\nis (ADR-0211)."
           },
           "status": {
             "type": "string"
@@ -37425,7 +37471,8 @@
               "tenant_id",
               "store_id",
               "name",
-              "status"
+              "status",
+              "parent_area_id"
             ],
             "properties": {
               "area_id": {
@@ -37435,6 +37482,17 @@
               "name": {
                 "type": "string",
                 "description": "The name to show (\"Terrace\")."
+              },
+              "parent_area_id": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/AreaId",
+                    "description": "The area it sits inside, or `None` at the top\n([ADR-0211](../../../docs/adr/0211-an-area-may-sit-inside-another-area.md))."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "status": {
                 "$ref": "#/components/schemas/EntityStatus",
