@@ -10,12 +10,13 @@ use pos_cloud_api::console::{mint_ulid, require_permission};
 use pos_cloud_api::response::{api_error_with_details, parse_ulid_fields, service_unavailable};
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
+use pos_proto::events::EventType;
 use pos_proto::ids::{StoreId, TenantId};
 use serde::Deserialize;
 
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
-use crate::http::{CloudApp, Json, not_found, random_hex_32};
+use crate::http::{CloudApp, FieldRefusal, Json, not_found, random_hex_32};
 use crate::webhook::{
     PersistedWebhook, SigningSecret, WebhookEndpointId, WebhookEndpointStore, WebhookSummary, vet,
 };
@@ -32,6 +33,44 @@ pub(in crate::http) struct RegisterWebhookRequest {
     /// The destination URL. Must be `https`, must carry no credentials, and must resolve only to
     /// public-unicast addresses — vetted here before the endpoint is stored ([ADR-0032](../../../docs/adr/0032-webhooks.md)).
     url: String,
+    /// The event types the endpoint is sent, as `domain.resource.action` tokens from the event
+    /// catalogue (roadmap-v3 B6.2). Absent or empty: every event, as before the field existed.
+    #[serde(default)]
+    event_types: Vec<String>,
+}
+
+/// The most event types one registration may name, before duplicates are dropped: more than the
+/// catalogue holds, so it bounds a request without refusing any honest one.
+const EVENT_TYPES_MAX: usize = 256;
+
+/// The event types `requested` names, sorted and once each, or the refusal of the first one the
+/// catalogue does not hold. An empty list is every event.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design — it *is* the 400 the caller returns"
+)]
+fn event_types_of(requested: &[String]) -> Result<Vec<String>, Response> {
+    if requested.len() > EVENT_TYPES_MAX {
+        return Err(FieldRefusal::new(
+            "a webhook names at most 256 event types",
+            "event_types",
+            "TOO_MANY",
+        )
+        .into_response());
+    }
+    let mut known = std::collections::BTreeSet::new();
+    for token in requested {
+        let Some(event_type) = EventType::parse(token) else {
+            return Err(FieldRefusal::new(
+                "an event type is not in the event catalogue",
+                "event_types",
+                "UNKNOWN_EVENT_TYPE",
+            )
+            .into_response());
+        };
+        known.insert(event_type.as_str().to_owned());
+    }
+    Ok(known.into_iter().collect())
 }
 
 /// The one-time response to a registration: the id, the normalized URL, and the signing secret shown
@@ -119,6 +158,10 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
+    let event_types = match event_types_of(&request.event_types) {
+        Ok(event_types) => event_types,
+        Err(refusal) => return refusal,
+    };
 
     // Vet the destination before it is ever stored. `vet` resolves the host with a real
     // getaddrinfo-backed resolver, which blocks, so it runs on the blocking pool. The vetted
@@ -167,6 +210,7 @@ where
         secret: SigningSecret::new(secret.clone()),
         cursor: None,
         disabled: false,
+        event_types,
     };
     if let Err(error) = app.webhooks.insert(&endpoint).await {
         tracing::error!(%error, "persisting a new webhook endpoint failed");

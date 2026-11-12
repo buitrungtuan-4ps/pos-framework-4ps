@@ -1538,6 +1538,7 @@ impl WebhookEndpointStore for FakeWebhooks {
                 url: row.url.clone(),
                 cursor: row.cursor.as_ref().map(ToString::to_string),
                 disabled: row.disabled,
+                event_types: row.event_types.clone(),
             })
             .collect())
     }

@@ -28,6 +28,8 @@ pub struct WebhookSummaryRow {
     pub cursor: Option<String>,
     /// Whether the endpoint is auto-disabled.
     pub disabled: bool,
+    /// The event types the endpoint is sent, sorted; empty for every event (migration 0097).
+    pub event_types: Vec<String>,
 }
 
 /// One endpoint in full, including the signing secret — for the delivery task to sign with.
@@ -45,6 +47,8 @@ pub struct WebhookRow {
     pub secret: String,
     /// The cursor position (an event-id ULID string), or `None` if nothing has been delivered.
     pub cursor: Option<String>,
+    /// The event types the endpoint is sent, sorted; empty for every event (migration 0097).
+    pub event_types: Vec<String>,
 }
 
 /// The webhook-endpoint store over a shared pool. Built by
@@ -59,7 +63,8 @@ impl PostgresWebhooks {
         Self { pool }
     }
 
-    /// Inserts a freshly registered endpoint (cursor unset, enabled).
+    /// Inserts a freshly registered endpoint (cursor unset, enabled), sent `event_types` (empty for
+    /// every event).
     ///
     /// # Errors
     ///
@@ -72,13 +77,14 @@ impl PostgresWebhooks {
         store_id: &str,
         url: &str,
         secret: &str,
+        event_types: &[String],
     ) -> Result<(), PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         connection
             .execute(
-                "INSERT INTO webhook_endpoints (id, tenant_id, store_id, url, secret) \
-                 VALUES ($1, $2, $3, $4, $5)",
-                &[&id, &tenant_id, &store_id, &url, &secret],
+                "INSERT INTO webhook_endpoints (id, tenant_id, store_id, url, secret, event_types) \
+                 VALUES ($1, $2, $3, $4, $5, $6)",
+                &[&id, &tenant_id, &store_id, &url, &secret, &event_types],
             )
             .await
             .map_err(unavailable)?;
@@ -94,7 +100,7 @@ impl PostgresWebhooks {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let rows = connection
             .query(
-                "SELECT id, store_id, url, cursor, disabled FROM webhook_endpoints \
+                "SELECT id, store_id, url, cursor, disabled, event_types FROM webhook_endpoints \
                  WHERE tenant_id = $1 ORDER BY created_at DESC",
                 &[&tenant_id],
             )
@@ -108,6 +114,7 @@ impl PostgresWebhooks {
                 url: row.get(2),
                 cursor: row.get(3),
                 disabled: row.get(4),
+                event_types: row.get(5),
             })
             .collect())
     }
@@ -138,7 +145,8 @@ impl PostgresWebhooks {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let rows = connection
             .query(
-                "SELECT id, tenant_id, store_id, url, secret, cursor FROM webhook_endpoints \
+                "SELECT id, tenant_id, store_id, url, secret, cursor, event_types \
+                 FROM webhook_endpoints \
                  WHERE disabled = false",
                 &[],
             )
@@ -153,6 +161,7 @@ impl PostgresWebhooks {
                 url: row.get(3),
                 secret: row.get(4),
                 cursor: row.get(5),
+                event_types: row.get(6),
             })
             .collect())
     }

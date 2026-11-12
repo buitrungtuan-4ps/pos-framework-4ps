@@ -3070,5 +3070,9 @@
   "data.intro": "Data only grows: once a version that declares a field, list or object type is published, it can be retired but never removed or changed to hold another kind of value.",
   "data.onObjects": "Fields on orders, lines, bills, tables and shifts",
   "data.lists": "Lists",
-  "data.objectTypes": "Object types"
+  "data.objectTypes": "Object types",
+  "webhooks.eventTypesLabel": "Events sent",
+  "webhooks.eventTypesHint": "Event types such as sales.order.opened, separated by commas or new lines. Leave empty to send every event.",
+  "webhooks.events": "Events",
+  "webhooks.eventsAll": "Every event"
 }

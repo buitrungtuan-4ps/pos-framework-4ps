@@ -225,6 +225,11 @@ Documented in [ADR-0057](../adr/0057-qr-ordering.md); it is not a general integr
 
 An operator registers your endpoint in the console (**Settings → Webhooks**) with an `https://` URL,
 and is shown a **signing secret** once. From then on the cloud pushes that store's events to you.
+The registration may name the **event types** you want, as `domain.resource.action` tokens from the
+event catalogue (`docs/snapshots/events.txt`), for example `sales.order.opened`; then you are sent
+only those, and the cursor moves past the rest, so a page holds only what you asked for and a
+quiet stretch sends nothing. Naming none sends every event. A token the catalogue does not hold is
+refused when the endpoint is registered (`event_types`, `UNKNOWN_EVENT_TYPE`).
 
 Three properties to build against
 ([ADR-0032](../adr/0032-webhooks.md)):

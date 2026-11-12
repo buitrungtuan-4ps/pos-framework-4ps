@@ -3070,5 +3070,9 @@
   "data.intro": "Dữ liệu chỉ tăng thêm: khi một phiên bản khai báo trường, danh sách hay loại đối tượng đã được phát hành, nó có thể ngừng dùng nhưng không thể bỏ hoặc đổi sang loại giá trị khác.",
   "data.onObjects": "Trường trên đơn, dòng, hóa đơn, bàn và ca",
   "data.lists": "Danh sách",
-  "data.objectTypes": "Loại đối tượng"
+  "data.objectTypes": "Loại đối tượng",
+  "webhooks.eventTypesLabel": "Sự kiện được gửi",
+  "webhooks.eventTypesHint": "Các loại sự kiện như sales.order.opened, phân cách bằng dấu phẩy hoặc xuống dòng. Để trống để gửi mọi sự kiện.",
+  "webhooks.events": "Sự kiện",
+  "webhooks.eventsAll": "Mọi sự kiện"
 }
