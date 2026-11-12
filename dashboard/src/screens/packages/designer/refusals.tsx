@@ -26,6 +26,10 @@ const REASON_KEYS: Readonly<Record<string, MessageKey>> = {
   NOT_ADDITIVE: "designer.refusal.notAdditive",
   TOO_LARGE: "designer.refusal.tooLarge",
   UNKNOWN_TRANSLATION_KEY: "designer.refusal.unknownTranslationKey",
+  NO_BASE_HOME: "designer.refusal.noBaseHome",
+  SAME_HOME_SELECTOR: "designer.refusal.sameHomeSelector",
+  HOME_SELECTOR: "designer.refusal.homeSelector",
+  UNKNOWN_HOME_SCREEN: "designer.refusal.unknownHomeScreen",
 };
 
 const FIELD_KEYS: Readonly<Record<string, MessageKey>> = {
@@ -38,8 +42,10 @@ export function refusalText(refusal: PackageRefusal, draft: PackageDraft): strin
     refusal.screen_index === undefined
       ? ""
       : (draft.screens?.[refusal.screen_index]?.body.screen_id ?? String(refusal.screen_index));
+  // A home's refusal names it by position in `home_screens` (ADR-0210): say the screen it names.
+  const home = refusal.field === "home_screens" && refusal.name !== undefined ? draft.home_screens?.[Number(refusal.name)]?.body.screen_id : undefined;
   const args = {
-    screen,
+    screen: home ?? screen,
     node: (refusal.node_index ?? 0) + 1,
     name: refusal.name ?? "",
     field: refusal.field,

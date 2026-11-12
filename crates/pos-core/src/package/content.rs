@@ -6,9 +6,11 @@
 //! and 6): the cloud checks it before a version is stored, and the edge again before it runs one.
 //!
 //! The parts (screens, flows, rules, data) add their own checks as they join the content: the
-//! screens' are [`super::screens`]'s and the data part's [`super::data`]'s.
+//! screens' are [`super::screens`]'s, the data part's [`super::data`]'s and the homes'
+//! [`super::homes`]'s.
 
 use super::data::{DataRefusal, check_data};
+use super::homes::{HomeRefusal, check_homes};
 use super::screens::{ScreenRefusal, check_screens};
 use pos_proto::package::{
     LABEL_CHARS_MAX, PackageContent, SCHEDULES_PER_TIME_SLOT_MAX, TIME_SLOTS_MAX, TimeSlot,
@@ -42,6 +44,8 @@ pub enum ContentRefusal {
     Screen(ScreenRefusal),
     /// The data part is refused ([ADR-0194](../../../../docs/adr/0194-custom-data-is-declared-and-personal-fields-are-kept-apart.md)).
     Data(DataRefusal),
+    /// The homes are refused ([ADR-0210](../../../../docs/adr/0210-a-role-names-its-home-screen-in-the-package.md)).
+    Home(HomeRefusal),
 }
 
 impl ContentRefusal {
@@ -56,6 +60,7 @@ impl ContentRefusal {
             Self::TimeSlotSchedules(_) | Self::Schedule(_) => "time_slots.schedules",
             Self::Screen(_) => "screens",
             Self::Data(refusal) => refusal.field(),
+            Self::Home(_) => "home_screens",
         }
     }
 
@@ -65,6 +70,7 @@ impl ContentRefusal {
     pub const fn code(self) -> &'static str {
         match self {
             Self::Data(_)
+            | Self::Home(_)
             | Self::VersionLabel
             | Self::Screen(_)
             | Self::TooManyTimeSlots
@@ -106,14 +112,15 @@ impl core::fmt::Display for ContentRefusal {
             ),
             Self::Screen(refusal) => write!(f, "screens: {refusal}"),
             Self::Data(refusal) => write!(f, "data: {refusal}"),
+            Self::Home(refusal) => write!(f, "home_screens: {refusal}"),
         }
     }
 }
 
 impl core::error::Error for ContentRefusal {}
 
-/// Checks a version's content: its label, each time slot's id, name key and windows, its screens
-/// and its data part.
+/// Checks a version's content: its label, each time slot's id, name key and windows, its screens,
+/// its data part and its homes.
 ///
 /// # Errors
 ///
@@ -138,7 +145,9 @@ pub fn check_content(content: &PackageContent) -> Result<(), ContentRefusal> {
         }
     }
     check_screens(&content.screens, &content.time_slots).map_err(ContentRefusal::Screen)?;
-    check_data(&content.data).map_err(ContentRefusal::Data)
+    check_data(&content.data).map_err(ContentRefusal::Data)?;
+    check_homes(&content.home_screens, &content.screens, &content.time_slots)
+        .map_err(ContentRefusal::Home)
 }
 
 fn check_slot(index: usize, slot: &TimeSlot) -> Result<(), ContentRefusal> {

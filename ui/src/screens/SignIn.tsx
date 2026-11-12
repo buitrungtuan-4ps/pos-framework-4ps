@@ -3,6 +3,7 @@ import { type Navigator, useNavigate } from "@solidjs/router";
 
 import { ApiError, api } from "../api/client";
 import { CodePad } from "../components/CodePad";
+import { homeRoute } from "../components/ScreenReactions";
 import { PageHeader } from "../components/ui";
 import { adoptStoreLanguage, t } from "../i18n";
 import { signedInAs } from "../state/session";
@@ -79,7 +80,8 @@ export function SignIn() {
         // load and this navigation is client-side — without this a freshly signed-in till drew the
         // fallback floor and an empty menu until somebody reloaded it.
         await loadStore();
-        navigate("/", { replace: true });
+        // Where the running version says this device starts, if it says (ADR-0210).
+        navigate(homeRoute(), { replace: true });
         return;
       }
       if (result.outcome === "locked_out") {

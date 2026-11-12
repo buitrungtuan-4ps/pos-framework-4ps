@@ -190,3 +190,49 @@ async fn a_key_without_english_is_refused_where_the_version_names_it() {
     let (status, body) = send(&router, post_with_cookie(&versions, &dinner, &cookie)).await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
 }
+
+/// A version names its homes (ADR-0210 decision 1): a home that names a screen the version does
+/// not declare is refused where it is, by the dry run and by the publish; a base home naming a
+/// declared screen publishes, and the version keeps it.
+#[tokio::test]
+async fn a_version_names_the_screen_each_role_starts_on() {
+    let router = package_app(provisioned_admin(), Arc::new(NoopAuditRecorder));
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+    let (_, package) = send(
+        &router,
+        post_with_cookie(
+            "/admin/packages",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Counter" }),
+            &cookie,
+        ),
+    )
+    .await;
+    let versions = format!(
+        "/admin/packages/{}/versions",
+        package["package_id"].as_str().expect("an id")
+    );
+    let dry_run = format!("{versions}/dry-run");
+    let mut body = screens_body(
+        &tenant,
+        &serde_json::json!({ "component_id": "page_header", "properties": { "title_key": "welcome.title" } }),
+    );
+
+    body["home_screens"] = serde_json::json!([{ "body": { "screen_id": "floor" } }]);
+    let (status, verdict) = send(&router, post_with_cookie(&dry_run, &body, &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{verdict}");
+    let refusal = &verdict["refusals"][0];
+    assert_eq!(refusal["field"], "home_screens", "{verdict}");
+    assert_eq!(refusal["reason"], "UNKNOWN_HOME_SCREEN");
+    assert_eq!(refusal["name"], "0");
+    let (status, refused) = send(&router, post_with_cookie(&versions, &body, &cookie)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+
+    body["home_screens"] = serde_json::json!([{ "body": { "screen_id": "welcome" } }]);
+    let (status, verdict) = send(&router, post_with_cookie(&dry_run, &body, &cookie)).await;
+    assert_eq!(status, StatusCode::OK, "{verdict}");
+    assert_eq!(verdict["accepted"], true, "{verdict}");
+    let (status, published) = send(&router, post_with_cookie(&versions, &body, &cookie)).await;
+    assert_eq!(status, StatusCode::CREATED, "{published}");
+    assert_eq!(published["content"]["home_screens"], body["home_screens"]);
+}

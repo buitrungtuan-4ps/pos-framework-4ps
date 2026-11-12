@@ -32069,6 +32069,13 @@
             },
             "description": "The package's flows ([ADR-0192](../../../docs/adr/0192-a-flow-is-a-graph-of-steps-the-edge-re-checks.md)),\neach with its variants; the variants of one flow share its `flow_id`."
           },
+          "home_screens": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Variant_HomeScreen"
+            },
+            "description": "The screen each role starts on after sign-in\n([ADR-0210](../../../docs/adr/0210-a-role-names-its-home-screen-in-the-package.md)\ndecision 1), as variants whose selectors state at most `role_id` and `device_class`. The base\nvariant is the home of every role without its own. Every `screen_id` is a screen the version\ndeclares, and a version that declares a screen and states homes has a base. Empty, and left\noff the wire, in a version that states none: its tills start where the release's own routes\nstart them."
+          },
           "min_edge_version": {
             "$ref": "#/components/schemas/ReleaseTag",
             "description": "The oldest edge release that runs this version, which the cloud computes at publish\n(ADR-0189 decision 5). An edge on an older release refuses the version as a whole."
@@ -32187,7 +32194,7 @@
           },
           "name": {
             "type": "string",
-            "description": "The property or act parameter at fault, when the fault names one; for a flow or a reaction,\nthe id, action, screen, prerequisite, target or parameter its fault names; for a key without\nan `en` value, the key."
+            "description": "The property or act parameter at fault, when the fault names one; for a flow or a reaction,\nthe id, action, screen, prerequisite, target or parameter its fault names; for a key without\nan `en` value, the key; for a home, its position in `home_screens`."
           },
           "node_index": {
             "type": "integer",
@@ -32201,7 +32208,7 @@
           },
           "reason": {
             "type": "string",
-            "description": "A stable token naming the fault: a publish's code (`INVALID`, `NOT_ADDITIVE`,\n`TOO_LARGE`, `UNKNOWN_TRANSLATION_KEY` with the key in `name`), or for a screen what is\nwrong with it, such as `MISSING_PROPERTY`."
+            "description": "A stable token naming the fault: a publish's code (`INVALID`, `NOT_ADDITIVE`,\n`TOO_LARGE`, `UNKNOWN_TRANSLATION_KEY` with the key in `name`), for a screen what is\nwrong with it, such as `MISSING_PROPERTY`, or for a home `NO_BASE_HOME`,\n`SAME_HOME_SELECTOR`, `HOME_SELECTOR` or `UNKNOWN_HOME_SCREEN`."
           },
           "screen_index": {
             "type": "integer",
@@ -32298,6 +32305,13 @@
               "$ref": "#/components/schemas/Variant_Flow"
             },
             "description": "The package's flows, every variant of each (ADR-0192): graphs of required, optional and\nconditional steps with their prerequisites. Their conditions are compiled at publish."
+          },
+          "home_screens": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Variant_HomeScreen"
+            },
+            "description": "The screen each role starts on after sign-in (ADR-0210 decision 1): variants of one\n`screen_id` each, stating at most a role and a device class, with a base whenever the\nversion declares a screen. Leave it out for a version whose tills start where their\nrelease starts them."
           },
           "reactions": {
             "type": "array",
@@ -37365,6 +37379,32 @@
                   "$ref": "#/components/schemas/FlowStep"
                 },
                 "description": "The steps, at most [`STEPS_MAX`], in the order the till offers them when several are\navailable at once."
+              }
+            }
+          },
+          "selector": {
+            "$ref": "#/components/schemas/VariantSelector",
+            "description": "When the variant applies. Empty for the part's base variant."
+          }
+        }
+      },
+      "Variant_HomeScreen": {
+        "type": "object",
+        "description": "One variant of a package part: what a till shows or runs when its selector is the one chosen.",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "object",
+            "description": "A role's home: the screen its tills open after sign-in\n([ADR-0210](../../../docs/adr/0210-a-role-names-its-home-screen-in-the-package.md)).",
+            "required": [
+              "screen_id"
+            ],
+            "properties": {
+              "screen_id": {
+                "type": "string",
+                "description": "The screen, by the `screen_id` of a screen the version declares."
               }
             }
           },

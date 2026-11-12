@@ -56,12 +56,13 @@ describe("a package draft", () => {
     expect(draft.screens).toEqual(VERSION.content.screens);
     expect(draft.flows).toEqual(VERSION.content.flows);
     expect(draft.reactions).toEqual(VERSION.content.reactions);
+    expect(draft.home_screens).toEqual([]);
     expect(draftRequest("01TENANT", { ...draft, version_label: " April " })).toMatchObject({
       tenant_id: "01TENANT",
       version_label: "April",
       screens: VERSION.content.screens,
     });
-    expect(blankDraft()).toEqual({ version_label: "", time_slots: [], data: {}, screens: [], flows: [], reactions: [] });
+    expect(blankDraft()).toEqual({ version_label: "", time_slots: [], data: {}, screens: [], flows: [], reactions: [], home_screens: [] });
   });
 
   it("gives a part the refusals of its field and the fields below it, and no other", () => {

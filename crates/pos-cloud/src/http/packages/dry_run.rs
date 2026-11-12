@@ -154,6 +154,10 @@ impl Refusal {
             located.node_index = node;
             located.name = name.map(str::to_owned);
         }
+        if let Self::Content(ContentRefusal::Home(home)) = self {
+            located.reason = String::from(home.reason());
+            located.name = home.index().map(|index| index.to_string());
+        }
         located
     }
 }
@@ -318,6 +322,7 @@ pub(super) fn version_content(
         screens: request.screens,
         data: request.data,
         reactions: request.reactions,
+        home_screens: request.home_screens,
     };
     content.min_edge_version = min_edge_version(&content);
     content
@@ -383,8 +388,9 @@ pub(super) struct PackageRefusal {
     /// `screens` or `data.object_types`.
     field: String,
     /// A stable token naming the fault: a publish's code (`INVALID`, `NOT_ADDITIVE`,
-    /// `TOO_LARGE`, `UNKNOWN_TRANSLATION_KEY` with the key in `name`), or for a screen what is
-    /// wrong with it, such as `MISSING_PROPERTY`.
+    /// `TOO_LARGE`, `UNKNOWN_TRANSLATION_KEY` with the key in `name`), for a screen what is
+    /// wrong with it, such as `MISSING_PROPERTY`, or for a home `NO_BASE_HOME`,
+    /// `SAME_HOME_SELECTOR`, `HOME_SELECTOR` or `UNKNOWN_HOME_SCREEN`.
     reason: String,
     /// The fault in one English sentence, for a log; the console words it from `reason`.
     message: String,
@@ -398,7 +404,7 @@ pub(super) struct PackageRefusal {
     node_index: Option<usize>,
     /// The property or act parameter at fault, when the fault names one; for a flow or a reaction,
     /// the id, action, screen, prerequisite, target or parameter its fault names; for a key without
-    /// an `en` value, the key.
+    /// an `en` value, the key; for a home, its position in `home_screens`.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     name: Option<String>,

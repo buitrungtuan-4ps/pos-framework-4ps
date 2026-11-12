@@ -17,7 +17,7 @@ use pos_cloud_api::response::api_error;
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
 use pos_proto::flow::Flow;
-use pos_proto::package::{PackageData, TimeSlot, Variant};
+use pos_proto::package::{HomeScreen, PackageData, TimeSlot, Variant};
 use pos_proto::reaction::Reaction;
 use pos_proto::screen::Screen;
 use serde::Deserialize;
@@ -87,6 +87,12 @@ struct PackageVersionRequest {
     /// if a condition holds, one UI act or edge write.
     #[serde(default)]
     reactions: Vec<Variant<Reaction>>,
+    /// The screen each role starts on after sign-in (ADR-0210 decision 1): variants of one
+    /// `screen_id` each, stating at most a role and a device class, with a base whenever the
+    /// version declares a screen. Leave it out for a version whose tills start where their
+    /// release starts them.
+    #[serde(default)]
+    home_screens: Vec<Variant<HomeScreen>>,
 }
 
 /// Builds the package sub-router. Reads are `console.data.read`; creating a package, publishing a
