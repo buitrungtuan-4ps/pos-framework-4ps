@@ -3111,5 +3111,9 @@
   "gateway.emptyHint": "Khai báo các dịch vụ mà cửa hàng có thể tra cứu.",
   "gateway.deleteTitle": "Xóa điểm kết nối",
   "gateway.deleteMessage": "Cửa hàng sẽ không gọi được điểm kết nối này, và các header niêm phong cũng bị xóa.",
-  "gateway.deleteTypePrompt": "Nhập tên điểm kết nối để xác nhận"
+  "gateway.deleteTypePrompt": "Nhập tên điểm kết nối để xác nhận",
+  "provider.delivery.demo": "Giao hàng mẫu (sandbox)",
+  "provider.field.item_map": "Bảng món (mã của đối tác=mã món, mỗi dòng một món)",
+  "provider.field.webhook_secret": "Khóa ký webhook",
+  "scope.call_gateway": "Gọi dịch vụ bên ngoài qua cloud"
 }
