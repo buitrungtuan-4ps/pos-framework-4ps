@@ -1,6 +1,6 @@
 # ADR-0210 — A role names its home screen in the package, and taps are counted from it
 
-**Status** Proposed · **Owner** @maintainers-architecture · **Date** 2026-11-10
+**Status** Accepted · **Owner** @maintainers-architecture · **Date** 2026-11-12
 · Amends [ADR-0190](0190-a-screen-is-drawn-from-the-package.md) decisions 1 and 7 (decision 7
   now warns instead of refusing)
 · Relates to [ADR-0109](0109-counting-the-taps-an-operator-makes.md),
@@ -8,8 +8,8 @@
 [ADR-0191](0191-every-act-is-in-a-typed-catalogue.md),
 [ADR-0192](0192-a-flow-is-a-graph-of-steps-the-edge-re-checks.md)
 
-Drafted by an AI agent. On 2026-11-12 the owner chose that an act over its tap budget is a
-warning, never a refusal (decision 5). The choice of option 2 for the home still waits on the owner.
+The owner chose option 2 on 2026-11-12, with an act over its tap budget a warning, never a refusal
+(decision 5).
 
 ## Context
 
@@ -49,7 +49,7 @@ count, and what happens to a screen the version does not declare.
    ADR-0109 and refuses designs that are fine, such as a manager-only settings screen deep in the
    graph.
 
-## Decision (proposed: option 2)
+## Decision (option 2)
 
 1. **A version names its homes.** `PackageContent` gains `home_screens`, a variant list of
    `HomeScreen { screen_id }`, left off the wire while it is empty. Its selectors may state only
