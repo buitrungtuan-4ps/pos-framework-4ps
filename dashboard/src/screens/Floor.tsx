@@ -45,6 +45,9 @@ import {
 import { toast } from "../components/Toast";
 import { PlanView, type Placement } from "./floor/PlanView";
 import { tableColumns } from "./floor/table-columns";
+import { AreaTree } from "./floor/AreaTree";
+import { inOperatorWords, useAreaTreeWrites } from "./floor/area-writes";
+import { areaTree, breadcrumb, MAX_AREA_LEVELS } from "../lib/area-tree";
 import { apiMessage, isStale } from "../lib/errors";
 
 export function Floor() {
@@ -80,9 +83,11 @@ export function Floor() {
   // area" card that stood open under the area table on every visit (§6, decision D4).
   const areaCrud = useEntityCrud<Area>();
   const [newAreaName, setNewAreaName] = createSignal("");
+  const [newAreaParent, setNewAreaParent] = createSignal("");
 
   const openCreateArea = () => {
     setNewAreaName("");
+    setNewAreaParent("");
     areaCrud.create();
   };
   const [editingArea, setEditingArea] = createSignal("");
@@ -129,6 +134,13 @@ export function Floor() {
   const areaNames = createMemo(() => new Map(areas()?.map((area) => [area.area_id, area.name])));
   const areaName = (id: string) => areaNames().get(id) ?? id;
   const activeAreas = createMemo(() => areas()?.filter((area) => area.status === "active") ?? []);
+  // The live areas in tree order, each named by its breadcrumb (ADR-0211).
+  const liveTree = createMemo(() => areaTree(activeAreas()));
+  const insideOf = (area: Area) => {
+    const parent = liveTree().find((node) => node.area.area_id === area.parent_area_id);
+    return parent ? breadcrumb(parent) : t("floor.treeTop");
+  };
+  const tree = useAreaTreeWrites({ tenantId, setBusy, saved: async () => { setSavedAtMs(Date.now()); await plan.refetch(); }, fail });
 
   const createArea = async () => {
     const name = newAreaName().trim();
@@ -139,7 +151,7 @@ export function Floor() {
     // `run` closes on success and keeps the panel open, carrying the refusal, on failure — the
     // operator's typing is the only copy of what they meant (ADR-0121 §4).
     await areaCrud.run(async () => {
-      await api.createArea(tenantId(), storeId(), name);
+      await api.createArea(tenantId(), storeId(), name, newAreaParent() || null).catch((caught: unknown) => Promise.reject(inOperatorWords(caught)));
       toast.ok(t("floor.areaCreated"));
       setSavedAtMs(Date.now());
       await plan.refetch();
@@ -155,6 +167,7 @@ export function Floor() {
     setBusy(true);
     try {
       await api.updateArea(area.area_id, tenantId(), { name, status: area.status }, area.etag);
+      tree.clear(area.area_id);
       setEditingArea("");
       setAreaDraft("");
       toast.ok(t("floor.areaRenamed"));
@@ -176,11 +189,13 @@ export function Floor() {
     try {
       await api.updateArea(area.area_id, tenantId(), { name: area.name, status }, area.etag);
       setPendingAreaArchive(null);
+      tree.clear(area.area_id);
       toast.ok(doneMessage);
       setSavedAtMs(Date.now());
       await plan.refetch();
     } catch (caught) {
-      await fail(caught);
+      // A refusal of the tree shows on the area's row, so the dialog has nothing more to say.
+      if (await tree.settle(area.area_id, caught)) setPendingAreaArchive(null);
     } finally {
       setBusy(false);
     }
@@ -363,7 +378,7 @@ export function Floor() {
       header: t("floor.areaName"),
       sortValue: (row) => row.name,
       cell: (row) => (
-        <Show when={editingArea() === row.area_id} fallback={<span>{row.name}</span>}>
+        <Show when={editingArea() === row.area_id} fallback={<span>{row.name}<Show when={tree.refusal(row.area_id)}>{(message) => <span role="alert" class="block text-sm text-danger">{message()}</span>}</Show></span>}>
           <div class="flex flex-wrap items-center gap-2">
             <CellField
               label={t("floor.areaName")}
@@ -386,6 +401,11 @@ export function Floor() {
           </div>
         </Show>
       ),
+    },
+    {
+      key: "inside",
+      header: t("floor.inside"),
+      cell: (row) => <span>{insideOf(row)}</span>,
     },
     {
       key: "status",
@@ -475,6 +495,12 @@ export function Floor() {
               )}
             </Show>
           </Card>
+
+          <Show when={activeAreas().length > 1}>
+            <Card title={t("floor.tree")}>
+              <AreaTree areas={areas() ?? []} canManage={canManage()} busy={busy()} refusal={tree.refusal} onMove={(area, parentId) => void tree.move(area, parentId)} />
+            </Card>
+          </Show>
 
           <Card
             title={t("floor.tables")}
@@ -619,6 +645,13 @@ export function Floor() {
           value={newAreaName()}
           onInput={setNewAreaName}
           placeholder={t("floor.areaNamePlaceholder")}
+        />
+        <SelectField
+          label={t("floor.inside")}
+          value={newAreaParent()}
+          placeholder={t("floor.treeTop")}
+          options={liveTree().filter((node) => node.depth + 1 < MAX_AREA_LEVELS).map((node) => ({ value: node.area.area_id, label: breadcrumb(node) }))}
+          onChange={setNewAreaParent}
         />
       </FormPanel>
 

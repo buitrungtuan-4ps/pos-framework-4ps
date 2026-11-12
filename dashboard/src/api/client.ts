@@ -1104,22 +1104,24 @@ export const api = {
       "GET",
       `/admin/floor/areas?${tenantQuery(tenantId)}&store_id=${encodeURIComponent(storeId)}`,
     ),
-  createArea: (tenantId: string, storeId: string, name: string) =>
+  /** An area at the top, or inside `parentAreaId` (ADR-0211). */
+  createArea: (tenantId: string, storeId: string, name: string, parentAreaId: string | null = null) =>
     requestJson<CreatedId>("POST", "/admin/floor/areas", {
-      tenant_id: tenantId,
-      store_id: storeId,
+      tenant_id: tenantId, store_id: storeId,
       name,
+      parent_area_id: parentAreaId,
     }),
+  /** `parentAreaId` moves the area (`null` to the top); left out, the area stays where it is. */
   updateArea: (
     areaId: string,
     tenantId: string,
-    fields: { name: string; status: EntityStatus },
+    fields: { name: string; status: EntityStatus; parentAreaId?: string | null },
     etag: ETag,
   ) =>
     requestVoidIfMatch("PATCH", `/admin/floor/areas/${encodeURIComponent(areaId)}`, etag, {
       tenant_id: tenantId,
-      name: fields.name,
-      status: fields.status,
+      name: fields.name, status: fields.status,
+      ...(fields.parentAreaId === undefined ? {} : { parent_area_id: fields.parentAreaId }),
     }),
   listTables: (tenantId: string, storeId: string) =>
     requestJson<FloorTable[]>(
