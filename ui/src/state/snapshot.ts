@@ -10,7 +10,10 @@
 // again, of another schema, or older than seven days is never used, and is deleted when read.
 //
 // **When it goes.** On a person signing out, and when the device is unpaired, by a reset or by a
-// `401` that clears its token. Not on the idle lock, which keeps the device in the same service.
+// `401` that clears its token. Not on the idle lock, which keeps the device in the same service. A
+// read that set out before the snapshot was cleared and is answered after it writes nothing: its
+// answer belongs to the session that ended (`snapshotGeneration`). Signing out waits for the clear
+// before the page leaves, and a read answered in that wait used to put its record back after it.
 //
 // **Where there is none.** A private window, blocked storage or a browser without IndexedDB has no
 // snapshot. Every call here then answers "nothing" and says nothing: the till reads the edge, as it
@@ -111,10 +114,21 @@ export async function restoreSnapshot(): Promise<ReadonlyMap<string, Restored>> 
   return restored;
 }
 
-// Keeps what the edge just sent for `key` under the tag it sent, for the next start.
-export function saveSnapshot(key: string, etag: string, body: unknown): void {
+// Raised each time the snapshot is cleared. A read takes it when it sets out and hands it back with
+// its answer, so an answer to a read made before a sign-out is not written into the snapshot after
+// it.
+let generation = 0;
+
+// The snapshot's generation now, which a read takes when it sets out.
+export function snapshotGeneration(): number {
+  return generation;
+}
+
+// Keeps what the edge just sent for `key` under the tag it sent, for the next start: unless the
+// snapshot was cleared since the read that brought it set out, at `since`.
+export function saveSnapshot(key: string, etag: string, body: unknown, since: number): void {
   const owner = identity();
-  if (owner === null) {
+  if (owner === null || since !== generation) {
     return;
   }
   const record: SnapshotRecord = { key, schema: SCHEMA, identity: owner, savedTime: Date.now(), etag, body };
@@ -123,6 +137,7 @@ export function saveSnapshot(key: string, etag: string, body: unknown): void {
 
 // Deletes the whole snapshot: a person signing out, or the device being unpaired.
 export function clearSnapshot(): Promise<unknown> {
+  generation += 1;
   return withStore("readwrite", (store) => store.clear());
 }
 
