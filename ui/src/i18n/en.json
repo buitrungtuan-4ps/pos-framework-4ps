@@ -198,6 +198,7 @@
   "floor.guests_required": "The store asks how many guests before the table is seated.",
   "floor.guests_skip": "Skip",
   "floor.guests_title": "Table {label}: how many guests?",
+  "floor.area_tabs": "Floors",
   "floor.title": "Floor",
   "handover.begin": "Hand over the shift",
   "handover.close_out": "Close and hand over",

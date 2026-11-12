@@ -198,6 +198,7 @@
   "floor.guests_required": "Cửa hàng cần biết số khách trước khi nhận bàn.",
   "floor.guests_skip": "Bỏ qua",
   "floor.guests_title": "Bàn {label}: bao nhiêu khách?",
+  "floor.area_tabs": "Các tầng",
   "floor.title": "Sơ đồ bàn",
   "handover.begin": "Giao ca",
   "handover.close_out": "Chốt ca và giao",
