@@ -1015,6 +1015,14 @@ impl PostgresStore {
         crate::connections::PostgresConnections::new(self.pool.clone())
     }
 
+    /// A tenant's gateway endpoints over this pool
+    /// ([ADR-0198](../../../../docs/adr/0198-a-store-reaches-the-internet-only-through-the-cloud.md)).
+    /// `pos-cloud` seals every secret header before a document reaches it.
+    #[must_use]
+    pub fn gateway_endpoints(&self) -> crate::gateway_endpoints::PostgresGatewayEndpoints {
+        crate::gateway_endpoints::PostgresGatewayEndpoints::new(self.pool.clone())
+    }
+
     /// A tenant's setting values over this pool
     /// ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
     ///
