@@ -126,12 +126,15 @@ where
                 endpoint.retarget(vetted);
                 endpoint
             }
-            Entry::Vacant(slot) => slot.insert(WebhookEndpoint::rehydrate(
-                persisted.store_id,
-                vetted,
-                persisted.secret.clone(),
-                persisted.cursor,
-            )),
+            Entry::Vacant(slot) => slot.insert(
+                WebhookEndpoint::rehydrate(
+                    persisted.store_id,
+                    vetted,
+                    persisted.secret.clone(),
+                    persisted.cursor,
+                )
+                .sent_only(&persisted.event_types),
+            ),
         };
         dispatch_one(events, webhooks, transport, now, persisted.id, endpoint).await;
     }
@@ -349,6 +352,7 @@ mod tests {
             secret: SigningSecret::new("shhh"),
             cursor: None,
             disabled: false,
+            event_types: Vec::new(),
         }
     }
 

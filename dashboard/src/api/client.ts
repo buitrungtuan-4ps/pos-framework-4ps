@@ -903,11 +903,11 @@ export const api = {
   // --- webhooks (ADR-0032) ---
   listWebhooks: (tenantId: string) =>
     requestJson<WebhookSummary[]>("GET", `/admin/webhooks?${tenantQuery(tenantId)}`),
-  registerWebhook: (tenantId: string, storeId: string, url: string) =>
+  registerWebhook: (tenantId: string, storeId: string, url: string, eventTypes: readonly string[] = []) =>
     requestJson<RegisterWebhookResponse>("POST", "/admin/webhooks", {
       tenant_id: tenantId,
       store_id: storeId,
-      url,
+      url, event_types: [...eventTypes],
     }),
   deleteWebhook: (tenantId: string, id: string) =>
     requestVoid("DELETE", `/admin/webhooks/${encodeURIComponent(id)}?${tenantQuery(tenantId)}`),

@@ -35055,6 +35055,13 @@
           "url"
         ],
         "properties": {
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The event types the endpoint is sent, as `domain.resource.action` tokens from the event\ncatalogue (roadmap-v3 B6.2). Absent or empty: every event, as before the field existed."
+          },
           "store_id": {
             "type": "string",
             "description": "The store whose event log the endpoint follows (a 26-character ULID)."
@@ -40147,7 +40154,8 @@
           "store_id",
           "url",
           "cursor",
-          "disabled"
+          "disabled",
+          "event_types"
         ],
         "properties": {
           "cursor": {
@@ -40160,6 +40168,13 @@
           "disabled": {
             "type": "boolean",
             "description": "Whether the endpoint is auto-disabled."
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The event types the endpoint is sent, sorted; empty for every event."
           },
           "id": {
             "type": "string",
