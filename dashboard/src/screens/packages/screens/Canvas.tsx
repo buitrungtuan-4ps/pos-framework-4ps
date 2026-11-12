@@ -47,6 +47,8 @@ function dropped(event: DragEvent): Dropped | null {
 type CanvasProps = {
   readonly selected: NodePath | null;
   readonly faulty: NodePath | null;
+  /** A note beside a node, by its path joined with dots: the acts there over their tap budget. */
+  readonly notes?: ReadonlyMap<string, readonly string[]>;
   readonly onSelect: (path: NodePath) => void;
   readonly onDrop: (slot: Slot, what: Dropped) => void;
 };
@@ -106,6 +108,13 @@ function NodeBox(props: CanvasProps & { node: ScreenNode; path: NodePath }) {
         <span class="font-medium text-ink">{componentName(props.node.component_id)}</span>
         <span class="truncate text-ink-muted">{keys()}</span>
       </button>
+      <For each={props.notes?.get(props.path.join(".")) ?? []}>
+        {(note) => (
+          <p class="mt-1 text-xs text-ink-muted" data-outcome="tap-warning">
+            {note}
+          </p>
+        )}
+      </For>
       <Show when={holdsChildren(props.node)}>
         <div class="mt-1 flex flex-col pl-3">
           <DropSlot slot={{ parent: props.path, index: 0 }} onDrop={props.onDrop} />

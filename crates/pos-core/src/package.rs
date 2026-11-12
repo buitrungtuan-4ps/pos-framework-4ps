@@ -40,6 +40,7 @@ mod evolution;
 mod homes;
 mod keys;
 mod screens;
+mod taps;
 
 pub use content::{ContentRefusal, LABEL_KEY_CHARS_MAX, check_content};
 pub use data::{DataRefusal, FieldAt, FieldFault, check_data};
@@ -51,6 +52,7 @@ pub use evolution::{EvolutionRefusal, check_evolution};
 pub use homes::{HomeRefusal, check_homes};
 pub use keys::{KeyAt, KeyRefusal, check_keys};
 pub use screens::{ScreenFault, ScreenRefusal, check_screens};
+pub use taps::{COMMON_TAPS_MAX, RARE_TAPS_MAX, TapWarning, tap_warnings};
 
 /// What a variant is chosen against: the device, the person and the moment on screen.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize)]

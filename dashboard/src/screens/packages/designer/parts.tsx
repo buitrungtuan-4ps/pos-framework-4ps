@@ -8,7 +8,7 @@
 
 import type { Accessor, Component } from "solid-js";
 
-import type { PackageRefusal } from "../../../api/schemas";
+import type { PackageRefusal, PackageWarning } from "../../../api/schemas";
 import type { MessageKey } from "../../../i18n";
 import type { PackageDraft } from "../../../lib/package-draft";
 import { DataPanel } from "../data/DataPanel";
@@ -25,6 +25,8 @@ export type PartProps = {
   readonly change: (next: DraftChange) => void;
   /** The cloud's refusals that name this part's field, from the last check. */
   readonly refusals: readonly PackageRefusal[];
+  /** The acts over their tap budget the last check found (ADR-0210), for the screens to show. */
+  readonly warnings?: readonly PackageWarning[];
 };
 
 /** One part of a package, as the designer offers it. */

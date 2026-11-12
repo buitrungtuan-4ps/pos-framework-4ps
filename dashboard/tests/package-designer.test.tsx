@@ -83,7 +83,7 @@ describe("the package designer", () => {
   });
 
   it("publishes a draft the cloud accepts, and forgets the kept draft", async () => {
-    dryRun.mockResolvedValue({ accepted: true, min_edge_version: "0.14.1", refusals: [] });
+    dryRun.mockResolvedValue({ accepted: true, min_edge_version: "0.14.1", refusals: [], warnings: [] });
     publish.mockResolvedValue({ ...VERSION, content: { ...VERSION.content, version_label: "April" } });
     await mount();
     fireEvent.input(label(), { target: { value: "April" } });

@@ -1,5 +1,6 @@
 // Comparing two versions on the Packages screen before pinning or rolling back (ADR-0189): the
-// newest against the one before it by default, part by part, and "the same" when nothing differs.
+// newest against the one before it by default, part by part, and "the same" when nothing differs;
+// and each version's count of acts over the tap budget beside the other's (ADR-0210).
 
 import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it } from "vitest";
@@ -38,6 +39,13 @@ describe("comparing versions", () => {
     fireEvent.change(screen.getByLabelText(messages["packageDiff.from"]!), { target: { value: APRIL.content.package_version_id } });
     fireEvent.change(screen.getByLabelText(messages["packageDiff.to"]!), { target: { value: MARCH.content.package_version_id } });
     expect(screen.getByText("Flows: seat is removed")).toBeTruthy();
+  });
+
+  it("shows each version's count of acts over the tap budget", () => {
+    render(() => <CompareCard versions={[MARCH, { ...APRIL, tap_warning_count: 4 }]} />);
+    expect(document.querySelector('[data-outcome="tap-warning-counts"]')?.textContent).toBe(
+      "Acts over the tap budget: 0 before, 4 after.",
+    );
   });
 
   it("says so when two versions run the same thing", () => {

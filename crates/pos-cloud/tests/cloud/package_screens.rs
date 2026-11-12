@@ -236,3 +236,78 @@ async fn a_version_names_the_screen_each_role_starts_on() {
     assert_eq!(status, StatusCode::CREATED, "{published}");
     assert_eq!(published["content"]["home_screens"], body["home_screens"]);
 }
+
+/// A screen of buttons, each `(act, the screen it opens or "")`, labelled with a key the grid has.
+fn buttons(screen_id: &str, acts: &[(&str, &str)]) -> serde_json::Value {
+    let children: Vec<serde_json::Value> = acts
+        .iter()
+        .map(|(act, opened)| {
+            let params = if opened.is_empty() {
+                serde_json::json!({})
+            } else {
+                serde_json::json!({ "screen_id": opened })
+            };
+            serde_json::json!({
+                "component_id": "action_button",
+                "properties": { "label_key": "welcome.start", "action": { "action_id": act, "params": params } }
+            })
+        })
+        .collect();
+    serde_json::json!({ "body": { "screen_id": screen_id, "root": { "component_id": "stack", "children": children } } })
+}
+
+/// An act over its tap budget is a warning, never a refusal (ADR-0210 decision 5): the dry run
+/// accepts the draft and lists the act, where it is and what it costs, for the base role on every
+/// device class; the publish stores the version with its count of warnings.
+#[tokio::test]
+async fn an_act_over_its_tap_budget_is_warned_and_still_publishes() {
+    let router = package_app(provisioned_admin(), Arc::new(NoopAuditRecorder));
+    let cookie = admin_cookie(&router).await;
+    let tenant = ulid_text(1);
+    let (_, package) = send(
+        &router,
+        post_with_cookie(
+            "/admin/packages",
+            &serde_json::json!({ "tenant_id": tenant, "name": "Counter" }),
+            &cookie,
+        ),
+    )
+    .await;
+    let versions = format!(
+        "/admin/packages/{}/versions",
+        package["package_id"].as_str().expect("an id")
+    );
+    let mut body = version_body(&tenant, "March", "[]");
+    // a opens b opens c, where printing the check costs three taps: one over a common act's two.
+    body["screens"] = serde_json::json!([
+        buttons("a", &[("ui.screen.open", "b")]),
+        buttons("b", &[("ui.screen.open", "c")]),
+        buttons("c", &[("billing.check.print", "")]),
+    ]);
+    body["home_screens"] = serde_json::json!([{ "body": { "screen_id": "a" } }]);
+
+    let (status, verdict) = send(
+        &router,
+        post_with_cookie(&format!("{versions}/dry-run"), &body, &cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{verdict}");
+    assert_eq!(verdict["accepted"], true, "{verdict}");
+    let warnings = verdict["warnings"].as_array().expect("warnings");
+    assert_eq!(
+        warnings.len(),
+        5,
+        "the base role, once per device class: {verdict}"
+    );
+    let first = &warnings[0];
+    assert_eq!(first["reason"], "TAP_BUDGET");
+    assert!(first.get("role_id").is_none(), "the base role");
+    assert_eq!(first["action_id"], "billing.check.print");
+    assert_eq!(first["screen_index"], 2);
+    assert_eq!(first["node_index"], 1);
+    assert_eq!(first["taps"], 3);
+
+    let (status, published) = send(&router, post_with_cookie(&versions, &body, &cookie)).await;
+    assert_eq!(status, StatusCode::CREATED, "{published}");
+    assert_eq!(published["tap_warning_count"], 5);
+}

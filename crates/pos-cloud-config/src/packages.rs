@@ -74,6 +74,12 @@ pub struct PackageVersionRecord {
     pub content: PackageContent,
     /// When it was published.
     pub create_time: Timestamp,
+    /// How many acts it offers over their tap budget, counted at publish
+    /// ([ADR-0210](../../../docs/adr/0210-a-role-names-its-home-screen-in-the-package.md)
+    /// decision 5): warnings, which never refuse a version. `0` for a version published before it
+    /// was counted.
+    #[serde(default)]
+    pub tap_warning_count: u32,
 }
 
 /// The oldest edge release that runs `content`: [`PACKAGE_NODE_SINCE`] until a part a version

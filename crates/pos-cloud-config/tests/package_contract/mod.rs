@@ -42,6 +42,7 @@ fn version(seed: u128, package: &PackageRecord, n: u128, label: &str) -> Package
             home_screens: Vec::new(),
         },
         create_time: at(2_000),
+        tap_warning_count: 0,
     }
 }
 
