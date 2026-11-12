@@ -8108,6 +8108,7 @@
           "permissions_enforced",
           "permissions",
           "permissions_with_approval",
+          "role_ids",
           "idle_lock_seconds",
           "opening_float_minor"
         ],
@@ -8155,6 +8156,13 @@
               "type": "string"
             },
             "description": "The permission ids the signed-in person holds only with approval, sorted: the till asks for\nan approver before sending the act."
+          },
+          "role_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The ids of the roles the signed-in person holds, sorted, from the roster the sign-in was\nauthorised against; empty when nobody is signed in or the person holds none. The till\nchooses a package's role variants and a role's home with them\n([ADR-0213](../../../../docs/adr/0213-a-store-knows-each-persons-roles.md) decision 2).\nThey grant nothing, and are never logged."
           },
           "sign_in_ready": {
             "type": "boolean",

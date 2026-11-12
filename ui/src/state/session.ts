@@ -6,6 +6,9 @@
 // what the person may do to `./permissions` (ADR-0158 decision 6), so the two cannot disagree about
 // who is signed in.
 //
+// The ids of the roles the person holds (ADR-0213) choose a package screen's role variant and a
+// role's home. They are kept in memory only, like the rest of the session, and never logged.
+//
 // The staff code a person signed in with is kept in memory, and nowhere else, so the lock can reopen
 // with their PIN alone (`docs/pos-spec.md` §16). It is never stored, logged or shown. A reload
 // forgets it, and the lock then asks for the code as well.
@@ -23,19 +26,24 @@ const [employeeId, setEmployeeId] = createSignal<string | null>(null);
 const [idleLockSeconds, setIdleLockSeconds] = createSignal(0);
 const [openingFloatMinor, setOpeningFloatMinor] = createSignal(0);
 const [locked, setLocked] = createSignal(false);
+// Equal by content, so a session read that brings the same roles back redraws no screen.
+const [roleIds, setRoleIds] = createSignal<readonly string[]>([], {
+  equals: (held, next) => held.length === next.length && held.every((id, index) => id === next[index]),
+});
 let staffCode: string | null = null;
 
-export { employeeId, idleLockSeconds, locked, openingFloatMinor, signedIn };
+export { employeeId, idleLockSeconds, locked, openingFloatMinor, roleIds, signedIn };
 
 // Takes what a session read says: who is signed in, the store's idle lock and opening float, this
-// device's class where its till names one (`../lib/device-class.ts`), and
-// what the person may do. An edge too old to send `idle_lock_seconds` never locks, and one too old
+// device's class where its till names one (`../lib/device-class.ts`), the roles the person holds,
+// and what the person may do. An edge too old to send `role_ids` reads as no role: the base. An edge too old to send `idle_lock_seconds` never locks, and one too old
 // to send `opening_float_minor` fills in no float, which is what every till did before the settings.
 export function takeSession(session: SessionState): void {
   setSignedIn(session.signed_in);
   setEmployeeId(session.employee_id ?? null);
   setIdleLockSeconds(session.idle_lock_seconds ?? 0);
   setOpeningFloatMinor(session.opening_float_minor ?? 0);
+  setRoleIds(session.role_ids ?? []);
   publishDeviceClass(session.device_class);
   adoptSession(session);
 }
@@ -64,12 +72,14 @@ export function rememberedCode(): string | null {
 export function lockTill(): void {
   setSignedIn(false);
   setLocked(true);
+  setRoleIds([]);
   forgetPermissions();
 }
 
 // A person signed out on this device: they hold nothing, and the store's configuration goes with
 // them (ADR-0173). The idle lock, which keeps the device in the same service, does not call this.
 export async function signedOut(): Promise<void> {
+  setRoleIds([]);
   forgetPermissions();
   await clearSnapshot();
 }

@@ -534,3 +534,30 @@ fn the_billing_node_sets_the_window_for_voiding_a_paid_bill() {
         "a document with no billing node runs the default"
     );
 }
+
+/// The roles each member of a published `permissions` node holds reach the roster, for the session
+/// read to answer (ADR-0213 decision 2): sorted, once each, a malformed id dropped, and none for a
+/// member published without the field.
+#[test]
+fn a_published_member_s_roles_reach_the_roster() {
+    let role = |n: u128| Ulid::from_u128(0x0A00 + n);
+    let session = session_from_config(
+        &EdgeSession::bootstrap(),
+        &serde_json::json!({ "permissions": { "staff": [
+            { "id": Ulid::from_u128(1).to_string(), "code": "C01",
+              "role_ids": [role(2).to_string(), "not a ulid", role(1).to_string(), role(2).to_string()] },
+            { "id": Ulid::from_u128(2).to_string(), "code": "C02" }
+        ] } }),
+    );
+    let roles_of = |n: u128| {
+        session
+            .staff
+            .role_ids_for(pos_proto::ids::EmployeeId::new(Ulid::from_u128(n)))
+            .to_vec()
+    };
+    assert_eq!(roles_of(1), [role(1), role(2)]);
+    assert!(
+        roles_of(2).is_empty(),
+        "a member without the field holds none"
+    );
+}
