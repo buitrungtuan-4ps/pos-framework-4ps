@@ -3074,5 +3074,6 @@
   "webhooks.eventTypesLabel": "Events sent",
   "webhooks.eventTypesHint": "Event types such as sales.order.opened, separated by commas or new lines. Leave empty to send every event.",
   "webhooks.events": "Events",
-  "webhooks.eventsAll": "Every event"
+  "webhooks.eventsAll": "Every event",
+  "scope.call_gateway": "Make external calls through the cloud"
 }

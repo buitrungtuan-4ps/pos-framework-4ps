@@ -57,6 +57,7 @@ const SCOPES: readonly { wire: string; key: MessageKey }[] = [
   { wire: "publish_events", key: "scope.publish_events" },
   { wire: "place_orders", key: "scope.place_orders" },
   { wire: "manage_devices", key: "scope.manage_devices" },
+  { wire: "call_gateway", key: "scope.call_gateway" },
 ];
 
 export function ApiKeys() {

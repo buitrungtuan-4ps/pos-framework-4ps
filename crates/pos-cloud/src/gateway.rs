@@ -10,5 +10,8 @@
 //! built from and a response is read into, a deadline, and secret headers sealed the moment they
 //! arrive. It is data, never code.
 
+pub mod call;
+pub mod calls;
 pub mod endpoints;
 mod persistence;
+pub mod sync;

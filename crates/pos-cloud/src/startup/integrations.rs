@@ -53,6 +53,16 @@ pub(super) fn integration_routes(deps: &RouteDeps<'_>) -> Router {
             SystemClock,
             Arc::clone(audit),
         ))
+        // A store's external calls through the cloud (ADR-0198): the store's credential with the
+        // call_gateway scope, its tenant's enabled endpoint, the limits and the breaker, then the
+        // call over the outbound HTTPS client behind the webhook guard.
+        .merge(pos_cloud::gateway::sync::https_gateway_call_router(
+            store.gateway_endpoints(),
+            store.gateway_calls(),
+            store.api_keys(),
+            SystemClock,
+            config.integration_secret.clone(),
+        ))
         // Sending a store the connections that serve it (ADR-0153 decision 5): its own, its
         // brand's, its tenant's, resolved into the `integrations` node on its Store layer. A
         // publish like every other node, so it is console.config.publish, not the authoring

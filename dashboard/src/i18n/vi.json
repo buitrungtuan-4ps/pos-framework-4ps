@@ -3074,5 +3074,6 @@
   "webhooks.eventTypesLabel": "Sự kiện được gửi",
   "webhooks.eventTypesHint": "Các loại sự kiện như sales.order.opened, phân cách bằng dấu phẩy hoặc xuống dòng. Để trống để gửi mọi sự kiện.",
   "webhooks.events": "Sự kiện",
-  "webhooks.eventsAll": "Mọi sự kiện"
+  "webhooks.eventsAll": "Mọi sự kiện",
+  "scope.call_gateway": "Gọi dịch vụ bên ngoài qua cloud"
 }
