@@ -39,15 +39,6 @@ use pos_rules::{Condition, Fact, Facts, Rules, Variable};
 
 use super::{AppError, Edge};
 
-/// The views an edge guard may read.
-const EDGE_VIEWS: [Variable; 5] = [
-    Variable::Order,
-    Variable::Line,
-    Variable::Bill,
-    Variable::Channel,
-    Variable::Now,
-];
-
 /// Conditions compiled by `pos-rules`, answered over `facts`: none when the edge checks a package
 /// on apply, an order's when it re-checks a command.
 #[derive(Debug)]
@@ -83,10 +74,7 @@ impl FlowConditions for EdgeConditions {
         let compiled = rules
             .compile(condition)
             .map_err(|refused| refused.to_string())?;
-        let foreign = Variable::ALL
-            .into_iter()
-            .find(|variable| !EDGE_VIEWS.contains(variable) && compiled.reads(*variable));
-        match foreign {
+        match compiled.till_view() {
             Some(variable) if edge_facts => Err(format!(
                 "`{}` is the till's to read, so an edge guard cannot",
                 variable.as_str()

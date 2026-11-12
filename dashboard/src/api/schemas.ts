@@ -137,8 +137,21 @@ export type SampleBill = Schemas["SampleBillView"];
 export type PackageRecord = Schemas["PackageRecord"];
 export type PackageVersionRecord = Schemas["PackageVersionRecord"];
 export type StorePackage = Schemas["StorePackage"];
+export type PackageVersionRequest = Schemas["PackageVersionRequest"];
+export type PackageVersionDryRun = Schemas["PackageVersionDryRun"];
+export type PackageRefusal = Schemas["PackageRefusal"];
+export type ScreenVariant = Schemas["Variant_Screen"];
 export type CustomField = Schemas["CustomField"];
 export type CustomList = Schemas["CustomList"];
 export type ValueSummary = Schemas["ValueSummary"];
 export type ValueCount = Schemas["ValueCount"];
 export type CustomFieldValue = Schemas["CustomFieldValue"];
+export type PackageContent = Schemas["PackageContent"];
+
+// A package's flows, reactions and data part, as a version carries them (ADR-0192, ADR-0193, ADR-0194).
+export type FlowVariant = Schemas["Variant_Flow"];
+export type Flow = FlowVariant["body"];
+export type FlowStep = Schemas["FlowStep"];
+export type ReactionVariant = Schemas["Variant_Reaction"];
+export type Reaction = ReactionVariant["body"];
+export type PackageData = Schemas["PackageData"];

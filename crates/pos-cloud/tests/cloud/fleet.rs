@@ -56,6 +56,7 @@ fn drifted_fleet(online_store: StoreId, offline_store: StoreId) -> FakeFleet {
                 print_agents_reported_at: None,
                 package: None,
                 config_wake: None,
+                devices: None,
             },
         )
         .with_row(
@@ -89,6 +90,7 @@ fn drifted_fleet(online_store: StoreId, offline_store: StoreId) -> FakeFleet {
                 print_agents_reported_at: None,
                 package: None,
                 config_wake: None,
+                devices: None,
             },
         )
 }
@@ -777,6 +779,7 @@ async fn fleet_never_seen_store_is_offline_and_not_current() {
             print_agents_reported_at: None,
             package: None,
             config_wake: None,
+            devices: None,
         },
     );
     let router = fleet_app(provisioned_admin(), fleet);
@@ -838,6 +841,7 @@ async fn fleet_reads_one_store_and_404s_an_unknown_one() {
             print_agents_reported_at: None,
             package: None,
             config_wake: None,
+            devices: None,
         },
     );
     let router = fleet_app(provisioned_admin(), fleet);
@@ -997,4 +1001,76 @@ async fn an_answer_is_refused_before_it_is_recorded() {
         assert_eq!(named, fields, "{target}: {refusal}");
     }
     assert!(audit.entries.lock().expect("lock").is_empty());
+}
+
+/// The fleet read lists each paired till's last read and marks a till behind the package version its
+/// store reports running (B7.3): a till that missed a `config_applied` is visible, and a store that
+/// has not reported its package marks none.
+#[tokio::test]
+async fn the_fleet_marks_a_till_behind_the_version_its_store_runs() {
+    use pos_cloud::config_tree::{DeviceReadBeat, PackageBeat};
+    use pos_cloud::fleet::{ReportedDevices, ReportedPackage};
+
+    let read = |device: &str, version: Option<&str>| DeviceReadBeat {
+        device_id: device.to_owned(),
+        package_version_id: version.map(str::to_owned),
+        read_at_ms: NOW_MS - 5_000,
+    };
+    let reads = ReportedDevices {
+        reads: vec![
+            read("D1", Some("V2")),
+            read("D2", Some("V1")),
+            read("D3", None),
+        ],
+        reported_at: seen_ago(1_000),
+    };
+    let running = StoreId::new(Ulid::from_u128(0xF1));
+    let unreported = StoreId::new(Ulid::from_u128(0xF2));
+    let mut with_package = store_in_handover(running, Some(1), None, None);
+    with_package.package = Some(ReportedPackage {
+        beat: PackageBeat {
+            package_version_id: Some("V2".to_owned()),
+            refused: None,
+        },
+        reported_at: seen_ago(1_000),
+    });
+    with_package.devices = Some(reads.clone());
+    let mut without_package = store_in_handover(unreported, Some(1), None, None);
+    without_package.devices = Some(reads);
+
+    let fleet = FakeFleet::default()
+        .with_row(tenant(), with_package)
+        .with_row(tenant(), without_package);
+    let router = fleet_app(provisioned_admin(), fleet);
+    let cookie = admin_cookie(&router).await;
+    let response = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/fleet?tenant_id={}", tenant().as_ulid()),
+            &cookie,
+        ))
+        .await
+        .expect("route the fleet read");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    let rows = body.as_array().expect("an array of stores");
+    let behind = |store: StoreId| -> Vec<bool> {
+        let row = rows
+            .iter()
+            .find(|row| row["store_id"] == store.to_string())
+            .expect("the store is listed");
+        row["devices"]["tills"]
+            .as_array()
+            .expect("the tills are listed")
+            .iter()
+            .map(|device| device["behind"].as_bool().expect("a flag"))
+            .collect()
+    };
+    assert_eq!(behind(running), vec![false, true, true]);
+    assert_eq!(behind(unreported), vec![false, false, false]);
+    let first = &rows
+        .iter()
+        .find(|row| row["store_id"] == running.to_string())
+        .expect("listed")["devices"]["tills"][0];
+    assert_eq!(first["device_id"], "D1");
+    assert_eq!(first["package_version_id"], "V2");
 }

@@ -43,8 +43,12 @@ export interface ScreenHost {
   readonly subject: () => Supplied;
   /** Whether the screen can run this act now; a button for one it cannot is disabled. */
   readonly offers: (actionId: string) => boolean;
-  /** Runs an act with the package's fixed parameters and the ids the component supplied. */
-  readonly run: (binding: ActionBinding, supplied: Supplied) => void;
+  /**
+   * Runs an act with the package's fixed parameters and the ids the component supplied. A request
+   * it answers is the act on its way: the button takes no second tap until it settles, and says
+   * what a failure was.
+   */
+  readonly run: (binding: ActionBinding, supplied: Supplied) => unknown;
 }
 
 const HostContext = createContext<ScreenHost>();

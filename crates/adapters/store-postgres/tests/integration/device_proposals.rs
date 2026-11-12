@@ -646,6 +646,74 @@ fn a_tills_float_round_trips_through_the_next_boot_and_a_terminal_nobody_set_has
     });
 }
 
+/// A till's device class is written and read back through the column migration 0095 adds,
+/// under the same conditional write, kept across the next boot, and cleared with a null
+/// (ADR-0201 decision 3). A terminal nobody set reads none, which is published as nothing.
+#[test]
+fn a_tills_device_class_round_trips_through_the_next_boot_and_a_terminal_nobody_set_has_none() {
+    async fn class(devices: &store_postgres::PostgresDeviceProposals) -> (Option<String>, String) {
+        let till = devices
+            .fetch(TENANT_A, Some("store-1"), "approved")
+            .await
+            .expect("read the approved devices")
+            .into_iter()
+            .find(|row| row.id == "TILL1")
+            .expect("the terminal");
+        (till.device_class, till.version)
+    }
+
+    block_on(async {
+        let (store, _admin) = prepared().await.expect("prepare the database");
+        let devices = store.device_proposals();
+        devices
+            .create_terminal("TILL1", TENANT_A, "store-1", "Bar till")
+            .await
+            .expect("create the terminal");
+        let (unset, version) = class(&devices).await;
+        assert_eq!(unset, None, "a terminal nobody set reads its screen");
+
+        let moved = devices
+            .set_device_class(TENANT_A, "TILL1", Some("DEVICE_CLASS_TABLET"), &version)
+            .await
+            .expect("the conditional write")
+            .expect("a matching version writes");
+        assert!(
+            devices
+                .set_device_class(TENANT_A, "TILL1", None, &version)
+                .await
+                .expect("the stale write")
+                .is_none(),
+            "a caller holding the old version does not silently undo the class"
+        );
+        assert!(
+            devices
+                .set_device_class("tenant-b", "TILL1", None, &moved)
+                .await
+                .expect("cross-tenant write")
+                .is_none(),
+            "the tenant scope stops one tenant setting another's class"
+        );
+
+        store.migrate().await.expect("the next boot");
+        let (kept, version) = class(&devices).await;
+        assert_eq!(
+            kept.as_deref(),
+            Some("DEVICE_CLASS_TABLET"),
+            "the next boot applies 0095 again and keeps what was written"
+        );
+        devices
+            .set_device_class(TENANT_A, "TILL1", None, &version)
+            .await
+            .expect("the clearing write")
+            .expect("a matching version clears");
+        assert_eq!(
+            class(&devices).await.0,
+            None,
+            "a till cleared reads its screen again"
+        );
+    });
+}
+
 /// Migration 0055 repairs the rows a two-spelling seam already wrote.
 ///
 /// Typing the argument stops the mistake being made again; it does nothing for the approvals

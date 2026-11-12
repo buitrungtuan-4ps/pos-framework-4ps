@@ -1,0 +1,22 @@
+-- Copyright (c) 2026 Pizza 4P's. All rights reserved.
+-- Proprietary and confidential. Internal use only. See LICENSE.
+--
+-- 0095 — the class of device a till runs on
+-- ([ADR-0201](../../../../docs/adr/0201-the-till-runs-on-every-device-class.md) decision 3).
+--
+-- Every till read its class from its screen. An operator now says, on a `terminal` row, which
+-- class of device that till is:
+--
+--   * `device_class` — the wire token of `pos_proto::devices::DeviceClass`
+--                      (`DEVICE_CLASS_TERMINAL`, `_TABLET`, `_PHONE`, `_KITCHEN_DISPLAY`,
+--                      `_KIOSK`). `pos-cloud` refuses any other token before it writes, as it does
+--                      a receipt language (0082), so the column carries no check constraint: a
+--                      class added later would need a destructive statement.
+--
+-- Nullable, and the null is the whole compatibility story, as for a till's float (0085). Null is
+-- "read it from the screen", which is published as nothing at all, and the edge and the till read
+-- nothing as the screen's class, which every till has used until now. A fleet takes this release,
+-- every row reads null, and every store's devices node stays as it was.
+--
+-- Forward-only and additive, applied idempotently on every boot (ADR-0017).
+ALTER TABLE device_proposals ADD COLUMN IF NOT EXISTS device_class text;

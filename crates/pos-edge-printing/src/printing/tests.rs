@@ -102,6 +102,7 @@ fn device(seed: u128, kind: DeviceKind, at: Option<StationId>) -> PublishedDevic
         receipt_language: Open::default(),
         receipt_second_language: Open::default(),
         opening_float_minor: None,
+        device_class: Open::default(),
     }
 }
 

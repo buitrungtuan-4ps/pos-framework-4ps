@@ -10841,6 +10841,118 @@
         "x-permission": "console.devices.manage"
       }
     },
+    "/admin/devices/proposals/{id}/device-class": {
+      "post": {
+        "tags": [
+          "printers"
+        ],
+        "summary": "A super-admin says which class of device a till is\n([ADR-0201](../../../docs/adr/0201-the-till-runs-on-every-device-class.md) decision 3).",
+        "description": "The float's guards, for the same reasons: `ManageDevices`, an `If-Match`, and an audit entry,\nsince the class decides which layout of every package screen the till draws.",
+        "operationId": "admin_set_terminal_device_class",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The terminal's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The version the terminal was read at (ADR-0094). Required; a wildcard is refused",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`tenant_id`; and `device_class`, a `DEVICE_CLASS_…` token other than `DEVICE_CLASS_UNSPECIFIED`, or `null` or absent for the class the till's screen says. It is the till's whole class state, so a class left out is the screen's again",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetDeviceClassRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Saved. It reaches the store on the next devices publish, `POST /admin/devices/publish`, and the till bound to the terminal draws a package screen's layout for that class; an edge older than 0.14.1 ignores it and the till reads its screen"
+          },
+          "400": {
+            "description": "The device is not a terminal (`id`, `WRONG_KIND`), the class is not one this release knows (`device_class`, `INVALID_ENUM_VALUE`), an id is not a ULID, or If-Match is absent, malformed, or a wildcard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.devices.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no approved device with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The terminal changed since you read it: re-read it and try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The device store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.devices.manage"
+      }
+    },
     "/admin/devices/proposals/{id}/drawer": {
       "post": {
         "tags": [
@@ -18232,7 +18344,7 @@
           }
         ],
         "requestBody": {
-          "description": "The tenant, the version's label, its time slots and its data part. The version id and the minimum edge release are the server's. Whether a custom field is personal is required; the lawful basis, consent wording and retention period of a personal field are the tenant's decision (ADR-0206)",
+          "description": "The tenant, the version's label, its time slots, its data part and its screens. The version id and the minimum edge release are the server's. Whether a custom field is personal is required; the lawful basis, consent wording and retention period of a personal field are the tenant's decision (ADR-0206)",
           "content": {
             "application/json": {
               "schema": {
@@ -18254,7 +18366,7 @@
             }
           },
           "400": {
-            "description": "tenant_id or package_id is not a ULID, or the content is refused: a blank or long label, a malformed or repeated time slot, a window that is not whole, a data part ADR-0194 refuses, or content over 1 MiB. The detail names the field: its code is `INVALID`, or `NOT_ADDITIVE` for data that removes, moves or retypes what an earlier version declared",
+            "description": "tenant_id or package_id is not a ULID, or the content is refused: a blank or long label, a malformed or repeated time slot, a window that is not whole, a data part ADR-0194 refuses, a screen ADR-0190 refuses, a translation key with no `en` value in the tenant's grid, or content over 1 MiB. The detail names the field: its code is `INVALID`, `UNKNOWN_TRANSLATION_KEY` for a key without English, or `NOT_ADDITIVE` for data that removes, moves or retypes what an earlier version declared",
             "content": {
               "application/json": {
                 "schema": {
@@ -18304,7 +18416,106 @@
             }
           },
           "503": {
-            "description": "The package store is unreachable, or the OS would not give the entropy the id needs",
+            "description": "The package store or the translation store is unreachable, or the OS would not give the entropy the id needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.packages.manage"
+      }
+    },
+    "/admin/packages/{package_id}/versions/dry-run": {
+      "post": {
+        "tags": [
+          "packages"
+        ],
+        "summary": "A console user checks a draft version the way a publish would, and nothing is stored.",
+        "operationId": "admin_dry_run_package_version",
+        "parameters": [
+          {
+            "name": "package_id",
+            "in": "path",
+            "description": "The package's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "A draft, in the shape a publish takes. Nothing is stored",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PackageVersionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What the publish's checks found: whether the draft would publish, its minimum edge release, and the first fault and where it is",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PackageVersionDryRun"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "tenant_id or package_id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.packages.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no package with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The package store or the translation store is unreachable",
             "content": {
               "application/json": {
                 "schema": {
@@ -27843,7 +28054,8 @@
           "cash_rounding_increment",
           "cash_denominations",
           "cash_count_denominations",
-          "setting_defaults"
+          "setting_defaults",
+          "receipt_required_sections"
         ],
         "properties": {
           "cash_count_denominations": {
@@ -27904,6 +28116,13 @@
           },
           "prices_include_tax": {
             "type": "boolean"
+          },
+          "receipt_required_sections": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The optional receipt sections the country's law requires, as `RECEIPT_SECTION_*` tokens\n([ADR-0207](../../../docs/adr/0207-a-receipt-is-a-structured-template-per-store-and-channel.md)\ndecision 3): a receipt template written anywhere cannot turn one off. Empty for a country\nthat requires none."
           },
           "setting_defaults": {
             "type": "array",
@@ -29199,6 +29418,7 @@
           "receipt_language",
           "receipt_second_language",
           "opening_float_minor",
+          "device_class",
           "status",
           "version"
         ],
@@ -29227,6 +29447,13 @@
               "null"
             ],
             "description": "Whether an operator says this printer cuts its paper. `None` until somebody says, which the\nedge reads as `true`."
+          },
+          "device_class": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "On a `terminal`, the class of device an operator says this till runs on, as its wire token\n(`DEVICE_CLASS_…`,\n[ADR-0201](../../../docs/adr/0201-the-till-runs-on-every-device-class.md) decision 3).\n`None` until somebody says, which the till reads from its screen."
           },
           "drawer_attached": {
             "type": "boolean",
@@ -30004,6 +30231,60 @@
           }
         }
       },
+      "FleetDeviceView": {
+        "type": "object",
+        "description": "One paired till as the fleet view shows it (B7.3).",
+        "required": [
+          "device_id",
+          "package_version_id",
+          "read_at_ms",
+          "behind"
+        ],
+        "properties": {
+          "behind": {
+            "type": "boolean",
+            "description": "Whether it read another version than the one the store's heartbeat says it runs. `false`\nwhile the store has not reported its package, as there is nothing to be behind."
+          },
+          "device_id": {
+            "type": "string",
+            "description": "The till."
+          },
+          "package_version_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The package version it last read, or `null` for its release's default package."
+          },
+          "read_at_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When it read it, in Unix ms on the store's clock."
+          }
+        }
+      },
+      "FleetDevicesView": {
+        "type": "object",
+        "description": "A store's paired tills as its heartbeat last reported them (B7.3).",
+        "required": [
+          "tills",
+          "reported_at_ms"
+        ],
+        "properties": {
+          "reported_at_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix ms of the heartbeat that reported them."
+          },
+          "tills": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FleetDeviceView"
+            },
+            "description": "Each till's last read, by device id. Empty for a store none of whose tills has read since\nthe edge started."
+          }
+        }
+      },
       "FleetPrintAgent": {
         "type": "object",
         "description": "One bound print agent as the fleet console sees it\n([ADR-0112](../../../docs/adr/0112-print-agents.md)).\n\nTwo opaque identifiers and a duration, carried verbatim from what the store reported. No document,\nno line, no name: nothing a ticket *says* helps diagnose a stalled agent, so nothing a ticket says\ncrosses this wire either.",
@@ -30054,6 +30335,7 @@
           "package_reported_at_ms",
           "config_wake",
           "config_wake_reported_at_ms",
+          "devices",
           "lease_generation_held",
           "lease_reported_at_ms",
           "lease_generation_authoritative",
@@ -30100,6 +30382,17 @@
             ],
             "format": "int64",
             "description": "Unix ms of the heartbeat that reported config delivery, or `null`."
+          },
+          "devices": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FleetDevicesView",
+                "description": "Which package version each paired till last read, and whether it is behind the version the\nstore runs (roadmap-v3 B7.3): a till that missed a `config_applied` still draws the version\nit read before. `null` until a heartbeat reports it, which an older edge never does."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "edge_placement": {
             "$ref": "#/components/schemas/EdgePlacement",
@@ -31831,6 +32124,57 @@
           }
         }
       },
+      "PackageRefusal": {
+        "type": "object",
+        "description": "One reason a draft would be refused, and where.",
+        "required": [
+          "field",
+          "reason",
+          "message"
+        ],
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "The request field at fault, as a publish's field error names it, such as `version_label`,\n`screens` or `data.object_types`."
+          },
+          "flow_index": {
+            "type": "integer",
+            "description": "For a flow, the variant's position in `flows`. Absent on a flow refusal about the flows\ntogether, such as too many.",
+            "minimum": 0
+          },
+          "message": {
+            "type": "string",
+            "description": "The fault in one English sentence, for a log; the console words it from `reason`."
+          },
+          "name": {
+            "type": "string",
+            "description": "The property or act parameter at fault, when the fault names one; for a flow or a reaction,\nthe id, action, screen, prerequisite, target or parameter its fault names; for a key without\nan `en` value, the key."
+          },
+          "node_index": {
+            "type": "integer",
+            "description": "For a screen's node, its position in the tree's pre-order, the root being 0.",
+            "minimum": 0
+          },
+          "reaction_index": {
+            "type": "integer",
+            "description": "For a reaction, the variant's position in `reactions`. Absent on a refusal about several\ntogether, such as too many for one trigger.",
+            "minimum": 0
+          },
+          "reason": {
+            "type": "string",
+            "description": "A stable token naming the fault: a publish's code (`INVALID`, `NOT_ADDITIVE`,\n`TOO_LARGE`, `UNKNOWN_TRANSLATION_KEY` with the key in `name`), or for a screen what is\nwrong with it, such as `MISSING_PROPERTY`."
+          },
+          "screen_index": {
+            "type": "integer",
+            "description": "For a screen, the variant's position in `screens`.",
+            "minimum": 0
+          },
+          "step_id": {
+            "type": "string",
+            "description": "For a flow's step, its `step_id`; a cycle names the first step caught in it."
+          }
+        }
+      },
       "PackageRequest": {
         "type": "object",
         "description": "A package create body. The id is server-owned.",
@@ -31845,6 +32189,32 @@
           },
           "tenant_id": {
             "type": "string"
+          }
+        }
+      },
+      "PackageVersionDryRun": {
+        "type": "object",
+        "description": "What a dry run found.",
+        "required": [
+          "accepted",
+          "min_edge_version",
+          "refusals"
+        ],
+        "properties": {
+          "accepted": {
+            "type": "boolean",
+            "description": "Whether the draft would publish as it stands."
+          },
+          "min_edge_version": {
+            "type": "string",
+            "description": "The oldest edge release that would run it, as the publish would compute it."
+          },
+          "refusals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PackageRefusal"
+            },
+            "description": "Why it would be refused: the first fault the publish's checks meet, or none."
           }
         }
       },
@@ -31882,6 +32252,27 @@
           "data": {
             "$ref": "#/components/schemas/PackageData",
             "description": "The package's data part: custom fields, object types and lists (ADR-0194). Each field says\nwhether it is personal; publishing a personal field is the tenant's decision on its lawful\nbasis, consent wording and retention, and is refused until personal fields are available\n(ADR-0206)."
+          },
+          "flows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Variant_Flow"
+            },
+            "description": "The package's flows, every variant of each (ADR-0192): graphs of required, optional and\nconditional steps with their prerequisites. Their conditions are compiled at publish."
+          },
+          "reactions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Variant_Reaction"
+            },
+            "description": "The package's reactions, every variant of each (ADR-0193 decision 5): when a trigger fires,\nif a condition holds, one UI act or edge write."
+          },
+          "screens": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Variant_Screen"
+            },
+            "description": "The package's screens, every variant of each (ADR-0190, ADR-0203): trees of the release's\ncatalogued components, given only literals."
           },
           "tenant_id": {
             "type": "string"
@@ -34755,6 +35146,26 @@
             "propertyNames": {
               "type": "string"
             }
+          }
+        }
+      },
+      "SetDeviceClassRequest": {
+        "type": "object",
+        "description": "An operator says which class of device an approved terminal is.\n\nThe class is the till's whole class state, as the float is its float state: an absent or `null`\nclass is \"read it from the screen\" again.",
+        "required": [
+          "tenant_id"
+        ],
+        "properties": {
+          "device_class": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The class, as its wire token (`DEVICE_CLASS_TERMINAL`, `_TABLET`, `_PHONE`,\n`_KITCHEN_DISPLAY` or `_KIOSK`), or `null` for the class the till's screen says."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "The tenant the terminal belongs to (a 26-character ULID)."
           }
         }
       },

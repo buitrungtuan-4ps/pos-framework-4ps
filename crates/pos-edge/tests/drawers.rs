@@ -168,6 +168,7 @@ fn terminal(seed: u128, name: &str, float: Option<i64>, printer: Option<u128>) -
         receipt_language: Open::default(),
         receipt_second_language: Open::default(),
         opening_float_minor: float,
+        device_class: Open::default(),
     }
 }
 
@@ -188,6 +189,7 @@ fn printer(seed: u128, address: &str, drawer: bool) -> PublishedDevice {
         receipt_language: Open::default(),
         receipt_second_language: Open::default(),
         opening_float_minor: None,
+        device_class: Open::default(),
     }
 }
 

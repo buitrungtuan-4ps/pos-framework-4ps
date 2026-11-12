@@ -235,6 +235,82 @@ jobs:
         run: cargo test -p pos-cloud --features integration --locked --test cursor
 
   # ---------------------------------------------------------------------------
+  # A package version published through the console is running on a store within
+  # about a second (roadmap-v4 phase 1; ADR-0195 decision 6). The real `pos_cloud`
+  # over PostgreSQL and NATS, the real `pos-edge` activated with a code and dialling
+  # it over https, and the console's own `/admin` calls: the harness pins a version,
+  # times the write to the store saying it applied the configuration the wake
+  # announced, and fails over the budget or on any other path. Post-merge for the
+  # reason this file's header gives: NATS needs a command a `services:` block cannot
+  # pass. `workflow_dispatch` runs it on a branch first.
+  # ---------------------------------------------------------------------------
+  publish-to-edge:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      # The digest `integration` uses — see the file header.
+      postgres:
+        image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
+        env:
+          POSTGRES_USER: pos
+          POSTGRES_PASSWORD: pos
+          POSTGRES_DB: poscloud
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pos -d poscloud"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # The server, not a database: the harness makes one of its own and drops it, as the console
+      # replay's does (dashboard/tests/cloud.mjs).
+      POS_E2E_POSTGRES: "postgres://pos:pos@127.0.0.1:5432"
+      NATS_URL: "127.0.0.1:4222"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: publish-to-edge
+      # Stamped with the justfile's `dev_edge_release`, as `pr.yml` stamps the replay store: an
+      # unstamped edge says 0.0.0, and the cloud keeps from it every version that needs more
+      # (ADR-0189 decision 5).
+      - name: build the cloud and the store
+        run: |
+          POS_EDGE_RELEASE_VERSION="$(sed -n 's/^dev_edge_release := "\(.*\)"$/\1/p' justfile)"
+          test -n "$POS_EDGE_RELEASE_VERSION" || { echo "::error::the justfile names no dev_edge_release"; exit 1; }
+          export POS_EDGE_RELEASE_VERSION
+          cargo build -p pos-cloud -p pos-edge --bin pos-cloud --bin pos-edge --locked
+      - name: start NATS with JetStream
+        # The digest and readiness check `integration` uses.
+        run: |
+          docker run -d --name nats -p 4222:4222 -p 8222:8222 \
+            nats@sha256:5498ba57b9471840be3d15b033a4eec554d1c02fa6c2cc0ca2d888637f6c6e2f \
+            -js -m 8222
+          for _ in $(seq 1 30); do
+            if curl -sf http://localhost:8222/healthz >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          echo "NATS did not become ready" >&2
+          docker logs nats || true
+          exit 1
+      # Node's own modules only, so no install: the harness drives the binaries over HTTP.
+      - name: publish a version and time it to the store
+        working-directory: dashboard
+        run: |
+          set -o pipefail
+          node tests/publish-to-edge.mjs | tee publish-to-edge.json
+      - name: say how long it took
+        if: always()
+        run: |
+          {
+            echo "### Publish to running on a store"
+            echo '```json'
+            cat dashboard/publish-to-edge.json 2>/dev/null || echo "no report"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
   # Contract tests: every implementation of every port runs the same suite. This
   # is what makes "swappable" a verified fact rather than a claim, and it is one of
   # the three nets that catch a syntactically-correct, semantically-wrong change.

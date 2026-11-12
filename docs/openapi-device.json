@@ -1177,7 +1177,7 @@
           }
         ],
         "requestBody": {
-          "description": "Optional: `outbox_depth`, `lease_generation`, `print_agents`, `package` (the package version the store runs and the configuration it last refused for its package, ADR-0189) and `config_wake` (wake or poll, and the wake-to-apply times, ADR-0195), each left out when the store cannot say. An empty body is a bare ping",
+          "description": "Optional: `outbox_depth`, `lease_generation`, `print_agents`, `package` (the package version the store runs and the configuration it last refused for its package, ADR-0189), `config_wake` (wake or poll, and the wake-to-apply times, ADR-0195) and `devices` (the package version each paired till last read, B7.3), each left out when the store cannot say. An empty body is a bare ping",
           "content": {
             "application/json": {
               "schema": {
@@ -2147,6 +2147,7 @@
           "receipt_language",
           "receipt_second_language",
           "opening_float_minor",
+          "device_class",
           "status",
           "version"
         ],
@@ -2175,6 +2176,13 @@
               "null"
             ],
             "description": "Whether an operator says this printer cuts its paper. `None` until somebody says, which the\nedge reads as `true`."
+          },
+          "device_class": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "On a `terminal`, the class of device an operator says this till runs on, as its wire token\n(`DEVICE_CLASS_…`,\n[ADR-0201](../../../docs/adr/0201-the-till-runs-on-every-device-class.md) decision 3).\n`None` until somebody says, which the till reads from its screen."
           },
           "drawer_attached": {
             "type": "boolean",
@@ -2246,6 +2254,33 @@
           "version": {
             "type": "string",
             "description": "The version the row was read at, for a conditional write\n([ADR-0094](../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: the adapter\nmints it from `xmin::text`, and nothing above this seam may assume that."
+          }
+        }
+      },
+      "DeviceReadBeat": {
+        "type": "object",
+        "description": "What one heartbeat said about one paired till (B7.3): the package version it last read from the\nedge, and when. A device id names a device, never a person.",
+        "required": [
+          "device_id",
+          "package_version_id",
+          "read_at_ms"
+        ],
+        "properties": {
+          "device_id": {
+            "type": "string",
+            "description": "The till, a ULID."
+          },
+          "package_version_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The package version it was served, or `null` for its release's default package."
+          },
+          "read_at_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When it read it, in Unix milliseconds on the store's clock."
           }
         }
       },
@@ -2472,6 +2507,16 @@
                 "type": "null"
               }
             ]
+          },
+          "devices": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/DeviceReadBeat"
+            },
+            "description": "Which package version each paired till last read, and when (roadmap-v3 B7.3), at most\n[`DeviceReadBeat::DEVICES_MAX`], or `None` when the store said nothing about its tills,\nwhich leaves what was recorded alone."
           },
           "lease_generation": {
             "type": [

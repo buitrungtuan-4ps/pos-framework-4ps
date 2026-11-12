@@ -884,6 +884,13 @@ export const api = {
       version,
       { tenant_id: tenantId, opening_float_minor: openingFloatMinor },
     ),
+  // Saying which class of device a till is, a `DEVICE_CLASS_…` token, or `null` for the class its
+  // screen says, conditional on the version the terminal was read at, as its float is (ADR-0094,
+  // ADR-0201 decision 3). The store hears it on the next publish.
+  setTerminalDeviceClass: (tenantId: string, id: string, deviceClass: string | null, version: string) =>
+    requestVoidIfMatch("POST", `/admin/devices/proposals/${encodeURIComponent(id)}/device-class`, version, {
+      tenant_id: tenantId, device_class: deviceClass,
+    }),
   // Compiling a store's approved devices into its `devices` node (ADR-0100). An approval, an agent
   // pick, a drawer mark, a printer's paper and a till's receipts and float all wait on this before
   // the store hears about them.

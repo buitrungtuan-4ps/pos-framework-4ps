@@ -82,18 +82,36 @@ async function freePort() {
  * plain http and sits behind a TLS proxy in production, so this is that proxy, with a certificate
  * made for the run and accepted by the browser (`ignoreHTTPSErrors`). The harness's own calls keep
  * going straight to `baseURL`.
+ *
+ * The certificate is issued by a run-only authority rather than signed by itself, because a store
+ * dialling this front trusts an authority (`cloud_ca_file`), and a self-signed certificate that is
+ * its own authority is one a store's TLS stack refuses to accept as a server's. `caFile` is that
+ * authority, for a store the run starts (`publish-to-edge.mjs`).
  */
 async function tlsFront(directory, target) {
+  const caKey = join(directory, "ca.key");
+  const caFile = join(directory, "ca.pem");
   const key = join(directory, "tls.key");
+  const request = join(directory, "tls.csr");
   const cert = join(directory, "tls.crt");
-  const made = spawnSync(
-    "openssl",
-    ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-keyout", key, "-out", cert]
-      .concat(["-subj", "/CN=127.0.0.1", "-addext", "subjectAltName=IP:127.0.0.1"]),
-    { encoding: "utf8" },
+  const extensions = join(directory, "tls.ext");
+  writeFileSync(
+    extensions,
+    "basicConstraints=critical,CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\n" +
+      "extendedKeyUsage=serverAuth\nsubjectAltName=IP:127.0.0.1\n",
   );
-  if (made.status !== 0) {
-    throw new Error(`openssl could not make the run's certificate: ${made.stderr ?? made.error}`);
+  const steps = [
+    ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-keyout", caKey, "-out", caFile]
+      .concat(["-subj", "/CN=pos replay run authority"]),
+    ["req", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", request, "-subj", "/CN=127.0.0.1"],
+    ["x509", "-req", "-in", request, "-CA", caFile, "-CAkey", caKey, "-CAcreateserial", "-days", "1"]
+      .concat(["-out", cert, "-extfile", extensions]),
+  ];
+  for (const step of steps) {
+    const made = spawnSync("openssl", step, { encoding: "utf8" });
+    if (made.status !== 0) {
+      throw new Error(`openssl could not make the run's certificate: ${made.stderr ?? made.error}`);
+    }
   }
   const server = createHttpsServer(
     { key: readFileSync(key), cert: readFileSync(cert) },
@@ -116,7 +134,7 @@ async function tlsFront(directory, target) {
     server.closeAllConnections();
     return new Promise((resolve) => server.close(resolve));
   };
-  return { url: `https://127.0.0.1:${port}`, close };
+  return { url: `https://127.0.0.1:${port}`, caFile, close };
 }
 
 /** Runs one statement with `psql`, or throws saying what could not be done. */
@@ -179,7 +197,7 @@ let running = null;
  * Idempotent for the run: the second caller gets the first one's cloud, because the config keeps a
  * single worker and every flow can share it.
  */
-export async function startCloud() {
+export async function startCloud({ extraConfig = [] } = {}) {
   if (running !== null) {
     return running;
   }
@@ -219,6 +237,9 @@ export async function startCloud() {
       // rather than fixed so a copied config cannot become a real one (ADR-0097).
       `internal_shared_secret = "${randomBytes(32).toString("hex")}"`,
       `table_token_secret = "${randomBytes(32).toString("hex")}"`,
+      // A caller's own sections, such as `[nats]`, after every top-level key so a table it opens
+      // cannot swallow one of them.
+      ...extraConfig,
       "",
     ].join("\n"),
   );
@@ -327,6 +348,7 @@ export async function startCloud() {
   running = {
     baseURL,
     consoleURL: front.url,
+    caFile: front.caFile,
     password: PASSWORD,
     secret,
     call,
@@ -439,8 +461,16 @@ export async function seedFixtures(cloud) {
     { tenant_id: tenant.tenant_id, store_ids: [store.store_id] },
     group.etag,
   );
+  // The labels the designer replay names, each with the English text a publish requires of every
+  // key a version names (ADR-0190 decision 6). A first write of the grid asserts `*` (ADR-0095).
+  await cloud.call(
+    "PUT",
+    `/admin/translations?tenant_id=${tenant.tenant_id}`,
+    { "welcome.title": { en: "Welcome", vi: "Xin chào" } },
+    "*",
+  );
   // A package with one published version, so the pin flow has a version to run on every store
-  // (ADR-0189). Publishing a version is the package builder's; the seed stands in for it.
+  // (ADR-0189). The seed publishes it as the package designer would.
   const pkg = await cloud.call("POST", "/admin/packages", {
     tenant_id: tenant.tenant_id,
     name: "Dine-in",

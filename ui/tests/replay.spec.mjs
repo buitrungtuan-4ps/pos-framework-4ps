@@ -32,10 +32,42 @@
 
 import { readFileSync } from "node:fs";
 
-import { expect, test } from "@playwright/test";
+import { expect, test as base } from "@playwright/test";
 
 import { TASKS } from "../scripts/step-tasks.mjs";
 import { startEdge } from "./edge.mjs";
+
+/**
+ * A stub that forwards to the edge can still be running when its test's `finally` stops that edge:
+ * the till's own reads do not stop with the test's last step. The forward then meets a closed
+ * port, and the stub would throw that as the test's error. Answer it as what it is, a refused
+ * connection, which is what the till would have met with no stub at all. Only a refused
+ * connection is answered this way; any other error a stub throws still fails its test, and an
+ * edge that dies while a test is running still fails the steps that need it.
+ */
+const test = base.extend({
+  page: async ({ page }, use) => {
+    const route = page.route.bind(page);
+    const unroute = page.unroute.bind(page);
+    // A test that takes off one handler names the one it gave, so each is mapped to its wrapper.
+    const wrapped = new Map();
+    page.route = (url, handler, options) => {
+      const wrapper = async (intercepted, request) => {
+        try {
+          await handler(intercepted, request);
+        } catch (error) {
+          if (!String(error?.message ?? error).includes("ECONNREFUSED")) throw error;
+          await intercepted.abort("connectionrefused").catch(() => {});
+        }
+      };
+      wrapped.set(handler, wrapper);
+      return route(url, wrapper, options);
+    };
+    page.unroute = (url, handler) =>
+      handler === undefined ? unroute(url) : unroute(url, wrapped.get(handler) ?? handler);
+    await use(page);
+  },
+});
 
 /**
  * The edge's whole answer to an intercepted request, for a stub that rewrites it. The till names
@@ -249,8 +281,15 @@ async function aTableWithTheDrinkSplitOff(page) {
  * the send, and a kitchen board loaded on its heels showed "Nothing firing" on CI.
  */
 async function sendOrder(page) {
+  // The send's own answer, not a note on screen: the writes-pending note is drawn only beside
+  // Take payment, which a person without `billing.bill.open` never sees, so waiting for it to go
+  // could pass before the request had even left.
+  const answered = page.waitForResponse(
+    (response) => response.request().method() === "POST" && /\/api\/orders\/[^/]+\/fire$/.test(new URL(response.url()).pathname),
+  );
   await page.locator('[data-step="fireOrder"]').click();
   await expect(page.locator('[data-outcome="line-fired"]').first()).toBeVisible();
+  await answered;
   await expect(page.locator('[data-outcome="writes-pending"]')).toHaveCount(0);
 }
 
