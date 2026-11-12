@@ -1,0 +1,13 @@
+-- Copyright (c) 2026 Pizza 4P's. All rights reserved.
+-- Proprietary and confidential. Internal use only. See LICENSE.
+--
+-- 0097 — a webhook endpoint names the event types it is sent (roadmap-v3 B6.2,
+-- [ADR-0083](../../../../docs/adr/0083-integration-doctrine.md) decision 2: subscribers select
+-- what they need).
+--
+--   * `event_types` — the `domain.resource.action` tokens the endpoint receives, sorted and once
+--                     each. Empty means every event, which is what every endpoint registered before
+--                     this column received, so the default keeps them as they were.
+--
+-- Forward-only and additive, applied idempotently on every boot (ADR-0017).
+ALTER TABLE webhook_endpoints ADD COLUMN IF NOT EXISTS event_types text[] NOT NULL DEFAULT '{}';
