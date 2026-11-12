@@ -31,7 +31,7 @@ import { createStore } from "solid-js/store";
 
 import { ApiError, revalidate } from "../api/client";
 import type { EdgeUrlFor } from "../api/paths";
-import { type Restored, restoreSnapshot, saveSnapshot } from "./snapshot";
+import { type Restored, restoreSnapshot, saveSnapshot, snapshotGeneration } from "./snapshot";
 
 // Configuration is what the store sells and how; live data is what it is doing and who is doing it
 // (the session and its permissions, the drawers, the shift, the open orders). Only configuration
@@ -147,6 +147,9 @@ async function read(found: Entry): Promise<void> {
   clearTimeout(timers.get(found.key));
   timers.delete(found.key);
   setStatus(found.key, "loading", true);
+  // Taken as the read sets out: a sign-out while it is out clears the snapshot, and its answer then
+  // is not kept (`./snapshot.ts`).
+  const since = snapshotGeneration();
   try {
     const copy = restored.get(found.key);
     const tag = etags.get(found.key) ?? copy?.etag ?? null;
@@ -170,7 +173,7 @@ async function read(found: Entry): Promise<void> {
       } else {
         etags.set(found.key, answer.etag);
         if (persisted(found)) {
-          saveSnapshot(found.key, answer.etag, answer.body);
+          saveSnapshot(found.key, answer.etag, answer.body, since);
         }
       }
     }
