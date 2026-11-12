@@ -3075,5 +3075,8 @@
   "webhooks.eventTypesHint": "Event types such as sales.order.opened, separated by commas or new lines. Leave empty to send every event.",
   "webhooks.events": "Events",
   "webhooks.eventsAll": "Every event",
+  "provider.delivery.demo": "Demo delivery (sandbox)",
+  "provider.field.item_map": "Item map (vendor code=menu item id, one per line)",
+  "provider.field.webhook_secret": "Webhook signing secret",
   "scope.call_gateway": "Make external calls through the cloud"
 }

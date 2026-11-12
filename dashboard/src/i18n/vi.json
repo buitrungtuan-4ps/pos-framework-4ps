@@ -3075,5 +3075,8 @@
   "webhooks.eventTypesHint": "Các loại sự kiện như sales.order.opened, phân cách bằng dấu phẩy hoặc xuống dòng. Để trống để gửi mọi sự kiện.",
   "webhooks.events": "Sự kiện",
   "webhooks.eventsAll": "Mọi sự kiện",
+  "provider.delivery.demo": "Giao hàng mẫu (sandbox)",
+  "provider.field.item_map": "Bảng món (mã của đối tác=mã món, mỗi dòng một món)",
+  "provider.field.webhook_secret": "Khóa ký webhook",
   "scope.call_gateway": "Gọi dịch vụ bên ngoài qua cloud"
 }

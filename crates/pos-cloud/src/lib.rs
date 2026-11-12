@@ -85,6 +85,7 @@ pub mod cloud;
 pub mod config;
 pub mod config_wakes;
 pub mod connections;
+pub mod connectors;
 pub mod countries;
 pub mod cursor;
 pub mod dashboard;
