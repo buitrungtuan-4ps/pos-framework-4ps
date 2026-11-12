@@ -149,6 +149,21 @@ fn v6_loopback_ula_and_mapped_v4_are_refused() {
             ForbiddenReason::LinkLocal
         ))
     );
+    // fe00::/9 Reserved by IETF (RFC 4291).
+    assert_eq!(
+        classify_ip(ip("fe00::1")),
+        Err(SsrfRejection::ForbiddenAddress(
+            ip("fe00::1"),
+            ForbiddenReason::Reserved
+        ))
+    );
+    assert_eq!(
+        classify_ip(ip("fe7f:ffff:ffff:ffff:ffff:ffff:ffff:ffff")),
+        Err(SsrfRejection::ForbiddenAddress(
+            ip("fe7f:ffff:ffff:ffff:ffff:ffff:ffff:ffff"),
+            ForbiddenReason::Reserved
+        ))
+    );
     // IPv4-mapped interface identifier smuggling cases (`<prefix>:0:ffff:a.b.c.d` or `<prefix>:ffff:ffff:a.b.c.d`).
     assert_eq!(
         classify_ip(ip("2001:db8::ffff:127.0.0.1")),
