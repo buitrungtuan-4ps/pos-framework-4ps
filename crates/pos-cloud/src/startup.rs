@@ -4,6 +4,7 @@
 //! The steps of the cloud's boot, in the order `run` takes them: the configuration, the store,
 //! then the application over it.
 
+pub(super) mod integrations;
 pub(super) mod loops;
 pub(super) mod packages;
 pub(super) mod routes;

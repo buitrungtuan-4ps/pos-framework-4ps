@@ -14599,6 +14599,464 @@
         "x-permission": "console.integrations.manage"
       }
     },
+    "/admin/integrations/gateway-endpoints": {
+      "get": {
+        "tags": [
+          "integrations"
+        ],
+        "summary": "A console user lists a tenant's gateway endpoints.",
+        "operationId": "admin_list_gateway_endpoints",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant whose endpoints to read (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's gateway endpoints in id order, each with the version it was read at. A secret header's value is never returned: `secret_headers_set` names the ones that have one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Versioned_GatewayEndpointView"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "tenant_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The endpoint store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
+      },
+      "post": {
+        "tags": [
+          "integrations"
+        ],
+        "summary": "A console user declares a gateway endpoint; the server mints the id.",
+        "operationId": "admin_create_gateway_endpoint",
+        "requestBody": {
+          "description": "The tenant, a display name, the `https` url, the method, the request and response fields by name and kind, `deadline_ms` (3000 when absent, at most 10000), `idempotent`, `enabled`, and `secret_headers`. The id is server-minted. The URL is vetted before anything is stored; secret headers are sealed on arrival and never returned",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GatewayEndpointRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created. The body is the endpoint without its secret values, including the id the server minted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_GatewayEndpointView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A field is wrong, named in `details`: the name, the URL (not https, carrying credentials, or not resolving only to public addresses), a field name, the deadline, or a header",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.integrations.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The endpoint store or the URL check is unavailable, or a secret header was sent and this cloud has no integration_secret to seal it with",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.integrations.manage"
+      }
+    },
+    "/admin/integrations/gateway-endpoints/{gateway_endpoint_id}": {
+      "get": {
+        "tags": [
+          "integrations"
+        ],
+        "summary": "A console user reads one gateway endpoint.",
+        "operationId": "admin_get_gateway_endpoint",
+        "parameters": [
+          {
+            "name": "gateway_endpoint_id",
+            "in": "path",
+            "description": "The endpoint's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant that owns it (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The endpoint without its secret values, with an ETag carrying the version it was read at",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_GatewayEndpointView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "tenant_id or gateway_endpoint_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no endpoint with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The endpoint store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
+      },
+      "put": {
+        "tags": [
+          "integrations"
+        ],
+        "summary": "A console user edits a gateway endpoint in place.",
+        "operationId": "admin_update_gateway_endpoint",
+        "parameters": [
+          {
+            "name": "gateway_endpoint_id",
+            "in": "path",
+            "description": "The endpoint's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The ETag the endpoint was read at (ADR-0094). Required; a wildcard is refused",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The endpoint as it should now stand. A secret header left out of `secret_headers` keeps its stored value; `clear_secret_headers` removes one",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GatewayEndpointRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated. The body is the endpoint without its secret values, and the ETag carries its new version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Versioned_GatewayEndpointView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A field is wrong, named in `details`, or If-Match is absent, malformed, or a wildcard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.integrations.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no endpoint with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The endpoint changed since you read it: re-read it and try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The endpoint store or the URL check is unavailable, or a secret header cannot be sealed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.integrations.manage"
+      },
+      "delete": {
+        "tags": [
+          "integrations"
+        ],
+        "summary": "A console user removes a gateway endpoint and the credentials it held.",
+        "operationId": "admin_delete_gateway_endpoint",
+        "parameters": [
+          {
+            "name": "gateway_endpoint_id",
+            "in": "path",
+            "description": "The endpoint's 26-character ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant that owns it (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted, with its sealed headers"
+          },
+          "400": {
+            "description": "tenant_id or gateway_endpoint_id is absent or not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.integrations.manage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no endpoint with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The endpoint store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.integrations.manage"
+      }
+    },
     "/admin/integrations/providers": {
       "get": {
         "tags": [
@@ -30742,6 +31200,183 @@
       "FreeFormJson": {
         "description": "Free-form JSON. The route's description names what it is and where its shape is defined"
       },
+      "GatewayEndpointRequest": {
+        "type": "object",
+        "description": "A create or update body. The id is server-owned: minted on create, the path id on update.\n\n`secret_headers` holds only the values this write sets. A header left out keeps the value the\nendpoint already holds, because the console cannot show it to be sent back;\n`clear_secret_headers` removes one on purpose.",
+        "required": [
+          "tenant_id",
+          "display_name",
+          "url",
+          "method"
+        ],
+        "properties": {
+          "clear_secret_headers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "deadline_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "In milliseconds; absent is 3000, and at most 10000.",
+            "minimum": 0
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Absent means enabled."
+          },
+          "idempotent": {
+            "type": "boolean",
+            "description": "Whether a call may be retried on a transport failure or a `5xx`."
+          },
+          "method": {
+            "$ref": "#/components/schemas/GatewayMethod"
+          },
+          "request_fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GatewayField"
+            }
+          },
+          "response_fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GatewayField"
+            }
+          },
+          "secret_headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "description": "The `https` URL. Vetted by the webhook guard before it is stored, and before every call."
+          }
+        }
+      },
+      "GatewayEndpointView": {
+        "type": "object",
+        "description": "An endpoint as the API answers it: everything but its sealed values.",
+        "required": [
+          "gateway_endpoint_id",
+          "display_name",
+          "url",
+          "method",
+          "request_fields",
+          "response_fields",
+          "deadline_ms",
+          "idempotent",
+          "enabled",
+          "secret_headers_set"
+        ],
+        "properties": {
+          "deadline_ms": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How long a call may take, in milliseconds.",
+            "minimum": 0
+          },
+          "display_name": {
+            "type": "string",
+            "description": "What the console calls it."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether stores may call it."
+          },
+          "gateway_endpoint_id": {
+            "type": "string",
+            "description": "The endpoint's id."
+          },
+          "idempotent": {
+            "type": "boolean",
+            "description": "Whether a call may be retried."
+          },
+          "method": {
+            "$ref": "#/components/schemas/GatewayMethod",
+            "description": "How it is called."
+          },
+          "request_fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GatewayField"
+            },
+            "description": "The fields a request is built from."
+          },
+          "response_fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GatewayField"
+            },
+            "description": "The fields a response is read into."
+          },
+          "secret_headers_set": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The secret headers that hold a value. Never the value."
+          },
+          "url": {
+            "type": "string",
+            "description": "The `https` URL."
+          }
+        }
+      },
+      "GatewayField": {
+        "type": "object",
+        "description": "One field a request is built from, or a response is read into, by name.",
+        "required": [
+          "name",
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/GatewayFieldKind",
+            "description": "The kind its value must be."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name: lower-case letters, digits and `_`, starting with a letter, at most 64 bytes."
+          },
+          "required": {
+            "type": "boolean",
+            "description": "Whether a request must carry it, or a response must answer it."
+          }
+        }
+      },
+      "GatewayFieldKind": {
+        "type": "string",
+        "description": "The kind of one field's value.",
+        "enum": [
+          "GATEWAY_FIELD_KIND_STRING",
+          "GATEWAY_FIELD_KIND_INTEGER",
+          "GATEWAY_FIELD_KIND_BOOLEAN"
+        ]
+      },
+      "GatewayMethod": {
+        "type": "string",
+        "description": "How the gateway calls an endpoint.",
+        "enum": [
+          "GATEWAY_METHOD_GET",
+          "GATEWAY_METHOD_POST"
+        ]
+      },
       "GenerateVouchersRequest": {
         "type": "object",
         "description": "A `POST /admin/campaigns/{id}/vouchers` body: the tenant and how many codes to mint.",
@@ -38128,6 +38763,97 @@
               "tenant_id": {
                 "$ref": "#/components/schemas/TenantId",
                 "description": "The owning tenant."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "etag"
+            ],
+            "properties": {
+              "etag": {
+                "$ref": "#/components/schemas/Version",
+                "description": "The version [`record`](Self::record) was read at. Byte-identical to the `ETag` header\na single-resource read would carry, so a client never reformats it."
+              },
+              "updated_at_ms": {
+                "type": "integer",
+                "format": "int64",
+                "description": "When the row was last written, in Unix milliseconds — `None` where the adapter does not\nproject it.\n\nEvery one of these tables has carried an `updated_at` since it was created; not one read\never returned it, so the console had no way to tell an operator whether what is on their\nscreen is newer than what the shop is running. The publish bar asked that question and had\nto answer it from a within-session signal, which forgets on reload (Wave 4 · PR-5b, F13).\n\n`Option` and skipped when absent, so this is additive twice over: the 80-odd existing\n[`new`](Self::new) call sites compile untouched, and a read that does not project the\ncolumn serialises exactly the bytes it did before."
+              }
+            }
+          }
+        ],
+        "description": "A record together with the version it was read at.\n\nSerialises as the record's own fields plus an `etag` — additive, so no existing field\nmoves or is renamed, and a list can carry a version per row where a header cannot.\n\nSerialize only. This shape is something the cloud *writes*; the console reads it in TypeScript,\nand no Rust caller parses one. Deriving `Deserialize` as well would pull in serde's flatten\nbuffer, whose `Content` enum carries `f32`/`f64` variants that `clippy.toml` bans outright —\na real cost (`docs/adr/0013`: money is never a float) for a capability nothing uses."
+      },
+      "Versioned_GatewayEndpointView": {
+        "allOf": [
+          {
+            "type": "object",
+            "description": "An endpoint as the API answers it: everything but its sealed values.",
+            "required": [
+              "gateway_endpoint_id",
+              "display_name",
+              "url",
+              "method",
+              "request_fields",
+              "response_fields",
+              "deadline_ms",
+              "idempotent",
+              "enabled",
+              "secret_headers_set"
+            ],
+            "properties": {
+              "deadline_ms": {
+                "type": "integer",
+                "format": "int32",
+                "description": "How long a call may take, in milliseconds.",
+                "minimum": 0
+              },
+              "display_name": {
+                "type": "string",
+                "description": "What the console calls it."
+              },
+              "enabled": {
+                "type": "boolean",
+                "description": "Whether stores may call it."
+              },
+              "gateway_endpoint_id": {
+                "type": "string",
+                "description": "The endpoint's id."
+              },
+              "idempotent": {
+                "type": "boolean",
+                "description": "Whether a call may be retried."
+              },
+              "method": {
+                "$ref": "#/components/schemas/GatewayMethod",
+                "description": "How it is called."
+              },
+              "request_fields": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/GatewayField"
+                },
+                "description": "The fields a request is built from."
+              },
+              "response_fields": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/GatewayField"
+                },
+                "description": "The fields a response is read into."
+              },
+              "secret_headers_set": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The secret headers that hold a value. Never the value."
+              },
+              "url": {
+                "type": "string",
+                "description": "The `https` URL."
               }
             }
           },
