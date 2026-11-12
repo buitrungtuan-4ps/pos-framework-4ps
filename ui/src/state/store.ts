@@ -37,6 +37,7 @@ import {
 } from "../lib/money";
 import type { BillCheckResponse, BuyerRequest, CheckResponse, CourseResponse } from "../api/schemas";
 import type { DiscountResponse, FloorResponse, LayoutCategory, LayoutResponse } from "../api/schemas";
+import { applyAreaPlaces } from "./floor-tree";
 import type { MenuItemResponse, ModifierGroup, PaymentRequest } from "../api/schemas";
 import type { CountBreakdown, ReasonCodeEntry, ReasonCodesResponse } from "../api/schemas";
 
@@ -424,6 +425,7 @@ export function applyFloor(response: FloorResponse): void {
     produce((draft) => {
       if (tables.length > 0) {
         draft.floor = tables;
+        applyAreaPlaces(response.floor.areas);
         // Rebuild the table-state map for the synced tables, preserving any live state already folded
         // from the fan-out and defaulting new tables to free.
         // The edge's own view wins where it has one, because on the boot that matters this device

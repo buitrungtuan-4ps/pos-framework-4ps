@@ -9,6 +9,7 @@ import {
   DINE_IN,
   areaIsPlaced,
   floorAreas,
+  floorTables,
   seatedAt,
   tableState,
   tablesEnabled,
@@ -16,6 +17,8 @@ import {
   type TableCard,
 } from "../state/store";
 import { clean } from "../state/floor-writes";
+import { floorSections } from "../state/floor-tree";
+import { AreaTabs } from "../components/AreaTabs";
 import { guestStep } from "../state/flows";
 import { Takeaway } from "./Takeaway";
 import { errorMessage } from "../lib/errors";
@@ -337,7 +340,8 @@ export function FloorPlan(): JSX.Element {
   // (ADR-0109). It is present whenever this screen renders, which is the claim.
   return (
     <div data-outcome="floor">
-      <For each={floorAreas()}>{area}</For>
+      <AreaTabs />
+      <For each={floorSections(floorAreas(), floorTables())}>{area}</For>
       <Show when={asking()}>
         {(table) => <GuestPad asking={table()} seatWithGuests={seatAsked} skipGuests={() => seatAsked()} cancel={() => setAsking(null)} />}
       </Show>

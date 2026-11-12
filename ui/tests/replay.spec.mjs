@@ -301,8 +301,13 @@ async function sendOrder(page) {
  */
 async function sendThenTakePayment(page) {
   await expect(page.locator('[data-outcome="writes-pending"]')).toHaveCount(0);
-  const send = page.locator('[data-step="fireOrder"]');
-  if ((await send.count()) > 0 && (await send.isEnabled())) {
+  // Whether there is anything to send is read off the lines, which say it for as long as it is
+  // true, and never off the Send button's state at one instant: the button is briefly disabled
+  // while a line is still waiting for its event or the till is reading the store again after its
+  // link came back, and a check that landed then skipped the send. Take payment then opened the
+  // "send it first?" dialog instead of the pay screen. `sendOrder`'s click waits for the button.
+  const unsent = page.locator('[data-outcome="line-unsent"], [data-outcome="line-sending"]');
+  if ((await unsent.count()) > 0 && (await page.locator('[data-step="fireOrder"]').count()) > 0) {
     await sendOrder(page);
   }
   await page.locator('[data-step="takePayment"]').click();
