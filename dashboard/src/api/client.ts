@@ -277,7 +277,7 @@ export async function requestJson<T, M extends AdminMethod = AdminMethod>(
 // entity-tag. The server requires it, so this is the only way to reach a mutating `/admin` route.
 // `etag` is the opaque token as it arrived, and the quotes are added here so no caller has to know
 // the header's grammar.
-async function requestJsonIfMatch<T, M extends AdminMethod = AdminMethod>(
+export async function requestJsonIfMatch<T, M extends AdminMethod = AdminMethod>(
   method: M,
   path: AdminUrlFor<M>,
   etag: ETag,
@@ -429,7 +429,7 @@ async function requestPublishReport<M extends AdminMethod>(
   return response.status === 200 ? ((await response.json()) as PermissionsPublishReport) : null;
 }
 
-async function requestVoid<M extends AdminMethod>(
+export async function requestVoid<M extends AdminMethod>(
   method: M,
   path: AdminUrlFor<M>,
   body?: unknown,

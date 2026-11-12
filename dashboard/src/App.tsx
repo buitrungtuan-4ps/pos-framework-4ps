@@ -172,6 +172,9 @@ const Translations = lazy(() =>
 const Webhooks = lazy(() =>
   import("./screens/Webhooks").then((module) => ({ default: module.Webhooks })),
 );
+const GatewayEndpoints = lazy(() =>
+  import("./screens/GatewayEndpoints").then((module) => ({ default: module.GatewayEndpoints })),
+);
 const CustomData = lazy(() =>
   import("./screens/CustomData").then((module) => ({ default: module.CustomData })),
 );
@@ -226,6 +229,7 @@ const COMPONENTS: Record<ScreenId, Component> = {
   activation: Activation,
   admins: Admins,
   webhooks: Webhooks,
+  gatewayEndpoints: GatewayEndpoints,
   mySessions: MySessions,
   mySecurity: MySecurity,
   customData: CustomData,
