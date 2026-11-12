@@ -503,6 +503,24 @@ test("a table dragged onto the floor plan is saved where it was dropped", async 
   await context.close();
 });
 
+// An area may sit inside another (ADR-0211): an area dragged onto another in the area tree is saved
+// inside it. Like a table's, the drag is not a click, so this test is the step gate's browser half.
+test("an area dragged onto another is saved inside it", async ({ browser }) => {
+  const scope = { tenant_id: fixtures.tenant.tenant_id, store_id: fixtures.store.store_id };
+  const upstairs = (await cloud.call("POST", "/admin/floor/areas", { ...scope, name: "Upstairs" })).id;
+  const vip = (await cloud.call("POST", "/admin/floor/areas", { ...scope, name: "VIP room" })).id;
+  const { context, page } = await openConsole(browser);
+  await page.setViewportSize({ width: 1440, height: 1400 });
+  await openNavGroupFor(page, "floor");
+  await page.locator('[data-nav="floor"]').first().click();
+
+  await page.locator(`[data-tree-area="${vip}"] > div`).dragTo(page.locator(`[data-tree-area="${upstairs}"] > div`));
+  await expect(page.locator(`[data-tree-area="${vip}"]`)).toHaveAttribute("style", /padding-inline-start: 1\.5rem/);
+  const areas = await cloud.call("GET", `/admin/floor/areas?tenant_id=${scope.tenant_id}&store_id=${scope.store_id}`);
+  expect(areas.find((row) => row.area_id === vip).parent_area_id).toBe(upstairs);
+  await context.close();
+});
+
 test("the flows this harness skips are exactly the ones that say so", () => {
   // A flow drops out of the browser gate only by declaring why, in `scripts/step-tasks.mjs`. This
   // asserts the count rather than the reasons: the reasons are prose for a reader, and what must not

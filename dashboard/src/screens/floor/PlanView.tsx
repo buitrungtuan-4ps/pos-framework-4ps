@@ -10,6 +10,7 @@ import { For, Show } from "solid-js";
 
 import type { Area, FloorTable } from "../../api/schemas";
 import { t } from "../../i18n";
+import { areaTree, breadcrumb } from "../../lib/area-tree";
 import { canPlace, gridSize, occupant, step, tablesOf, type Cell } from "../../lib/floor-grid";
 
 /** Where a table goes: a cell of an area, or off the grid. */
@@ -73,8 +74,8 @@ function dropHandlers(props: PlanProps, placement: Placement, inArea: readonly F
   };
 }
 
-/** One area's grid. */
-function AreaGrid(props: PlanProps & { area: Area }) {
+/** One area's grid, headed by where it sits (`Tầng 2 › VIP`, ADR-0211). */
+function AreaGrid(props: PlanProps & { area: Area; heading: string }) {
   const inArea = () => tablesOf(props.tables, props.area.area_id);
   const size = () => gridSize(inArea());
   const cells = () =>
@@ -85,7 +86,7 @@ function AreaGrid(props: PlanProps & { area: Area }) {
   const unplaced = () => inArea().filter((table) => !table.position);
   return (
     <section class="flex flex-col gap-2" aria-label={props.area.name}>
-      <h3 class="text-sm font-semibold text-ink">{props.area.name}</h3>
+      <h3 class="text-sm font-semibold text-ink">{props.heading}</h3>
       <div class="grid gap-1 overflow-x-auto" style={{ "grid-template-columns": `repeat(${size().columns}, minmax(4.5rem, 1fr))` }}>
         <For each={cells()}>
           {(cell) => (
@@ -119,13 +120,13 @@ function AreaGrid(props: PlanProps & { area: Area }) {
   );
 }
 
-/** Every active area's grid. */
+/** Every active area's grid, in tree order. */
 export function PlanView(props: PlanProps) {
-  const active = () => props.areas.filter((area) => area.status !== "archived");
+  const active = () => areaTree(props.areas.filter((area) => area.status !== "archived"));
   return (
     <div class="flex flex-col gap-6">
       <p class="text-sm text-ink-muted">{t("floor.planHint")}</p>
-      <For each={active()}>{(area) => <AreaGrid {...props} area={area} />}</For>
+      <For each={active()}>{(node) => <AreaGrid {...props} area={node.area} heading={breadcrumb(node)} />}</For>
     </div>
   );
 }
