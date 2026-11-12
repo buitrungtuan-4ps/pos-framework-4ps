@@ -92,6 +92,7 @@ fn respond(path: &str, asset: Asset, request: &HeaderMap) -> Response {
                 // What the 200 would have said (RFC 9110 §15.4.5). The compression layer adds it
                 // only to a body it compressed, and a 304 has none.
                 (header::VARY, HeaderValue::from_static(VARY)),
+                (header::CONTENT_SECURITY_POLICY, connect_policy(request)),
             ],
         )
             .into_response();
@@ -119,6 +120,7 @@ fn respond(path: &str, asset: Asset, request: &HeaderMap) -> Response {
                 HeaderValue::from_static("no-referrer"),
             ),
             (header::CACHE_CONTROL, HeaderValue::from_static(caching)),
+            (header::CONTENT_SECURITY_POLICY, connect_policy(request)),
             (header::ETAG, etag),
             // Set here as well as by the compression layer, which leaves it off a body under its
             // size floor: a cache must not answer a gzip client from a plain copy, or the reverse.
@@ -128,6 +130,36 @@ fn respond(path: &str, asset: Asset, request: &HeaderMap) -> Response {
     )
         .into_response()
 }
+
+/// The till may connect to its edge and nowhere else
+/// ([ADR-0198](../../../../docs/adr/0198-a-store-reaches-the-internet-only-through-the-cloud.md)
+/// decision 1): an external call goes through the edge to the cloud, never from the browser.
+///
+/// `'self'` is the edge: every `fetch` the till served here makes is root-relative, `/ws` derives
+/// from the same origin, and the rules module and lazy chunks are this edge's `/assets`. The same
+/// host is also named for `ws:` and `wss:`, because older Safari, which tablets run, does not let
+/// `'self'` cover a websocket. The host is the request's `Host`, used only when it is a plain
+/// `host[:port]`; anything else leaves `'self'` alone. Only `connect-src` is set: what a page may
+/// load, frame or run is not this decision's.
+fn connect_policy(request: &HeaderMap) -> HeaderValue {
+    let host = request
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .filter(|host| {
+            !host.is_empty()
+                && host.len() <= 255
+                && host
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b".-:[]".contains(&byte))
+        });
+    host.and_then(|host| {
+        HeaderValue::from_str(&format!("connect-src 'self' ws://{host} wss://{host}")).ok()
+    })
+    .unwrap_or(HeaderValue::from_static(CONNECT_SELF))
+}
+
+/// The policy when the request names no usable host.
+const CONNECT_SELF: &str = "connect-src 'self'";
 
 /// The one request header an asset's bytes vary on: the compression layer answers the same path
 /// gzip or plain, by what the client accepts.
@@ -203,6 +235,51 @@ mod tests {
         assert_eq!(revalidated.status(), StatusCode::NOT_MODIFIED);
         assert_eq!(revalidated.headers()[header::VARY], "accept-encoding");
         assert_eq!(revalidated.headers()[header::ETAG], "W/\"abc123\"");
+    }
+
+    /// ADR-0198 decision 1: the till may connect to its edge alone, on the full answer and the 304.
+    #[test]
+    fn the_till_may_connect_to_its_edge_and_nowhere_else() {
+        let asset = || Asset {
+            etag: Some("W/\"abc123\"".to_owned()),
+            bytes: b"<html></html>".to_vec(),
+        };
+        let mut request = HeaderMap::new();
+        request.insert(header::HOST, HeaderValue::from_static("192.168.1.20:8080"));
+        let full = respond("index.html", asset(), &request);
+        assert_eq!(
+            full.headers()[header::CONTENT_SECURITY_POLICY],
+            "connect-src 'self' ws://192.168.1.20:8080 wss://192.168.1.20:8080"
+        );
+        request.insert(
+            header::IF_NONE_MATCH,
+            HeaderValue::from_static("W/\"abc123\""),
+        );
+        let revalidated = respond("index.html", asset(), &request);
+        assert_eq!(revalidated.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(
+            revalidated.headers()[header::CONTENT_SECURITY_POLICY],
+            full.headers()[header::CONTENT_SECURITY_POLICY]
+        );
+
+        // A host that is not a plain host[:port] names nothing beyond 'self'.
+        for hostile in ["evil.example 'unsafe-inline'", "a;b", ""] {
+            let mut odd = HeaderMap::new();
+            odd.insert(
+                header::HOST,
+                HeaderValue::from_str(hostile).expect("a header value"),
+            );
+            assert_eq!(
+                respond("index.html", asset(), &odd).headers()[header::CONTENT_SECURITY_POLICY],
+                "connect-src 'self'",
+                "{hostile:?}"
+            );
+        }
+        assert_eq!(
+            respond("index.html", asset(), &HeaderMap::new()).headers()
+                [header::CONTENT_SECURITY_POLICY],
+            "connect-src 'self'"
+        );
     }
 
     #[test]
