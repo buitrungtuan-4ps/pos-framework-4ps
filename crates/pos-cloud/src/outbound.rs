@@ -18,7 +18,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use http_body_util::{BodyExt as _, Empty, Limited};
+use http_body_util::{BodyExt as _, Either, Empty, Full, Limited};
 use hyper::Request;
 use hyper::header::{HOST, HeaderName, LOCATION};
 use hyper_util::rt::TokioIo;
@@ -77,6 +77,28 @@ impl HttpsGet {
         max_bytes: usize,
         subject: &str,
     ) -> Result<Answer, String> {
+        self.send_once("GET", url, headers, None, max_bytes, subject)
+            .await
+    }
+
+    /// One request of `method` over TLS, with `body` when there is one, otherwise exactly as
+    /// [`Self::get_once`]: the URL vetted again before the dial, only the vetted addresses dialled,
+    /// no redirect followed, and a body of at most `max_bytes`. The gateway's calls
+    /// ([ADR-0198](../../../docs/adr/0198-a-store-reaches-the-internet-only-through-the-cloud.md)
+    /// decision 4) are its second caller.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::get_once`].
+    pub(crate) async fn send_once(
+        &self,
+        method: &str,
+        url: &str,
+        headers: &[(HeaderName, String)],
+        body: Option<Vec<u8>>,
+        max_bytes: usize,
+        subject: &str,
+    ) -> Result<Answer, String> {
         let vetted = vet_blocking(url)
             .await
             .map_err(|reason| format!("{url}: {reason}"))?;
@@ -110,14 +132,18 @@ impl HttpsGet {
         });
 
         let mut request = Request::builder()
-            .method("GET")
+            .method(method)
             .uri(&target)
             .header(HOST, host.as_str());
         for (name, value) in headers {
             request = request.header(name, value.as_str());
         }
+        let body = body.map_or_else(
+            || Either::Left(Empty::<Bytes>::new()),
+            |bytes| Either::Right(Full::new(Bytes::from(bytes))),
+        );
         let request = request
-            .body(Empty::<Bytes>::new())
+            .body(body)
             .map_err(|error| format!("building the request failed: {error}"))?;
 
         let response = sender
