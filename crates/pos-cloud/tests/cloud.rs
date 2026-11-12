@@ -83,6 +83,8 @@ mod connectors;
 mod floor;
 #[path = "cloud/floor_tree.rs"]
 mod floor_tree;
+#[path = "cloud/gateway_calls.rs"]
+mod gateway_calls;
 #[path = "cloud/gateway_endpoints.rs"]
 mod gateway_endpoints;
 #[path = "cloud/hq_rollups.rs"]

@@ -413,6 +413,7 @@ From [`docs/openapi-device.json`](../openapi-device.json).
 | POST | `/sync/stores/{store_id}/devices` | `propose_device` | `device_credential` (manage_devices) | — | [`crates/pos-cloud-devices/src/routes/proposals.rs`](../../crates/pos-cloud-devices/src/routes/proposals.rs) |
 | POST | `/sync/stores/{store_id}/events` | `edge_publish_events` | `device_credential` (publish_events) | — | [`crates/pos-cloud/src/http/sync.rs`](../../crates/pos-cloud/src/http/sync.rs) |
 | POST | `/sync/stores/{store_id}/events/hello` | `edge_events_hello` | `device_credential` (publish_events) | — | [`crates/pos-cloud/src/http/sync.rs`](../../crates/pos-cloud/src/http/sync.rs) |
+| POST | `/sync/stores/{store_id}/gateway/calls` | `store_gateway_call` | `device_credential` (call_gateway) | — | [`crates/pos-cloud/src/gateway/sync.rs`](../../crates/pos-cloud/src/gateway/sync.rs) |
 | POST | `/sync/stores/{store_id}/heartbeat` | `edge_heartbeat` | `device_credential` (read_config) | — | [`crates/pos-cloud/src/http/sync.rs`](../../crates/pos-cloud/src/http/sync.rs) |
 | GET | `/sync/stores/{store_id}/orders` | `pull_orders` | `device_credential` (relay_orders) | — | [`crates/pos-cloud/src/relay.rs`](../../crates/pos-cloud/src/relay.rs) |
 | POST | `/sync/stores/{store_id}/orders/{queued_id}/ack` | `ack_order` | `device_credential` (relay_orders) | — | [`crates/pos-cloud/src/relay.rs`](../../crates/pos-cloud/src/relay.rs) |

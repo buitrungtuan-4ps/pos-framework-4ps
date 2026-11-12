@@ -186,3 +186,14 @@ fn endpoint_row(row: &tokio_postgres::Row) -> GatewayEndpointRow {
         updated_at_ms: row.get(3),
     }
 }
+
+impl crate::PostgresStore {
+    /// A tenant's gateway endpoints over this pool
+    /// ([ADR-0198](../../../../docs/adr/0198-a-store-reaches-the-internet-only-through-the-cloud.md)).
+    /// `pos-cloud` seals every secret header before a document reaches it. Here rather than in
+    /// `store.rs`, which is at its size baseline.
+    #[must_use]
+    pub fn gateway_endpoints(&self) -> PostgresGatewayEndpoints {
+        PostgresGatewayEndpoints::new(self.pool.clone())
+    }
+}

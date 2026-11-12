@@ -55,6 +55,16 @@ pub(super) fn integration_routes(deps: &RouteDeps<'_>) -> Router {
             SystemClock,
             Arc::clone(audit),
         ))
+        // A store's external calls through the cloud (ADR-0198): the store's credential with the
+        // call_gateway scope, its tenant's enabled endpoint, the limits and the breaker, then the
+        // call over the outbound HTTPS client behind the webhook guard.
+        .merge(pos_cloud::gateway::sync::https_gateway_call_router(
+            store.gateway_endpoints(),
+            store.gateway_calls(),
+            store.api_keys(),
+            SystemClock,
+            config.integration_secret.clone(),
+        ))
         // A delivery vendor's own webhook (ADR-0083 decision 3): verified under the secret sealed on
         // the tenant's store-scoped connection, mapped through its item map, and submitted to the
         // same relay `POST /v1/orders` uses. One connector per vendor; the sandbox one for now.

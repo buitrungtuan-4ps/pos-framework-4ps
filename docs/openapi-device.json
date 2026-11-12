@@ -1158,6 +1158,126 @@
         ]
       }
     },
+    "/sync/stores/{store_id}/gateway/calls": {
+      "post": {
+        "tags": [
+          "gateway"
+        ],
+        "summary": "`POST /sync/stores/{store_id}/gateway/calls` — the cloud makes a store's external call.",
+        "operationId": "store_gateway_call",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store, a ULID. It must be the credential's own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The endpoint's id, the store's `idempotency_key` for the act, and the endpoint's request fields as `values`",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GatewayCallRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The call was made, or its key's first answer is replayed: `GATEWAY_OUTCOME_ANSWERED` with the declared `result`, or `GATEWAY_OUTCOME_REFUSED` with the `refusal` (timeout, unreachable, the target's error status, or an answer without the declared fields)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayCallAnswer"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "store_id or the endpoint id is not a ULID, the idempotency key is malformed, or a value is missing, undeclared or of the wrong kind, named in `details` as `values.<field>`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or one the cloud does not accept",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credential lacks the `call_gateway` scope, or belongs to another store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The tenant has no enabled endpoint with that id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The idempotency key was used for another endpoint in the last 24 hours",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Over ten calls a second from this store, over fifty to this endpoint, or the endpoint's breaker is open: `Retry-After` says when to try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The credential store, the endpoint store or the call record is unavailable, or the endpoint's secret headers cannot be opened",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_credential": [
+              "call_gateway"
+            ]
+          }
+        ]
+      }
+    },
     "/sync/stores/{store_id}/heartbeat": {
       "post": {
         "tags": [
@@ -1857,6 +1977,17 @@
         "description": "A business date, YYYY-MM-DD, by the store's own cutoff",
         "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
       },
+      "CallRefusal": {
+        "type": "string",
+        "description": "Why a call answered no result, as the store-facing route names it.",
+        "enum": [
+          "GATEWAY_REFUSAL_INVALID_VALUES",
+          "GATEWAY_REFUSAL_TIMEOUT",
+          "GATEWAY_REFUSAL_UNREACHABLE",
+          "GATEWAY_REFUSAL_TARGET_ERROR",
+          "GATEWAY_REFUSAL_MALFORMED_ANSWER"
+        ]
+      },
       "ChainHash": {
         "type": "string",
         "description": "A chain hash, as 64 lowercase hexadecimal characters.\n\nA string rather than `[u8; 32]` because it crosses the wire inside the envelope and is\nread by humans in a diagnostic; the cost is 32 bytes a record, and the benefit is that\na chain break can be pasted into a bug report."
@@ -2492,6 +2623,76 @@
             "description": "The device id the credential authenticates as."
           }
         }
+      },
+      "GatewayCallAnswer": {
+        "type": "object",
+        "description": "What the store-facing route answers for one call, and what is kept for its key.",
+        "required": [
+          "call_id",
+          "outcome"
+        ],
+        "properties": {
+          "call_id": {
+            "type": "string",
+            "description": "The call's id, a ULID: what the logs name it by. A replayed answer keeps the first call's."
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/GatewayOutcome",
+            "description": "`GATEWAY_OUTCOME_ANSWERED` with a `result`, or `GATEWAY_OUTCOME_REFUSED` with a `refusal`."
+          },
+          "refusal": {
+            "$ref": "#/components/schemas/CallRefusal",
+            "description": "Why no result, when refused."
+          },
+          "result": {
+            "type": "object",
+            "description": "The endpoint's declared response fields, by name; empty when refused.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The target's HTTP status, when it answered.",
+            "minimum": 0
+          }
+        }
+      },
+      "GatewayCallRequest": {
+        "type": "object",
+        "description": "A store's call.",
+        "required": [
+          "gateway_endpoint_id",
+          "idempotency_key"
+        ],
+        "properties": {
+          "gateway_endpoint_id": {
+            "type": "string",
+            "description": "The endpoint, a ULID of the store's tenant."
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "The store's key for this act: 1 to 64 letters, digits, `-` and `_`. A key repeated within 24\nhours gets the first answer back."
+          },
+          "values": {
+            "type": "object",
+            "description": "The endpoint's request fields by name, each of its kind.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "GatewayOutcome": {
+        "type": "string",
+        "description": "Whether a call answered a result.",
+        "enum": [
+          "GATEWAY_OUTCOME_ANSWERED",
+          "GATEWAY_OUTCOME_REFUSED"
+        ]
       },
       "HeartbeatBody": {
         "type": "object",
@@ -3205,6 +3406,10 @@
     {
       "name": "order relay",
       "description": "Orders taken for the store elsewhere, pulled by a bounded long-poll and acknowledged with the store's outcome (ADR-0061)."
+    },
+    {
+      "name": "gateway",
+      "description": "A store's external call, made by the cloud on its behalf to an endpoint its tenant declared, behind the webhook guard, within the endpoint's deadline (ADR-0198)."
     },
     {
       "name": "updates",

@@ -33,7 +33,7 @@ type Row = (TenantId, Versioned<GatewayEndpoint>);
 /// A version-carrying, tenant-scoped in-memory store that lets a test read back exactly what
 /// reached it: where "sealed before it is stored" is proved.
 #[derive(Default, Clone)]
-struct FakeEndpoints {
+pub(crate) struct FakeEndpoints {
     rows: Arc<Mutex<Vec<Row>>>,
     next_version: Arc<Mutex<u64>>,
 }
