@@ -461,6 +461,14 @@ export async function seedFixtures(cloud) {
     { tenant_id: tenant.tenant_id, store_ids: [store.store_id] },
     group.etag,
   );
+  // The labels the designer replay names, each with the English text a publish requires of every
+  // key a version names (ADR-0190 decision 6). A first write of the grid asserts `*` (ADR-0095).
+  await cloud.call(
+    "PUT",
+    `/admin/translations?tenant_id=${tenant.tenant_id}`,
+    { "welcome.title": { en: "Welcome", vi: "Xin chào" } },
+    "*",
+  );
   // A package with one published version, so the pin flow has a version to run on every store
   // (ADR-0189). The seed publishes it as the package designer would.
   const pkg = await cloud.call("POST", "/admin/packages", {

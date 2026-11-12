@@ -30,6 +30,7 @@ import { configApplied, load, loadAll, register, type Entry } from "./engine";
 import { readLiveOrders, type LiveOrdersRead } from "./live-orders-read";
 import { takeSession } from "./session";
 import { applyPackage } from "./flows";
+import { applyScreens } from "./package-screens";
 import { applyReactions } from "./reactions";
 import { applyLabels } from "./labels";
 import { applyCustomData } from "./custom-data";
@@ -107,14 +108,15 @@ const ENTRIES: readonly Entry[] = [
   },
   {
     // The running package version's flows and reactions, which the till runs (ADR-0192 decision 3,
-    // `./flows.ts`; ADR-0193 decision 5, `./reactions.ts`). A store on the default package is
-    // answered `running: null`.
+    // `./flows.ts`; ADR-0193 decision 5, `./reactions.ts`), and its screens, which it draws
+    // (ADR-0190, `./package-screens.ts`). A store on the default package is answered `running: null`.
     key: "package",
     kind: "configuration",
     path: () => "/api/package",
     apply: (body) => {
       applyPackage(body);
       applyReactions(body);
+      applyScreens(body);
       applyLabels(body);
       applyCustomData(body);
     },
@@ -152,9 +154,10 @@ const ENTRIES: readonly Entry[] = [
     path: () => "/api/session",
     apply: (body) => takeSession(body as SessionState),
     // Who is signed in and what they may do; the permissions are the published `permissions`
-    // node, and the idle lock and opening float are settings (ADR-0158, ADR-0160).
+    // node, and the idle lock and opening float are settings (ADR-0158, ADR-0160). The device's
+    // class is its till's, on the `devices` node (ADR-0201 decision 3).
     required: true,
-    nodes: ["permissions"],
+    nodes: ["permissions", "devices"],
     unclaimedNodes: true,
   },
   {

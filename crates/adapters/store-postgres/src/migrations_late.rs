@@ -15,6 +15,8 @@ const MIGRATION_0090: &str = include_str!("../migrations/0090_store_liveness_pac
 const MIGRATION_0091: &str = include_str!("../migrations/0091_store_liveness_config_wake.sql");
 const MIGRATION_0092: &str = include_str!("../migrations/0092_custom_values.sql");
 const MIGRATION_0093: &str = include_str!("../migrations/0093_custom_subjects.sql");
+const MIGRATION_0094: &str = include_str!("../migrations/0094_store_liveness_device_reads.sql");
+const MIGRATION_0095: &str = include_str!("../migrations/0095_terminal_device_class.sql");
 
 /// Applies 0089 onwards on `connection`, one `batch_execute` each, as `store.rs`'s wiring tests read.
 pub(crate) async fn migrate_from_0089(connection: &Object) -> Result<(), PortError> {
@@ -36,6 +38,14 @@ pub(crate) async fn migrate_from_0089(connection: &Object) -> Result<(), PortErr
         .map_err(unavailable)?;
     connection
         .batch_execute(MIGRATION_0093)
+        .await
+        .map_err(unavailable)?;
+    connection
+        .batch_execute(MIGRATION_0094)
+        .await
+        .map_err(unavailable)?;
+    connection
+        .batch_execute(MIGRATION_0095)
         .await
         .map_err(unavailable)
 }

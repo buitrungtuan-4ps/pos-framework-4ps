@@ -101,6 +101,8 @@ mod openapi_device;
 #[cfg(test)]
 mod openapi_required;
 #[cfg(test)]
+mod openapi_routes;
+#[cfg(test)]
 mod openapi_security;
 pub mod orders;
 pub mod ota;

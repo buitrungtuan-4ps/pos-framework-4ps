@@ -11,8 +11,11 @@ import { withinLimits } from "../src/package/render";
 import { defaultScreen } from "../src/package/screen";
 import { SCREENS, type ScreenId } from "../src/state/screens";
 
-/** The package screen each route draws; the order screen serves a table's order and a counter's. */
-const DRAWN_FROM: Record<ScreenId, string> = {
+/**
+ * The package screen each route draws; the order screen serves a table's order and a counter's.
+ * `/screen/:id` draws a screen the running version adds, which the default package never holds.
+ */
+const DRAWN_FROM: Record<ScreenId, string | undefined> = {
     floor: "floor",
     tableOrder: "order",
     counterOrder: "order",
@@ -28,6 +31,7 @@ const DRAWN_FROM: Record<ScreenId, string> = {
     devices: "devices",
     setup: "setup",
     signIn: "sign_in",
+    versionScreen: undefined,
 };
 
 function components(node: ScreenNode): string[] {
@@ -37,7 +41,10 @@ function components(node: ScreenNode): string[] {
 describe("the default package", () => {
     it("holds a screen for every route of the till", () => {
         for (const id of Object.keys(SCREENS) as ScreenId[]) {
-            expect(defaultScreen(DRAWN_FROM[id]), id).toBeDefined();
+            const drawn = DRAWN_FROM[id];
+            if (drawn !== undefined) {
+                expect(defaultScreen(drawn), id).toBeDefined();
+            }
         }
     });
 

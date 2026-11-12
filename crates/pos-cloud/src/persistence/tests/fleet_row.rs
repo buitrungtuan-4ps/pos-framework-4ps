@@ -62,6 +62,10 @@ fn full_row() -> FleetStoreRow {
         config_wake_p95_ms: Some(240),
         config_wake_max_ms: Some(900),
         config_wake_reported_at_ms: Some(10_000),
+        device_reads_json: Some(
+            r#"[{"device_id":"D1","package_version_id":"V1","read_at_ms":9000}]"#.to_owned(),
+        ),
+        device_reads_reported_at_ms: Some(11_000),
     }
 }
 
@@ -123,6 +127,16 @@ fn every_readable_column_reaches_the_fleet_row() {
         ),
         ("CONFIG_DELIVERY_WAKE", 12, Some(240), Some(900))
     );
+    let devices = row.devices.expect("the tills' reads reach the row");
+    assert_eq!(devices.reported_at, at(11_000).expect("an instant"));
+    assert_eq!(
+        devices.reads,
+        vec![crate::config_tree::DeviceReadBeat {
+            device_id: "D1".to_owned(),
+            package_version_id: Some("V1".to_owned()),
+            read_at_ms: 9000,
+        }]
+    );
 }
 
 #[test]
@@ -144,9 +158,11 @@ fn a_column_that_cannot_be_read_says_nothing_rather_than_failing_the_read() {
         edge_placement: Some("EDGE_PLACEMENT_ON_THE_MOON".to_owned()),
         region_label: None,
         print_agents: Some("not json".to_owned()),
+        device_reads_json: Some("not json".to_owned()),
         ..full_row()
     })
     .expect("one bad column does not fail the row");
+    assert!(row.devices.is_none(), "unreadable reads say nothing");
     for instant in [
         row.last_seen_at,
         row.last_config_pull_at,

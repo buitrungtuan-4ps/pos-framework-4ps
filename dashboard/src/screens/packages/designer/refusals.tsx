@@ -25,6 +25,7 @@ const REASON_KEYS: Readonly<Record<string, MessageKey>> = {
   MISSING_PARAM: "designer.refusal.missingParam",
   NOT_ADDITIVE: "designer.refusal.notAdditive",
   TOO_LARGE: "designer.refusal.tooLarge",
+  UNKNOWN_TRANSLATION_KEY: "designer.refusal.unknownTranslationKey",
 };
 
 const FIELD_KEYS: Readonly<Record<string, MessageKey>> = {
