@@ -21,18 +21,19 @@ import { refusalText } from "../designer/refusals";
 import { Canvas, dragComponent } from "./Canvas";
 import { Inspector } from "./Inspector";
 import { componentName, deviceName } from "./names";
+import { previewWords, ScreenPreview, type Grid } from "./Preview";
 
 /** A screen id the cloud accepts: 1 to 64 of `a`–`z`, `0`–`9` and `_`. */
 const SCREEN_ID = /^[a-z0-9_]{1,64}$/;
 
-/** The tenant's translation keys, read once, for the key fields to offer. */
-function useKeys() {
-  const [keys, setKeys] = createSignal<readonly string[]>([]);
+/** The tenant's translation grid, read once: its keys for the key fields, its text for the preview. */
+function useGrid() {
+  const [grid, setGrid] = createSignal<Grid>({});
   void api
     .getTranslations(tenantId())
-    .then((grid) => setKeys(Object.keys(grid.value).sort()))
-    .catch(() => setKeys([]));
-  return keys;
+    .then((read) => setGrid(read.value))
+    .catch(() => setGrid({}));
+  return grid;
 }
 
 /** The package's screens, a variant chosen, and the ways to add both. */
@@ -129,7 +130,9 @@ function Palette(props: { deviceClass: string | undefined; onAdd: (componentId: 
 
 /** The screens tab of the package designer. */
 export function ScreensPart(props: PartProps) {
-  const keys = useKeys();
+  const grid = useGrid();
+  const keys = () => Object.keys(grid()).sort();
+  const words = previewWords(grid);
   const edit = useScreens(props);
   return (
     <div class="flex flex-col gap-3">
@@ -156,7 +159,12 @@ export function ScreensPart(props: PartProps) {
           onRemove={edit.removeVariant}
         />
         <Show when={edit.root()} fallback={<p class="text-sm text-ink-muted">{t("designer.screens.empty")}</p>}>
-          {(tree) => <Canvas root={tree()} selected={edit.selected()} faulty={edit.faulty()} onSelect={edit.setSelected} onDrop={edit.drop} />}
+          {(tree) => (
+            <div class="flex min-w-0 flex-col gap-4">
+              <Canvas root={tree()} selected={edit.selected()} faulty={edit.faulty()} onSelect={edit.setSelected} onDrop={edit.drop} />
+              <ScreenPreview root={tree()} deviceClass={edit.variant()?.selector?.device_class} words={words} />
+            </div>
+          )}
         </Show>
         <div class="flex flex-col gap-4">
           <Show when={edit.node()}>

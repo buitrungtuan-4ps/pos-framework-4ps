@@ -11,6 +11,8 @@ previews them with the same code, so the preview is the till's drawing and not a
 | `src/base.tsx` | The components that draw from the package alone: `stack`, `text`, `action_button`, `screen_frame`, `page_header` (`BASE`) |
 | `src/regions.tsx` | `RegionsContext` and `region(id)`: a region is drawn by the host, never here |
 | `src/variant.ts` | Which variant of a package part a device draws (ADR-0189 decision 4), tested against `pos-core`'s shared vectors |
+| `src/shape.tsx` | `marked` and `shape`: what a drawn tree's DOM is, region contents left out, for the test that the preview matches the till |
+| `fixtures/` | That test's one fixture (`preview-package.json`, the default package and a designed screen) and the shape both front ends must draw (`preview-shape.txt`) |
 | `src/components.ts`, `src/actions.ts` | The component and action catalogues, written by `pos-proto` (`POS_UPDATE_SNAPSHOTS=1 cargo test -p pos-proto snapshot`); never edit them by hand |
 
 ## Rules
@@ -31,6 +33,9 @@ previews them with the same code, so the preview is the till's drawing and not a
 
 ## How to test
 
-From `ui/`: `pnpm test` (the renderer and variant tests, `unit/package-*.test.ts`). From
-`dashboard/`: `pnpm test`. A change here runs both front ends' jobs (`xtask affected`, class
+From `ui/`: `pnpm test` (the renderer and variant tests, `unit/package-*.test.ts`, and
+`unit/preview-matches.test.ts`). From `dashboard/`: `pnpm test` (`tests/preview-matches.test.ts`).
+When the till's drawing changes on purpose, `pnpm exec vitest run -u unit/preview-matches.test.ts`
+in `ui/` rewrites `fixtures/preview-shape.txt`, and the console's test must then agree with it. The
+fixture's first screens are the default package's, and the till's test fails when they differ. A change here runs both front ends' jobs (`xtask affected`, class
 `shared`).

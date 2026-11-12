@@ -1,0 +1,91 @@
+== floor · every device
+<section class="p-4">
+  <h1 class="mb-4 text-lg font-semibold">
+    "«floor.title»"
+  [region floor_alerts]
+  [region floor_plan]
+== order · every device
+[region order_layout]
+  [region order_column]
+    [region order_header]
+    [region order_notices]
+    [region order_move]
+    [region order_bill]
+  [region order_menu]
+    [region menu_toolbar]
+    [region menu_fields]
+    [region menu_buttons]
+== pay · every device
+<section class="mx-auto max-w-xl p-4">
+  [region pay_back]
+  [region pay_flow]
+== kds · every device
+[region kds_frame]
+  [region kds_header]
+  [region kds_notices]
+  [region kds_stations]
+  [region kds_tickets]
+== expo · every device
+<section class="p-4">
+  <h1 class="mb-4 text-xl font-semibold">
+    "«expo.title»"
+  [region expo_tickets]
+== guests · every device
+<section class="mx-auto max-w-xl p-4">
+  <h1 class="mb-4 text-lg font-semibold">
+    "«confirm.title»"
+  [region confirm_queue]
+== counter · every device
+[region counter_frame]
+  [region counter_flow]
+== today · every device
+<section class="p-4">
+  <h1 class="mb-4 text-lg font-semibold">
+    "«today.title»"
+  [region today_body]
+== records · every device
+<section class="p-4">
+  <h1 class="mb-4 text-lg font-semibold">
+    "«records.title»"
+  [region records_body]
+== shift · every device
+[region shift_screen]
+== devices · every device
+<section class="mx-auto max-w-2xl p-4">
+  <h1 class="mb-4 text-lg font-semibold">
+    "«devices.title»"
+  [region devices_body]
+== pair · every device
+<section class="mx-auto max-w-sm p-4">
+  <h1 class="mb-4 text-lg font-semibold">
+    "«pair.title»"
+  [region pair_body]
+== setup · every device
+<section class="mx-auto max-w-sm p-4">
+  <h1 class="mb-4 text-lg font-semibold">
+    "«setup.title»"
+  [region setup_body]
+== sign_in · every device
+[region sign_in_screen]
+== preview_counter · every device
+<section class="mx-auto max-w-2xl p-4">
+  <h1 class="mb-4 text-xl font-semibold">
+    "«data.preview.title»"
+  <div class="flex gap-2 flex-wrap items-center">
+    <p class="text-sm text-ink-muted">
+      "«data.preview.note»"
+    <button class="min-h-touch rounded-token px-4 font-semibold disabled:opacity-50 bg-primary text-primary-ink" type="button" data-action-id="ui.screen.open">
+      "«data.preview.open_floor»"
+    <button class="min-h-touch rounded-token px-4 font-semibold disabled:opacity-50 border border-line bg-surface text-ink" type="button" disabled data-action-id="billing.check.print">
+      "«data.preview.print»"
+  [region order_column]
+    [region order_bill]
+    <p class="text-base">
+      "«data.preview.below_bill»"
+  <p class="rounded-token border border-dashed border-line p-3 text-sm text-ink-muted" data-package-fallback>
+    "«needs an update»"
+== preview_counter · DEVICE_CLASS_PHONE
+<div class="flex gap-2 flex-col">
+  <p class="text-lg font-semibold">
+    "«data.preview.title»"
+  [region order_bill]
