@@ -19,7 +19,7 @@ export type PackageDraft = Omit<PackageVersionRequest, "tenant_id">;
 
 /** A draft with nothing in it yet but its label. */
 export function blankDraft(versionLabel = ""): PackageDraft {
-  return { version_label: versionLabel, time_slots: [], data: {}, screens: [], flows: [], reactions: [] };
+  return { version_label: versionLabel, time_slots: [], data: {}, screens: [], flows: [], reactions: [], home_screens: [] };
 }
 
 /** A published version, opened as the draft of the next one. Every part is copied as it is. */
@@ -32,6 +32,7 @@ export function draftFromVersion(version: PackageVersionRecord): PackageDraft {
     screens: content.screens,
     flows: content.flows,
     reactions: content.reactions,
+    home_screens: content.home_screens ?? [],
   };
 }
 

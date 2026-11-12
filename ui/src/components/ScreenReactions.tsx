@@ -8,9 +8,10 @@
 import { createEffect, on } from "solid-js";
 import { useLocation, useNavigate } from "@solidjs/router";
 
+import { deviceClass } from "../lib/device-class";
 import { defaultScreen } from "../package/screen";
 import { tableReacts } from "../state/optimistic";
-import { publishedScreen } from "../state/package-screens";
+import { homeScreenId, publishedScreen } from "../state/package-screens";
 import { setScreenOpener } from "../state/reactions";
 import { SCREENS } from "../state/screens";
 
@@ -41,6 +42,17 @@ export function screenRoute(screenId: string): string | undefined {
   }
   const added = defaultScreen(screenId) === undefined && publishedScreen(screenId).length > 0;
   return added ? SCREENS.versionScreen.path.replace(":id", screenId) : undefined;
+}
+
+/**
+ * Where a sign-in lands: the screen the running version names as this device's home (ADR-0210
+ * decision 1), else `/` as before. A home the till cannot open, or one that needs a table, lands on
+ * `/` too.
+ */
+export function homeRoute(): string {
+  const home = homeScreenId({ device_class: deviceClass() });
+  const route = home === undefined ? undefined : screenRoute(home);
+  return route === undefined || route.includes(":id") ? "/" : route;
 }
 
 export function ScreenReactions() {

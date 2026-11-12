@@ -44,6 +44,15 @@ pub const PACKAGE_NODE_SINCE: &str = "0.14.1";
 /// could be sent a version with data that it cannot check.
 pub const DATA_PART_SINCE: &str = "0.14.1";
 
+/// The first release whose edge checks a version's homes and whose till opens one after sign-in
+/// ([ADR-0210](../../../docs/adr/0210-a-role-names-its-home-screen-in-the-package.md)). A version
+/// that states homes needs at least it.
+///
+/// It reads "0.14.1" for [`DATA_PART_SINCE`]'s reason: no release has been tagged since 0.14.0.
+/// **When the first release that carries `pos_core::package::check_homes` is tagged, set this to
+/// that release** if it is not 0.14.1.
+pub const HOME_SCREENS_SINCE: &str = "0.14.1";
+
 /// The most packages, and the most versions of all packages, the in-memory store holds.
 pub const IN_MEMORY_ROWS: usize = 1024;
 
@@ -68,8 +77,8 @@ pub struct PackageVersionRecord {
 }
 
 /// The oldest edge release that runs `content`: [`PACKAGE_NODE_SINCE`] until a part a version
-/// uses introduces a later one: the data part, each component and act its screens name, and each
-/// act its flows and reactions run (ADR-0190, ADR-0191). Nobody types it.
+/// uses introduces a later one: the data part, its homes, each component and act its screens name,
+/// and each act its flows and reactions run (ADR-0190, ADR-0191, ADR-0210). Nobody types it.
 #[must_use]
 pub fn min_edge_version(content: &PackageContent) -> ReleaseTag {
     let floor = if content.data.is_empty() {
@@ -83,6 +92,9 @@ pub fn min_edge_version(content: &PackageContent) -> ReleaseTag {
         .map(|variant| &variant.body.root)
         .collect();
     let mut latest = floor;
+    if !content.home_screens.is_empty() && release(HOME_SCREENS_SINCE) > release(latest) {
+        latest = HOME_SCREENS_SINCE;
+    }
     while let Some(node) = pending.pop() {
         let component = Component::find(&node.component_id).map(|found| found.since);
         let acts = node.properties.values().filter_map(|value| match value {

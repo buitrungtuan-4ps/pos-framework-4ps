@@ -37,6 +37,7 @@ mod content;
 mod data;
 mod entry;
 mod evolution;
+mod homes;
 mod keys;
 mod screens;
 
@@ -47,6 +48,7 @@ pub use entry::{
     check_entry,
 };
 pub use evolution::{EvolutionRefusal, check_evolution};
+pub use homes::{HomeRefusal, check_homes};
 pub use keys::{KeyAt, KeyRefusal, check_keys};
 pub use screens::{ScreenFault, ScreenRefusal, check_screens};
 

@@ -99,6 +99,31 @@ function ScreenList(props: {
   );
 }
 
+/**
+ * The screen a till opens after sign-in (ADR-0210 decision 1): the base home, one of the version's
+ * screens, or none for the release's own start. A home for one role or device class, which a draft
+ * may carry, is kept as it is.
+ */
+function HomeField(props: PartProps) {
+  const homes = () => props.draft().home_screens ?? [];
+  const base = () => homes().find((home) => !home.selector || Object.keys(home.selector).length === 0);
+  const ids = () => [...new Set((props.draft().screens ?? []).map((variant) => variant.body.screen_id))];
+  const choose = (screenId: string) =>
+    props.change((draft) => {
+      const others = (draft.home_screens ?? []).filter((home) => home.selector && Object.keys(home.selector).length > 0);
+      return { ...draft, home_screens: screenId === "" ? others : [{ selector: {}, body: { screen_id: screenId } }, ...others] };
+    });
+  return (
+    <SelectField
+      label={t("designer.screens.home")}
+      hint={t("designer.screens.homeHint")}
+      value={base()?.body.screen_id ?? ""}
+      options={[{ value: "", label: t("designer.screens.homeRelease") }, ...ids().map((id) => ({ value: id, label: id }))]}
+      onChange={choose}
+    />
+  );
+}
+
 /** The components a variant may hold, each dragged or added. */
 function Palette(props: { deviceClass: string | undefined; onAdd: (componentId: string) => void }) {
   const offered = () => COMPONENTS.filter((component) => drawnOn(component, props.deviceClass));
@@ -150,14 +175,17 @@ export function ScreensPart(props: PartProps) {
         </ul>
       </Show>
       <div class="grid gap-4 terminal:grid-cols-[14rem_1fr_18rem]">
-        <ScreenList
-          screens={edit.screens()}
-          chosen={edit.chosen()}
-          onChoose={edit.choose}
-          onAddScreen={edit.addScreen}
-          onAddVariant={edit.addVariant}
-          onRemove={edit.removeVariant}
-        />
+        <div class="flex flex-col gap-4">
+          <ScreenList
+            screens={edit.screens()}
+            chosen={edit.chosen()}
+            onChoose={edit.choose}
+            onAddScreen={edit.addScreen}
+            onAddVariant={edit.addVariant}
+            onRemove={edit.removeVariant}
+          />
+          <HomeField {...props} />
+        </div>
         <Show when={edit.root()} fallback={<p class="text-sm text-ink-muted">{t("designer.screens.empty")}</p>}>
           {(tree) => (
             <div class="flex min-w-0 flex-col gap-4">

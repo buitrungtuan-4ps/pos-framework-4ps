@@ -39,6 +39,7 @@ fn version(seed: u128, package: &PackageRecord, n: u128, label: &str) -> Package
             screens: Vec::new(),
             data: pos_proto::package::PackageData::default(),
             reactions: Vec::new(),
+            home_screens: Vec::new(),
         },
         create_time: at(2_000),
     }

@@ -138,6 +138,24 @@ pub struct PackageContent {
     /// decision 5), each with its variants; the variants of one reaction share its `reaction_id`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reactions: Vec<Variant<Reaction>>,
+    /// The screen each role starts on after sign-in
+    /// ([ADR-0210](../../../docs/adr/0210-a-role-names-its-home-screen-in-the-package.md)
+    /// decision 1), as variants whose selectors state at most `role_id` and `device_class`. The base
+    /// variant is the home of every role without its own. Every `screen_id` is a screen the version
+    /// declares, and a version that declares a screen and states homes has a base. Empty, and left
+    /// off the wire, in a version that states none: its tills start where the release's own routes
+    /// start them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub home_screens: Vec<Variant<HomeScreen>>,
+}
+
+/// A role's home: the screen its tills open after sign-in
+/// ([ADR-0210](../../../docs/adr/0210-a-role-names-its-home-screen-in-the-package.md)).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct HomeScreen {
+    /// The screen, by the `screen_id` of a screen the version declares.
+    pub screen_id: String,
 }
 
 /// A named part of the week a variant may be chosen for, such as lunch.

@@ -1,6 +1,7 @@
 // The screen designer writes the draft's screens from clicks alone: a screen added, a component
-// added from the palette, a property given; a refusal outlines the node it names; and the preview
-// draws the chosen variant with the till's renderer as it is edited (ADR-0209).
+// added from the palette, a property given, the home a till opens after sign-in chosen (ADR-0210);
+// a refusal outlines the node it names; and the preview draws the chosen variant with the till's
+// renderer as it is edited (ADR-0209).
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
@@ -57,6 +58,19 @@ describe("the screen designer", () => {
     fireEvent.click(document.querySelector('[data-node-path="0"] > button')!);
     fireEvent.input(screen.getByLabelText(/^Title \(required\)/), { target: { value: "welcome.title" } });
     await waitFor(() => expect(document.querySelector('[data-outcome="screen-preview"] h1')?.textContent).toBe("Welcome"));
+  });
+
+  it("names the screen a till opens after sign-in, and can go back to the release's own", () => {
+    const initial: PackageDraft = {
+      ...blankDraft("May"),
+      screens: [{ selector: {}, body: { screen_id: "welcome", root: { component_id: "screen_frame" } } }],
+    };
+    const draft = mount([], initial);
+    const home = screen.getByLabelText(new RegExp(`^${messages["designer.screens.home"]!}`)) as HTMLSelectElement;
+    fireEvent.change(home, { target: { value: "welcome" } });
+    expect(draft().home_screens).toEqual([{ selector: {}, body: { screen_id: "welcome" } }]);
+    fireEvent.change(home, { target: { value: "" } });
+    expect(draft().home_screens).toEqual([]);
   });
 
   it("outlines the node a refusal names", () => {

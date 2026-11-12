@@ -20,7 +20,7 @@ use pos_ports::event_store::EventStore;
 use pos_proto::ClockSource as _;
 use pos_proto::flow::Flow;
 use pos_proto::ids::DeviceId;
-use pos_proto::package::{PackageData, Variant};
+use pos_proto::package::{HomeScreen, PackageData, Variant};
 use pos_proto::reaction::Reaction;
 use pos_proto::screen::Screen;
 
@@ -63,6 +63,12 @@ pub(crate) struct RunningPackage {
     /// The edge checked them on apply. Left out when the version has none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     screens: Vec<Variant<Screen>>,
+    /// The screen each role starts on after sign-in, every variant in the version's order
+    /// (ADR-0210 decision 1), for the till to open the one its device and person resolve to. The
+    /// edge checked them on apply. Left out when the version states none: the till starts where
+    /// its release starts it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    home_screens: Vec<Variant<HomeScreen>>,
     /// The tenant's labels for the translation keys this version names, `key → { locale → text }`,
     /// from the grid the store pulled (ADR-0043): every key with `en`. A key the grid lacks is not
     /// here. Left out when there are none.
@@ -133,6 +139,7 @@ where
             flows: content.flows.clone(),
             reactions: content.reactions.clone(),
             screens: content.screens.clone(),
+            home_screens: content.home_screens.clone(),
             data: content.data.clone(),
             labels: if grid.is_empty() {
                 BTreeMap::new()
@@ -318,7 +325,8 @@ mod tests {
         assert_eq!(body(edge).await["running"]["flows"], flows);
     }
 
-    /// A version's screens ride the answer for the till to draw, every variant in order.
+    /// A version's screens ride the answer for the till to draw, every variant in order, and its
+    /// homes for the till to open after sign-in.
     #[tokio::test]
     async fn the_running_version_carries_its_screens() {
         let edge = Arc::new(
@@ -337,6 +345,7 @@ mod tests {
             { "selector": { "device_class": "DEVICE_CLASS_PHONE" },
               "body": { "screen_id": "floor", "root": { "component_id": "floor_alerts" } } },
         ]);
+        let homes = serde_json::json!([{ "body": { "screen_id": "floor" } }]);
         let mut session = (*edge.session()).clone();
         session.package = Some(Arc::new(
             serde_json::from_value::<PackageContent>(serde_json::json!({
@@ -345,11 +354,14 @@ mod tests {
                 "version_label": "March",
                 "min_edge_version": "0.14.1",
                 "screens": screens,
+                "home_screens": homes,
             }))
             .expect("content"),
         ));
         edge.apply_session(session);
-        assert_eq!(body(edge).await["running"]["screens"], screens);
+        let running = body(edge).await;
+        assert_eq!(running["running"]["screens"], screens);
+        assert_eq!(running["running"]["home_screens"], homes, "ADR-0210");
     }
 
     /// A version's reactions ride the answer beside its flows.
