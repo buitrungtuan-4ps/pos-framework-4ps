@@ -1,7 +1,8 @@
 // The screen designer writes the draft's screens from clicks alone: a screen added, a component
-// added from the palette, a property given; and a refusal outlines the node it names.
+// added from the palette, a property given; a refusal outlines the node it names; and the preview
+// draws the chosen variant with the till's renderer as it is edited (ADR-0209).
 
-import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -43,6 +44,19 @@ describe("the screen designer", () => {
         },
       },
     ]);
+  });
+
+  it("previews the screen as the till draws it, regions outlined", async () => {
+    const initial: PackageDraft = {
+      ...blankDraft("May"),
+      screens: [{ selector: {}, body: { screen_id: "welcome", root: { component_id: "screen_frame", children: [{ component_id: "page_header" }, { component_id: "order_bill" }] } } }],
+    };
+    mount([], initial);
+    const preview = document.querySelector('[data-outcome="screen-preview"]')!;
+    expect(preview.querySelector('[data-region="order_bill"]')).toBeTruthy();
+    fireEvent.click(document.querySelector('[data-node-path="0"] > button')!);
+    fireEvent.input(screen.getByLabelText(/^Title \(required\)/), { target: { value: "welcome.title" } });
+    await waitFor(() => expect(document.querySelector('[data-outcome="screen-preview"] h1')?.textContent).toBe("Welcome"));
   });
 
   it("outlines the node a refusal names", () => {

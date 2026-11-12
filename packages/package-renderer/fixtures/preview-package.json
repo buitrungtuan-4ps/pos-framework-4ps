@@ -1,0 +1,382 @@
+{
+  "screens": [
+    {
+      "body": {
+        "screen_id": "floor",
+        "root": {
+          "component_id": "screen_frame",
+          "children": [
+            {
+              "component_id": "page_header",
+              "properties": {
+                "title_key": "floor.title"
+              }
+            },
+            {
+              "component_id": "floor_alerts"
+            },
+            {
+              "component_id": "floor_plan"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "body": {
+        "screen_id": "order",
+        "root": {
+          "component_id": "order_layout",
+          "children": [
+            {
+              "component_id": "order_column",
+              "children": [
+                {
+                  "component_id": "order_header"
+                },
+                {
+                  "component_id": "order_notices"
+                },
+                {
+                  "component_id": "order_move"
+                },
+                {
+                  "component_id": "order_bill"
+                }
+              ]
+            },
+            {
+              "component_id": "order_menu",
+              "children": [
+                {
+                  "component_id": "menu_toolbar"
+                },
+                {
+                  "component_id": "menu_fields"
+                },
+                {
+                  "component_id": "menu_buttons"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "body": {
+        "screen_id": "pay",
+        "root": {
+          "component_id": "screen_frame",
+          "properties": {
+            "width": "narrow"
+          },
+          "children": [
+            {
+              "component_id": "pay_back"
+            },
+            {
+              "component_id": "pay_flow"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "body": {
+        "screen_id": "kds",
+        "root": {
+          "component_id": "kds_frame",
+          "children": [
+            {
+              "component_id": "kds_header"
+            },
+            {
+              "component_id": "kds_notices"
+            },
+            {
+              "component_id": "kds_stations"
+            },
+            {
+              "component_id": "kds_tickets"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "body": {
+        "screen_id": "expo",
+        "root": {
+          "component_id": "screen_frame",
+          "children": [
+            {
+              "component_id": "page_header",
+              "properties": {
+                "title_key": "expo.title",
+                "size": "extra_large"
+              }
+            },
+            {
+              "component_id": "expo_tickets"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "body": {
+        "screen_id": "guests",
+        "root": {
+          "component_id": "screen_frame",
+          "properties": {
+            "width": "narrow"
+          },
+          "children": [
+            {
+              "component_id": "page_header",
+              "properties": {
+                "title_key": "confirm.title"
+              }
+            },
+            {
+              "component_id": "confirm_queue"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "body": {
+        "screen_id": "counter",
+        "root": {
+          "component_id": "counter_frame",
+          "children": [
+            {
+              "component_id": "counter_flow"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "body": {
+        "screen_id": "today",
+        "root": {
+          "component_id": "screen_frame",
+          "children": [
+            {
+              "component_id": "page_header",
+              "properties": {
+                "title_key": "today.title"
+              }
+            },
+            {
+              "component_id": "today_body"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "body": {
+        "screen_id": "records",
+        "root": {
+          "component_id": "screen_frame",
+          "children": [
+            {
+              "component_id": "page_header",
+              "properties": {
+                "title_key": "records.title"
+              }
+            },
+            {
+              "component_id": "records_body"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "body": {
+        "screen_id": "shift",
+        "root": {
+          "component_id": "shift_screen"
+        }
+      }
+    },
+    {
+      "body": {
+        "screen_id": "devices",
+        "root": {
+          "component_id": "screen_frame",
+          "children": [
+            {
+              "component_id": "page_header",
+              "properties": {
+                "title_key": "devices.title"
+              }
+            },
+            {
+              "component_id": "devices_body"
+            }
+          ],
+          "properties": {
+            "width": "medium"
+          }
+        }
+      }
+    },
+    {
+      "body": {
+        "screen_id": "pair",
+        "root": {
+          "component_id": "screen_frame",
+          "children": [
+            {
+              "component_id": "page_header",
+              "properties": {
+                "title_key": "pair.title"
+              }
+            },
+            {
+              "component_id": "pair_body"
+            }
+          ],
+          "properties": {
+            "width": "small"
+          }
+        }
+      }
+    },
+    {
+      "body": {
+        "screen_id": "setup",
+        "root": {
+          "component_id": "screen_frame",
+          "children": [
+            {
+              "component_id": "page_header",
+              "properties": {
+                "title_key": "setup.title"
+              }
+            },
+            {
+              "component_id": "setup_body"
+            }
+          ],
+          "properties": {
+            "width": "small"
+          }
+        }
+      }
+    },
+    {
+      "body": {
+        "screen_id": "sign_in",
+        "root": {
+          "component_id": "sign_in_screen"
+        }
+      }
+    },
+    {
+      "selector": {},
+      "body": {
+        "screen_id": "preview_counter",
+        "root": {
+          "component_id": "screen_frame",
+          "properties": {
+            "width": "medium"
+          },
+          "children": [
+            {
+              "component_id": "page_header",
+              "properties": {
+                "title_key": "data.preview.title",
+                "size": "extra_large"
+              }
+            },
+            {
+              "component_id": "stack",
+              "properties": {
+                "direction": "horizontal"
+              },
+              "children": [
+                {
+                  "component_id": "text",
+                  "properties": {
+                    "text_key": "data.preview.note",
+                    "variant": "muted"
+                  }
+                },
+                {
+                  "component_id": "action_button",
+                  "properties": {
+                    "label_key": "data.preview.open_floor",
+                    "variant": "primary",
+                    "action": {
+                      "action_id": "ui.screen.open",
+                      "params": {
+                        "screen_id": "floor"
+                      }
+                    }
+                  }
+                },
+                {
+                  "component_id": "action_button",
+                  "properties": {
+                    "label_key": "data.preview.print",
+                    "action": {
+                      "action_id": "billing.check.print",
+                      "params": {}
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "component_id": "order_column",
+              "children": [
+                {
+                  "component_id": "order_bill"
+                },
+                {
+                  "component_id": "text",
+                  "properties": {
+                    "text_key": "data.preview.below_bill"
+                  }
+                }
+              ]
+            },
+            {
+              "component_id": "newer_component"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "selector": {
+        "device_class": "DEVICE_CLASS_PHONE"
+      },
+      "body": {
+        "screen_id": "preview_counter",
+        "root": {
+          "component_id": "stack",
+          "children": [
+            {
+              "component_id": "text",
+              "properties": {
+                "text_key": "data.preview.title",
+                "variant": "title"
+              }
+            },
+            {
+              "component_id": "order_bill"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
