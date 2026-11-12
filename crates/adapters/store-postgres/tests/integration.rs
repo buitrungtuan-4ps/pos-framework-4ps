@@ -856,6 +856,11 @@ mod chain_window;
 #[path = "integration/integration_connections.rs"]
 mod integration_connections;
 
+/// The gateway endpoint table (ADR-0198, migration 0098): the same per-record shape and tenant
+/// isolation as the connections above.
+#[path = "integration/gateway_endpoints_store.rs"]
+mod gateway_endpoints_store;
+
 // ---------------------------------------------------------------------------
 // A tenant's fee rules (ADR-0159, migration 0075).
 // ---------------------------------------------------------------------------

@@ -39,6 +39,7 @@ mod devices;
 mod fee_rules;
 mod fleet;
 mod floor;
+mod gateway_endpoints;
 mod inventory;
 mod liveness_devices;
 mod liveness_wake;
@@ -100,6 +101,7 @@ pub use floor::{
     AreaFields, AreaLinkRow, AreaRow, AreaWrite, PostgresFloor, RoutingRuleRow, StationRow,
     TableRow,
 };
+pub use gateway_endpoints::{GatewayEndpointRow, PostgresGatewayEndpoints};
 pub use inventory::{InventoryRow, PostgresInventory};
 pub use liveness_wake::ConfigWakeRow;
 pub use media::{MediaAssetRow, PostgresMedia};
