@@ -15,15 +15,31 @@
 // - **A retry is the same act.** A tap again after a call that did not answer, with nothing typed
 //   since, sends the same `idempotency_key`, so the cloud answers it once. An answer that comes
 //   back after the screen has gone is dropped.
+// - **A flow's offline branch is honoured** (ADR-0214 decision 5). An answer completes the lookup
+//   steps of the table's or order's flows (`./flows.ts`). When the cloud is offline, each lookup step
+//   with an `offline` branch is passed: one that skips says its note under the button in place of
+//   the refusal, and one that goes to a step showing a screen opens that screen.
 
 import { createSignal } from "solid-js";
 
 import { api, ApiError } from "../api/client";
 import { afterPaint } from "../lib/after-paint";
+import { lookupAnswered, lookupOffline } from "./flows";
 import { can, needsApprover } from "./permissions";
+import { openPackageScreen } from "./reactions";
+
+/** A lookup the cloud could not take, passed by its flow step's offline branch with this note. */
+export class OfflineSkip extends Error {
+  constructor(readonly noteKey: string) {
+    super(noteKey);
+  }
+}
 
 /** The act a screen's button runs a lookup with. */
 export const LOOKUP_ACT = "integrations.lookup.run";
+
+/** A table's channel, for choosing its flows' variants. */
+const DINE_IN = "SALES_CHANNEL_DINE_IN";
 
 /** The fields a lookup takes from the screen's own subject instead of from a person. */
 export const SUBJECT_FIELDS: ReadonlySet<string> = new Set(["order_id", "table_id"]);
@@ -99,6 +115,8 @@ export async function runLookup(
       values[field] = id;
     }
   }
+  const subject = supplied["table_id"] ?? supplied["order_id"] ?? "";
+  const channel = supplied["table_id"] === undefined ? "" : DINE_IN;
   retryKey ??= newKey();
   const key = retryKey;
   const screen = generation;
@@ -114,6 +132,7 @@ export async function runLookup(
       retryKey = undefined;
       setAnswer({ state: "answered", result: answered.result });
     }
+    lookupAnswered(subject, channel);
   } catch (caught) {
     if (screen === generation) {
       // Only a call nobody answered in time is repeated under its key; any other refusal is final.
@@ -121,6 +140,15 @@ export async function runLookup(
         retryKey = undefined;
       }
       setAnswer({ state: "refused" });
+    }
+    if (caught instanceof ApiError && caught.reason === "GATEWAY_OFFLINE") {
+      const branch = lookupOffline(subject, channel);
+      if (branch.screenId !== undefined) {
+        openPackageScreen(branch.screenId);
+      }
+      if (branch.noteKey !== undefined) {
+        throw new OfflineSkip(branch.noteKey);
+      }
     }
     throw caught;
   }
