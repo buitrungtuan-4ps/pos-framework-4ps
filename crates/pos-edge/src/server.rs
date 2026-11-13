@@ -33,6 +33,7 @@ use crate::clock::SystemClock;
 use crate::cloud_http::{CloudHttpClient, OtaHttpTransport};
 use crate::config::{EdgeConfig, NatsConfig, ValueSource};
 use crate::config_client::{restore_device_revocations, restore_session_from_store};
+use crate::delivery_slips::Delivery;
 use crate::device_revocations::DeviceRevocations;
 use crate::discovery::{Advertiser, NoopAdvertiser};
 use crate::durable_auth::{DurableAuth, EdgeRegistry};
@@ -947,6 +948,7 @@ where
     // The size rasterised lines are drawn at, and where it comes from, once at start-up; the
     // printers say it again whenever it changes.
     printers.say_font_size(&edge.session());
+    let (answers, answer_queue) = crate::delivery_answers::channel();
     let mut app = crate::http::router(state)
         .merge(crate::http::domain_router(
             edge,
@@ -958,7 +960,8 @@ where
             Arc::clone(&sessions),
             &origins,
         ))
-        .layer(axum::Extension(Arc::clone(&printers)));
+        .layer(axum::Extension(Arc::clone(&printers)))
+        .layer(axum::Extension(answers.clone()));
 
     // The store's own retention sweep (ADR-0107). Spawned here, outside the cloud gate, because it
     // is the store's obligation and not the cloud's: a box that has never been activated, or whose
@@ -990,7 +993,7 @@ where
                 origins: &origins,
                 revocations: &revocations,
                 backup,
-                printers: Some(printers),
+                delivery: Some(Delivery::new(printers, answers, answer_queue)),
             },
             nats.as_ref(),
             Lifecycle {
@@ -1128,8 +1131,8 @@ struct CloudWiring<'a, S, Q, L, P> {
     origins: &'a Arc<crate::origins::Origins>,
     revocations: &'a Arc<DeviceRevocations>,
     backup: Option<BackupPlan>,
-    /// Where the relay prints a delivery order's slip, or `None` to print none.
-    printers: Option<Arc<crate::printing::Printers>>,
+    /// Where the relay prints a delivery order's slip and answers its vendor, or `None` for neither.
+    delivery: Option<Delivery>,
 }
 
 /// Composes the cloud surface onto `app` for a store that has a `cloud_url` (ADR-0086): the vault

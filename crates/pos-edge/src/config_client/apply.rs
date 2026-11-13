@@ -19,6 +19,7 @@ use super::{
 use crate::origins::Origins;
 use pos_proto::billing::PublishedBilling;
 use pos_proto::receipt::PublishedReceipt;
+use pos_proto::vendors::PublishedVendors;
 
 /// The store's display language from the `locale` node, and the `menu` node in it (ADR-0066,
 /// ADR-0074).
@@ -178,6 +179,17 @@ pub(super) fn apply_store_identity(session: &mut EdgeSession, document: &serde_j
         .and_then(|text| serde_json::from_str::<PublishedIntegrations>(&text).ok())
     {
         session.integrations = integrations;
+    }
+    // The `vendors` node (ADR-0215 decision 5): the delivery vendors this store takes, and whether
+    // staff confirm each one's orders. Absent or unparseable leaves the session's as it is, as for
+    // `integrations`, so a bad publish never changes how an order is held mid-service.
+    if let Some(vendors) = document
+        .get("vendors")
+        .and_then(|value| serde_json::to_string(value).ok())
+        .and_then(|text| serde_json::from_str::<PublishedVendors>(&text).ok())
+        .filter(PublishedVendors::is_valid)
+    {
+        session.vendors = vendors;
     }
     // The `store_profile` node (ADR-0106): who this store legally is, as the receipt prints it. An
     // absent or unparseable node leaves the previous profile in place, which is the never-blank rule

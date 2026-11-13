@@ -11,8 +11,12 @@
 
 use std::sync::{Arc, Mutex};
 
+use core::future::Future;
 use std::collections::BTreeMap;
 
+use pos_edge::delivery_answers::{
+    AnswerBody, AnswerQueue, AnswerTransport, DeliveryAnswers, Posted,
+};
 use pos_edge::relay_client::{
     PendingOrderDto, QueuedOrderLine, QueuedOrderPayload, RelayClient, RelayTransport,
     RelayTransportError, StoreOutcome, TakenOrders,
@@ -25,13 +29,14 @@ use pos_fakes::executor::run_ready;
 use pos_ports::subject_store::SubjectRecord;
 use pos_proto::SalesChannel;
 use pos_proto::ids::{DeviceId, MenuItemId, StoreId};
-use pos_proto::ids::{OrderId, SubjectId};
+use pos_proto::ids::{OrderId, ReasonCodeId, SubjectId, VendorId};
 use pos_proto::locale::{TaxRate, TaxRateTable};
 use pos_proto::menu::{MenuCatalog, MenuEntry};
 use pos_proto::money::{CurrencyCode, Money};
 use pos_proto::text::DisplayName;
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
+use pos_proto::vendors::{PublishedVendor, PublishedVendors};
 
 fn store() -> StoreId {
     StoreId::new(Ulid::from_u128(7))
@@ -58,6 +63,11 @@ fn intake_over(edge: Arc<Edge<FakeStore>>) -> EdgeOrderIn<FakeStore, InMemoryQue
 
 /// The seeded edge.
 fn edge() -> Arc<Edge<FakeStore>> {
+    edge_taking(PublishedVendors::default())
+}
+
+/// The seeded edge, taking orders from `vendors`.
+fn edge_taking(vendors: PublishedVendors) -> Arc<Edge<FakeStore>> {
     let class = EdgeSession::standard_tax_class();
     let menu = MenuCatalog::new().with(MenuEntry::new(
         known_item(),
@@ -69,9 +79,10 @@ fn edge() -> Arc<Edge<FakeStore>> {
         .with(class, SalesChannel::DineIn, TaxRate::from_percent(10))
         .with(class, SalesChannel::Qr, TaxRate::from_percent(10))
         .with(class, SalesChannel::Delivery, TaxRate::from_percent(10));
-    let session = EdgeSession::bootstrap()
+    let mut session = EdgeSession::bootstrap()
         .with_menu(menu)
         .with_tax_rates(rates);
+    session.vendors = vendors;
     let edge = Edge::new(
         FakeStore::default(),
         StoreIdentity::for_store(store()),
@@ -345,4 +356,152 @@ fn the_wire_shapes_deserialize_the_clouds_pull_json() {
     let value = serde_json::to_value(&outcome).expect("serialize");
     assert_eq!(value["outcome"], "rejected");
     assert_eq!(value["status"], "invalid_argument");
+}
+
+/// The fake vendor every delivery order in these tests comes through.
+fn fake_vendor(staff_confirm: bool) -> PublishedVendors {
+    PublishedVendors::new(vec![PublishedVendor {
+        vendor_id: VendorId::new(Ulid::from_u128(0x0EE1)),
+        display_name: DisplayName::new("Sandbox delivery"),
+        staff_confirm,
+        prep_minutes: 20,
+    }])
+}
+
+/// A pending delivery order from [`fake_vendor`], naming no recipient.
+fn pending_vendor_order(queued_id: &str, reference: &str) -> PendingOrderDto {
+    let mut order = pending_delivery_order(queued_id, reference);
+    order.order.subject_id = None;
+    order.order.vendor_id = Some(Ulid::from_u128(0x0EE1).to_string());
+    order
+}
+
+/// Every answer `answers` was handed, drained through a transport that takes them all.
+fn answered(answers: DeliveryAnswers, queue: AnswerQueue) -> Vec<serde_json::Value> {
+    #[derive(Default)]
+    struct Taken(Mutex<Vec<serde_json::Value>>);
+    impl AnswerTransport for Taken {
+        async fn post(&self, body: &AnswerBody) -> Result<Posted, RelayTransportError> {
+            self.0
+                .lock()
+                .expect("lock")
+                .push(serde_json::to_value(body).expect("json"));
+            Ok(Posted::Taken)
+        }
+    }
+    drop(answers);
+    let taken = Arc::new(Taken::default());
+    let transport = Arc::clone(&taken);
+    run_ready(async move {
+        pos_edge::delivery_answers::run(queue, ArcTransport(transport), core::future::pending())
+            .await;
+    });
+    taken.0.lock().expect("lock").clone()
+}
+
+/// A transport shared with the test that reads what it was sent.
+struct ArcTransport<T>(Arc<T>);
+
+impl<T: AnswerTransport> AnswerTransport for ArcTransport<T> {
+    fn post(
+        &self,
+        body: &AnswerBody,
+    ) -> impl Future<Output = Result<Posted, RelayTransportError>> + Send {
+        self.0.post(body)
+    }
+}
+
+/// ADR-0215 decision 5: an order from a vendor whose orders staff confirm waits in the guests'
+/// queue, as a QR order does, and is accepted with its vendor, by the store's own order id, only
+/// when staff confirm it; an order from a vendor whose orders go straight to the kitchen is
+/// accepted as the store takes it.
+#[test]
+fn a_vendor_s_orders_wait_for_staff_where_it_says_and_are_accepted_when_taken() {
+    let held_edge = edge_taking(fake_vendor(true));
+    let transport = FakeTransport::with(vec![pending_vendor_order("q-h", "relay-h")]);
+    let told = Told::default();
+    let client = RelayClient::new(transport.clone(), intake_over(Arc::clone(&held_edge)))
+        .telling(told.clone());
+    assert_eq!(run_ready(client.pump_once()).expect("pump"), 1);
+    let StoreOutcome::Accepted(record) = &transport.acks()[0].1 else {
+        panic!("refused");
+    };
+    assert!(record.awaiting_staff_confirmation, "it waits for staff");
+    assert!(told.0.lock().expect("lock").is_empty(), "not taken yet");
+    let order_id = record.order_id.parse::<OrderId>().expect("an order id");
+    assert!(held_edge.awaits_staff_confirmation(order_id));
+    assert_eq!(
+        held_edge.orders_awaiting_staff_confirmation(),
+        vec![order_id],
+        "in the guests' queue"
+    );
+    let (answers, queue) = pos_edge::delivery_answers::channel();
+    run_ready(pos_edge::delivery_slips::confirmed(
+        None,
+        Some(&answers),
+        &held_edge,
+        order_id,
+    ));
+    let posted = answered(answers, queue);
+    assert_eq!(posted.len(), 1);
+    assert_eq!(posted[0]["answer"], "DELIVERY_ANSWER_ACCEPT");
+    assert_eq!(posted[0]["order_id"], order_id.to_string());
+    assert_eq!(posted[0]["prep_minutes"], 20);
+    assert_eq!(posted[0]["vendor_id"], Ulid::from_u128(0x0EE1).to_string());
+
+    let straight_edge = edge_taking(fake_vendor(false));
+    let transport = FakeTransport::with(vec![pending_vendor_order("q-s", "relay-s")]);
+    let told = Told::default();
+    let client = RelayClient::new(transport.clone(), intake_over(Arc::clone(&straight_edge)))
+        .telling(told.clone());
+    assert_eq!(run_ready(client.pump_once()).expect("pump"), 1);
+    let StoreOutcome::Accepted(record) = &transport.acks()[0].1 else {
+        panic!("refused");
+    };
+    assert!(
+        !record.awaiting_staff_confirmation,
+        "straight to the kitchen"
+    );
+    assert_eq!(told.0.lock().expect("lock").len(), 1, "taken at once");
+    assert!(
+        straight_edge
+            .orders_awaiting_staff_confirmation()
+            .is_empty()
+    );
+}
+
+/// A refused order is rejected with its vendor citing the reason, an order of no vendor the store
+/// takes answers no one, and a made order is ready.
+#[test]
+fn a_store_rejects_and_readies_only_orders_of_its_vendors() {
+    let edge = edge_taking(fake_vendor(true));
+    let transport = FakeTransport::with(vec![
+        pending_vendor_order("q-1", "relay-1"),
+        pending_qr_order("q-2", "relay-2"),
+    ]);
+    let client = RelayClient::new(transport.clone(), intake_over(Arc::clone(&edge)));
+    assert_eq!(run_ready(client.pump_once()).expect("pump"), 2);
+    let order = |index: usize| match &transport.acks()[index].1 {
+        StoreOutcome::Accepted(record) => record.order_id.parse::<OrderId>().expect("an id"),
+        StoreOutcome::Rejected { .. } => panic!("refused"),
+    };
+    let (delivery, qr) = (order(0), order(1));
+    let reason = ReasonCodeId::new(Ulid::from_u128(0x0BAD));
+    let (answers, queue) = pos_edge::delivery_answers::channel();
+    let vendor = edge.order_vendor(delivery);
+    assert!(vendor.is_some());
+    pos_edge::delivery_slips::refused(Some(&answers), vendor.as_ref(), delivery, reason);
+    pos_edge::delivery_slips::refused(Some(&answers), edge.order_vendor(qr).as_ref(), qr, reason);
+    pos_edge::delivery_slips::made(Some(&answers), &edge, delivery);
+    pos_edge::delivery_slips::made(Some(&answers), &edge, qr);
+    let posted = answered(answers, queue);
+    let codes: Vec<&str> = posted
+        .iter()
+        .filter_map(|answer| answer["answer"].as_str())
+        .collect();
+    assert_eq!(
+        codes,
+        vec!["DELIVERY_ANSWER_REJECT", "DELIVERY_ANSWER_READY"]
+    );
+    assert_eq!(posted[0]["reason_code_id"], reason.to_string());
 }

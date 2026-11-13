@@ -14,6 +14,7 @@ use pos_proto::time::Timestamp;
 use serde::Deserialize;
 
 use super::CloudHttpClient;
+use crate::delivery_answers::{AnswerBody, AnswerTransport, Posted};
 use crate::relay_client::RelayTransportError;
 
 /// The cloud's answer. Mirrors `pos_cloud::connectors::recipient`'s; no `Debug`, so no value can be
@@ -78,6 +79,29 @@ fn record_of(body: &[u8]) -> Result<SubjectRecord, RelayTransportError> {
         ),
         None => record,
     })
+}
+
+/// The answers route for a store. Pure, so the path is checked without a socket.
+fn answers_path(store_id: StoreId) -> String {
+    format!("/sync/stores/{store_id}/delivery/answers")
+}
+
+impl AnswerTransport for super::RelayHttpTransport {
+    async fn post(&self, body: &AnswerBody) -> Result<Posted, RelayTransportError> {
+        let bytes = serde_json::to_vec(body)
+            .map_err(|_| RelayTransportError::new("the answer could not be encoded"))?;
+        let (status, _body) = self
+            .client
+            .request(
+                &hyper::Method::POST,
+                &answers_path(self.store_id),
+                None,
+                bytes,
+            )
+            .await
+            .map_err(|error| RelayTransportError::new(error.to_string()))?;
+        Ok(Posted::of_status(status))
+    }
 }
 
 #[cfg(test)]

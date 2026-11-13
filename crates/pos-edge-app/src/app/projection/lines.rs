@@ -231,6 +231,21 @@ impl Projection {
         }
     }
 
+    /// Whether every line of `order_id` still on it has been bumped: the kitchen has made it. An
+    /// order with no such line is not made.
+    pub(in crate::app) fn order_made(&self, order_id: OrderId) -> bool {
+        let lines: Vec<OrderLineId> = self
+            .identified_lines_for_order(order_id)
+            .into_iter()
+            .filter(|(_, record)| record.state != OrderLineState::Voided)
+            .map(|(line_id, _)| line_id)
+            .collect();
+        !lines.is_empty()
+            && lines
+                .iter()
+                .all(|line_id| self.bumped_lines.contains(line_id))
+    }
+
     /// Every bumped line, in id order — the current prepared set a KDS reads on (re)connect so a
     /// screen that joined late agrees with the ones that were already open.
     pub(in crate::app) fn bumped_line_ids(&self) -> Vec<OrderLineId> {

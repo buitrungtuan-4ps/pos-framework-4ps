@@ -27,6 +27,8 @@ use serde::{Deserialize, Serialize};
 use pos_core::decision::Actor;
 use pos_ports::event_store::EventStore;
 use pos_ports::subject_store::SubjectStore;
+
+use crate::delivery_answers::DeliveryAnswers;
 use pos_proto::ids::{OrderId, ReasonCodeId};
 use pos_proto::money::Money;
 use pos_proto::quantity::Quantity;
@@ -58,9 +60,14 @@ struct RejectReasonResponse {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 struct WaitingOrderResponse {
     order_id: String,
-    /// The table the guest scanned. Always present: a held order is a tabled QR order by
-    /// definition (ADR-0116), and a screen that could not say which table would be useless.
+    /// The table the guest scanned, for a QR order; empty for a delivery order, which sits at no
+    /// table (ADR-0215 decision 5).
     table_id: String,
+    /// What the delivery vendor an order came through is called, where it came through one: the
+    /// heading a member of staff sees in place of a table.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    vendor_name: Option<String>,
     items: Vec<WaitingLineResponse>,
     total: Money,
 }
@@ -117,6 +124,9 @@ where
             WaitingOrderResponse {
                 order_id: order_id.to_string(),
                 table_id: table_id.map(|id| id.to_string()).unwrap_or_default(),
+                vendor_name: edge
+                    .order_vendor(order_id)
+                    .map(|vendor| vendor.display_name.as_str().to_owned()),
                 items: lines
                     .into_iter()
                     .map(|line| WaitingLineResponse {
@@ -175,6 +185,7 @@ pub(crate) async fn confirm_order<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
     printers: Option<Extension<Arc<crate::printing::Printers>>>,
+    answers: Option<Extension<DeliveryAnswers>>,
     Path(id): Path<String>,
 ) -> Response
 where
@@ -185,10 +196,15 @@ where
     };
     match edge.confirm_inbound_order(actor, order_id).await {
         Ok(()) => {
-            if let Some(Extension(printers)) = printers {
-                let _outcome =
-                    crate::delivery_slips::print_delivery_slip(&printers, &edge, order_id).await;
-            }
+            crate::delivery_slips::confirmed(
+                printers
+                    .as_ref()
+                    .map(|Extension(printers)| printers.as_ref()),
+                answers.as_ref().map(|Extension(answers)| answers),
+                &edge,
+                order_id,
+            )
+            .await;
             StatusCode::NO_CONTENT.into_response()
         }
         Err(error) => error_response(&error),
@@ -221,10 +237,12 @@ where
     ),
     tag = "orders",
 ))]
-/// `POST /api/orders/{id}/reject` — refuse a guest's order, with a reason, and close it.
+/// `POST /api/orders/{id}/reject` — refuse a guest's order, with a reason, and close it. A delivery
+/// order is rejected with its vendor, citing the reason (ADR-0215 decision 4).
 pub(crate) async fn reject_order<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
+    answers: Option<Extension<DeliveryAnswers>>,
     Path(id): Path<String>,
     Json(request): Json<RejectRequest>,
 ) -> Response
@@ -234,11 +252,21 @@ where
     let Some(order_id) = parse_ulid(&id).map(OrderId::new) else {
         return bad_request("an order id is a ULID");
     };
+    // Read before the refusal closes the order, which forgets its vendor.
+    let vendor = edge.order_vendor(order_id);
     match edge
         .reject_inbound_order(actor, order_id, request.reason_code_id)
         .await
     {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            crate::delivery_slips::refused(
+                answers.as_ref().map(|Extension(answers)| answers),
+                vendor.as_ref(),
+                order_id,
+                request.reason_code_id,
+            );
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(error) => error_response(&error),
     }
 }

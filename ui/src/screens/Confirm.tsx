@@ -40,6 +40,13 @@ const REFRESH_MS = 15_000;
 // the reason picker back; no answer puts it back and reads the queue again, which drops it if the
 // store made the act. Until the edge answers, no other order on the queue takes a tap.
 
+/** A waiting order's heading: its delivery vendor, or the table the guest scanned (ADR-0215). */
+function heading(order: { table_id: string; vendor_name?: string }): string {
+  return order.vendor_name !== undefined
+    ? t("confirm.vendor", { vendor: order.vendor_name })
+    : t("confirm.table", { table: tableLabel(order.table_id) });
+}
+
 export function Confirm() {
   const [orders, setOrders] = createSignal<WaitingOrder[] | null>(null);
   const [reasons, setReasons] = createSignal<RejectReason[]>([]);
@@ -117,7 +124,7 @@ export function Confirm() {
           {(order) => (
             <li class="rounded-token border border-line bg-surface p-4" data-outcome="guest-order">
               <h3 class="text-lg font-semibold">
-                {t("confirm.table", { table: tableLabel(order.table_id) })}
+                {heading(order)}
               </h3>
               <ul class="mt-2 flex list-none flex-col gap-1 p-0 text-sm">
                 <For each={order.items}>
