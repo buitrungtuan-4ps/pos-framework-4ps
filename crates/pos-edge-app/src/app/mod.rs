@@ -336,6 +336,9 @@ pub struct IntakeIntent<'a> {
     pub total: Money,
     /// Whether any line's caller-quoted price differed from the store's.
     pub repriced: bool,
+    /// The vendor a delivery order came through, which `sales.order.opened` records
+    /// ([ADR-0215](../../../../docs/adr/0215-a-delivery-order-names-its-vendor.md) decision 1).
+    pub vendor_id: Option<pos_proto::ids::VendorId>,
 }
 
 #[cfg(test)]

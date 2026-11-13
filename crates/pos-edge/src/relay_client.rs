@@ -28,7 +28,7 @@ use pos_ports::order_in::{
     ExternalReference, InboundOrder, InboundOrderLine, OrderAcceptance, OrderIn,
 };
 use pos_proto::error::ErrorStatus;
-use pos_proto::ids::{MenuItemId, StoreId, SubjectId, TableId};
+use pos_proto::ids::{MenuItemId, StoreId, SubjectId, TableId, VendorId};
 use pos_proto::money::{CurrencyCode, Money};
 use pos_proto::text::GuestNote;
 use pos_proto::wire_enum::Open;
@@ -62,6 +62,9 @@ pub struct QueuedOrderPayload {
     /// The recipient side-table id, when there is one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject_id: Option<String>,
+    /// The vendor a delivery order came through, an opaque id (ADR-0215 decision 1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vendor_id: Option<String>,
     /// The requested lines.
     pub lines: Vec<QueuedOrderLine>,
     /// When the caller says it was placed (ms since the Unix epoch).
@@ -366,6 +369,13 @@ fn to_inbound_order(payload: &QueuedOrderPayload) -> Result<InboundOrder, &'stat
         ),
         None => None,
     };
+    let vendor_id = match &payload.vendor_id {
+        Some(text) => Some(
+            text.parse::<VendorId>()
+                .map_err(|_ignored| "vendor_id must be a ULID")?,
+        ),
+        None => None,
+    };
     let placed_at = Timestamp::from_milliseconds_since_epoch(payload.placed_at_ms)
         .map_err(|_ignored| "placed_at_ms is out of range")?;
     let mut lines = Vec::with_capacity(payload.lines.len());
@@ -378,6 +388,7 @@ fn to_inbound_order(payload: &QueuedOrderPayload) -> Result<InboundOrder, &'stat
         store_id,
         table_id,
         subject_id,
+        vendor_id,
         lines,
         placed_at,
     })

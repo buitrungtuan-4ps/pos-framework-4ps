@@ -683,6 +683,7 @@ mod retries {
             store_id: store_id(),
             table_id: Some(table()),
             subject_id: None,
+            vendor_id: None,
             lines: vec![InboundOrderLine {
                 menu_item_id: pizza(),
                 quantity: Quantity::ONE,

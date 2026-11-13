@@ -298,6 +298,7 @@ fn to_inbound_order(request: &OrderRequest) -> Result<InboundOrder, &'static str
         // The buyer side-table id is not part of the public submission shape yet; a corporate buyer
         // (P10) attaches it downstream.
         subject_id: None,
+        vendor_id: None,
         lines,
         placed_at,
     })

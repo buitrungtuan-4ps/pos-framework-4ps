@@ -151,6 +151,12 @@ resource_id! {
     MenuItemId
 }
 resource_id! {
+    /// The vendor a delivery order came through: the tenant's delivery connection's id, opaque to
+    /// the store ([ADR-0215](../../../docs/adr/0215-a-delivery-order-names-its-vendor.md)
+    /// decisions 1 and 6). No vendor is named anywhere a store runs.
+    VendorId
+}
+resource_id! {
     /// A set of modifier choices with a min/max selection rule, attached to items
     /// ([ADR-0066](../../../docs/adr/0066-cloud-catalog.md) entity 5,
     /// [ADR-0127](../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).
