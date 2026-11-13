@@ -7,7 +7,7 @@
 //! The cloud parks a guest QR order, a marketplace order, or a `POST /v1/orders` on a durable
 //! per-store queue and waits for the store to report what became of it. This is the store half: a
 //! thin loop that long-polls `GET /sync/stores/{id}/orders`, feeds each pulled order through the
-//! local [`OrderIn`] (which reprices, opens it in the store's log, and dedupes on the caller's
+//! local [`OrderIn`](pos_ports::order_in::OrderIn) (which reprices, opens it in the store's log, and dedupes on the caller's
 //! reference — ADR-0064), and posts the outcome back to
 //! `POST /sync/stores/{id}/orders/{queued_id}/ack`. The queue is at-least-once and intake is
 //! idempotent, so a redelivered order converges on one order in the kitchen.
@@ -24,11 +24,10 @@ use core::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use pos_ports::PortError;
-use pos_ports::order_in::{
-    ExternalReference, InboundOrder, InboundOrderLine, OrderAcceptance, OrderIn,
-};
+use pos_ports::order_in::{ExternalReference, InboundOrder, InboundOrderLine, OrderAcceptance};
+use pos_ports::subject_store::SubjectRecord;
 use pos_proto::error::ErrorStatus;
-use pos_proto::ids::{MenuItemId, StoreId, SubjectId, TableId, VendorId};
+use pos_proto::ids::{MenuItemId, OrderId, StoreId, SubjectId, TableId, VendorId};
 use pos_proto::money::{CurrencyCode, Money};
 use pos_proto::text::GuestNote;
 use pos_proto::wire_enum::Open;
@@ -231,6 +230,58 @@ pub trait RelayTransport: Send + Sync {
         queued_id: &str,
         outcome: &StoreOutcome,
     ) -> impl Future<Output = Result<(), RelayTransportError>> + Send;
+
+    /// The recipient a pulled order names, as the cloud kept it for this store
+    /// ([ADR-0215](../../../docs/adr/0215-a-delivery-order-names-its-vendor.md) decision 3), or
+    /// `None` when the cloud holds none for it: unknown, masked, or a cloud that keeps none.
+    ///
+    /// # Errors
+    ///
+    /// [`RelayTransportError`] if the cloud could not be reached or its answer did not parse.
+    fn recipient(
+        &self,
+        subject_id: SubjectId,
+    ) -> impl Future<Output = Result<Option<SubjectRecord>, RelayTransportError>> + Send;
+}
+
+/// What makes a relayed order: the edge's own intake, keeping the recipient the cloud kept with
+/// the order that names it.
+pub trait RelayIntake: Send + Sync {
+    /// Makes `order`, keeping `recipient` in its own transaction when it names one.
+    fn submit_relayed(
+        &self,
+        order: &InboundOrder,
+        recipient: Option<&SubjectRecord>,
+    ) -> impl Future<Output = Result<OrderAcceptance, PortError>> + Send;
+}
+
+impl<S, Q> RelayIntake for crate::order_in::EdgeOrderIn<S, Q>
+where
+    S: pos_ports::event_store::EventStore
+        + pos_ports::intake_ledger::IntakeLedger
+        + pos_ports::subject_store::SubjectStore
+        + Send
+        + Sync,
+    Q: crate::queue::QueueNumberAuthority,
+{
+    fn submit_relayed(
+        &self,
+        order: &InboundOrder,
+        recipient: Option<&SubjectRecord>,
+    ) -> impl Future<Output = Result<OrderAcceptance, PortError>> + Send {
+        self.submit_with_recipient(order, recipient)
+    }
+}
+
+/// What the relay does once the store has taken a new order that does not wait for staff: print
+/// its delivery slip (ADR-0215 decision 3). `()` does nothing.
+pub trait TakenOrders: Send + Sync {
+    /// The store has just taken `order_id`.
+    fn taken(&self, order_id: OrderId) -> impl Future<Output = ()> + Send;
+}
+
+impl TakenOrders for () {
+    async fn taken(&self, _order_id: OrderId) {}
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -272,24 +323,41 @@ fn jittered(backoff: Duration) -> Duration {
     Duration::from_nanos(u64::try_from(low.saturating_add(offset)).unwrap_or(u64::MAX))
 }
 
-/// The relay client: a transport to the cloud queue and the local [`OrderIn`] each pulled order is
+/// The relay client: a transport to the cloud queue and the local [`RelayIntake`] each pulled order is
 /// made through. Static dispatch, no `dyn` ([ADR-0013](../../../docs/adr/0013-async-strategy.md)).
 #[derive(Debug)]
-pub struct RelayClient<T, X> {
+pub struct RelayClient<T, X, P = ()> {
     transport: T,
     intake: X,
+    taken: P,
 }
 
-impl<T, X> RelayClient<T, X>
-where
-    T: RelayTransport,
-    X: OrderIn,
-{
+impl<T, X> RelayClient<T, X> {
     /// Builds a client over a transport and the store's intake.
     pub const fn new(transport: T, intake: X) -> Self {
-        Self { transport, intake }
+        Self {
+            transport,
+            intake,
+            taken: (),
+        }
     }
 
+    /// This client, telling `taken` of each new order the store takes without waiting for staff.
+    pub fn telling<P>(self, taken: P) -> RelayClient<T, X, P> {
+        RelayClient {
+            transport: self.transport,
+            intake: self.intake,
+            taken,
+        }
+    }
+}
+
+impl<T, X, P> RelayClient<T, X, P>
+where
+    T: RelayTransport,
+    X: RelayIntake,
+    P: TakenOrders,
+{
     /// Pulls one batch, makes and acks each order, and returns how many were processed. A malformed
     /// payload is acked as an `invalid_argument` refusal (the store cannot make what it cannot read),
     /// never dropped, so the cloud stops re-parking it; a store refusal is acked as its class.
@@ -303,7 +371,22 @@ where
         let mut processed = 0;
         for entry in &pending {
             let outcome = match to_inbound_order(&entry.order) {
-                Ok(order) => StoreOutcome::from_result(self.intake.submit(&order).await),
+                Ok(order) => {
+                    // A recipient the cloud cannot be asked for now leaves the order un-acked, so
+                    // it comes back with the next pull rather than being made without its slip.
+                    let recipient = match order.subject_id {
+                        Some(subject_id) => self.transport.recipient(subject_id).await?,
+                        None => None,
+                    };
+                    let result = self.intake.submit_relayed(&order, recipient.as_ref()).await;
+                    if let Ok(acceptance) = &result
+                        && acceptance.created
+                        && !acceptance.awaiting_staff_confirmation
+                    {
+                        self.taken.taken(acceptance.order_id).await;
+                    }
+                    StoreOutcome::from_result(result)
+                }
                 Err(reason) => StoreOutcome::Rejected {
                     status: "invalid_argument".to_owned(),
                     message: reason.to_owned(),

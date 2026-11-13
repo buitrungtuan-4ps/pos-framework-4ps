@@ -11,21 +11,26 @@
 
 use std::sync::{Arc, Mutex};
 
+use std::collections::BTreeMap;
+
 use pos_edge::relay_client::{
     PendingOrderDto, QueuedOrderLine, QueuedOrderPayload, RelayClient, RelayTransport,
-    RelayTransportError, StoreOutcome,
+    RelayTransportError, StoreOutcome, TakenOrders,
 };
 use pos_edge::{
     Edge, EdgeOrderIn, EdgeSession, InMemoryQueueNumbers, InMemoryReceipts, StoreIdentity,
 };
 use pos_fakes::FakeStore;
 use pos_fakes::executor::run_ready;
+use pos_ports::subject_store::SubjectRecord;
 use pos_proto::SalesChannel;
 use pos_proto::ids::{DeviceId, MenuItemId, StoreId};
+use pos_proto::ids::{OrderId, SubjectId};
 use pos_proto::locale::{TaxRate, TaxRateTable};
 use pos_proto::menu::{MenuCatalog, MenuEntry};
 use pos_proto::money::{CurrencyCode, Money};
 use pos_proto::text::DisplayName;
+use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
 
 fn store() -> StoreId {
@@ -39,6 +44,20 @@ fn known_item() -> MenuItemId {
 /// A fresh `EdgeOrderIn` over the in-memory store, seeded with one item at 120 000 VND on the
 /// standard class (taxed on every channel), the same seed the `OrderIn` suite uses.
 fn intake() -> EdgeOrderIn<FakeStore, InMemoryQueueNumbers> {
+    intake_over(edge())
+}
+
+/// The intake over `edge`, so a test can read the edge it opened orders on.
+fn intake_over(edge: Arc<Edge<FakeStore>>) -> EdgeOrderIn<FakeStore, InMemoryQueueNumbers> {
+    EdgeOrderIn::new(
+        edge,
+        InMemoryQueueNumbers::new(),
+        DeviceId::new(Ulid::from_u128(20)),
+    )
+}
+
+/// The seeded edge.
+fn edge() -> Arc<Edge<FakeStore>> {
     let class = EdgeSession::standard_tax_class();
     let menu = MenuCatalog::new().with(MenuEntry::new(
         known_item(),
@@ -48,7 +67,8 @@ fn intake() -> EdgeOrderIn<FakeStore, InMemoryQueueNumbers> {
     ));
     let rates = TaxRateTable::new()
         .with(class, SalesChannel::DineIn, TaxRate::from_percent(10))
-        .with(class, SalesChannel::Qr, TaxRate::from_percent(10));
+        .with(class, SalesChannel::Qr, TaxRate::from_percent(10))
+        .with(class, SalesChannel::Delivery, TaxRate::from_percent(10));
     let session = EdgeSession::bootstrap()
         .with_menu(menu)
         .with_tax_rates(rates);
@@ -59,11 +79,7 @@ fn intake() -> EdgeOrderIn<FakeStore, InMemoryQueueNumbers> {
         Arc::new(InMemoryReceipts::new()),
     )
     .expect("seed the id generator");
-    EdgeOrderIn::new(
-        Arc::new(edge),
-        InMemoryQueueNumbers::new(),
-        DeviceId::new(Ulid::from_u128(20)),
-    )
+    Arc::new(edge)
 }
 
 /// An in-memory relay transport: it hands out its pending orders on pull and removes an order from
@@ -73,6 +89,8 @@ fn intake() -> EdgeOrderIn<FakeStore, InMemoryQueueNumbers> {
 struct FakeTransport {
     pending: Arc<Mutex<Vec<PendingOrderDto>>>,
     acks: Arc<Mutex<Vec<(String, StoreOutcome)>>>,
+    /// The recipients the cloud kept, by subject; `None` while the cloud cannot be reached.
+    recipients: Arc<Mutex<Option<Kept>>>,
 }
 
 impl FakeTransport {
@@ -80,6 +98,7 @@ impl FakeTransport {
         Self {
             pending: Arc::new(Mutex::new(orders)),
             acks: Arc::new(Mutex::new(Vec::new())),
+            recipients: Arc::new(Mutex::new(Some(Vec::new()))),
         }
     }
 
@@ -108,7 +127,112 @@ impl RelayTransport for FakeTransport {
             .push((queued_id.to_owned(), outcome.clone()));
         Ok(())
     }
+
+    async fn recipient(
+        &self,
+        subject_id: SubjectId,
+    ) -> Result<Option<SubjectRecord>, RelayTransportError> {
+        match &*self.recipients.lock().expect("recipients lock") {
+            Some(kept) => Ok(kept
+                .iter()
+                .find(|(id, _)| *id == subject_id)
+                .map(|(_, record)| record.clone())),
+            None => Err(RelayTransportError::new("the cloud is unreachable")),
+        }
+    }
 }
+
+/// The orders the relay told of, as the delivery slips hear of them.
+#[derive(Clone, Default)]
+struct Told(Arc<Mutex<Vec<OrderId>>>);
+
+impl TakenOrders for Told {
+    async fn taken(&self, order_id: OrderId) {
+        self.0.lock().expect("told lock").push(order_id);
+    }
+}
+
+fn recipient_subject() -> SubjectId {
+    SubjectId::new(Ulid::from_u128(0x005B_1EC7))
+}
+
+/// A recipient with fake data only, expiring on the store's retention as the cloud set it.
+fn fake_recipient() -> SubjectRecord {
+    let at = |ms| Timestamp::from_milliseconds_since_epoch(ms).expect("an instant");
+    SubjectRecord::new(
+        at(1_000),
+        BTreeMap::from([
+            ("name".to_owned(), "Test Guest".to_owned()),
+            ("phone".to_owned(), "000-0000".to_owned()),
+            ("address".to_owned(), "1 Example Street".to_owned()),
+        ]),
+    )
+    .retained_until(at(9_000_000_000_000))
+}
+
+/// One pending delivery order naming its recipient's subject.
+fn pending_delivery_order(queued_id: &str, reference: &str) -> PendingOrderDto {
+    let mut order = pending_qr_order(queued_id, reference);
+    "SALES_CHANNEL_DELIVERY".clone_into(&mut order.order.sales_channel);
+    order.order.table_id = None;
+    order.order.subject_id = Some(recipient_subject().to_string());
+    order
+}
+
+/// A delivery order's recipient is read from the cloud and kept in the store's subject store with
+/// the order that names it; the order names it by id only, and the relay tells the slip printer
+/// of the order the store took (ADR-0215 decision 3).
+#[test]
+fn a_delivery_order_keeps_its_recipient_with_the_order_and_tells_its_slip() {
+    let transport = FakeTransport::with(vec![pending_delivery_order("q-d", "relay-d")]);
+    *transport.recipients.lock().expect("lock") =
+        Some(vec![(recipient_subject(), fake_recipient())]);
+    let edge = edge();
+    let told = Told::default();
+    let client =
+        RelayClient::new(transport.clone(), intake_over(Arc::clone(&edge))).telling(told.clone());
+
+    assert_eq!(run_ready(client.pump_once()).expect("pump"), 1);
+    let order_id = match &transport.acks()[0].1 {
+        StoreOutcome::Accepted(record) => {
+            assert!(
+                !record.awaiting_staff_confirmation,
+                "a delivery order waits for no one"
+            );
+            record.order_id.parse::<OrderId>().expect("an order id")
+        }
+        StoreOutcome::Rejected { status, message } => panic!("refused: {status} {message}"),
+    };
+    assert_eq!(
+        *told.0.lock().expect("lock"),
+        vec![order_id],
+        "its slip was told once"
+    );
+    assert_eq!(edge.order_recipient(order_id), Some(recipient_subject()));
+    let kept = run_ready(edge.delivery_recipient(order_id))
+        .expect("read")
+        .expect("kept");
+    assert_eq!(
+        kept,
+        fake_recipient(),
+        "kept as the cloud kept it, expiry and all"
+    );
+}
+
+/// A recipient the cloud cannot be asked for leaves the order un-acked and unmade, so it comes back
+/// with the next pull rather than being made without its slip.
+#[test]
+fn an_unreachable_recipient_leaves_the_order_for_the_next_pull() {
+    let transport = FakeTransport::with(vec![pending_delivery_order("q-u", "relay-u")]);
+    *transport.recipients.lock().expect("lock") = None;
+    let client = RelayClient::new(transport.clone(), intake());
+    assert!(run_ready(client.pump_once()).is_err());
+    assert!(transport.acks().is_empty(), "nothing was acked");
+    assert_eq!(transport.pending.lock().expect("lock").len(), 1);
+}
+
+/// The recipients a fake cloud kept, by subject.
+type Kept = Vec<(SubjectId, SubjectRecord)>;
 
 /// One pending QR order for the seeded item, at a table.
 fn pending_qr_order(queued_id: &str, reference: &str) -> PendingOrderDto {

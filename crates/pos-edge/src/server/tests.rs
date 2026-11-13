@@ -225,6 +225,7 @@ async fn surface_over(
             origins: &origins,
             revocations: &revocations,
             backup,
+            printers: None,
         },
         None,
         super::Lifecycle {

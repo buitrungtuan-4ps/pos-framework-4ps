@@ -932,21 +932,17 @@ where
     // printer, and every composition that omits this — the fakes-backed example, a route test —
     // reports `NO_PRINTER`, which is the truth for it rather than a silent no-op.
     let printers = Arc::new(
-        match fonts {
-            Some(renderer) => crate::printing::Printers::tcp().with_fonts(renderer),
-            None => crate::printing::Printers::tcp(),
-        }
-        .with_local_font_size(local_font_size)
-        // The lane a printer that names an agent is reached through (ADR-0112). It holds the *same*
-        // three values the agent's routes hold, which is the whole point of the three `Arc::clone`s
-        // above: the dispatch that writes the row and the route the agent claims it from are two
-        // halves of one table, and the wake only works because the writer and the waiter are in one
-        // process.
-        .with_agents(Arc::new(crate::printing::AgentLane::new(
-            Arc::clone(&agents),
-            Arc::clone(&jobs),
-            Arc::clone(&wake),
-        ))),
+        base_printers(fonts, local_font_size)
+            // The lane a printer that names an agent is reached through (ADR-0112). It holds the *same*
+            // three values the agent's routes hold, which is the whole point of the three `Arc::clone`s
+            // above: the dispatch that writes the row and the route the agent claims it from are two
+            // halves of one table, and the wake only works because the writer and the waiter are in one
+            // process.
+            .with_agents(Arc::new(crate::printing::AgentLane::new(
+                Arc::clone(&agents),
+                Arc::clone(&jobs),
+                Arc::clone(&wake),
+            ))),
     );
     // The size rasterised lines are drawn at, and where it comes from, once at start-up; the
     // printers say it again whenever it changes.
@@ -962,7 +958,7 @@ where
             Arc::clone(&sessions),
             &origins,
         ))
-        .layer(axum::Extension(printers));
+        .layer(axum::Extension(Arc::clone(&printers)));
 
     // The store's own retention sweep (ADR-0107). Spawned here, outside the cloud gate, because it
     // is the store's obligation and not the cloud's: a box that has never been activated, or whose
@@ -994,6 +990,7 @@ where
                 origins: &origins,
                 revocations: &revocations,
                 backup,
+                printers: Some(printers),
             },
             nats.as_ref(),
             Lifecycle {
@@ -1131,6 +1128,8 @@ struct CloudWiring<'a, S, Q, L, P> {
     origins: &'a Arc<crate::origins::Origins>,
     revocations: &'a Arc<DeviceRevocations>,
     backup: Option<BackupPlan>,
+    /// Where the relay prints a delivery order's slip, or `None` to print none.
+    printers: Option<Arc<crate::printing::Printers>>,
 }
 
 /// Composes the cloud surface onto `app` for a store that has a `cloud_url` (ADR-0086): the vault
@@ -1475,6 +1474,19 @@ impl BackupPlan {
 /// provisioned before ADR-0055 Amendment 1 answers `None`, and so does the on-fakes example — both
 /// keep trading and simply do not self-update, which is why this is a detection rather than a
 /// refusal to start.
+/// The store's printers over TCP, drawing with `fonts` where this box has them, at its own font
+/// size until the store's `printing` node says otherwise.
+fn base_printers(
+    fonts: Option<pos_render::TextRenderer>,
+    local_font_size: Option<u16>,
+) -> crate::printing::Printers {
+    match fonts {
+        Some(renderer) => crate::printing::Printers::tcp().with_fonts(renderer),
+        None => crate::printing::Printers::tcp(),
+    }
+    .with_local_font_size(local_font_size)
+}
+
 /// Loads the store's printing fonts, and says at boot which scripts it can print.
 ///
 /// A thermal printer's own character set does not reach Vietnamese, let alone Japanese or

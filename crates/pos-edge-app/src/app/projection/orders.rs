@@ -74,6 +74,22 @@ impl Projection {
         }
     }
 
+    /// Records the subject an open delivery order names as its recipient.
+    pub(in crate::app) fn record_recipient(
+        &mut self,
+        order_id: OrderId,
+        subject_id: Option<pos_proto::ids::SubjectId>,
+    ) {
+        if let Some(subject_id) = subject_id {
+            self.recipients.insert(order_id, subject_id);
+        }
+    }
+
+    /// The subject an open order names as its recipient, if any.
+    pub(in crate::app) fn recipient(&self, order_id: OrderId) -> Option<pos_proto::ids::SubjectId> {
+        self.recipients.get(&order_id).copied()
+    }
+
     /// The package version an open order opened under, if any.
     pub(in crate::app) fn package_version(&self, order_id: OrderId) -> Option<PackageVersionId> {
         self.package_versions.get(&order_id).copied()
@@ -266,6 +282,7 @@ impl Projection {
         self.closed_orders.insert(order_id);
         self.guest_counts.remove(&order_id);
         self.package_versions.remove(&order_id);
+        self.recipients.remove(&order_id);
         if let Some(table_id) = self.table_for_order(order_id) {
             self.table_orders.remove(&table_id);
         }

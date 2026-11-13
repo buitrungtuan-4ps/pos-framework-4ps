@@ -77,7 +77,9 @@ does, as input to the tenant's data protection impact assessment; it is not that
   then, whether or not the cloud has a `retention_days` of its own; a store that publishes no
   retention leaves the record to the cloud's period ([ADR-0035](adr/0035-retention-and-pii-masking.md)).
   A shorter period for delivery recipients would be a new setting and the owner's decision.
-- **Erasure.** Through the request tool, which masks the cloud's record.
+- **The store's copy.** The store the order is for reads the record once, when it pulls the order, and keeps it in its own `subjects` table with the same `retain_until`, written in the order's transaction; its sweep masks it then. The order's event names only the `subject_id`.
+- **What prints it.** Only the delivery slip, once, on the store's receipt printer when the store takes the order. Nothing reprints it.
+- **Erasure.** Through the request tool, which masks the cloud's record. The store's copy is not yet reached by an erasure: it is masked on its `retain_until`, and until the erasure path also names it on the store's `erasures` node, an erasure request for a delivery recipient needs the store's copy masked by its expiry or by hand. This is an open item.
 - **Crossing a border.** Only if the cell runs outside the store's country (the table above); a
   Vietnamese store's cell is hosted in Vietnam (gate L6). A cell abroad needs a data transfer
   agreement or the person's explicit consent.
