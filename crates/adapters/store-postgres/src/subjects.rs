@@ -34,6 +34,35 @@ pub struct SubjectRow {
     pub masked_at_ms: Option<i64>,
 }
 
+/// A subject record kept for one store
+/// ([ADR-0215](../../../../docs/adr/0215-a-delivery-order-names-its-vendor.md) decision 3): a delivery
+/// order's recipient. Plain types, as [`SubjectRow`]; its `Debug` leaves `fields_json` out, so a
+/// value cannot be printed by accident.
+pub struct StoreSubjectRow<'a> {
+    /// The subject id (a ULID string).
+    pub subject_id: &'a str,
+    /// The tenant (a ULID string).
+    pub tenant_id: &'a str,
+    /// The store it was collected for (a ULID string); only that store may read it.
+    pub store_id: &'a str,
+    /// When it was collected, in milliseconds since the Unix epoch.
+    pub collected_at_ms: i64,
+    /// When it is masked, in milliseconds since the Unix epoch, or `None` for the cloud's period.
+    pub retain_until_ms: Option<i64>,
+    /// The personal fields as a JSON object.
+    pub fields_json: &'a str,
+}
+
+impl core::fmt::Debug for StoreSubjectRow<'_> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("StoreSubjectRow")
+            .field("subject_id", &self.subject_id)
+            .field("store_id", &self.store_id)
+            .finish_non_exhaustive()
+    }
+}
+
 /// The subject store over a shared pool. Built by [`PostgresStore::subjects`](crate::PostgresStore::subjects).
 #[derive(Clone, Debug)]
 pub struct PostgresSubjects {
@@ -46,6 +75,8 @@ impl PostgresSubjects {
     }
 
     /// The unmasked rows collected at or before `cutoff_ms`, at most `limit` of them, oldest first.
+    /// A row that carries its own `retain_until` (migration 0101) is not one of them: it expires on
+    /// its own clock, through [`fetch_expired`](Self::fetch_expired).
     ///
     /// Only `masked_at IS NULL` rows are returned, which is what makes the sweep idempotent: a row
     /// masked by [`mask`](Self::mask) is never handed back.
@@ -62,7 +93,7 @@ impl PostgresSubjects {
         let rows = connection
             .query(
                 "SELECT subject_id, collected_at, fields::text FROM subjects \
-                 WHERE masked_at IS NULL AND collected_at <= $1 \
+                 WHERE masked_at IS NULL AND retain_until IS NULL AND collected_at <= $1 \
                  ORDER BY collected_at ASC LIMIT $2",
                 &[&cutoff_ms, &limit],
             )
@@ -108,6 +139,104 @@ impl PostgresSubjects {
             collected_at_ms: row.get(1),
             fields_json: row.get(2),
             masked_at_ms: row.get(3),
+        }))
+    }
+
+    /// The unmasked rows whose own `retain_until` is at or before `now_ms`, at most `limit` of them,
+    /// soonest first (migration 0101,
+    /// [ADR-0206](../../../../docs/adr/0206-a-personal-custom-value-stays-on-its-store-and-expires-on-its-own-clock.md)
+    /// decision 1). Like [`fetch_due`](Self::fetch_due), only `masked_at IS NULL` rows.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn fetch_expired(
+        &self,
+        now_ms: i64,
+        limit: i64,
+    ) -> Result<Vec<SubjectRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .query(
+                "SELECT subject_id, collected_at, fields::text FROM subjects \
+                 WHERE masked_at IS NULL AND retain_until IS NOT NULL AND retain_until <= $1 \
+                 ORDER BY retain_until ASC LIMIT $2",
+                &[&now_ms, &limit],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows
+            .iter()
+            .map(|row| SubjectRow {
+                subject_id: row.get(0),
+                collected_at_ms: row.get(1),
+                fields_json: row.get(2),
+                masked_at_ms: None,
+            })
+            .collect())
+    }
+
+    /// Keeps a store's subject record: inserts it unless a row with `subject_id` is already there,
+    /// in which case nothing changes (a vendor's retry carries the same id, and the first record
+    /// stands). Returns whether a row was inserted.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn keep_for_store(&self, row: &StoreSubjectRow<'_>) -> Result<bool, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let inserted = connection
+            .execute(
+                "INSERT INTO subjects (subject_id, tenant_id, store_id, collected_at, \
+                 retain_until, fields) VALUES ($1, $2, $3, $4, $5, $6::text::jsonb) \
+                 ON CONFLICT (subject_id) DO NOTHING",
+                &[
+                    &row.subject_id,
+                    &row.tenant_id,
+                    &row.store_id,
+                    &row.collected_at_ms,
+                    &row.retain_until_ms,
+                    &row.fields_json,
+                ],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(inserted == 1)
+    }
+
+    /// One unmasked subject row kept for `store_id` of `tenant_id`, with its `retain_until`, or
+    /// `None` when there is none: another tenant's, another store's, a masked one, or an unknown
+    /// id all read the same.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn fetch_for_store(
+        &self,
+        tenant_id: &str,
+        store_id: &str,
+        subject_id: &str,
+    ) -> Result<Option<(SubjectRow, Option<i64>)>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let row = connection
+            .query_opt(
+                "SELECT subject_id, collected_at, fields::text, retain_until FROM subjects \
+                 WHERE subject_id = $1 AND tenant_id = $2 AND store_id = $3 \
+                 AND masked_at IS NULL",
+                &[&subject_id, &tenant_id, &store_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(row.map(|row| {
+            (
+                SubjectRow {
+                    subject_id: row.get(0),
+                    collected_at_ms: row.get(1),
+                    fields_json: row.get(2),
+                    masked_at_ms: None,
+                },
+                row.get(3),
+            )
         }))
     }
 

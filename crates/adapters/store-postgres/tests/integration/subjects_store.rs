@@ -126,3 +126,91 @@ fn fetch_one_is_tenant_scoped_and_reports_masked_at() {
         assert_eq!(masked.masked_at_ms, Some(7000));
     });
 }
+
+/// A store's subject (migration 0101, ADR-0215 decision 3): kept once by id, read only by its own
+/// tenant and store while unmasked, and swept on its own `retain_until` rather than the cloud's
+/// cutoff.
+#[test]
+fn a_store_subject_is_kept_once_read_by_its_store_and_expires_on_its_own_clock() {
+    block_on(async {
+        let (store, _admin) = prepared().await.expect("prepare the database");
+        let subjects = store.subjects();
+        let row = store_postgres::StoreSubjectRow {
+            subject_id: "SUBJECT0000000000000000CC",
+            tenant_id: "TENANT000000000000000000AA",
+            store_id: "STORE0000000000000000000AA",
+            collected_at_ms: 1_000,
+            retain_until_ms: Some(5_000),
+            fields_json: r#"{"address":"address-placeholder"}"#,
+        };
+        assert!(subjects.keep_for_store(&row).await.expect("keep"));
+        let retry = store_postgres::StoreSubjectRow {
+            fields_json: r#"{"address":"another-placeholder"}"#,
+            ..row
+        };
+        assert!(
+            !subjects.keep_for_store(&retry).await.expect("keep again"),
+            "a retry keeps no second record and changes nothing"
+        );
+
+        let (read, until) = subjects
+            .fetch_for_store(row.tenant_id, row.store_id, row.subject_id)
+            .await
+            .expect("fetch")
+            .expect("its store reads it");
+        assert!(read.fields_json.contains("address-placeholder"));
+        assert_eq!(until, Some(5_000));
+        for (tenant, store_id) in [
+            (row.tenant_id, "STORE0000000000000000000BB"),
+            ("TENANT000000000000000000BB", row.store_id),
+        ] {
+            assert!(
+                subjects
+                    .fetch_for_store(tenant, store_id, row.subject_id)
+                    .await
+                    .expect("fetch")
+                    .is_none(),
+                "another store or tenant reads nothing"
+            );
+        }
+
+        // The cloud's cutoff passes it by: it carries its own expiry.
+        assert!(
+            subjects
+                .fetch_due(99_999, 100)
+                .await
+                .expect("due")
+                .is_empty()
+        );
+        assert!(
+            subjects
+                .fetch_expired(4_999, 100)
+                .await
+                .expect("early")
+                .is_empty()
+        );
+        let expired = subjects.fetch_expired(5_000, 100).await.expect("expired");
+        assert_eq!(expired.len(), 1);
+        assert!(
+            subjects
+                .mask(row.subject_id, r#"{"address":"[REDACTED]"}"#, 5_000)
+                .await
+                .expect("mask")
+        );
+        assert!(
+            subjects
+                .fetch_expired(9_999, 100)
+                .await
+                .expect("again")
+                .is_empty()
+        );
+        assert!(
+            subjects
+                .fetch_for_store(row.tenant_id, row.store_id, row.subject_id)
+                .await
+                .expect("fetch")
+                .is_none(),
+            "a masked record is read by no store"
+        );
+    });
+}

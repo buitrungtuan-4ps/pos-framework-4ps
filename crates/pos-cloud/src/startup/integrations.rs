@@ -8,8 +8,12 @@ use std::sync::Arc;
 
 use axum::Router;
 use pos_cloud::clock::SystemClock;
+use pos_cloud::connectors::recipient::CloudRecipients;
 use pos_cloud::http;
+use pos_cloud::keys::Keys;
 use pos_cloud::relay::OrderRelay;
+use pos_cloud::wake::SharedWake;
+use store_postgres::{PostgresConfigTrees, PostgresStore};
 
 use super::routes::RouteDeps;
 
@@ -68,32 +72,7 @@ pub(super) fn integration_routes(deps: &RouteDeps<'_>) -> Router {
             SystemClock,
             keys.clone(),
         ))
-        // A delivery vendor's own webhook (ADR-0083 decision 3): verified under the secret sealed on
-        // the tenant's store-scoped connection, mapped through its item map, and submitted to the
-        // same relay `POST /v1/orders` uses. One connector per vendor; the sandbox one for now.
-        .merge(pos_cloud::connectors::route::connector_router(
-            store.connections(),
-            OrderRelay::new(
-                store.store_directory(),
-                store.config_trees(),
-                store.order_queue(),
-                SystemClock,
-                relay_wake.clone(),
-            ),
-            SystemClock,
-            vec![Arc::new(pos_cloud::connectors::demo::DemoConnector)],
-            keys.clone(),
-        ))
-        // A store's answer to a delivery vendor (ADR-0215 decision 4): accept, reject, ready or
-        // busy, sent on by the vendor's connector to its connection's answer_url over the guarded
-        // outbound client.
-        .merge(pos_cloud::connectors::answer::https_delivery_answer_router(
-            store.connections(),
-            store.api_keys(),
-            SystemClock,
-            vec![Arc::new(pos_cloud::connectors::demo::DemoConnector)],
-            keys.clone(),
-        ))
+        .merge(delivery_routes(store, keys.as_ref(), relay_wake))
         // Sending a store the connections that serve it (ADR-0153 decision 5): its own, its
         // brand's, its tenant's, resolved into the `integrations` node on its Store layer. A
         // publish like every other node, so it is console.config.publish, not the authoring
@@ -107,4 +86,56 @@ pub(super) fn integration_routes(deps: &RouteDeps<'_>) -> Router {
             SystemClock,
             Arc::clone(audit),
         ))
+}
+
+/// A delivery vendor's own webhook (ADR-0083 decision 3), and the store's read of the recipient a
+/// relayed order names (ADR-0215 decision 3).
+fn delivery_routes(store: &PostgresStore, keys: Option<&Keys>, relay_wake: &SharedWake) -> Router {
+    Router::new()
+        // A delivery vendor's own webhook (ADR-0083 decision 3): verified under the secret sealed on
+        // the tenant's store-scoped connection, mapped through its item map, and submitted to the
+        // same relay `POST /v1/orders` uses. One connector per vendor; the sandbox one for now.
+        .merge(pos_cloud::connectors::route::connector_router(
+            (
+                store.connections(),
+                OrderRelay::new(
+                    store.store_directory(),
+                    store.config_trees(),
+                    store.order_queue(),
+                    SystemClock,
+                    relay_wake.clone(),
+                ),
+                recipients(store),
+            ),
+            SystemClock,
+            vec![Arc::new(pos_cloud::connectors::demo::DemoConnector)],
+            keys.cloned(),
+        ))
+        // A store's answer to a delivery vendor (ADR-0215 decision 4): accept, reject, ready or
+        // busy, sent on by the vendor's connector to its connection's answer_url over the guarded
+        // outbound client.
+        .merge(pos_cloud::connectors::answer::https_delivery_answer_router(
+            store.connections(),
+            store.api_keys(),
+            SystemClock,
+            vec![Arc::new(pos_cloud::connectors::demo::DemoConnector)],
+            keys.cloned(),
+        ))
+        .merge(recipient_routes(store))
+}
+
+/// A delivery order's recipient, kept apart on the cloud under its store's retention (ADR-0215
+/// decision 3).
+fn recipients(store: &PostgresStore) -> CloudRecipients<PostgresConfigTrees> {
+    CloudRecipients::new(store.subjects(), store.config_trees())
+}
+
+/// The store-facing read of the recipient a relayed delivery order names (ADR-0215 decision 3):
+/// `relay_orders`, the credential's own store, one subject at a time.
+fn recipient_routes(store: &PostgresStore) -> Router {
+    pos_cloud::connectors::recipient::recipient_sync_router(
+        recipients(store),
+        store.api_keys(),
+        SystemClock,
+    )
 }

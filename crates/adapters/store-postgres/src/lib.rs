@@ -121,7 +121,7 @@ pub use scheduling::{NewScheduledPublishRow, PostgresScheduledPublishes, Schedul
 pub use settings::{PostgresSettings, SettingSlot};
 pub use store::{PostgresStore, RowUpdate};
 pub use store_groups::{BatchResultRow, ConfigBatchRow, PostgresStoreGroups, StoreGroupRow};
-pub use subjects::{PostgresSubjects, SubjectRow};
+pub use subjects::{PostgresSubjects, StoreSubjectRow, SubjectRow};
 pub use task_health::{PostgresTaskHealth, TaskHealthRow};
 pub use tax_rates::{PostgresTaxRates, TaxRateRow};
 pub use tenant_keys::{PostgresTenantKeys, TenantKeyRow};

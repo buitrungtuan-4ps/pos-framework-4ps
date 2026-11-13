@@ -420,6 +420,7 @@ From [`docs/openapi-device.json`](../openapi-device.json).
 | POST | `/sync/stores/{store_id}/orders/{queued_id}/ack` | `ack_order` | `device_credential` (relay_orders) | — | [`crates/pos-cloud/src/relay.rs`](../../crates/pos-cloud/src/relay.rs) |
 | POST | `/sync/stores/{store_id}/reconcile` | `store_reconcile` | `device_credential` (read_config) | — | [`crates/pos-cloud/src/http/reconcile.rs`](../../crates/pos-cloud/src/http/reconcile.rs) |
 | POST | `/sync/stores/{store_id}/report` | `receive_store_report` | `device_credential` (read_config) | — | [`crates/pos-cloud/src/http/ota/report.rs`](../../crates/pos-cloud/src/http/ota/report.rs) |
+| GET | `/sync/stores/{store_id}/subjects/{subject_id}` | `read_recipient` | `device_credential` (relay_orders) | — | [`crates/pos-cloud/src/connectors/recipient.rs`](../../crates/pos-cloud/src/connectors/recipient.rs) |
 | GET | `/sync/stores/{store_id}/translations` | `serve_store_grid` | `device_credential` (read_config) | — | [`crates/pos-cloud/src/http/grid_sync.rs`](../../crates/pos-cloud/src/http/grid_sync.rs) |
 
 ## Integrators (`/v1`)

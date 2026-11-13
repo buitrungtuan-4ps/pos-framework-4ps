@@ -22,6 +22,7 @@ const MIGRATION_0097: &str = include_str!("../migrations/0097_webhook_event_type
 const MIGRATION_0098: &str = include_str!("../migrations/0098_gateway_endpoints.sql");
 const MIGRATION_0099: &str = include_str!("../migrations/0099_gateway_calls.sql");
 const MIGRATION_0100: &str = include_str!("../migrations/0100_tenant_keys.sql");
+const MIGRATION_0101: &str = include_str!("../migrations/0101_subject_store_and_expiry.sql");
 
 /// Applies 0089 onwards on `connection`, one `batch_execute` each, as `store.rs`'s wiring tests read.
 pub(crate) async fn migrate_from_0089(connection: &Object) -> Result<(), PortError> {
@@ -71,6 +72,10 @@ pub(crate) async fn migrate_from_0089(connection: &Object) -> Result<(), PortErr
         .map_err(unavailable)?;
     connection
         .batch_execute(MIGRATION_0100)
+        .await
+        .map_err(unavailable)?;
+    connection
+        .batch_execute(MIGRATION_0101)
         .await
         .map_err(unavailable)
 }

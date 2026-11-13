@@ -8,7 +8,8 @@
 //! is its credential. In order: the connection, enabled, store-scoped and of a provider this cloud
 //! has a connector for (one `404` for anything else, so the route maps nothing for a prober); the
 //! connection's budget; the signature over the raw body (`401`); the vendor's order and the item
-//! map (`400`, `422`); then the same intake `/v1/orders` submits to.
+//! map (`400`, `422`); the recipient, when the order names one, kept apart as a personal record
+//! ([`super::recipient`]; `400` for a bad field); then the same intake `/v1/orders` submits to.
 //!
 //! A refused request logs the connection's id and why, never the body.
 
@@ -21,12 +22,14 @@ use axum::http::HeaderMap;
 use axum::response::Response;
 use axum::routing::post;
 use pos_cloud_api::response::{api_error, api_error_with_details, parse_ulid_fields};
+use pos_ports::PortError;
 use pos_ports::order_in::OrderIn;
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{StoreId, TenantId};
 use pos_proto::integrations::SettingValue;
 
+use super::recipient::{RecipientStore, keep_recipient, recipient_subject_id};
 use super::{MappingRefusal, OrderConnector, item_map, to_inbound};
 use crate::auth::rate_limit::SlidingRateLimiter;
 use crate::connections::{Connection, ConnectionStore, ScopeLevel, SealedFor};
@@ -45,20 +48,22 @@ pub const ITEM_MAP: &str = super::demo::ITEM_MAP;
 pub const WEBHOOK_SECRET: &str = super::demo::WEBHOOK_SECRET;
 
 /// What the route shares.
-pub(crate) struct ConnectorState<S, X, C> {
+pub(crate) struct ConnectorState<S, X, C, R> {
     connections: S,
     intake: X,
+    recipients: R,
     clock: C,
     connectors: Arc<[Arc<dyn OrderConnector>]>,
     keys: Option<Keys>,
     limiter: SlidingRateLimiter,
 }
 
-impl<S: Clone, X: Clone, C: Clone> Clone for ConnectorState<S, X, C> {
+impl<S: Clone, X: Clone, C: Clone, R: Clone> Clone for ConnectorState<S, X, C, R> {
     fn clone(&self) -> Self {
         Self {
             connections: self.connections.clone(),
             intake: self.intake.clone(),
+            recipients: self.recipients.clone(),
             clock: self.clock.clone(),
             connectors: Arc::clone(&self.connectors),
             keys: self.keys.clone(),
@@ -67,10 +72,10 @@ impl<S: Clone, X: Clone, C: Clone> Clone for ConnectorState<S, X, C> {
     }
 }
 
-/// Builds the connector router over `connectors`, each serving one provider.
-pub fn connector_router<S, X, C>(
-    connections: S,
-    intake: X,
+/// Builds the connector router over `connectors`, each serving one provider. A vendor order's
+/// recipient is kept in `recipients` (ADR-0215 decision 3).
+pub fn connector_router<S, X, C, R>(
+    (connections, intake, recipients): (S, X, R),
     clock: C,
     connectors: Vec<Arc<dyn OrderConnector>>,
     keys: Option<Keys>,
@@ -79,16 +84,18 @@ where
     S: ConnectionStore + Clone + Send + Sync + 'static,
     X: OrderIn + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    R: RecipientStore + Clone + 'static,
 {
     Router::new()
         .route(
             "/connectors/{tenant_id}/{connection_id}/orders",
-            post(vendor_order::<S, X, C>),
+            post(vendor_order::<S, X, C, R>),
         )
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(ConnectorState {
             connections,
             intake,
+            recipients,
             clock,
             connectors: connectors.into(),
             keys,
@@ -103,8 +110,8 @@ fn no_connector() -> Response {
 
 /// `POST /connectors/{tenant_id}/{connection_id}/orders` — a vendor's order, verified, mapped and
 /// submitted to the store.
-async fn vendor_order<S, X, C>(
-    State(state): State<ConnectorState<S, X, C>>,
+async fn vendor_order<S, X, C, R>(
+    State(state): State<ConnectorState<S, X, C, R>>,
     Path((tenant_id, connection_id)): Path<(String, String)>,
     headers: HeaderMap,
     body: Bytes,
@@ -113,6 +120,7 @@ where
     S: ConnectionStore + Clone + Send + Sync + 'static,
     X: OrderIn + Clone + Send + Sync + 'static,
     C: ClockSource + Clone + Send + Sync + 'static,
+    R: RecipientStore + Clone + 'static,
 {
     let Ok([tenant_id, connection_id]) =
         parse_ulid_fields([("tenant_id", &tenant_id), ("connection_id", &connection_id)])
@@ -154,10 +162,26 @@ where
         Some(SettingValue::Text(text)) => item_map(text),
         _ => Err(MappingRefusal::BadItemMap),
     };
-    let inbound = match map.and_then(|map| to_inbound(&connection_id, store_id, &order, &map)) {
+    let mut inbound = match map.and_then(|map| to_inbound(&connection_id, store_id, &order, &map)) {
         Ok(inbound) => inbound,
         Err(refusal) => return mapping_refused(&connection_id, &refusal),
     };
+    if let Some(recipient) = &order.recipient {
+        let subject_id =
+            recipient_subject_id(tenant_id, &inbound.external_reference, inbound.placed_at);
+        let kept = keep_recipient(
+            &state.recipients,
+            (tenant_id, store_id),
+            subject_id,
+            recipient,
+            state.clock.now(),
+        )
+        .await;
+        if let Err(error) = kept {
+            return recipient_refused(&connection_id, &error);
+        }
+        inbound.subject_id = Some(subject_id);
+    }
     match state.intake.submit(&inbound).await {
         Ok(acceptance) => order_response(&acceptance),
         Err(error) => intake_error(&error),
@@ -165,8 +189,8 @@ where
 }
 
 /// The connection, the store it serves and its connector, or the one `404`.
-async fn serving<S, X, C>(
-    state: &ConnectorState<S, X, C>,
+async fn serving<S, X, C, R>(
+    state: &ConnectorState<S, X, C, R>,
     tenant_id: TenantId,
     connection_id: &str,
 ) -> Result<(Connection, StoreId, Arc<dyn OrderConnector>), Response>
@@ -220,6 +244,16 @@ fn webhook_secret(
             sealed,
         )
         .ok()
+}
+
+/// The answer a recipient that could not be kept becomes: its field's reason for a bad one, never
+/// its value, else unavailable. The log names the connection only.
+fn recipient_refused(connection_id: &str, error: &PortError) -> Response {
+    if error.status() == ErrorStatus::InvalidArgument {
+        return api_error(ErrorStatus::InvalidArgument, error.message());
+    }
+    tracing::error!(%connection_id, "a delivery recipient could not be kept");
+    api_error(ErrorStatus::Unavailable, "the connector is unavailable")
 }
 
 /// The answer a mapping refusal becomes: the vendor's own item code named back, which is the

@@ -1780,6 +1780,104 @@
         ]
       }
     },
+    "/sync/stores/{store_id}/subjects/{subject_id}": {
+      "get": {
+        "tags": [
+          "order relay"
+        ],
+        "summary": "`GET /sync/stores/{store_id}/subjects/{subject_id}` — a store reads the recipient a relayed\norder names. The log names the store and the subject, never a value.",
+        "operationId": "read_recipient",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store, a ULID. It must be the credential's own",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "subject_id",
+            "in": "path",
+            "description": "The subject a relayed order names, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The one subject record kept for this store: a delivery order's recipient (ADR-0215). No list, no search",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubjectRecordDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "store_id or subject_id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No credential, or one the cloud does not accept: one answer for every credential problem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The credential lacks the `relay_orders` scope, or belongs to another store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No unmasked record is kept for this store under that id: unknown, another store's, or already masked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The credential store or the subject store is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "device_credential": [
+              "relay_orders"
+            ]
+          }
+        ]
+      }
+    },
     "/sync/stores/{store_id}/translations": {
       "get": {
         "tags": [
@@ -3294,6 +3392,41 @@
               "null"
             ],
             "description": "Whether the post-install self-test passed; absent when the store has never self-tested\n(ADR-0078 Amendment 1)."
+          }
+        }
+      },
+      "SubjectRecordDto": {
+        "type": "object",
+        "description": "What the store reads: the one subject record, and when it expires.",
+        "required": [
+          "subject_id",
+          "collected_time",
+          "fields"
+        ],
+        "properties": {
+          "collected_time": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When the cloud kept it, in Unix milliseconds."
+          },
+          "fields": {
+            "type": "object",
+            "description": "The personal fields: `name`, `phone` and `address`.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "retain_until_time": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When it is masked, in Unix milliseconds; absent when the store publishes no retention."
+          },
+          "subject_id": {
+            "type": "string",
+            "description": "The subject, a ULID."
           }
         }
       },

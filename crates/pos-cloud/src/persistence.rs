@@ -27,7 +27,8 @@ use store_postgres::{
     PendingOrderRow, PostgresAlerts, PostgresArtifacts, PostgresCampaigns, PostgresConfigTrees,
     PostgresFleet, PostgresOrderQueue, PostgresReasonCodes, PostgresReconcile,
     PostgresScheduledPublishes, PostgresStore, PostgresStoreDirectory, PostgresSubjects,
-    PostgresVouchers, ReasonCodeRow, ReleaseArtifactRow, ScheduledPublishRow, VoucherRow,
+    PostgresVouchers, ReasonCodeRow, ReleaseArtifactRow, ScheduledPublishRow, SubjectRow,
+    VoucherRow,
 };
 use store_postgres::{ConnectionRow, PostgresConnections};
 use store_postgres::{ExpiredArchiveRow, PostgresArchives, StoreArchiveRow};
@@ -107,6 +108,30 @@ impl StoreCatalog for PostgresStore {
     }
 }
 
+/// A row the sweep read, as the record it masks: `fetch_due` and `fetch_expired` return only
+/// unmasked rows, so `masked_at` is `None` by construction.
+fn unmasked_record(row: &SubjectRow) -> Result<SubjectRecord, RetentionError> {
+    let subject_id = row
+        .subject_id
+        .parse::<Ulid>()
+        .map(SubjectId::new)
+        .map_err(|_| {
+            RetentionError::new(format!("subject id is not a ULID: {}", row.subject_id))
+        })?;
+    let collected_at = Timestamp::from_milliseconds_since_epoch(row.collected_at_ms)
+        .map_err(|_| RetentionError::new("a subject's collected_at is out of range"))?;
+    let fields: BTreeMap<String, String> =
+        serde_json::from_str(&row.fields_json).map_err(|error| {
+            RetentionError::new(format!("decoding a subject's fields failed: {error}"))
+        })?;
+    Ok(SubjectRecord {
+        subject_id,
+        collected_at,
+        fields,
+        masked_at: None,
+    })
+}
+
 impl SubjectStore for PostgresSubjects {
     async fn due_before(
         &self,
@@ -117,30 +142,19 @@ impl SubjectStore for PostgresSubjects {
             .fetch_due(cutoff.as_milliseconds_since_epoch(), i64::from(limit))
             .await
             .map_err(|error| RetentionError::new(error.to_string()))?;
-        let mut records = Vec::with_capacity(rows.len());
-        for row in rows {
-            let subject_id = row
-                .subject_id
-                .parse::<Ulid>()
-                .map(SubjectId::new)
-                .map_err(|_| {
-                    RetentionError::new(format!("subject id is not a ULID: {}", row.subject_id))
-                })?;
-            let collected_at = Timestamp::from_milliseconds_since_epoch(row.collected_at_ms)
-                .map_err(|_| RetentionError::new("a subject's collected_at is out of range"))?;
-            let fields: BTreeMap<String, String> =
-                serde_json::from_str(&row.fields_json).map_err(|error| {
-                    RetentionError::new(format!("decoding a subject's fields failed: {error}"))
-                })?;
-            // `fetch_due` returns only unmasked rows, so `masked_at` is `None` by construction.
-            records.push(SubjectRecord {
-                subject_id,
-                collected_at,
-                fields,
-                masked_at: None,
-            });
-        }
-        Ok(records)
+        rows.iter().map(unmasked_record).collect()
+    }
+
+    async fn expired_by(
+        &self,
+        now: Timestamp,
+        limit: u32,
+    ) -> Result<Vec<SubjectRecord>, RetentionError> {
+        let rows = self
+            .fetch_expired(now.as_milliseconds_since_epoch(), i64::from(limit))
+            .await
+            .map_err(|error| RetentionError::new(error.to_string()))?;
+        rows.iter().map(unmasked_record).collect()
     }
 
     async fn save_masked(&self, records: &[SubjectRecord]) -> Result<u64, RetentionError> {
