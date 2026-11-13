@@ -186,8 +186,9 @@ impl PostgresCustomValues {
         transaction.commit().await.map_err(unavailable)
     }
 
-    /// The stores whose events name `subject_id`, each with when it confirmed masking it in Unix
-    /// milliseconds, or `None` while it has not. At most [`SUBJECT_HOLDERS_MAX`], by store id.
+    /// The stores whose events name `subject_id`, and the store the cloud kept it for (a delivery
+    /// order's recipient, ADR-0215), each with when it confirmed masking it in Unix milliseconds,
+    /// or `None` while it has not. At most [`SUBJECT_HOLDERS_MAX`], by store id.
     ///
     /// # Errors
     ///
@@ -202,6 +203,12 @@ impl PostgresCustomValues {
             .query(
                 "SELECT store_id, (extract(epoch FROM masked_time) * 1000)::bigint \
                  FROM custom_subjects WHERE tenant_id = $1 AND subject_id = $2 \
+                 UNION \
+                 SELECT kept.store_id, NULL::bigint FROM subjects kept \
+                 WHERE kept.tenant_id = $1 AND kept.subject_id = $2 \
+                 AND kept.store_id IS NOT NULL AND NOT EXISTS ( \
+                     SELECT 1 FROM custom_subjects held WHERE held.tenant_id = $1 \
+                     AND held.store_id = kept.store_id AND held.subject_id = $2) \
                  ORDER BY store_id LIMIT $3",
                 &[&tenant.to_string(), &subject_id, &SUBJECT_HOLDERS_MAX],
             )
@@ -313,6 +320,21 @@ async fn write_subject(
                     "UPDATE custom_subjects SET masked_time = COALESCE(masked_time, \
                      to_timestamp($4::bigint::double precision / 1000.0)) \
                      WHERE tenant_id = $1 AND store_id = $2 AND subject_id = $3",
+                    &[tenant, store, subject_id, masked_time_ms],
+                )
+                .await
+                .map_err(unavailable)?;
+            // The one insert: a subject the cloud kept for this very store (a delivery order's
+            // recipient, migration 0101, ADR-0215), which the store holds a copy of by design.
+            transaction
+                .execute(
+                    "INSERT INTO custom_subjects (tenant_id, store_id, subject_id, first_time, \
+                     masked_time) SELECT $1, $2, $3, \
+                     to_timestamp($4::bigint::double precision / 1000.0), \
+                     to_timestamp($4::bigint::double precision / 1000.0) \
+                     WHERE EXISTS (SELECT 1 FROM subjects WHERE tenant_id = $1 \
+                     AND store_id = $2 AND subject_id = $3) \
+                     ON CONFLICT (tenant_id, store_id, subject_id) DO NOTHING",
                     &[tenant, store, subject_id, masked_time_ms],
                 )
                 .await
