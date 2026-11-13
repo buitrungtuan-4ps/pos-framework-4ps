@@ -13,6 +13,8 @@ import { NO_ACTS, orderHost } from "../src/package/screen";
 import { TILL_WORDS } from "../src/package/words";
 import { adoptSession } from "../src/state/permissions";
 import { forgetLookup, lookupAnswer } from "../src/state/lookup";
+import { applyPackage, passedLookupSteps } from "../src/state/flows";
+import { setScreenOpener } from "../src/state/reactions";
 
 const ENDPOINT = "01J0000000000000000000GW01";
 
@@ -116,5 +118,62 @@ describe("a package screen's lookup", () => {
         expect(keys[1]).toBe(keys[0]);
         expect(keys[2]).not.toBe(keys[1]);
         expect(target.querySelector('[role="alert"]')?.textContent).not.toContain("offline");
+    });
+});
+
+describe("a lookup in a flow (ADR-0214 decision 5)", () => {
+    it("honours a flow step's offline branch: skip with its note, or open the screen of the step it goes to", async () => {
+        adoptSession({ permissions_enforced: false } as never);
+        const step = (step_id: string, offline: object) => ({ step_id, action_id: "integrations.lookup.run", kind: "STEP_KIND_REQUIRED", offline });
+        applyPackage({
+            running: {
+                flows: [
+                    { body: { flow_id: "points", start_action_id: "sales.table.seat", steps: [step("look", { skip_note_key: "floor.title" })] } },
+                    {
+                        body: {
+                            flow_id: "card",
+                            start_action_id: "sales.table.seat",
+                            steps: [step("ask", { step_id: "by_hand" }), { step_id: "by_hand", screen_id: "card_by_hand", kind: "STEP_KIND_OPTIONAL" }],
+                        },
+                    },
+                ],
+            },
+        });
+        const opened: string[] = [];
+        setScreenOpener((screenId) => opened.push(screenId) > 0);
+        vi.spyOn(api, "lookup").mockRejectedValue(new ApiError(503, "offline", "GATEWAY_OFFLINE"));
+        const { target } = draw();
+        lookupButton(target).click();
+        await vi.waitFor(() => expect(target.querySelector('[role="alert"]')?.textContent).toBe(TILL_WORDS.label("floor.title")));
+        expect(passedLookupSteps("T7")).toEqual(["points/look", "card/ask"]);
+        expect(opened).toEqual(["card_by_hand"]);
+        applyPackage({ running: null });
+    });
+
+    it("counts a lookup step done once answered, and passes nothing for a refusal that is not offline", async () => {
+        adoptSession({ permissions_enforced: false } as never);
+        applyPackage({
+            running: {
+                flows: [
+                    {
+                        body: {
+                            flow_id: "tier",
+                            start_action_id: "sales.table.seat",
+                            steps: [{ step_id: "look", action_id: "integrations.lookup.run", kind: "STEP_KIND_REQUIRED", offline: { skip_note_key: "floor.title" } }],
+                        },
+                    },
+                ],
+            },
+        });
+        const call = vi.spyOn(api, "lookup").mockRejectedValueOnce(new ApiError(502, "no", "GATEWAY_REFUSED"));
+        const { target } = draw();
+        lookupButton(target).click();
+        await vi.waitFor(() => expect(lookupAnswer().state).toBe("refused"));
+        expect(passedLookupSteps("T7").includes("tier/look")).toBe(false);
+        call.mockResolvedValueOnce({ call_id: "c", idempotency_key: "k", result: {} } as never);
+        await vi.waitFor(() => expect(lookupButton(target).disabled).toBe(false));
+        lookupButton(target).click();
+        await vi.waitFor(() => expect(passedLookupSteps("T7")).toContain("tier/look"));
+        applyPackage({ running: null });
     });
 });

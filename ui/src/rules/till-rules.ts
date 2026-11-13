@@ -28,6 +28,7 @@ export interface FlowStep {
   readonly applies_when?: string;
   readonly prerequisites?: readonly string[];
   readonly done_when?: string;
+  readonly offline?: { readonly skip_note_key?: string; readonly step_id?: string };
 }
 
 /** A package flow, as `pos_proto::flow::Flow` writes it. */
