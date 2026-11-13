@@ -57,6 +57,21 @@ pub static PROVIDER: ProviderDescriptor = ProviderDescriptor {
             required: false,
         },
         SettingField {
+            key: super::vendors::STAFF_CONFIRM,
+            label_key: "provider.field.staff_confirm",
+            kind: FieldKind::Flag,
+            required: true,
+        },
+        SettingField {
+            key: super::vendors::PREP_MINUTES,
+            label_key: "provider.field.prep_minutes",
+            kind: FieldKind::Number {
+                min: pos_proto::vendors::MIN_PREP_MINUTES as i64,
+                max: pos_proto::vendors::MAX_PREP_MINUTES as i64,
+            },
+            required: true,
+        },
+        SettingField {
             key: WEBHOOK_SECRET,
             label_key: "provider.field.webhook_secret",
             kind: FieldKind::Secret { max_len: 128 },

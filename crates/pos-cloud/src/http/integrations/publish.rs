@@ -10,11 +10,14 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use pos_cloud_api::console::{audit_action, require_permission};
-use pos_cloud_api::response::{api_error, parse_ulid_fields, service_unavailable};
+use pos_cloud_api::response::{
+    api_error, api_error_with_details, parse_ulid_fields, service_unavailable,
+};
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{ConfigVersionId, StoreId, TenantId};
 use pos_proto::integrations::PublishedIntegrations;
+use pos_proto::vendors::PublishedVendors;
 use serde::Deserialize;
 
 use super::connections::connection_error_response;
@@ -22,6 +25,7 @@ use crate::audit::AuditRecorder;
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::{ConfigLevel, ConfigTreeStore};
+use crate::connectors::vendors::{VendorsRefusal, vendors_for_store};
 use crate::http::config_publish::publish_config_nodes;
 use crate::http::{Json, not_found};
 use crate::registry::RegistryStore;
@@ -105,6 +109,8 @@ struct IntegrationsPublished {
     config_version_id: String,
     /// How many connections the store's node now names.
     integrations: usize,
+    /// How many delivery vendors the store's `vendors` node now names (ADR-0215 decision 5).
+    vendors: usize,
 }
 
 #[utoipa::path(
@@ -125,12 +131,16 @@ struct IntegrationsPublished {
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
         (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
         (status = 404, description = "The tenant has no such store", body = crate::openapi_admin::ErrorResponse),
+        (status = 422, description = "A delivery connection serving the store has no `staff_confirm` or \
+                                      `prep_minutes` setting, named in `details`, or more than 64 do: \
+                                      nothing was published", body = crate::openapi_admin::ErrorResponse),
         (status = 503, description = "The connection store, the registry or the config tree is \
                                       unreachable", body = crate::openapi_admin::ErrorResponse),
     ),
     tag = "integrations",
 )]
-/// Publishes the connections that serve one store as its `integrations` node.
+/// Publishes the connections that serve one store as its `integrations` node, and the delivery
+/// vendors it takes orders from as its `vendors` node (ADR-0215 decision 5).
 async fn admin_publish_integrations<S, Rg, Cfg, A, C>(
     State(state): State<ConfigIntegrationsState<S, Rg, Cfg, A, C>>,
     headers: HeaderMap,
@@ -161,12 +171,12 @@ where
         Ok([tenant_id, store_id]) => (TenantId::new(tenant_id), StoreId::new(store_id)),
         Err(refusal) => return refusal,
     };
-    let node = match resolved_node(&state, tenant_id, store_id).await {
-        Ok(node) => node,
+    let (node, vendors) = match resolved_node(&state, tenant_id, store_id).await {
+        Ok(resolved) => resolved,
         Err(refusal) => return refusal,
     };
     let summary = IntegrationsPublishSummary::of(&node);
-    let id = match write_integrations(&state, tenant_id, store_id, &node).await {
+    let id = match write_integrations(&state, tenant_id, store_id, &node, &vendors).await {
         Ok(id) => id,
         Err(refusal) => return refusal,
     };
@@ -187,6 +197,7 @@ where
         Json(IntegrationsPublished {
             config_version_id: id.to_string(),
             integrations: summary.connections.len(),
+            vendors: vendors.vendors().len(),
         }),
     )
         .into_response()
@@ -211,12 +222,12 @@ impl IntegrationsPublishSummary {
 }
 
 /// The connections that serve the store: its own, its brand's, its tenant's, one per exclusive
-/// family.
+/// family; and the delivery vendors it takes orders from.
 async fn resolved_node<S, Rg, Cfg, A, C>(
     state: &ConfigIntegrationsState<S, Rg, Cfg, A, C>,
     tenant_id: TenantId,
     store_id: StoreId,
-) -> Result<PublishedIntegrations, Response>
+) -> Result<(PublishedIntegrations, PublishedVendors), Response>
 where
     S: crate::connections::ConnectionStore,
     Rg: RegistryStore,
@@ -226,11 +237,30 @@ where
         Ok(rows) => rows.into_iter().map(|row| row.record).collect::<Vec<_>>(),
         Err(error) => return Err(connection_error_response(&error)),
     };
-    Ok(crate::connections::resolve_for_store(
-        &connections,
-        &state.providers,
-        &store_id.to_string(),
-        brand_id.as_deref(),
+    let vendors = match vendors_for_store(&connections, &state.providers, &store_id.to_string()) {
+        Ok(vendors) => vendors,
+        Err(VendorsRefusal::Incomplete(connection_id)) => {
+            return Err(api_error_with_details(
+                ErrorStatus::Unprocessable,
+                "a delivery connection needs its staff_confirm and prep_minutes settings",
+                &[("connection_id", connection_id.as_str())],
+            ));
+        }
+        Err(VendorsRefusal::TooMany) => {
+            return Err(api_error(
+                ErrorStatus::Unprocessable,
+                "a store takes orders from at most 64 delivery connections",
+            ));
+        }
+    };
+    Ok((
+        crate::connections::resolve_for_store(
+            &connections,
+            &state.providers,
+            &store_id.to_string(),
+            brand_id.as_deref(),
+        ),
+        vendors,
     ))
 }
 
@@ -262,18 +292,21 @@ where
     }
 }
 
-/// Writes `node` as the store's `integrations` node and answers the version.
+/// Writes `node` as the store's `integrations` node and `vendors` as its `vendors` node, in one
+/// version, and answers the version.
 async fn write_integrations<S, Rg, Cfg, A, C>(
     state: &ConfigIntegrationsState<S, Rg, Cfg, A, C>,
     tenant_id: TenantId,
     store_id: StoreId,
     node: &PublishedIntegrations,
+    vendors: &PublishedVendors,
 ) -> Result<ConfigVersionId, Response>
 where
     Cfg: ConfigTreeStore,
     C: ClockSource,
 {
-    let Ok(value) = serde_json::to_value(node) else {
+    let (Ok(value), Ok(vendors)) = (serde_json::to_value(node), serde_json::to_value(vendors))
+    else {
         return Err(api_error(
             ErrorStatus::Internal,
             "the integrations node could not be encoded",
@@ -285,7 +318,10 @@ where
         tenant_id,
         store_id,
         ConfigLevel::Store,
-        vec![("integrations".to_owned(), value)],
+        vec![
+            ("integrations".to_owned(), value),
+            ("vendors".to_owned(), vendors),
+        ],
     )
     .await
 }
@@ -301,10 +337,11 @@ mod answer_tests {
         let answer = IntegrationsPublished {
             config_version_id: "01J0000000000000000000000V".to_owned(),
             integrations: 2,
+            vendors: 1,
         };
         assert_eq!(
             serde_json::to_value(answer).expect("json"),
-            serde_json::json!({ "config_version_id": "01J0000000000000000000000V", "integrations": 2 })
+            serde_json::json!({ "config_version_id": "01J0000000000000000000000V", "integrations": 2, "vendors": 1 })
         );
     }
 }

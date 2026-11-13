@@ -618,6 +618,16 @@ fn seeded_integrations_publish_with(
     audit: Arc<dyn AuditRecorder>,
     branded: bool,
 ) -> (axum::Router, FakeConfigTrees) {
+    seeded_publish_over(admin, audit, branded, Vec::new())
+}
+
+/// [`seeded_integrations_publish_with`], with `extra` connections beside the seeded ones.
+fn seeded_publish_over(
+    admin: FakeAdmin,
+    audit: Arc<dyn AuditRecorder>,
+    branded: bool,
+    extra: Vec<pos_cloud::connections::Connection>,
+) -> (axum::Router, FakeConfigTrees) {
     use pos_cloud::connections::{Connection, ScopeLevel};
 
     static TERMINAL: pos_providers::ProviderDescriptor = pos_providers::ProviderDescriptor {
@@ -675,7 +685,10 @@ fn seeded_integrations_publish_with(
             "card.test_terminal",
             (ScopeLevel::Store, Some(store_id().to_string())),
         ),
-    ] {
+    ]
+    .into_iter()
+    .chain(extra)
+    {
         connections
             .rows
             .lock()
@@ -692,8 +705,13 @@ fn seeded_integrations_publish_with(
         config_trees.clone(),
         FakeWebhooks::default(),
     );
-    let providers = pos_providers::Registry::new([&TEST_LEDGER, &COURIER, &TERMINAL])
-        .expect("valid test catalogue");
+    let providers = pos_providers::Registry::new([
+        &TEST_LEDGER,
+        &COURIER,
+        &TERMINAL,
+        &pos_cloud::connectors::demo::PROVIDER,
+    ])
+    .expect("valid test catalogue");
     let router = http::router(app).merge(http::config_integrations_router(
         connections,
         Arc::new(providers),
@@ -983,4 +1001,83 @@ async fn a_connection_records_its_processing_country_and_flags_another_country()
         json_body(malformed).await["error"]["details"][0]["field"],
         "processing_country"
     );
+}
+
+/// ADR-0215 decision 5: the integrations publish also sends a store its `vendors` node, the
+/// delivery connections scoped to it with each one's `staff_confirm` and `prep_minutes`, and
+/// refuses, naming it, a delivery connection that has not been given them.
+#[tokio::test]
+async fn publishing_integrations_sends_a_store_the_vendors_it_takes() {
+    use pos_cloud::connections::{Connection, ScopeLevel};
+
+    let delivery = |id: &str, settings: &[(&str, pos_providers::SettingValue)]| Connection {
+        connection_id: id.to_owned(),
+        provider_id: "delivery.demo".to_owned(),
+        scope_level: ScopeLevel::Store,
+        scope_id: Some(store_id().to_string()),
+        display_name: "Sandbox delivery".to_owned(),
+        enabled: true,
+        settings: settings
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), value.clone()))
+            .collect(),
+        sealed_secrets: BTreeMap::new(),
+        processing_country: None,
+    };
+    let vendor = Ulid::from_u128(0x0EE1).to_string();
+    let chosen = [
+        ("staff_confirm", pos_providers::SettingValue::Flag(true)),
+        ("prep_minutes", pos_providers::SettingValue::Number(25)),
+    ];
+    let (router, config_trees) = seeded_publish_over(
+        provisioned_admin(),
+        Arc::new(NoopAuditRecorder),
+        true,
+        vec![delivery(&vendor, &chosen)],
+    );
+    let cookie = admin_cookie(&router).await;
+    let body = serde_json::json!({
+        "tenant_id": tenant().as_ulid().to_string(),
+        "store_id": store_id().as_ulid().to_string(),
+    });
+    let published = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/config/integrations",
+            &body,
+            &cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(published.status(), StatusCode::OK);
+    assert_eq!(json_body(published).await["vendors"], 1);
+    let state = config_trees
+        .load(tenant(), store_id())
+        .await
+        .expect("load")
+        .expect("a published tree");
+    let node = &state.record.layers[2]["vendors"]["vendors"][0];
+    assert_eq!(node["vendor_id"], vendor.as_str());
+    assert_eq!(node["staff_confirm"], true);
+    assert_eq!(node["prep_minutes"], 25);
+    assert_eq!(node["display_name"], "Sandbox delivery");
+
+    let incomplete = Ulid::from_u128(0x0EE2).to_string();
+    let (router, _) = seeded_publish_over(
+        provisioned_admin(),
+        Arc::new(NoopAuditRecorder),
+        true,
+        vec![delivery(&incomplete, &chosen[..1])],
+    );
+    let cookie = admin_cookie(&router).await;
+    let refused = router
+        .oneshot(put_with_cookie(
+            "/admin/config/integrations",
+            &body,
+            &cookie,
+        ))
+        .await
+        .expect("route the publish");
+    assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(json_body(refused).await.to_string().contains(&incomplete));
 }

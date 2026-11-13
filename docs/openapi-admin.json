@@ -7821,7 +7821,7 @@
         "tags": [
           "integrations"
         ],
-        "summary": "Publishes the connections that serve one store as its `integrations` node.",
+        "summary": "Publishes the connections that serve one store as its `integrations` node, and the delivery\nvendors it takes orders from as its `vendors` node (ADR-0215 decision 5).",
         "operationId": "admin_publish_integrations",
         "requestBody": {
           "description": "The tenant and the store to publish to. The node's content is resolved from the tenant's connections: the store's own, then its brand's, then the tenant's, with one per e-invoice and ERP family",
@@ -7877,6 +7877,16 @@
           },
           "404": {
             "description": "The tenant has no such store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A delivery connection serving the store has no `staff_confirm` or `prep_minutes` setting, named in `details`, or more than 64 do: nothing was published",
             "content": {
               "application/json": {
                 "schema": {
@@ -31610,7 +31620,8 @@
         "description": "What an integrations publish answers: the version it made, and how many connections it carries.",
         "required": [
           "config_version_id",
-          "integrations"
+          "integrations",
+          "vendors"
         ],
         "properties": {
           "config_version_id": {
@@ -31620,6 +31631,11 @@
           "integrations": {
             "type": "integer",
             "description": "How many connections the store's node now names.",
+            "minimum": 0
+          },
+          "vendors": {
+            "type": "integer",
+            "description": "How many delivery vendors the store's `vendors` node now names (ADR-0215 decision 5).",
             "minimum": 0
           }
         }
