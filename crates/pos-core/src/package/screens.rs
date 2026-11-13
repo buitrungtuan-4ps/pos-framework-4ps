@@ -20,8 +20,8 @@ use pos_proto::actions::{Action, ActionParamKind};
 use pos_proto::devices::DeviceClass;
 use pos_proto::package::{TimeSlot, Variant};
 use pos_proto::screen::{
-    ActionBinding, Component, DEPTH_MAX, NODES_MAX, ParamValue, PropertyKind, PropertyValue,
-    SCREEN_ID_CHARS_MAX, SCREENS_MAX, Screen, ScreenNode,
+    ActionBinding, Component, DEPTH_MAX, FIELD_CHARS_MAX, NODES_MAX, ParamValue, PropertyKind,
+    PropertyValue, SCREEN_ID_CHARS_MAX, SCREENS_MAX, Screen, ScreenNode,
 };
 use pos_proto::wire_enum::WireEnum;
 
@@ -52,7 +52,7 @@ pub enum ScreenFault {
     /// A node leaves out a property its component requires.
     MissingProperty(usize, &'static str),
     /// A property's value is not of its kind, not one of its tokens, outside its bounds, or a
-    /// malformed translation key.
+    /// malformed translation key or field name.
     PropertyValue(usize, &'static str),
     /// An action property names an act the catalogue does not have.
     UnknownAction(usize, &'static str),
@@ -240,6 +240,10 @@ fn check_node(index: usize, node: &ScreenNode, class: DeviceClass) -> Result<(),
                 (property.bounds.0..=property.bounds.1).contains(number)
             }
             (PropertyKind::Bool, PropertyValue::Flag(_)) => true,
+            (PropertyKind::Field, PropertyValue::Text(field)) => {
+                field.starts_with(|c: char| c.is_ascii_lowercase())
+                    && is_token(field, FIELD_CHARS_MAX, |c| c == '_')
+            }
             (PropertyKind::Action, PropertyValue::Action(binding)) => {
                 check_binding(index, name, binding, component.supplies)?;
                 true

@@ -13,6 +13,7 @@ import { createMemo, Show, type JSX } from "solid-js";
 
 import { deviceClass } from "../lib/device-class";
 import { DRAFT } from "../state/draft-walk-in";
+import { LOOKUP_ACT, lookupRuns, runLookup } from "../state/lookup";
 import { publishedScreen } from "../state/package-screens";
 import { buttonRuns, runButton } from "../state/reactions";
 import { roleIds } from "../state/session";
@@ -49,10 +50,15 @@ export function packageScreen(screenId: string, context: VariantContext = {}): S
  * A host for a screen whose own components bind no act, for the order and table `subject` gives:
  * a package's button there runs what a reaction may run (`../state/reactions.ts`), for that
  * subject, when the signed-in person holds it outright. That is opening a screen and the prints,
- * never an act that moves money; any other act it binds draws disabled.
+ * never an act that moves money; and the screen's lookup (`../state/lookup.ts`, ADR-0214), which
+ * only reads. Any other act it binds draws disabled.
  */
 export function screenHost(subject: () => Supplied): ScreenHost {
-  return { subject, offers: buttonRuns, run: runButton };
+  return {
+    subject,
+    offers: (actionId) => (actionId === LOOKUP_ACT ? lookupRuns() : buttonRuns(actionId)),
+    run: (binding, supplied) => (binding.action_id === LOOKUP_ACT ? runLookup(binding, supplied) : runButton(binding, supplied)),
+  };
 }
 
 /** The host of a screen that is for no order or table. */

@@ -19,6 +19,7 @@ action_button	reads=subject
 action_button	since=0.14.1
 action_button	supplies=order_id
 action_button	supplies=table_id
+action_button	supplies=values
 confirm_queue
 confirm_queue	children=false
 confirm_queue	device_class=DEVICE_CLASS_KIOSK
@@ -126,6 +127,31 @@ kds_tickets	device_class=DEVICE_CLASS_TABLET
 kds_tickets	device_class=DEVICE_CLASS_TERMINAL
 kds_tickets	reads=kitchen
 kds_tickets	since=0.14.1
+lookup_field
+lookup_field	children=false
+lookup_field	device_class=DEVICE_CLASS_KIOSK
+lookup_field	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+lookup_field	device_class=DEVICE_CLASS_PHONE
+lookup_field	device_class=DEVICE_CLASS_TABLET
+lookup_field	device_class=DEVICE_CLASS_TERMINAL
+lookup_field	property=field:PROPERTY_KIND_FIELD:required
+lookup_field	property=kind:PROPERTY_KIND_TOKEN:optional
+lookup_field	property=kind:token=number
+lookup_field	property=kind:token=text
+lookup_field	property=label_key:PROPERTY_KIND_TRANSLATION_KEY:required
+lookup_field	reads=lookup
+lookup_field	since=0.14.1
+lookup_result
+lookup_result	children=false
+lookup_result	device_class=DEVICE_CLASS_KIOSK
+lookup_result	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+lookup_result	device_class=DEVICE_CLASS_PHONE
+lookup_result	device_class=DEVICE_CLASS_TABLET
+lookup_result	device_class=DEVICE_CLASS_TERMINAL
+lookup_result	property=field:PROPERTY_KIND_FIELD:required
+lookup_result	property=label_key:PROPERTY_KIND_TRANSLATION_KEY:required
+lookup_result	reads=lookup
+lookup_result	since=0.14.1
 menu_buttons
 menu_buttons	children=false
 menu_buttons	device_class=DEVICE_CLASS_KIOSK

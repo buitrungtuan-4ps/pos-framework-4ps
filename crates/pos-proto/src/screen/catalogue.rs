@@ -5,7 +5,7 @@
 //! till first, then its entry here (ADR-0190 decision 2). The screens of the default package add the
 //! components they are drawn from, each with the part of the context it reads (ADR-0203).
 
-use super::PropertyKind::{Action, Token, TranslationKey};
+use super::PropertyKind::{Action, Field, Token, TranslationKey};
 use super::{Component, Property};
 use crate::devices::DeviceClass;
 use crate::settings::NEXT_RELEASE;
@@ -42,8 +42,24 @@ const PROPERTY: Property = Property {
     bounds: (0, 0),
 };
 
-/// The ids the screen itself is for, which any component that binds an act supplies.
-const SCREEN_SUBJECT: &[&str] = &["order_id", "table_id"];
+/// What a button supplies to the act it binds: the ids the screen itself is for, and the values a
+/// person typed into the screen's `lookup_field`s (ADR-0214 decision 1).
+const BUTTON_SUPPLIES: &[&str] = &["order_id", "table_id", "values"];
+
+/// The two properties of a lookup's field and of one field of its answer: the endpoint field it is,
+/// and its label.
+const LOOKUP_FIELD: Property = Property {
+    name: "field",
+    kind: Field,
+    required: true,
+    ..PROPERTY
+};
+const LOOKUP_LABEL: Property = Property {
+    name: "label_key",
+    kind: TranslationKey,
+    required: true,
+    ..PROPERTY
+};
 
 /// Every component, in the order the console lists them.
 pub static CATALOGUE: &[Component] = &[
@@ -98,8 +114,9 @@ pub static CATALOGUE: &[Component] = &[
                 ..PROPERTY
             },
         ],
-        supplies: SCREEN_SUBJECT,
-        summary: "A button that does one act on the order or table the screen is for.",
+        supplies: BUTTON_SUPPLIES,
+        summary: "A button that does one act on the order or table the screen is for, with what a \
+                  person typed into the screen's lookup fields.",
         ..BASE
     },
     Component {
@@ -313,6 +330,31 @@ pub static CATALOGUE: &[Component] = &[
         component_id: "sign_in_screen",
         reads: "sign_in",
         summary: "Signing in with a badge code and PIN, and the pad to type them on.",
+        ..BASE
+    },
+    Component {
+        component_id: "lookup_field",
+        reads: "lookup",
+        properties: &[
+            LOOKUP_FIELD,
+            LOOKUP_LABEL,
+            Property {
+                name: "kind",
+                tokens: &["text", "number"],
+                ..PROPERTY
+            },
+        ],
+        summary: "A box a person types one value of the screen's lookup into, sent as the \
+                  endpoint field it names: text, or a whole number. One named order_id or \
+                  table_id sends the screen's own id and draws nothing.",
+        ..BASE
+    },
+    Component {
+        component_id: "lookup_result",
+        reads: "lookup",
+        properties: &[LOOKUP_FIELD, LOOKUP_LABEL],
+        summary: "One field of the answer to the screen's last lookup, under its label, while the \
+                  screen is shown; never kept.",
         ..BASE
     },
 ];

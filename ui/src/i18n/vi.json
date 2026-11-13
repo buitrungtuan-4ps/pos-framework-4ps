@@ -620,5 +620,14 @@
   "records.refused_permission": "Bạn không được làm việc này.",
   "records.save_failed": "Không lưu được hồ sơ. Hãy thử lại.",
   "records.print_slip": "In phiếu",
-  "records.slip_printed": "Đã in phiếu."
+  "records.slip_printed": "Đã in phiếu.",
+  "error.gateway_offline": "Cửa hàng hiện không kết nối được đám mây nên chưa tra cứu được. Hãy tiếp tục mà không cần nó, hoặc thử lại sau.",
+  "error.gateway_timeout": "Tra cứu không nhận được trả lời kịp thời. Hãy thử lại.",
+  "error.gateway_refused": "Dịch vụ được hỏi đã từ chối tra cứu hoặc trả lời không đúng. Hãy kiểm tra thông tin đã nhập, hoặc hỏi quản lý.",
+  "error.gateway_busy": "Đang có quá nhiều lượt tra cứu. Hãy chờ một chút rồi thử lại.",
+  "error.unknown_gateway_endpoint": "Tra cứu này chưa được thiết lập cho cửa hàng. Hãy hỏi quản lý.",
+  "lookup.pending": "Đang tra cứu…",
+  "lookup.none": "Không có",
+  "lookup.yes": "Có",
+  "lookup.no": "Không"
 }
