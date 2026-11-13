@@ -29,10 +29,12 @@ use crate::auth::admin::AdminStore;
 use crate::http::FieldRefusal;
 
 mod connections;
+mod gateway_endpoints;
 mod providers;
 mod publish;
 mod webhooks;
 
+pub use gateway_endpoints::gateway_endpoint_router;
 pub use providers::provider_catalogue_router;
 pub use publish::config_integrations_router;
 // The webhook handlers the main router mounts.
@@ -43,6 +45,11 @@ pub(super) use webhooks::{
 pub(crate) use connections::{
     __path_admin_create_connection, __path_admin_delete_connection, __path_admin_get_connection,
     __path_admin_list_connections, __path_admin_update_connection,
+};
+pub(crate) use gateway_endpoints::{
+    __path_admin_create_gateway_endpoint, __path_admin_delete_gateway_endpoint,
+    __path_admin_get_gateway_endpoint, __path_admin_list_gateway_endpoints,
+    __path_admin_update_gateway_endpoint,
 };
 pub(crate) use providers::__path_admin_list_providers;
 pub(crate) use publish::__path_admin_publish_integrations;

@@ -75,7 +75,7 @@ pub(crate) fn api_routes(app: App, deps: &RouteDeps<'_>) -> Router {
         .merge(people_routes(deps))
         .merge(floor_routes(deps))
         .merge(fleet_routes(deps))
-        .merge(integration_routes(deps))
+        .merge(super::integrations::integration_routes(deps))
         .merge(settings_routes(deps))
         .merge(device_revoke_and_health_routes(deps))
         .merge(catalog_routes(deps))
@@ -499,52 +499,6 @@ fn fleet_routes(deps: &RouteDeps<'_>) -> Router {
         // screen's form editor renders toggles and conflict previews from — static framework data
         // behind the session guard.
         .merge(http::capabilities_router(store.admin(), SystemClock))
-}
-
-/// The vendor catalogue, connections, and integrations.
-fn integration_routes(deps: &RouteDeps<'_>) -> Router {
-    let RouteDeps {
-        store,
-        config,
-        audit,
-        providers,
-        cell,
-        ..
-    } = *deps;
-    Router::new()
-        // The vendor catalogue (ADR-0153): every provider compiled into this binary, with the
-        // settings schema the console draws a connection form from.
-        .merge(http::provider_catalogue_router(
-            Arc::clone(providers),
-            store.admin(),
-            SystemClock,
-        ))
-        // A tenant's vendor connections (ADR-0153): per-record CRUD, every write checked against
-        // the provider's schema and every secret sealed under integration_secret before it is
-        // stored. Reads answer which secrets are set, never their values.
-        .merge(http::connection_router(
-            store.connections(),
-            Arc::clone(providers),
-            config.integration_secret.clone(),
-            store.admin(),
-            SystemClock,
-            Arc::clone(audit),
-            // Each connection's processing country is compared with this (ADR-0179 C7).
-            cell.cell().home_country,
-        ))
-        // Sending a store the connections that serve it (ADR-0153 decision 5): its own, its
-        // brand's, its tenant's, resolved into the `integrations` node on its Store layer. A
-        // publish like every other node, so it is console.config.publish, not the authoring
-        // permission.
-        .merge(http::config_integrations_router(
-            store.connections(),
-            Arc::clone(providers),
-            store.registry(),
-            store.config_trees(),
-            store.admin(),
-            SystemClock,
-            Arc::clone(audit),
-        ))
 }
 
 /// Shared settings, fees, and configured capabilities.

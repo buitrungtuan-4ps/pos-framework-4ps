@@ -16,7 +16,6 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 - [ADR-0200](../adr/0200-six-business-type-templates-ship-with-the-framework.md) Six business-type templates ship with the framework
 - [ADR-0205](../adr/0205-a-refusal-any-act-can-meet-is-not-listed-per-act.md) A refusal any act can meet is not listed per act
 - [ADR-0212](../adr/0212-the-heartbeat-names-the-version-each-till-last-read.md) The heartbeat names the package version each till last read
-- [ADR-0213](../adr/0213-a-store-knows-each-persons-roles.md) A store knows each person's roles, so a role's screens and home resolve on the till
 - [ADR-0215](../adr/0215-a-delivery-order-names-its-vendor.md) A delivery order names its vendor, and a store answers it through the cloud
 
 ## Citations of ADRs that do not exist

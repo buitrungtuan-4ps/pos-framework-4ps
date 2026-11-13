@@ -27,6 +27,8 @@ pub fn registry() -> Result<Registry, RegistryError> {
         &shipping_ahamove::PROVIDER,
         &shipping_grabexpress::PROVIDER,
         &erp_sap::PROVIDER,
+        // The sandbox delivery vendor, whose connector proves the framework end to end (B9.3).
+        &crate::connectors::demo::PROVIDER,
     ])
 }
 
@@ -139,12 +141,18 @@ mod tests {
             .iter()
             .filter_map(|provider| provider["provider_id"].as_str())
             .collect();
-        // Family order: couriers before the ERP.
+        // Family order: the delivery sandbox, then couriers, then the ERP.
         assert_eq!(
             ids,
-            vec!["courier.ahamove", "courier.grabexpress", "erp.sap"]
+            vec![
+                "delivery.demo",
+                "courier.ahamove",
+                "courier.grabexpress",
+                "erp.sap"
+            ]
         );
-        let ahamove = &view["providers"][0];
+        assert_eq!(view["providers"][0]["sandbox"], true);
+        let ahamove = &view["providers"][1];
         assert_eq!(ahamove["family"], "INTEGRATION_FAMILY_COURIER");
         assert_eq!(ahamove["runs_on"], "PROVIDER_RUNTIME_CLOUD");
         assert_eq!(ahamove["countries"], serde_json::json!(["VN"]));

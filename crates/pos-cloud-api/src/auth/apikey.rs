@@ -104,6 +104,11 @@ pub enum Scope {
     /// ([ADR-0143](../../../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)).
     /// A device credential always carries it; a store API key only when an admin grants it.
     PublishEvents,
+    /// Make an external call through the cloud (`POST /sync/stores/{id}/gateway/calls`)
+    /// ([ADR-0198](../../../../docs/adr/0198-a-store-reaches-the-internet-only-through-the-cloud.md)
+    /// decision 1). A store API key holds it when an admin grants it; a device credential does not
+    /// carry it yet.
+    CallGateway,
 }
 
 impl Scope {
@@ -118,6 +123,7 @@ impl Scope {
             Self::PlaceOrders => "place_orders",
             Self::RelayOrders => "relay_orders",
             Self::PublishEvents => "publish_events",
+            Self::CallGateway => "call_gateway",
         }
     }
 
@@ -135,6 +141,7 @@ impl Scope {
             "place_orders" => Some(Self::PlaceOrders),
             "relay_orders" => Some(Self::RelayOrders),
             "publish_events" => Some(Self::PublishEvents),
+            "call_gateway" => Some(Self::CallGateway),
             _ => None,
         }
     }
@@ -694,6 +701,7 @@ mod tests {
             Scope::PlaceOrders,
             Scope::RelayOrders,
             Scope::PublishEvents,
+            Scope::CallGateway,
         ] {
             assert_eq!(Scope::from_wire(scope.as_wire()), Some(scope));
         }

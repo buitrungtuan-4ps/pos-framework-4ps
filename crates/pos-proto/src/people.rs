@@ -64,6 +64,16 @@ pub struct PublishedStaffMember {
     /// person cannot sign in. Never the PIN itself.
     #[serde(default)]
     pub pin_phc: Option<String>,
+    /// The ids of the active roles the person holds at the store, as ULID strings, sorted and
+    /// without duplicates
+    /// ([ADR-0213](../../../docs/adr/0213-a-store-knows-each-persons-roles.md) decision 1). The
+    /// till chooses a package's role variants and a role's home with them; they grant nothing.
+    ///
+    /// Skipped from the wire when empty, so a node compiled before the field, or for a person with
+    /// no active role, is byte-identical. An edge that predates it ignores it. Never put in an
+    /// event or a log: `Debug` prints only how many there are.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub role_ids: Vec<String>,
 }
 
 impl core::fmt::Debug for PublishedStaffMember {
@@ -76,6 +86,7 @@ impl core::fmt::Debug for PublishedStaffMember {
             .field("permissions_with_approval", &self.permissions_with_approval)
             .field("discount_ceiling_minor", &self.discount_ceiling_minor)
             .field("has_pin", &self.pin_phc.is_some())
+            .field("role_count", &self.role_ids.len())
             .finish_non_exhaustive()
     }
 }
@@ -138,6 +149,7 @@ mod tests {
             permissions_with_approval: Vec::new(),
             discount_ceiling_minor: None,
             pin_phc: Some("$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA".to_owned()),
+            role_ids: Vec::new(),
         }
     }
 
@@ -221,6 +233,34 @@ mod tests {
         assert!(!node.enforced, "an absent switch keeps the store-wide set");
         let member = node.staff.first().expect("one member");
         assert!(member.permissions_with_approval.is_empty());
+    }
+
+    #[test]
+    fn role_ids_ride_the_wire_only_when_held() {
+        const ROLE: &str = "01J00000000000000000000R01";
+        let text = serde_json::to_string(&PublishedStaffMember {
+            role_ids: vec![ROLE.to_owned()],
+            ..member()
+        })
+        .expect("serialise");
+        assert!(text.ends_with(r#","role_ids":["01J00000000000000000000R01"]}"#));
+        let back: PublishedStaffMember = serde_json::from_str(&text).expect("deserialise");
+        assert_eq!(back.role_ids, [ROLE]);
+        assert!(
+            !serde_json::to_string(&member())
+                .expect("serialise")
+                .contains("role_ids"),
+            "a person with no role is written as before the field"
+        );
+        let printed = format!(
+            "{:?}",
+            PublishedStaffMember {
+                role_ids: vec![ROLE.to_owned()],
+                ..member()
+            }
+        );
+        assert!(!printed.contains(ROLE), "a role id is never printed");
+        assert!(printed.contains("role_count: 1"));
     }
 
     #[test]

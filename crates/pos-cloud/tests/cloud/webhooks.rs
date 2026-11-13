@@ -186,3 +186,63 @@ async fn webhook_register_requires_a_session_and_refuses_ssrf() {
         "a webhook must use https"
     );
 }
+
+/// Roadmap-v3 B6.2: a registration names the event types it is sent, sorted and once each in the
+/// listing; one the event catalogue does not hold is refused on `event_types`, and nothing is stored.
+#[tokio::test]
+async fn a_webhook_names_the_event_types_it_is_sent_and_an_unknown_one_is_refused() {
+    let router = http::router(app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        provisioned_admin(),
+        FakeConfigTrees::default(),
+        FakeWebhooks::default(),
+    ));
+    let cookie = admin_cookie(&router).await;
+    let tenant_ulid = tenant().as_ulid().to_string();
+    let register = |event_types: serde_json::Value| {
+        serde_json::json!({
+            "tenant_id": tenant_ulid,
+            "store_id": store_id().as_ulid().to_string(),
+            "url": "https://93.184.216.34/hook",
+            "event_types": event_types,
+        })
+    };
+
+    let unknown = register(serde_json::json!(["sales.order.opened", "no.such.event"]));
+    let refused = router
+        .clone()
+        .oneshot(post_with_cookie("/admin/webhooks", &unknown, &cookie))
+        .await
+        .expect("route the refused registration");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    let refused = json_body(refused).await.to_string();
+    assert!(refused.contains("event_types") && refused.contains("UNKNOWN_EVENT_TYPE"));
+
+    let named = register(serde_json::json!([
+        "billing.payment.captured",
+        "sales.order.opened",
+        "sales.order.opened"
+    ]));
+    let created = router
+        .clone()
+        .oneshot(post_with_cookie("/admin/webhooks", &named, &cookie))
+        .await
+        .expect("route the registration");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let listed = router
+        .oneshot(get_with_cookie(
+            &format!("/admin/webhooks?tenant_id={tenant_ulid}"),
+            &cookie,
+        ))
+        .await
+        .expect("route the listing");
+    let listed = json_body(listed).await;
+    let rows = listed.as_array().expect("an array");
+    assert_eq!(rows.len(), 1, "the refused registration stored nothing");
+    assert_eq!(
+        rows[0]["event_types"],
+        serde_json::json!(["billing.payment.captured", "sales.order.opened"])
+    );
+}

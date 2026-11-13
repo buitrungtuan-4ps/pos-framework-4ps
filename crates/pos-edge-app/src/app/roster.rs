@@ -88,12 +88,49 @@ pub struct StaffAuth {
     pub pin_phc: Option<String>,
 }
 
+/// The roles one person holds at the store, by id, sorted and once each
+/// ([ADR-0213](../../../../docs/adr/0213-a-store-knows-each-persons-roles.md)): what the till
+/// chooses a package's role variants and a role's home by. They grant nothing; permissions are
+/// [`StaffAuth`]'s.
+///
+/// `Debug` prints only how many there are, so a roster printed by mistake logs none of them
+/// (decision 5).
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct RoleIds(Vec<Ulid>);
+
+impl RoleIds {
+    /// The ids a published member lists. One that is not a ULID is dropped: it could name no role a
+    /// selector states, so it would match nothing anyway.
+    #[must_use]
+    pub fn from_published(ids: &[String]) -> Self {
+        let mut parsed: Vec<Ulid> = ids.iter().filter_map(|id| id.parse().ok()).collect();
+        parsed.sort_unstable();
+        parsed.dedup();
+        Self(parsed)
+    }
+
+    /// The ids, sorted.
+    #[must_use]
+    pub fn as_slice(&self) -> &[Ulid] {
+        &self.0
+    }
+}
+
+impl core::fmt::Debug for RoleIds {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "RoleIds({} held)", self.0.len())
+    }
+}
+
 /// The store's staff, keyed by the badge `code` a person types, as published from the cloud
 /// ([ADR-0070](../../../../docs/adr/0070-people-and-access.md)). This is the roster the edge authorises
 /// against — replacing any local, out-of-band staff list with the set the console published.
 #[derive(Debug, Clone, Default)]
 pub struct StaffRoster {
     by_code: BTreeMap<String, StaffAuth>,
+    /// The roles of each member who holds any, by the same code. Beside [`StaffAuth`] rather than in
+    /// it because nothing the edge authorises reads them: only the session read answers them.
+    roles_by_code: BTreeMap<String, RoleIds>,
 }
 
 impl StaffRoster {
@@ -103,9 +140,33 @@ impl StaffRoster {
         Self::default()
     }
 
-    /// Adds (or replaces) a staff member under their `code`.
+    /// Adds (or replaces) a staff member under their `code`, holding no role.
     pub fn insert(&mut self, code: impl Into<String>, auth: StaffAuth) {
-        self.by_code.insert(code.into(), auth);
+        self.insert_with_roles(code, auth, RoleIds::default());
+    }
+
+    /// Adds (or replaces) a staff member under their `code`, holding `roles`
+    /// ([ADR-0213](../../../../docs/adr/0213-a-store-knows-each-persons-roles.md)).
+    pub fn insert_with_roles(&mut self, code: impl Into<String>, auth: StaffAuth, roles: RoleIds) {
+        let code = code.into();
+        if roles.as_slice().is_empty() {
+            self.roles_by_code.remove(&code);
+        } else {
+            self.roles_by_code.insert(code.clone(), roles);
+        }
+        self.by_code.insert(code, auth);
+    }
+
+    /// The roles a signed-in person holds, sorted: none for an id the roster does not know, or a
+    /// person the cloud published with no role. What the till chooses a package's role variants
+    /// and a role's home by (ADR-0213 decision 2).
+    #[must_use]
+    pub fn role_ids_for(&self, employee_id: EmployeeId) -> &[Ulid] {
+        self.by_code
+            .iter()
+            .find(|(_, auth)| auth.employee_id == Some(employee_id))
+            .and_then(|(code, _)| self.roles_by_code.get(code))
+            .map_or(&[], RoleIds::as_slice)
     }
 
     /// The staff member under `code`, if any.
@@ -282,5 +343,55 @@ mod tests {
 
         roster.insert("1003", member(Some(3), Some("$argon2id$v=19$stand-in")));
         assert!(roster.sign_in_ready());
+    }
+
+    #[test]
+    fn a_member_answers_their_own_roles_and_a_replaced_member_drops_them() {
+        use super::{RoleIds, StaffAuth, StaffRoster};
+        use pos_core::permission::PermissionSet;
+
+        let alice = EmployeeId::new(Ulid::from_u128(1));
+        let member = || StaffAuth {
+            employee_id: Some(alice),
+            permissions: PermissionSet::default(),
+            permissions_with_approval: PermissionSet::EMPTY,
+            discount_ceiling: None,
+            pin_phc: None,
+        };
+        let r1 = Ulid::from_u128(0x0A01);
+        let r2 = Ulid::from_u128(0x0A02);
+        let published = [
+            r2.to_string(),
+            "not a ulid".to_owned(),
+            r1.to_string(),
+            r2.to_string(),
+        ];
+        let roles = RoleIds::from_published(&published);
+        assert_eq!(
+            roles.as_slice(),
+            [r1, r2],
+            "sorted, once each, a malformed id dropped"
+        );
+        assert_eq!(
+            format!("{roles:?}"),
+            "RoleIds(2 held)",
+            "never the ids themselves"
+        );
+
+        let mut roster = StaffRoster::new();
+        roster.insert_with_roles("1001", member(), roles);
+        assert_eq!(roster.role_ids_for(alice), [r1, r2]);
+        assert!(
+            roster
+                .role_ids_for(EmployeeId::new(Ulid::from_u128(9)))
+                .is_empty()
+        );
+        assert!(!format!("{roster:?}").contains(&r1.to_string()));
+
+        roster.insert("1001", member());
+        assert!(
+            roster.role_ids_for(alice).is_empty(),
+            "replaced with no role"
+        );
     }
 }

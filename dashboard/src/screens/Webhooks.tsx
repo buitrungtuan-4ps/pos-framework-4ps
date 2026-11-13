@@ -2,7 +2,9 @@
 // ([ADR-0121](../../../docs/adr/0121-one-way-to-author-an-entity.md)): list a tenant's endpoints,
 // register a new HTTPS destination for the store in context (the URL is vetted server-side by the
 // SSRF guard), and delete one behind a type-to-confirm. The cursor shows how far delivery has
-// reached; `disabled` marks an auto-disabled endpoint.
+// reached; `disabled` marks an auto-disabled endpoint. An endpoint may name the event types it is
+// sent (roadmap-v3 B6.2), typed as tokens; the cloud refuses one its catalogue does not hold, and
+// none means every event.
 //
 // Like the API-key token, the signing secret is shown **exactly once** — the cloud stores a hash and
 // cannot show it again — so it lives in its own `Modal`, opened as the form closes. Same reasoning
@@ -16,7 +18,7 @@ import type { WebhookSummary } from "../api/schemas";
 import { t } from "../i18n";
 import { onScopedContext, RequireContext } from "../lib/scoped";
 import { storeId, tenantId } from "../state/session";
-import { Banner, Button, Card, PageHeader, Skeleton, StatusBadge, TextField } from "../components/ui";
+import { Banner, Button, Card, PageHeader, Skeleton, StatusBadge, TextArea, TextField } from "../components/ui";
 import {
   type Column,
   ConfirmDialog,
@@ -30,9 +32,50 @@ import { useEntityCrud } from "../lib/entity-crud";
 import { toast } from "../components/Toast";
 import { apiMessage } from "../lib/errors";
 
+// The table's columns. They read nothing but the row, so they live outside the screen.
+const columns = (): Column<WebhookSummary>[] => [
+  {
+    key: "url",
+    header: t("webhooks.urlLabel"),
+    cell: (row) => row.url,
+    sortValue: (row) => row.url,
+    class: "break-all",
+  },
+  {
+    key: "events",
+    header: t("webhooks.events"),
+    cell: (row) => (row.event_types.length === 0 ? t("webhooks.eventsAll") : row.event_types.join(", ")),
+    class: "break-all",
+  },
+  {
+    key: "status",
+    header: t("webhooks.status"),
+    cell: (row) => (
+      <StatusBadge
+        tone={row.disabled ? "disabled" : "active"}
+        label={row.disabled ? t("webhooks.disabled") : t("webhooks.active")}
+      />
+    ),
+    sortValue: (row) => (row.disabled ? 1 : 0),
+  },
+  {
+    key: "id",
+    header: t("webhooks.id"),
+    cell: (row) => (
+      <TechnicalDetails label={t("common.technicalDetails")}>{row.id}</TechnicalDetails>
+    ),
+  },
+];
+
+/** The event-type tokens typed into the form: split on commas and white space, blanks dropped. */
+export function eventTypesTyped(text: string): string[] {
+  return text.split(/[\s,]+/).filter((token) => token !== "");
+}
+
 export function Webhooks() {
   const [rows, setRows] = createSignal<WebhookSummary[] | null>(null);
   const [url, setUrl] = createSignal("");
+  const [eventTypes, setEventTypes] = createSignal("");
   // Held only until the operator dismisses it. Nothing persists it, here or anywhere.
   const [secret, setSecret] = createSignal("");
   const [error, setError] = createSignal("");
@@ -58,6 +101,7 @@ export function Webhooks() {
 
   const openRegister = () => {
     setUrl("");
+    setEventTypes("");
     registration.create();
   };
 
@@ -68,7 +112,7 @@ export function Webhooks() {
     }
     void registration
       .run(async () => {
-        const created = await api.registerWebhook(tenantId(), storeId(), url().trim());
+        const created = await api.registerWebhook(tenantId(), storeId(), url().trim(), eventTypesTyped(eventTypes()));
         // Set inside the write, so the secret exists before `run` closes the panel and the second
         // dialog can open in the same tick. It is the only copy that will ever be shown.
         setSecret(created.signing_secret);
@@ -114,34 +158,6 @@ export function Webhooks() {
       setReenabling("");
     }
   };
-
-  const columns = (): Column<WebhookSummary>[] => [
-    {
-      key: "url",
-      header: t("webhooks.urlLabel"),
-      cell: (row) => row.url,
-      sortValue: (row) => row.url,
-      class: "break-all",
-    },
-    {
-      key: "status",
-      header: t("webhooks.status"),
-      cell: (row) => (
-        <StatusBadge
-          tone={row.disabled ? "disabled" : "active"}
-          label={row.disabled ? t("webhooks.disabled") : t("webhooks.active")}
-        />
-      ),
-      sortValue: (row) => (row.disabled ? 1 : 0),
-    },
-    {
-      key: "id",
-      header: t("webhooks.id"),
-      cell: (row) => (
-        <TechnicalDetails label={t("common.technicalDetails")}>{row.id}</TechnicalDetails>
-      ),
-    },
-  ];
 
   return (
     <div>
@@ -203,7 +219,7 @@ export function Webhooks() {
           editTitle={t("webhooks.register")}
           submitLabel={t("action.register")}
           onSubmit={register}
-          dirty={() => url() !== ""}
+          dirty={() => url() !== "" || eventTypes() !== ""}
         >
           <TextField
             label={t("webhooks.urlLabel")}
@@ -212,6 +228,13 @@ export function Webhooks() {
             value={url()}
             onInput={setUrl}
             hint={t("webhooks.urlHint")}
+          />
+          <TextArea
+            label={t("webhooks.eventTypesLabel")}
+            value={eventTypes()}
+            rows={3}
+            onInput={setEventTypes}
+            hint={t("webhooks.eventTypesHint")}
           />
         </FormPanel>
 

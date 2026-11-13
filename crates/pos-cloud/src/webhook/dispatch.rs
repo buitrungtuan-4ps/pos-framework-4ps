@@ -23,6 +23,7 @@
 
 use core::future::Future;
 use core::num::NonZeroU32;
+use std::collections::BTreeSet;
 
 use pos_ports::PortError;
 use pos_ports::event_store::{EventQuery, EventStore};
@@ -116,6 +117,8 @@ pub struct WebhookEndpoint {
     cursor: Option<EventId>,
     page: NonZeroU32,
     breaker: CircuitBreaker,
+    /// The event types it is sent; empty for every event (roadmap-v3 B6.2).
+    event_types: BTreeSet<String>,
 }
 
 impl WebhookEndpoint {
@@ -143,7 +146,21 @@ impl WebhookEndpoint {
             cursor,
             page: NonZeroU32::new(DEFAULT_PAGE).unwrap_or(NonZeroU32::MIN),
             breaker: CircuitBreaker::new(BreakerConfig::default()),
+            event_types: BTreeSet::new(),
         }
+    }
+
+    /// The endpoint, sent only the events whose type is one of `event_types`; every event when it is
+    /// empty, as an endpoint registered before the filter is (roadmap-v3 B6.2).
+    #[must_use]
+    pub fn sent_only(mut self, event_types: &[String]) -> Self {
+        self.event_types = event_types.iter().cloned().collect();
+        self
+    }
+
+    /// Whether the endpoint is sent an event of `event_type`.
+    fn sends(&self, event_type: &str) -> bool {
+        self.event_types.is_empty() || self.event_types.contains(event_type)
     }
 
     /// Points the endpoint at a freshly re-vetted `destination`, leaving the cursor and breaker
@@ -215,9 +232,19 @@ where
     if let Some(after) = endpoint.cursor {
         query = query.after(after);
     }
-    let batch = store.read(&query).await?;
-    if batch.is_empty() {
+    let page = store.read(&query).await?;
+    let Some(last) = page.last().map(|event| event.event_id) else {
         return Ok(DeliveryOutcome::Idle);
+    };
+    // The page's events the endpoint is sent. A page holding none of them is passed over: the
+    // cursor moves past it with nothing sent, so a narrow filter never re-reads the same page.
+    let batch: Vec<_> = page
+        .into_iter()
+        .filter(|event| endpoint.sends(event.event_type.as_str()))
+        .collect();
+    if batch.is_empty() {
+        endpoint.cursor = Some(last);
+        return Ok(DeliveryOutcome::Delivered { events: 0 });
     }
 
     let body = serde_json::to_vec(&batch).map_err(WebhookError::Encode)?;
@@ -239,8 +266,8 @@ where
         .await
         .is_ok()
     {
-        // Advance only on success. The last event's id is the new high-water mark.
-        endpoint.cursor = batch.last().map(|event| event.event_id).or(endpoint.cursor);
+        // Advance only on success, past the whole page read, including any events filtered out.
+        endpoint.cursor = Some(last);
         endpoint.breaker.record_success();
         let events = u32::try_from(batch.len()).unwrap_or(u32::MAX);
         Ok(DeliveryOutcome::Delivered { events })
@@ -353,6 +380,66 @@ mod tests {
                 .push((signature.clone(), body.to_vec()));
             Ok(())
         }
+    }
+
+    /// Roadmap-v3 B6.2: an endpoint that names event types is sent only those, and the cursor moves
+    /// past what it is not sent, so a page with none of them is never read again.
+    #[tokio::test]
+    async fn an_endpoint_naming_event_types_is_sent_only_those() {
+        use pos_proto::envelope::EventTypeRef;
+        use pos_proto::events::EventType;
+
+        let store = FakeStore::new();
+        let mut events = fixtures::activations(store_id(), 1, 3);
+        let other = EventType::ALL
+            .iter()
+            .copied()
+            .find(|candidate| candidate.as_str() != events[0].event_type.as_str())
+            .expect("the catalogue holds more than one type");
+        events[1].event_type = EventTypeRef::from_known(other);
+        let mut tx = store.begin().await.expect("begin");
+        store.append(&mut tx, &events).await.expect("append");
+        tx.commit().await.expect("commit");
+
+        let wanted = [other.as_str().to_owned()];
+        let mut endpoint =
+            WebhookEndpoint::register(store_id(), destination(), SigningSecret::new("s"))
+                .sent_only(&wanted);
+        let transport = FakeTransport::up();
+        let outcome = deliver_next(&store, &mut endpoint, &transport, now())
+            .await
+            .expect("deliver");
+        assert_eq!(outcome, DeliveryOutcome::Delivered { events: 1 });
+        assert_eq!(
+            endpoint.cursor(),
+            Some(events[2].event_id),
+            "past the whole page"
+        );
+        {
+            let accepted = transport.accepted.lock().expect("lock");
+            let body = String::from_utf8_lossy(&accepted[0].1).into_owned();
+            assert!(body.contains(other.as_str()));
+            assert!(!body.contains(events[0].event_type.as_str()));
+        }
+
+        // A page holding none of them is passed over: nothing is sent, and the cursor moves on.
+        let none = ["no.such.type".to_owned()];
+        let mut narrow =
+            WebhookEndpoint::register(store_id(), destination(), SigningSecret::new("s"))
+                .sent_only(&none);
+        let quiet = FakeTransport::up();
+        let outcome = deliver_next(&store, &mut narrow, &quiet, now())
+            .await
+            .expect("deliver");
+        assert_eq!(outcome, DeliveryOutcome::Delivered { events: 0 });
+        assert_eq!(quiet.calls(), 0);
+        assert_eq!(narrow.cursor(), Some(events[2].event_id));
+        assert_eq!(
+            deliver_next(&store, &mut narrow, &quiet, now())
+                .await
+                .expect("deliver"),
+            DeliveryOutcome::Idle
+        );
     }
 
     #[tokio::test]
