@@ -482,8 +482,10 @@ credential in the OS credential store (Credential Manager on Windows, the kernel
 [ADR-0086](../../docs/adr/0086-edge-keyvault-and-activation.md)), and — once activated — runs the
 config-pull, heartbeat, and order-relay loops. **The device credential is all they need**
 ([ADR-0143](../../docs/adr/0143-the-device-credential-syncs-and-events-travel-over-https.md)): the
-cloud accepts it on `/sync` for the box's own store, with exactly `read_config`, `relay_orders` and
-`publish_events`, and archiving the device in the console revokes it. A store key still takes
+cloud accepts it on `/sync` for the box's own store, with exactly `read_config`, `relay_orders`,
+`publish_events` and `call_gateway` (the till's lookups, which always present the device credential,
+[ADR-0214](../../docs/adr/0214-a-tills-external-lookup-is-one-catalogue-act.md)), and archiving the
+device in the console revokes it. A store key still takes
 precedence when one is set, read from the keyring (`sync_key`) or, as a headless bring-up override,
 from `POS_EDGE_SYNC_KEY` (the unit's optional `/etc/pos-edge/env`, root-owned mode 0600 — never in
 `config.toml`, never committed); a value there that starts with `#` is a leftover hint, not a key, and

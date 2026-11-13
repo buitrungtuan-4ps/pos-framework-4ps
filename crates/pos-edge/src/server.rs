@@ -1259,6 +1259,8 @@ where
     // own endpoint and presents the device credential whatever key the loops use
     // (ADR-0087, ADR-0143).
     let publisher = event_rail::spawn_event_publish(edge, rail, cloud, vault, shutdown_rx).await;
+    // The till's lookups go out beside the loops, over the device credential (ADR-0214).
+    let app = gateway_link::with_gateway(app, edge.store_id(), cloud, vault).await;
     CloudSurface {
         app,
         cloud: keyed_client,
@@ -1800,5 +1802,6 @@ pub async fn shutdown_signal() {
 
 mod cloud_loops;
 mod event_rail;
+mod gateway_link;
 #[cfg(test)]
 mod tests;

@@ -44,19 +44,44 @@ fn granting_one_permission_does_not_grant_another() {
     ));
 }
 
+/// The permissions an accepted ADR grants to no role by default, so a tenant grants each to the
+/// roles it chooses: the till's external lookup
+/// ([ADR-0214](../../../../docs/adr/0214-a-tills-external-lookup-is-one-catalogue-act.md)
+/// decision 2).
+const GRANTED_BY_NO_ROLE: &[Permission] = &[Permission::RunLookup];
+
 #[test]
 fn the_owner_default_role_gets_everything() {
     // Not a rule the spec mandates, but a sane default and a guard that default_grants works:
-    // every permission lists Owner, so the Owner seed is the full catalogue.
+    // every permission lists Owner, so the Owner seed is the full catalogue, except the ones an
+    // accepted ADR grants to nobody.
     let owner = default_grants(Role::Owner);
     for permission in Permission::ALL {
-        assert!(
+        assert_eq!(
             owner.contains(*permission),
-            "Owner should get {}",
+            !GRANTED_BY_NO_ROLE.contains(permission),
+            "Owner should get {} exactly when an ADR does not grant it to nobody",
             permission.meta().id
         );
     }
-    assert_eq!(owner.len() as usize, Permission::ALL.len());
+    assert_eq!(
+        owner.len() as usize,
+        Permission::ALL.len() - GRANTED_BY_NO_ROLE.len()
+    );
+}
+
+#[test]
+fn a_permission_granted_to_no_role_is_in_no_default_set() {
+    for permission in GRANTED_BY_NO_ROLE {
+        assert!(permission.meta().default_roles.is_empty());
+        for role in Role::ALL {
+            assert!(
+                !default_grants(*role).contains(*permission),
+                "{role:?} must not get {} by default",
+                permission.meta().id
+            );
+        }
+    }
 }
 
 #[test]

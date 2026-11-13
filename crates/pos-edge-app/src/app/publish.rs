@@ -216,6 +216,14 @@ impl<S: EventStore> Edge<S> {
         pos_proto::ids::EventId::new(self.next_ulid())
     }
 
+    /// A fresh `idempotency_key` for one gateway call a till did not name its own for
+    /// ([ADR-0214](../../../../docs/adr/0214-a-tills-external-lookup-is-one-catalogue-act.md)
+    /// decision 3): a ULID, 26 letters and digits.
+    #[must_use]
+    pub fn gateway_idempotency_key(&self) -> String {
+        self.next_ulid().to_string()
+    }
+
     pub(in crate::app) fn next_ulid(&self) -> Ulid {
         self.ids
             .lock()

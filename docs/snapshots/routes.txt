@@ -51,6 +51,7 @@ POST /api/custom-records
 POST /api/custom-records/{id}/slip
 POST /api/custom-records/{id}/values
 POST /api/drawer/open
+POST /api/gateway/calls
 POST /api/kds/bump
 POST /api/lines/{id}/fire
 POST /api/lines/{id}/quantity

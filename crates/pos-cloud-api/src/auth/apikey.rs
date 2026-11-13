@@ -48,8 +48,16 @@ pub const TOKEN_PREFIX: &str = "pos_";
 pub const DEVICE_TOKEN_PREFIX: &str = "posdev_";
 
 /// The scopes a device credential carries: exactly what a store box does with the cloud, and
-/// nothing a person or an integration does (ADR-0143).
-pub const DEVICE_SCOPES: [Scope; 3] = [Scope::ReadConfig, Scope::RelayOrders, Scope::PublishEvents];
+/// nothing a person or an integration does (ADR-0143). A box calls the gateway for its till's
+/// lookups ([ADR-0214](../../../../docs/adr/0214-a-tills-external-lookup-is-one-catalogue-act.md)
+/// decision 3), so it carries `call_gateway` too; what it may call is still only an endpoint its
+/// tenant declared and enabled.
+pub const DEVICE_SCOPES: [Scope; 4] = [
+    Scope::ReadConfig,
+    Scope::RelayOrders,
+    Scope::PublishEvents,
+    Scope::CallGateway,
+];
 
 /// Which kind of credential a presented token is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,8 +114,8 @@ pub enum Scope {
     PublishEvents,
     /// Make an external call through the cloud (`POST /sync/stores/{id}/gateway/calls`)
     /// ([ADR-0198](../../../../docs/adr/0198-a-store-reaches-the-internet-only-through-the-cloud.md)
-    /// decision 1). A store API key holds it when an admin grants it; a device credential does not
-    /// carry it yet.
+    /// decision 1). A device credential always carries it, for the till's lookups (ADR-0214); a
+    /// store API key only when an admin grants it.
     CallGateway,
 }
 

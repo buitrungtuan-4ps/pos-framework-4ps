@@ -22,6 +22,7 @@ pub mod check;
 mod counter;
 mod custom_data;
 pub mod floor;
+pub mod gateway;
 mod guarded;
 pub mod health;
 mod integrations;
