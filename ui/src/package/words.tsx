@@ -8,6 +8,7 @@ import { NeedsUpdateSlot, type Words } from "../../../packages/package-renderer/
 import { t, type MessageKey } from "../i18n";
 import en from "../i18n/en.json";
 import { tenantLabel } from "../state/labels";
+import { OfflineSkip } from "../state/lookup";
 import { printFailure } from "../state/print-writes";
 
 /**
@@ -27,9 +28,13 @@ export function NeedsUpdate(): JSX.Element {
   return <NeedsUpdateSlot text={t("package.needs_update")} />;
 }
 
-/** The words the till draws a package tree with. A failed act says what the till says of a print. */
+/**
+ * The words the till draws a package tree with. A failed act says what the till says of a print; a
+ * lookup its flow step skipped offline says the step's note (ADR-0214 decision 5).
+ */
 export const TILL_WORDS: Words = {
   label: (key) => packageLabel(key),
   needsUpdate: () => t("package.needs_update"),
-  failure: printFailure,
+  failure: (caught) =>
+    caught instanceof OfflineSkip ? packageLabel(caught.noteKey) || t("error.gateway_offline") : printFailure(caught),
 };
