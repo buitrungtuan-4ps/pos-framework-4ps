@@ -120,6 +120,7 @@ fn pending_qr_order(queued_id: &str, reference: &str) -> PendingOrderDto {
             store_id: store().to_string(),
             table_id: Some(Ulid::from_u128(0x7AB1E).to_string()),
             subject_id: None,
+            vendor_id: None,
             lines: vec![QueuedOrderLine {
                 menu_item_id: known_item().to_string(),
                 quantity_milli: 1000,
@@ -170,15 +171,19 @@ fn a_pulled_order_is_made_and_acked_accepted() {
 fn a_malformed_payload_is_acked_as_invalid_argument_not_dropped() {
     let mut bad = pending_qr_order("q-bad", "relay-bad");
     bad.order.lines[0].menu_item_id = "not-a-ulid".to_owned();
-    let transport = FakeTransport::with(vec![bad]);
+    // A vendor that is not an opaque id is refused the same way (ADR-0215 decision 1).
+    let mut bad_vendor = pending_qr_order("q-bad-vendor", "relay-bad-vendor");
+    bad_vendor.order.vendor_id = Some("Grab".to_owned());
+    let transport = FakeTransport::with(vec![bad, bad_vendor]);
     let client = RelayClient::new(transport.clone(), intake());
 
     let processed = run_ready(client.pump_once()).expect("pump");
-    assert_eq!(processed, 1);
-    let acks = transport.acks();
-    match &acks[0].1 {
-        StoreOutcome::Rejected { status, .. } => assert_eq!(status, "invalid_argument"),
-        StoreOutcome::Accepted(_) => panic!("a malformed order must not be accepted"),
+    assert_eq!(processed, 2);
+    for (_, outcome) in transport.acks() {
+        match outcome {
+            StoreOutcome::Rejected { status, .. } => assert_eq!(status, "invalid_argument"),
+            StoreOutcome::Accepted(_) => panic!("a malformed order must not be accepted"),
+        }
     }
 }
 

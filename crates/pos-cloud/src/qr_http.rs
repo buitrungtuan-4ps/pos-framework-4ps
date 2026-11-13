@@ -286,6 +286,7 @@ fn to_inbound_qr_order(
         store_id,
         table_id: Some(table_id),
         subject_id: None,
+        vendor_id: None,
         lines,
         placed_at,
     })

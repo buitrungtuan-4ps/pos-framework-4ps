@@ -89,6 +89,7 @@ impl<S: EventStore> Edge<S> {
             table_id: Some(table_id),
             guest_count,
             package_version_id,
+            vendor_id: None,
         };
         let (table_envelope, table_message) = self.prepare(&ctx, &table_opened)?;
         let (order_envelope, order_message) = self.prepare(&ctx, &order_opened)?;

@@ -181,6 +181,7 @@ mod staff_confirmation {
             store_id: store(),
             table_id: Some(TableId::new(Ulid::from_u128(42))),
             subject_id: None,
+            vendor_id: None,
             lines: vec![InboundOrderLine {
                 menu_item_id: MenuItemId::new(Ulid::from_u128(500)),
                 quantity: Quantity::ONE,
@@ -374,6 +375,7 @@ mod channel_prices {
             store_id: store(),
             table_id: None,
             subject_id: None,
+            vendor_id: None,
             lines: vec![InboundOrderLine {
                 menu_item_id: margherita(),
                 quantity: Quantity::ONE,
@@ -452,6 +454,7 @@ mod qr_switch {
             store_id: store(),
             table_id: (channel == SalesChannel::Qr).then(|| TableId::new(Ulid::from_u128(42))),
             subject_id: None,
+            vendor_id: None,
             lines: vec![InboundOrderLine {
                 menu_item_id: MenuItemId::new(Ulid::from_u128(500)),
                 quantity: Quantity::ONE,
@@ -555,5 +558,84 @@ mod qr_switch {
                 .expect("a takeaway order does not ask the QR switch")
                 .created
         );
+    }
+}
+
+/// ADR-0215 decision 1: a delivery order names its vendor, an opaque id, on the order it opens;
+/// any other order names none.
+mod vendor {
+    use std::num::NonZeroU32;
+    use std::sync::Arc;
+
+    use pos_edge::{Edge, EdgeOrderIn, InMemoryQueueNumbers, InMemoryReceipts, StoreIdentity};
+    use pos_fakes::FakeStore;
+    use pos_fakes::executor::run_ready;
+    use pos_ports::event_store::{EventQuery, EventStore};
+    use pos_ports::order_in::{ExternalReference, InboundOrder, InboundOrderLine, OrderIn};
+    use pos_proto::SalesChannel;
+    use pos_proto::events::SalesOrderOpened;
+    use pos_proto::ids::{DeviceId, MenuItemId, VendorId};
+    use pos_proto::quantity::Quantity;
+    use pos_proto::ulid::Ulid;
+    use pos_proto::wire_enum::Open;
+
+    use super::{seeded_session, store};
+
+    fn order(reference: &str, channel: SalesChannel, vendor_id: Option<VendorId>) -> InboundOrder {
+        InboundOrder {
+            external_reference: ExternalReference::parse(reference).expect("a valid reference"),
+            sales_channel: Open::from_known(channel),
+            store_id: store(),
+            table_id: None,
+            subject_id: None,
+            vendor_id,
+            lines: vec![InboundOrderLine {
+                menu_item_id: MenuItemId::new(Ulid::from_u128(500)),
+                quantity: Quantity::ONE,
+                modifier_menu_item_ids: Vec::new(),
+                quoted_unit_price: None,
+                note: None,
+            }],
+            placed_at: pos_contract_tests::fixtures::instant(),
+        }
+    }
+
+    #[test]
+    fn a_delivery_order_names_its_vendor_on_the_order_it_opens() {
+        let log = FakeStore::default();
+        let edge = Edge::new(
+            log.clone(),
+            StoreIdentity::for_store(store()),
+            seeded_session(),
+            Arc::new(InMemoryReceipts::new()),
+        )
+        .expect("seed the id generator");
+        let intake = EdgeOrderIn::new(
+            Arc::new(edge),
+            InMemoryQueueNumbers::new(),
+            DeviceId::new(Ulid::from_u128(20)),
+        );
+        let vendor = VendorId::new(Ulid::from_u128(77));
+        for submitted in [
+            order(
+                "01J0000000000000000000CN01:A1",
+                SalesChannel::Delivery,
+                Some(vendor),
+            ),
+            order("TAKE-1", SalesChannel::Takeaway, None),
+        ] {
+            run_ready(intake.submit(&submitted)).expect("accepted");
+        }
+        let query = EventQuery::first(store(), NonZeroU32::new(100).expect("a positive limit"));
+        let vendors: Vec<Option<VendorId>> = run_ready(log.read(&query))
+            .expect("read the log")
+            .into_iter()
+            .filter(|envelope| envelope.event_type.as_str() == "sales.order.opened")
+            .map(|envelope| {
+                let opened: SalesOrderOpened = envelope.data.decode().expect("decodes");
+                opened.vendor_id
+            })
+            .collect();
+        assert_eq!(vendors, [Some(vendor), None]);
     }
 }

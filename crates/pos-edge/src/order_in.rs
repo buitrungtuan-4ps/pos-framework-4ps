@@ -191,6 +191,7 @@ where
             external_reference: order.external_reference.as_str(),
             total: priced.total,
             repriced: priced.repriced,
+            vendor_id: order.vendor_id,
         };
         self.edge
             .open_inbound_order(

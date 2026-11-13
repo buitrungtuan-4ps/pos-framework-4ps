@@ -147,6 +147,9 @@ no_pii!(
     // configuration, like `ConfigVersionId`, never a person.
     ids::PackageVersionId,
     ids::PaymentId,
+    // The vendor a delivery order came through (ADR-0215 decision 1): a tenant's connection, a
+    // business, never a person.
+    ids::VendorId,
     // Custom data (ADR-0194 decision 3): which field, which entry of a list, which object type,
     // which record. Each names a declaration or a record, never what a person typed: a personal
     // value is held in the subject store and reached through a `SubjectId`.

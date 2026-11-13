@@ -31,7 +31,7 @@ pub mod route;
 use std::collections::BTreeMap;
 
 use pos_ports::order_in::{ExternalReference, InboundOrder, InboundOrderLine};
-use pos_proto::ids::{MenuItemId, StoreId};
+use pos_proto::ids::{MenuItemId, StoreId, VendorId};
 use pos_proto::text::GuestNote;
 use pos_proto::time::Timestamp;
 use pos_proto::wire_enum::Open;
@@ -174,12 +174,17 @@ pub fn to_inbound(
                 .map(|note| GuestNote::new(note.chars().take(MAX_NOTE_CHARS).collect::<String>())),
         });
     }
+    // The vendor is the connection, opaque to the store (ADR-0215 decisions 1 and 6).
+    let vendor_id = connection_id
+        .parse::<VendorId>()
+        .map_err(|_| MappingRefusal::Invalid("the connection's id is not a ULID"))?;
     Ok(InboundOrder {
         external_reference,
         sales_channel: Open::from_known(SalesChannel::Delivery),
         store_id,
         table_id: None,
         subject_id: None,
+        vendor_id: Some(vendor_id),
         lines,
         placed_at,
     })
@@ -236,7 +241,7 @@ mod tests {
         let map = BTreeMap::from([("PIZZA-M".to_owned(), item(1))]);
         let store = StoreId::new(Ulid::from_u128(9));
         let inbound = to_inbound(
-            "01J0000000000000000000CONN",
+            "01J0000000000000000000CN01",
             store,
             &order(vec![line("PIZZA-M", 2)]),
             &map,
@@ -244,7 +249,12 @@ mod tests {
         .expect("maps");
         assert_eq!(
             inbound.external_reference.as_str(),
-            "01J0000000000000000000CONN:D-1001"
+            "01J0000000000000000000CN01:D-1001"
+        );
+        assert_eq!(
+            inbound.vendor_id.map(|id| id.to_string()).as_deref(),
+            Some("01J0000000000000000000CN01"),
+            "the vendor is the connection, an opaque id (ADR-0215)"
         );
         assert_eq!(inbound.sales_channel.known(), SalesChannel::Delivery);
         assert_eq!(inbound.store_id, store);

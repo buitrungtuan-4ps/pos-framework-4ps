@@ -298,6 +298,7 @@ fn an_order_from_outside_the_store_naming_a_sold_out_item_is_refused() {
             store_id: StoreId::new(Ulid::from_u128(1)),
             table_id: None,
             subject_id: None,
+            vendor_id: None,
             lines: vec![InboundOrderLine {
                 menu_item_id: pizza(),
                 quantity: Quantity::ONE,
