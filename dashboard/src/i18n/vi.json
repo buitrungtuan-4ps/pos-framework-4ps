@@ -3132,5 +3132,6 @@
   "flow.step.offlineGoTo": "Chuyển sang bước khác",
   "flow.step.offlineNote": "Ghi chú",
   "flow.step.offlineNoteHint": "Một khóa trong bản dịch của bạn, hiện ở máy bán hàng khi bước này bị bỏ qua.",
-  "flow.step.offlineStep": "Bước chuyển đến"
+  "flow.step.offlineStep": "Bước chuyển đến",
+  "provider.field.answer_url": "URL nhận trả lời (nơi gửi chấp nhận, từ chối, sẵn sàng và bận của cửa hàng)"
 }

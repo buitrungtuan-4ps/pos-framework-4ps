@@ -23,6 +23,7 @@ use pos_providers::{Family, FieldKind, ProviderDescriptor, SettingField};
 use serde::Deserialize;
 use sha2::Sha256;
 
+use super::answer::{AnswerCall, AnswerKind, DeliveryAnswer};
 use super::{OrderConnector, VendorLine, VendorOrder};
 use crate::archive::hex_bytes;
 
@@ -45,6 +46,12 @@ pub static PROVIDER: ProviderDescriptor = ProviderDescriptor {
             label_key: "provider.field.item_map",
             kind: FieldKind::Text { max_len: 64_000 },
             required: true,
+        },
+        SettingField {
+            key: super::answer::ANSWER_URL,
+            label_key: "provider.field.answer_url",
+            kind: FieldKind::Url,
+            required: false,
         },
         SettingField {
             key: WEBHOOK_SECRET,
@@ -116,6 +123,33 @@ impl OrderConnector for DemoConnector {
                 .collect(),
         })
     }
+
+    fn answer(&self, reference: &str, answer: &DeliveryAnswer, secret: &str) -> Option<AnswerCall> {
+        demo_answer(reference, answer, secret)
+    }
+}
+
+/// The demo vendor's answer body: `{"order_ref", "answer", "prep_minutes"?, "reason"?}`, the
+/// answer in lower case, signed in [`SIGNATURE_HEADER`] as its webhooks are.
+fn demo_answer(reference: &str, answer: &DeliveryAnswer, secret: &str) -> Option<AnswerCall> {
+    let word = match answer.kind {
+        AnswerKind::Accept => "accept",
+        AnswerKind::Reject => "reject",
+        AnswerKind::Ready => "ready",
+        AnswerKind::Busy => "busy",
+    };
+    let body = serde_json::to_vec(&serde_json::json!({
+        "order_ref": reference,
+        "answer": word,
+        "prep_minutes": answer.prep_minutes,
+        "reason": answer.reason_code_id,
+    }))
+    .ok()?;
+    let signature = sign(&body, secret)?;
+    Some(AnswerCall {
+        headers: vec![(SIGNATURE_HEADER.to_owned(), signature)],
+        body,
+    })
 }
 
 /// Signs `body` as the demo vendor does, for tests and a sample request. `None` only if HMAC refused

@@ -24,6 +24,7 @@
 //! personal data, and wait on their own decision. A connector answers the vendor's webhook and
 //! nothing more; accepting, rejecting and reporting an order ready back to the vendor is not built.
 
+pub mod answer;
 pub mod demo;
 pub mod route;
 
@@ -82,6 +83,16 @@ pub trait OrderConnector: Send + Sync {
     ///
     /// A short reason when the body is not one of the vendor's orders.
     fn read(&self, body: &[u8]) -> Result<VendorOrder, &'static str>;
+
+    /// The request that tells the vendor a store's answer about `reference` (ADR-0215 decision 4),
+    /// signed under `secret`, or `None` when the vendor takes no answers. Pure, like the rest: the
+    /// route sends it.
+    fn answer(
+        &self,
+        reference: &str,
+        answer: &answer::DeliveryAnswer,
+        secret: &str,
+    ) -> Option<answer::AnswerCall>;
 }
 
 /// Why a vendor order could not become an inbound order.

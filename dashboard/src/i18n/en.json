@@ -3132,5 +3132,6 @@
   "flow.step.offlineGoTo": "Go to another step",
   "flow.step.offlineNote": "Note",
   "flow.step.offlineNoteHint": "A key of your translations, shown at the till when the step is skipped.",
-  "flow.step.offlineStep": "Step to go to"
+  "flow.step.offlineStep": "Step to go to",
+  "provider.field.answer_url": "Answer URL (where the store's accept, reject, ready and busy go)"
 }
