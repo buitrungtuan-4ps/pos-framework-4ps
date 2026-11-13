@@ -33500,14 +33500,14 @@
           },
           {
             "type": "string",
-            "description": "A [`PropertyKind::TranslationKey`] or a [`PropertyKind::Token`]."
+            "description": "A [`PropertyKind::TranslationKey`], a [`PropertyKind::Token`] or a [`PropertyKind::Field`]."
           },
           {
             "$ref": "#/components/schemas/ActionBinding",
             "description": "A [`PropertyKind::Action`]."
           }
         ],
-        "description": "A property's value: the literal itself, read by the kind the catalogue gives the property.\n\nUntagged, so `true`, `3` and `\"order.send\"` are the values themselves. A\n[`PropertyKind::TranslationKey`] and a [`PropertyKind::Token`] are both text."
+        "description": "A property's value: the literal itself, read by the kind the catalogue gives the property.\n\nUntagged, so `true`, `3` and `\"order.send\"` are the values themselves. A\n[`PropertyKind::TranslationKey`], a [`PropertyKind::Token`] and a [`PropertyKind::Field`] are\nall text."
       },
       "ProviderView": {
         "type": "object",

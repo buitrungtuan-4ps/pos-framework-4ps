@@ -155,6 +155,15 @@ function PropertyEditor(props: { property: ComponentProperty } & Omit<InspectorP
           }
         />
       );
+    case "PROPERTY_KIND_FIELD":
+      return (
+        <TextField
+          label={label()}
+          value={typeof value() === "string" ? (value() as string) : ""}
+          hint={t("designer.screens.fieldHint")}
+          onInput={(text) => props.onSet(name(), text.trim() === "" ? undefined : text.trim())}
+        />
+      );
     case "PROPERTY_KIND_BOOL":
       return <CheckboxField label={label()} checked={value() === true} onChange={(on) => props.onSet(name(), on)} />;
     case "PROPERTY_KIND_ACTION":

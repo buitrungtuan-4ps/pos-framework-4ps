@@ -64,7 +64,14 @@ wire_enum! {
     Bool = "BOOL",
     /// A catalogue act and its fixed parameters ([`ActionBinding`]).
     Action = "ACTION",
+    /// The name of a field of the gateway endpoint the screen's lookup calls: 1 to
+    /// [`FIELD_CHARS_MAX`] of `a`–`z`, `0`–`9` and `_`, starting with a letter, as an endpoint
+    /// declares one ([ADR-0214](../../../docs/adr/0214-a-tills-external-lookup-is-one-catalogue-act.md)).
+    Field = "FIELD",
 }
+
+/// The longest [`PropertyKind::Field`], in characters.
+pub const FIELD_CHARS_MAX: usize = 64;
 
 /// One property a component takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -155,7 +162,8 @@ pub struct ScreenNode {
 /// A property's value: the literal itself, read by the kind the catalogue gives the property.
 ///
 /// Untagged, so `true`, `3` and `"order.send"` are the values themselves. A
-/// [`PropertyKind::TranslationKey`] and a [`PropertyKind::Token`] are both text.
+/// [`PropertyKind::TranslationKey`], a [`PropertyKind::Token`] and a [`PropertyKind::Field`] are
+/// all text.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(untagged)]
@@ -164,7 +172,7 @@ pub enum PropertyValue {
     Flag(bool),
     /// A [`PropertyKind::Int`].
     Number(i64),
-    /// A [`PropertyKind::TranslationKey`] or a [`PropertyKind::Token`].
+    /// A [`PropertyKind::TranslationKey`], a [`PropertyKind::Token`] or a [`PropertyKind::Field`].
     Text(String),
     /// A [`PropertyKind::Action`].
     Action(ActionBinding),

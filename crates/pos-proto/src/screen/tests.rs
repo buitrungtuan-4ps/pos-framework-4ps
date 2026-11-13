@@ -69,7 +69,9 @@ fn every_property_is_a_literal_of_a_known_kind() {
 }
 
 /// A component supplies only parameters some act takes as an id, and an act it may bind can be
-/// completed from what it supplies (ADR-0203 decision 3).
+/// completed from what it supplies (ADR-0203 decision 3). The one exception is `values`, what a
+/// person typed into the screen's lookup fields, which an act takes as an entry (ADR-0214
+/// decision 1).
 #[test]
 fn what_a_component_supplies_is_an_id_some_act_takes() {
     for component in CATALOGUE {
@@ -77,7 +79,8 @@ fn what_a_component_supplies_is_an_id_some_act_takes() {
             let taken = crate::actions::CATALOGUE.iter().any(|action| {
                 action.params.iter().any(|p| {
                     p.name == *param
-                        && matches!(p.kind, ActionParamKind::Id | ActionParamKind::IdList)
+                        && (matches!(p.kind, ActionParamKind::Id | ActionParamKind::IdList)
+                            || (*param == "values" && p.kind == ActionParamKind::Entered))
                 })
             });
             assert!(taken, "{}: no act takes {param}", component.component_id);
