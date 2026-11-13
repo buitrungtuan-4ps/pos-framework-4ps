@@ -20,9 +20,11 @@
 //! that seals under the newest and opens under any (`sealer.rs`).
 
 mod environment;
+mod reseal;
 mod sealer;
 mod tenant;
 
 pub use environment::{ENVIRONMENT_KEY_LEN, EnvironmentKeys};
+pub use reseal::{ResealError, ResealReport, reseal_tenant};
 pub use sealer::{KEY_VERSIONS_MAX, Keys, TenantSealer, sealed_version};
 pub use tenant::{MemoryTenantKeys, TenantKey, TenantKeyStore, TenantKeyStoreError};

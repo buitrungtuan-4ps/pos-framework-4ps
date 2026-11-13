@@ -103,6 +103,50 @@ impl PostgresTenantKeys {
     }
 }
 
+impl PostgresTenantKeys {
+    /// Replaces the wrapped bytes of one version, re-wrapped under another environment-key
+    /// version; `false` when there is no such version.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached or the write fails.
+    pub async fn rewrap(&self, tenant_id: &str, key: &TenantKeyRow) -> Result<bool, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let too_large =
+            |_error| PortError::invalid_argument(PortName::KeyKeeper, "a key version is too large");
+        let key_version = i32::try_from(key.key_version).map_err(too_large)?;
+        let keeper_version = i32::try_from(key.keeper_version).map_err(too_large)?;
+        let updated = connection
+            .execute(
+                "UPDATE tenant_keys SET keeper_version = $3, wrapped = $4 \
+                 WHERE tenant_id = $1 AND key_version = $2",
+                &[&tenant_id, &key_version, &keeper_version, &key.wrapped],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(updated == 1)
+    }
+
+    /// Deletes the tenant's versions below `below`, or every version when `None`: a retired
+    /// version, or a tenant's secrets erased by key. Answers how many went.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached or the write fails.
+    pub async fn delete(&self, tenant_id: &str, below: Option<u32>) -> Result<u64, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let below = below.map(|version| i32::try_from(version).unwrap_or(i32::MAX));
+        connection
+            .execute(
+                "DELETE FROM tenant_keys WHERE tenant_id = $1 \
+                 AND ($2::integer IS NULL OR key_version < $2)",
+                &[&tenant_id, &below],
+            )
+            .await
+            .map_err(unavailable)
+    }
+}
+
 impl crate::PostgresStore {
     /// Tenant keys over this pool (ADR-0217, migration 0100). Here rather than in `store.rs`,
     /// which is at its size baseline.
