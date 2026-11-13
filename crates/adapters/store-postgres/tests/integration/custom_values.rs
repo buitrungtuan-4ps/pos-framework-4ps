@@ -279,3 +279,69 @@ fn a_subject_is_held_per_store_and_its_masking_is_recorded_once() {
         );
     });
 }
+
+/// A delivery recipient the cloud kept for a store (migration 0101, ADR-0215) makes that store a
+/// holder before any confirmation, so an erasure reaches it; the store's confirmation is recorded
+/// for it, and no other store is made a holder by confirming it.
+#[test]
+fn a_subject_the_cloud_kept_for_a_store_is_held_by_that_store() {
+    block_on(async {
+        let (store, _admin) = prepared().await.expect("prepare the database");
+        let values = store.custom_values();
+        let tenant = TenantId::new(Ulid::from_u128(0x0A));
+        let shop = StoreId::new(Ulid::from_u128(0x5));
+        let elsewhere = StoreId::new(Ulid::from_u128(0x6));
+        let subject = "SUBJECT0000000000000000DD";
+        let (tenant_id, shop_id) = (tenant.to_string(), shop.to_string());
+        store
+            .subjects()
+            .keep_for_store(&store_postgres::StoreSubjectRow {
+                subject_id: subject,
+                tenant_id: &tenant_id,
+                store_id: &shop_id,
+                collected_at_ms: 1_000,
+                retain_until_ms: None,
+                fields_json: r#"{"address":"address-placeholder"}"#,
+            })
+            .await
+            .expect("kept");
+        assert_eq!(
+            values
+                .subject_holders(tenant, subject)
+                .await
+                .expect("reads"),
+            vec![(shop.to_string(), None)],
+            "held by the store it was kept for, not yet confirmed"
+        );
+        let masked = CustomValueWrite::SubjectMasked {
+            subject_id: subject.to_owned(),
+            masked_time_ms: 5_000,
+        };
+        for (at, cursor) in [(elsewhere, 0x401), (shop, 0x402)] {
+            values
+                .apply(
+                    tenant,
+                    at,
+                    core::slice::from_ref(&masked),
+                    EventId::new(Ulid::from_u128(cursor)),
+                )
+                .await
+                .expect("confirmed");
+        }
+        assert_eq!(
+            values
+                .subject_holders(tenant, subject)
+                .await
+                .expect("reads"),
+            vec![(shop.to_string(), Some(5_000))],
+            "the store's confirmation is recorded; another store's makes no row"
+        );
+        assert_eq!(
+            values
+                .masked_among(tenant, shop, &[subject.to_owned()])
+                .await
+                .expect("reads"),
+            vec![subject.to_owned()]
+        );
+    });
+}
