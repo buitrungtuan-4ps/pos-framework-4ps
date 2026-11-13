@@ -175,6 +175,32 @@ impl PostgresOrderQueue {
         Ok(orders)
     }
 
+    /// The reference `store_id` accepted as `order_id` on `sales_channel`, from the outcome it
+    /// reported, or `None` when it reported no such order.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn reference_of_order(
+        &self,
+        tenant_id: &str,
+        store_id: &str,
+        sales_channel: &str,
+        order_id: &str,
+    ) -> Result<Option<String>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let row = connection
+            .query_opt(
+                "SELECT external_reference FROM order_queue \
+                 WHERE tenant_id = $1 AND store_id = $2 AND status = 'reported' \
+                 AND (outcome ->> 'order_id') = $3 AND sales_channel = $4 LIMIT 1",
+                &[&tenant_id, &store_id, &order_id, &sales_channel],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(row.map(|row| row.get(0)))
+    }
+
     /// Records the device's outcome for a pending order and marks it reported, returning whether a
     /// pending row matched — a second report for the same order finds nothing pending and returns
     /// `false`.

@@ -75,6 +75,7 @@ pub mod tender_keys;
 pub mod text;
 pub mod time;
 pub mod ulid;
+pub mod vendors;
 pub mod wake;
 pub mod wire_enum;
 

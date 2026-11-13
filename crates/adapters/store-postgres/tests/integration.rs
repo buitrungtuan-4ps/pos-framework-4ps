@@ -743,6 +743,9 @@ mod people_republishes_queue;
 #[path = "integration/subjects_store.rs"]
 mod subjects_store;
 
+#[path = "integration/delivery_order_refs.rs"]
+mod delivery_order_refs;
+
 // ---------------------------------------------------------------------------
 // The webhook-endpoint store (ADR-0032): registration facts, the admin CRUD's
 // tenant-scoped listing, and the delivery task's fleet-wide enabled load.

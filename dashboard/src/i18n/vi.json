@@ -3133,5 +3133,7 @@
   "flow.step.offlineNote": "Ghi chú",
   "flow.step.offlineNoteHint": "Một khóa trong bản dịch của bạn, hiện ở máy bán hàng khi bước này bị bỏ qua.",
   "flow.step.offlineStep": "Bước chuyển đến",
-  "provider.field.answer_url": "URL nhận trả lời (nơi gửi chấp nhận, từ chối, sẵn sàng và bận của cửa hàng)"
+  "provider.field.answer_url": "URL nhận trả lời (nơi gửi chấp nhận, từ chối, sẵn sàng và bận của cửa hàng)",
+  "provider.field.prep_minutes": "Số phút để làm một đơn đã nhận (báo cho đối tác)",
+  "provider.field.staff_confirm": "Nhân viên xác nhận từng đơn trước khi bếp nhận"
 }

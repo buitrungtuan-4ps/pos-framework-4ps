@@ -31,6 +31,7 @@ pub mod answer;
 pub mod demo;
 pub mod recipient;
 pub mod route;
+pub mod vendors;
 
 use std::collections::BTreeMap;
 
