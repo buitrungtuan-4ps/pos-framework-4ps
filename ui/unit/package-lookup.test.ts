@@ -119,7 +119,9 @@ describe("a package screen's lookup", () => {
         expect(keys[2]).not.toBe(keys[1]);
         expect(target.querySelector('[role="alert"]')?.textContent).not.toContain("offline");
     });
+});
 
+describe("a lookup in a flow (ADR-0214 decision 5)", () => {
     it("honours a flow step's offline branch: skip with its note, or open the screen of the step it goes to", async () => {
         adoptSession({ permissions_enforced: false } as never);
         const step = (step_id: string, offline: object) => ({ step_id, action_id: "integrations.lookup.run", kind: "STEP_KIND_REQUIRED", offline });

@@ -4,6 +4,11 @@
 //
 // jsdom has no IndexedDB, so this stands in a store that keeps records in a map and answers every
 // request on a later task, as the browser's does.
+//
+// A save lands after a chain of later tasks (open, then put), so a check that one landed waits for
+// it rather than for a fixed time: on a busy machine the chain can take longer than any fixed delay.
+// The check that the late answer is not kept may wait a fixed time, because the save it watches
+// returns at once without writing; a delay there can only let a wrong write show, never hide it.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -50,8 +55,7 @@ describe("the till's snapshot across a sign-out", () => {
     rememberPairing("http://127.0.0.1:8787", "a-device-token");
 
     saveSnapshot("menu", 'W/"1"', { items: [] }, snapshotGeneration());
-    await settle();
-    expect(records.size).toBe(1);
+    await vi.waitFor(() => expect(records.size).toBe(1));
 
     // A read sets out, and the person signs out. The read is answered while the snapshot is being
     // cleared, as `signedOut` waits for the clear before the page leaves.
@@ -64,7 +68,6 @@ describe("the till's snapshot across a sign-out", () => {
 
     // The next person's reads are kept again.
     saveSnapshot("menu", 'W/"3"', { items: [] }, snapshotGeneration());
-    await settle();
-    expect(records.size).toBe(1);
+    await vi.waitFor(() => expect(records.size).toBe(1));
   });
 });
