@@ -25,7 +25,8 @@ pub(super) fn integration_routes(deps: &RouteDeps<'_>) -> Router {
         ..
     } = *deps;
     // The keys every secret is sealed under (ADR-0217, `super::keys`).
-    let keys = super::keys::keys(config, store);
+    // The boot has already stopped if the keeper's keys cannot be read.
+    let keys = super::keys::keys(config, store).ok().flatten();
     Router::new()
         // The vendor catalogue (ADR-0153): every provider compiled into this binary, with the
         // settings schema the console draws a connection form from.

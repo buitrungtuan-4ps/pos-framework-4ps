@@ -26,6 +26,9 @@ pub const ENVIRONMENT_KEY_LEN: usize = 32;
 /// Bytes of nonce: XChaCha20-Poly1305, so a random nonce per wrap needs no counter.
 const NONCE_LEN: usize = 24;
 
+/// The name of one environment key among systemd's credentials: this, then the version.
+pub const CREDENTIAL_PREFIX: &str = "pos-cloud-environment-key-v";
+
 /// What every wrap is bound to besides its version.
 const WRAP_CONTEXT: &[u8] = b"pos-cloud/environment-key/v1\0";
 
@@ -52,6 +55,44 @@ impl EnvironmentKeys {
     pub fn from_file_key(integration_secret: &ConnectionSecret) -> Option<Self> {
         let material = integration_secret.material()?;
         Self::new([(1, *material)])
+    }
+
+    /// The `systemd-creds` keeper (ADR-0217 decision 5, as ADR-0151 does for the edge): every
+    /// `pos-cloud-environment-key-v<N>` in `dir`, each 32 raw bytes, which systemd decrypted
+    /// from the host's TPM2-sealed credentials for this start. A file of another length, or a
+    /// directory with no key, is refused, so a misconfigured host does not boot.
+    ///
+    /// # Errors
+    ///
+    /// Why the keys could not be read, naming the file and never its bytes.
+    pub fn from_credentials(dir: &std::path::Path) -> Result<Self, String> {
+        let entries = std::fs::read_dir(dir).map_err(|error| {
+            format!("cannot read the credentials in {}: {error}", dir.display())
+        })?;
+        let mut keys = Vec::new();
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Some(version) = name
+                .strip_prefix(CREDENTIAL_PREFIX)
+                .and_then(|version| version.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            let bytes = Zeroizing::new(
+                std::fs::read(entry.path())
+                    .map_err(|error| format!("cannot read the credential {name}: {error}"))?,
+            );
+            let key: [u8; ENVIRONMENT_KEY_LEN] = bytes.as_slice().try_into().map_err(|_error| {
+                format!("the credential {name} is not {ENVIRONMENT_KEY_LEN} bytes")
+            })?;
+            keys.push((version, key));
+        }
+        Self::new(keys).ok_or_else(|| {
+            format!(
+                "no {CREDENTIAL_PREFIX}<N> credential (N from 1) in {}",
+                dir.display()
+            )
+        })
     }
 
     /// The version a new wrap uses.
@@ -149,10 +190,10 @@ impl KeyKeeper for EnvironmentKeys {
 
 #[cfg(test)]
 mod tests {
-    use pos_contract_tests::harness::{KeyKeeperHarness, Setup};
+    use pos_contract_tests::harness::{HarnessError, KeyKeeperHarness, Setup};
     use pos_fakes::executor::run_ready;
 
-    use super::{ENVIRONMENT_KEY_LEN, EnvironmentKeys};
+    use super::{CREDENTIAL_PREFIX, ENVIRONMENT_KEY_LEN, EnvironmentKeys};
     use crate::connections::ConnectionSecret;
 
     struct FileKeeper;
@@ -162,15 +203,72 @@ mod tests {
 
         async fn fresh(&self) -> Setup<Self::Keeper> {
             let secret = ConnectionSecret::new("11".repeat(ENVIRONMENT_KEY_LEN));
-            EnvironmentKeys::from_file_key(&secret)
-                .ok_or_else(|| pos_contract_tests::harness::HarnessError::new("a file key"))
+            EnvironmentKeys::from_file_key(&secret).ok_or_else(|| HarnessError::new("a file key"))
         }
 
         async fn other(&self) -> Setup<Self::Keeper> {
             let secret = ConnectionSecret::new("22".repeat(ENVIRONMENT_KEY_LEN));
-            EnvironmentKeys::from_file_key(&secret)
-                .ok_or_else(|| pos_contract_tests::harness::HarnessError::new("a file key"))
+            EnvironmentKeys::from_file_key(&secret).ok_or_else(|| HarnessError::new("a file key"))
         }
+    }
+
+    /// The `systemd-creds` keeper over a directory as systemd leaves it, with two versions.
+    struct CredsKeeper;
+
+    /// A fresh, empty directory of this process's own, as systemd's credentials directory is.
+    fn scratch() -> std::path::PathBuf {
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("pos-cloud-creds-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+        dir
+    }
+
+    fn credentials(byte: u8) -> Setup<EnvironmentKeys> {
+        let dir = scratch();
+        for (version, fill) in [(1, byte), (2, byte.wrapping_add(1))] {
+            std::fs::write(
+                dir.join(format!("{CREDENTIAL_PREFIX}{version}")),
+                [fill; ENVIRONMENT_KEY_LEN],
+            )
+            .map_err(|error| HarnessError::new(error.to_string()))?;
+        }
+        let keeper = EnvironmentKeys::from_credentials(&dir).map_err(HarnessError::new);
+        let _ = std::fs::remove_dir_all(&dir);
+        keeper
+    }
+
+    impl KeyKeeperHarness for CredsKeeper {
+        type Keeper = EnvironmentKeys;
+
+        async fn fresh(&self) -> Setup<Self::Keeper> {
+            credentials(0x10)
+        }
+
+        async fn other(&self) -> Setup<Self::Keeper> {
+            credentials(0x70)
+        }
+    }
+
+    mod systemd_creds_keeper {
+        use super::{CredsKeeper, run_ready};
+        pos_contract_tests::key_keeper_suite!(CredsKeeper, run_ready);
+    }
+
+    #[test]
+    fn the_credentials_keeper_reads_every_version_and_refuses_a_bad_or_missing_key() {
+        let keeper = credentials(3).expect("a keeper");
+        assert_eq!(keeper.newest_version(), 2);
+        let dir = scratch();
+        assert!(EnvironmentKeys::from_credentials(&dir).is_err(), "no key");
+        std::fs::write(dir.join(format!("{CREDENTIAL_PREFIX}1")), b"short").expect("write");
+        let refused = EnvironmentKeys::from_credentials(&dir).expect_err("a short key");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            refused.contains("is not 32 bytes") && !refused.contains("short"),
+            "{refused}"
+        );
     }
 
     mod file_keeper {

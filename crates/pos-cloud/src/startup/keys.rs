@@ -18,7 +18,7 @@ use std::sync::Arc;
 use pos_cloud::CloudConfig;
 use pos_cloud::audit::AuditRecorder;
 use pos_cloud::clock::SystemClock;
-use pos_cloud::keys::{EnvironmentKeys, Keys, ResealReport, reseal_tenant};
+use pos_cloud::keys::{EnvironmentKeys, KeeperChoice, Keys, ResealReport, reseal_tenant};
 use pos_cloud_api::auth::admin::system_actor;
 use pos_cloud_api::console::audit_action;
 use pos_proto::ids::TenantId;
@@ -32,21 +32,47 @@ pub(crate) const RESEAL_EVERY: Duration = Duration::from_secs(15 * 60);
 const RESEAL_PER_TENANT: usize = 200;
 const RESEAL_PER_RUN: usize = 2_000;
 
-/// The keys every secret is sealed under: the file keeper over `integration_secret` (development
-/// only; ADR-0217 decision 5), each tenant's own key in `tenant_keys`, and `integration_secret`
-/// again for a value sealed before tenant keys. `None` while `cloud.toml` has no
-/// `integration_secret`.
-pub(crate) fn keys(config: &CloudConfig, store: &PostgresStore) -> Option<Keys> {
-    config.integration_secret.as_ref().and_then(|secret| {
-        EnvironmentKeys::from_file_key(secret).map(|keeper| {
-            Keys::new(
-                keeper,
-                store.tenant_keys(),
-                Some(secret.clone()),
-                SystemClock,
-            )
-        })
-    })
+/// The keys every secret is sealed under (ADR-0217 decision 5): the keeper `key_keeper` names,
+/// each tenant's own key in `tenant_keys`, and `integration_secret`, when set, for a value sealed
+/// before tenant keys. With the `file` keeper, `None` while `cloud.toml` has no
+/// `integration_secret`, and a warning that production must not run on it.
+///
+/// # Errors
+///
+/// The `systemd-creds` keeper's credentials cannot be read: the boot stops rather than refuse
+/// every secret later.
+pub(crate) fn keys(config: &CloudConfig, store: &PostgresStore) -> Result<Option<Keys>, String> {
+    let legacy = config.integration_secret.clone();
+    let keeper = match config.key_keeper {
+        KeeperChoice::File => {
+            let Some(keeper) = legacy.as_ref().and_then(EnvironmentKeys::from_file_key) else {
+                return Ok(None);
+            };
+            tracing::warn!(
+                "key_keeper is \"file\": tenant keys are wrapped by integration_secret, for \
+                 development only; production runs on \"systemd-creds\" (ADR-0217)"
+            );
+            keeper
+        }
+        KeeperChoice::SystemdCreds => {
+            let dir = config
+                .key_credentials_dir
+                .clone()
+                .or_else(|| std::env::var_os("CREDENTIALS_DIRECTORY").map(Into::into))
+                .ok_or("key_keeper is \"systemd-creds\" but neither key_credentials_dir nor CREDENTIALS_DIRECTORY is set")?;
+            EnvironmentKeys::from_credentials(&dir)?
+        }
+    };
+    tracing::info!(
+        newest_environment_key = keeper.newest_version(),
+        "the environment key is ready"
+    );
+    Ok(Some(Keys::new(
+        keeper,
+        store.tenant_keys(),
+        legacy,
+        SystemClock,
+    )))
 }
 
 /// Records what a key action did for one tenant, as the system or the operator's command.
@@ -180,7 +206,7 @@ async fn run_command(verb: &str, args: &[String]) -> Result<(), Box<dyn std::err
     let config = super::load_config()?;
     let store = PostgresStore::connect(&config.database_url).map_err(|error| error.to_string())?;
     store.migrate().await.map_err(|error| error.to_string())?;
-    let keys = keys(&config, &store).ok_or("cloud.toml has no usable integration_secret")?;
+    let keys = keys(&config, &store)?.ok_or("cloud.toml has no usable integration_secret")?;
     let audit: Arc<dyn AuditRecorder> = Arc::new(pos_cloud::audit::AuditSink::new(store.audit()));
     let tenant = || -> Result<TenantId, Box<dyn std::error::Error>> {
         Ok(flag(args, "--tenant").ok_or(USAGE)?.parse::<TenantId>()?)
