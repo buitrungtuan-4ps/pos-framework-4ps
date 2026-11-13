@@ -38,6 +38,23 @@ fn a_tenant_key_version_is_stored_once_and_kept_from_the_tenant_role() {
         );
         assert!(keys.versions(TENANT_B).await.expect("versions").is_empty());
 
+        // A re-wrap replaces one version's bytes; retiring deletes below a version; erasing, all.
+        let mut moved = row(1, 7);
+        moved.keeper_version = 2;
+        assert!(keys.rewrap(TENANT_A, &moved).await.expect("rewrap"));
+        assert!(!keys.rewrap(TENANT_B, &moved).await.expect("rewrap"));
+        let held = keys.versions(TENANT_A).await.expect("versions");
+        assert_eq!(held.first().map(|key| key.keeper_version), Some(2));
+        assert_eq!(keys.delete(TENANT_A, Some(2)).await.expect("retire"), 1);
+        assert!(keys.insert(TENANT_B, &row(1, 3)).await.expect("insert"));
+        assert_eq!(keys.delete(TENANT_A, None).await.expect("erase"), 1);
+        assert!(keys.versions(TENANT_A).await.expect("versions").is_empty());
+        assert_eq!(
+            keys.versions(TENANT_B).await.expect("versions").len(),
+            1,
+            "another tenant's keys stay"
+        );
+
         admin
             .batch_execute(&format!(
                 "SET ROLE app_tenant; SET app.tenant_id = '{TENANT_A}'"

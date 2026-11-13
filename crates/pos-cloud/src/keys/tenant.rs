@@ -43,6 +43,30 @@ pub trait TenantKeyStore: Send + Sync {
         tenant_id: TenantId,
         key: &TenantKey,
     ) -> impl Future<Output = Result<bool, TenantKeyStoreError>> + Send;
+
+    /// Replaces one version's wrapped key, re-wrapped under another environment-key version;
+    /// `false` when the tenant has no such version.
+    fn rewrap(
+        &self,
+        tenant_id: TenantId,
+        key: &TenantKey,
+    ) -> impl Future<Output = Result<bool, TenantKeyStoreError>> + Send;
+
+    /// Deletes the versions below `below`, or all of them when `None`; answers how many went.
+    fn delete(
+        &self,
+        tenant_id: TenantId,
+        below: Option<u32>,
+    ) -> impl Future<Output = Result<u64, TenantKeyStoreError>> + Send;
+}
+
+fn row(key: &TenantKey) -> TenantKeyRow {
+    TenantKeyRow {
+        key_version: key.key_version,
+        keeper_version: key.wrapped.keeper_version,
+        wrapped: key.wrapped.bytes.clone(),
+        created_at_ms: key.created_at_ms,
+    }
 }
 
 impl TenantKeyStore for PostgresTenantKeys {
@@ -68,13 +92,27 @@ impl TenantKeyStore for PostgresTenantKeys {
         tenant_id: TenantId,
         key: &TenantKey,
     ) -> Result<bool, TenantKeyStoreError> {
-        let row = TenantKeyRow {
-            key_version: key.key_version,
-            keeper_version: key.wrapped.keeper_version,
-            wrapped: key.wrapped.bytes.clone(),
-            created_at_ms: key.created_at_ms,
-        };
-        PostgresTenantKeys::insert(self, &tenant_id.to_string(), &row)
+        PostgresTenantKeys::insert(self, &tenant_id.to_string(), &row(key))
+            .await
+            .map_err(|error| TenantKeyStoreError(error.to_string()))
+    }
+
+    async fn rewrap(
+        &self,
+        tenant_id: TenantId,
+        key: &TenantKey,
+    ) -> Result<bool, TenantKeyStoreError> {
+        PostgresTenantKeys::rewrap(self, &tenant_id.to_string(), &row(key))
+            .await
+            .map_err(|error| TenantKeyStoreError(error.to_string()))
+    }
+
+    async fn delete(
+        &self,
+        tenant_id: TenantId,
+        below: Option<u32>,
+    ) -> Result<u64, TenantKeyStoreError> {
+        PostgresTenantKeys::delete(self, &tenant_id.to_string(), below)
             .await
             .map_err(|error| TenantKeyStoreError(error.to_string()))
     }
@@ -114,5 +152,35 @@ impl TenantKeyStore for MemoryTenantKeys {
         versions.push(key.clone());
         versions.sort_by_key(|held| held.key_version);
         Ok(true)
+    }
+
+    async fn rewrap(
+        &self,
+        tenant_id: TenantId,
+        key: &TenantKey,
+    ) -> Result<bool, TenantKeyStoreError> {
+        let mut held = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let found = held.get_mut(&tenant_id).and_then(|versions| {
+            versions
+                .iter_mut()
+                .find(|held| held.key_version == key.key_version)
+        });
+        Ok(found
+            .map(|held| held.wrapped = key.wrapped.clone())
+            .is_some())
+    }
+
+    async fn delete(
+        &self,
+        tenant_id: TenantId,
+        below: Option<u32>,
+    ) -> Result<u64, TenantKeyStoreError> {
+        let mut held = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(versions) = held.get_mut(&tenant_id) else {
+            return Ok(0);
+        };
+        let before = versions.len();
+        versions.retain(|held| below.is_some_and(|below| held.key_version >= below));
+        Ok(u64::try_from(before.saturating_sub(versions.len())).unwrap_or(u64::MAX))
     }
 }

@@ -5,6 +5,7 @@
 //! then the application over it.
 
 pub(super) mod integrations;
+pub(super) mod keys;
 pub(super) mod loops;
 pub(super) mod packages;
 pub(super) mod routes;
