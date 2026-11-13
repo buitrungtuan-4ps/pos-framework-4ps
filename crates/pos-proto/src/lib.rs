@@ -106,7 +106,8 @@ pub use ids::{
     AreaId, BillId, BrandId, CampaignId, ConfigVersionId, CourseId, DeviceId, DisplayCategoryId,
     DisplaySubcategoryId, EmployeeId, EventId, FeeId, IngredientId, MenuItemId, OrderId,
     OrderLineId, PaymentId, QrSessionId, ReasonCodeId, ShiftId, ShipmentId, StationId,
-    StockLedgerEntryId, StoreId, SubjectId, SupplierId, TableId, TaxClassId, TenantId, VoucherId,
+    StockLedgerEntryId, StoreId, SubjectId, SupplierId, TableId, TaxClassId, TenantId, VendorId,
+    VoucherId,
 };
 pub use locale::{
     CountryCode, CountryCodeError, LocalePack, NumberFormat, TaxRate, TaxRateRow, TaxRateTable,

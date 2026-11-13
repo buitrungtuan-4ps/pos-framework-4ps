@@ -410,6 +410,7 @@ fn a_channel_order_is_left_queued_for_the_replacement_not_failed() {
             store_id: store(),
             table_id: None,
             subject_id: None,
+            vendor_id: None,
             lines: vec![InboundOrderLine {
                 menu_item_id: item(),
                 quantity: Quantity::ONE,

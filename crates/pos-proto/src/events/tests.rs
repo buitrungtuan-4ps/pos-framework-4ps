@@ -205,6 +205,7 @@ fn an_envelope_round_trips_through_json() {
         table_id: Some(TableId::new(Ulid::from_parts(1, 12))),
         guest_count: Some(4),
         package_version_id: None,
+        vendor_id: None,
     };
     let envelope = sample_envelope(EventType::SalesOrderOpened, payload.clone());
     let json = serde_json::to_string(&envelope).expect("serialise");
@@ -989,4 +990,22 @@ fn an_order_records_the_package_version_it_opened_under() {
     assert!(json.contains(r#""package_version_id":"#), "{json}");
     let back: SalesOrderOpened = serde_json::from_str(&json).expect("deserialise");
     assert_eq!(back, pinned);
+}
+
+/// A delivery order names its vendor (ADR-0215 decision 1): opaque, absent for any other order and
+/// left off the wire then, so every order opened before replays byte for byte.
+#[test]
+fn a_delivery_order_names_its_vendor_and_others_stay_as_they_were() {
+    let before = r#"{"order_id":"01J00000000000000000000001","channel":"SALES_CHANNEL_DINE_IN","table_id":null,"guest_count":2}"#;
+    let opened: SalesOrderOpened = serde_json::from_str(before).expect("an old order replays");
+    assert_eq!(opened.vendor_id, None);
+    assert_eq!(serde_json::to_string(&opened).expect("serialise"), before);
+    let delivered = SalesOrderOpened {
+        vendor_id: Some(crate::ids::VendorId::new(Ulid::from_parts(1, 9))),
+        ..opened
+    };
+    let json = serde_json::to_string(&delivered).expect("serialise");
+    assert!(json.contains(r#""vendor_id":"#), "{json}");
+    let back: SalesOrderOpened = serde_json::from_str(&json).expect("deserialise");
+    assert_eq!(back, delivered);
 }

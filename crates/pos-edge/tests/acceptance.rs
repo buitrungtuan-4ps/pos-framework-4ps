@@ -1388,6 +1388,7 @@ async fn a_relayed_takeaway_order_is_accepted_and_priced_by_the_store() {
         store_id: store_id(),
         table_id: None,
         subject_id: None,
+        vendor_id: None,
         lines: vec![InboundOrderLine {
             menu_item_id: MenuItemId::new(Ulid::from_u128(ITEM)),
             quantity: Quantity::ONE,
@@ -1487,6 +1488,7 @@ async fn a_relayed_takeaway_order_is_charged_at_the_counter() {
             store_id: store_id(),
             table_id: None,
             subject_id: None,
+            vendor_id: None,
             lines: vec![InboundOrderLine {
                 menu_item_id: MenuItemId::new(Ulid::from_u128(ITEM)),
                 quantity: Quantity::ONE,

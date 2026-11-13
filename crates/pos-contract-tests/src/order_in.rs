@@ -81,6 +81,7 @@ fn order(
         store_id,
         table_id: None,
         subject_id: None,
+        vendor_id: None,
         lines: vec![InboundOrderLine {
             menu_item_id,
             quantity: Quantity::ONE,

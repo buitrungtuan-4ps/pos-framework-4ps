@@ -37,6 +37,7 @@ use pos_proto::money::Money;
 use pos_proto::wire_enum::Open;
 use pos_proto::{
     GuestNote, MenuItemId, OrderId, Quantity, SalesChannel, StoreId, SubjectId, TableId, Timestamp,
+    VendorId,
 };
 
 use crate::error::PortError;
@@ -132,6 +133,12 @@ pub struct InboundOrder {
     pub table_id: Option<TableId>,
     /// The recipient, when there is one and their details are held in the side table.
     pub subject_id: Option<SubjectId>,
+    /// The vendor a delivery order came through: the tenant's delivery connection, opaque to the
+    /// store ([ADR-0215](../../../docs/adr/0215-a-delivery-order-names-its-vendor.md) decision 1).
+    /// `None` for every other order. Carried into `sales.order.opened`; the idempotency key stays
+    /// `(sales_channel, external_reference)`, and a connector prefixes the reference with its
+    /// connection so two vendors cannot collide.
+    pub vendor_id: Option<VendorId>,
     /// What was ordered.
     pub lines: Vec<InboundOrderLine>,
     /// When the caller says it was placed.

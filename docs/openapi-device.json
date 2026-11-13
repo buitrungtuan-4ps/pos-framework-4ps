@@ -3125,6 +3125,10 @@
           "table_id": {
             "type": "string",
             "description": "The table, for a QR order."
+          },
+          "vendor_id": {
+            "type": "string",
+            "description": "The vendor a delivery order came through, an opaque id (ADR-0215 decision 1)."
           }
         }
       },

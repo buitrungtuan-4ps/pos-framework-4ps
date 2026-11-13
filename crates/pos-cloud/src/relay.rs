@@ -129,6 +129,10 @@ pub struct QueuedOrderPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schema(nullable = false)]
     pub subject_id: Option<String>,
+    /// The vendor a delivery order came through, an opaque id (ADR-0215 decision 1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub vendor_id: Option<String>,
     /// The requested lines.
     pub lines: Vec<QueuedOrderLine>,
     /// When the caller says it was placed (ms since the Unix epoch).
@@ -175,6 +179,7 @@ impl QueuedOrderPayload {
             store_id: order.store_id.to_string(),
             table_id: order.table_id.map(|id| id.to_string()),
             subject_id: order.subject_id.map(|id| id.to_string()),
+            vendor_id: order.vendor_id.map(|id| id.to_string()),
             lines: order
                 .lines
                 .iter()

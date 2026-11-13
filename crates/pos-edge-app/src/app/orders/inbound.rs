@@ -91,6 +91,7 @@ impl<S: EventStore> Edge<S> {
             table_id,
             guest_count: None,
             package_version_id,
+            vendor_id: intake.and_then(|intent| intent.vendor_id),
         };
         let prepared = self.prepare_inbound(stamp, &opened, lines, joins)?;
         let (envelopes, messages): (Vec<_>, Vec<_>) = prepared.events.into_iter().unzip();

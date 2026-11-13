@@ -34,7 +34,7 @@ use crate::ids::{
     BillId, CampaignId, ConfigVersionId, CourseId, CustomRecordId, DeviceId, EmployeeId, FeeId,
     IngredientId, MenuItemId, ObjectTypeId, OrderId, OrderLineId, PackageVersionId, PaymentId,
     QrSessionId, ReasonCodeId, ShiftId, ShipmentId, StationId, StockLedgerEntryId, SubjectId,
-    SupplierId, TableId, TaxClassId, VoucherId,
+    SupplierId, TableId, TaxClassId, VendorId, VoucherId,
 };
 use crate::money::{Money, Ratio};
 use crate::package::DataObject;
@@ -70,6 +70,12 @@ event_catalogue! {
         /// orders replay and their bytes stay the same.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         package_version_id: Option<PackageVersionId>,
+        /// The vendor a delivery order came through, an opaque id
+        /// ([ADR-0215](../../../docs/adr/0215-a-delivery-order-names-its-vendor.md) decision 1).
+        /// Absent for any other order and on every order opened before this field; left off the
+        /// wire while absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        vendor_id: Option<VendorId>,
     },
     /// An order reached a terminal state.
     ///
