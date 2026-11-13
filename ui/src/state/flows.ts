@@ -9,6 +9,10 @@
 //   asks the guest count first (`guestStep`). A required step offers no Skip.
 // - **It names a missing prerequisite.** An act whose step waits on one that is not done is held,
 //   with the missing step named (`missingFor`), as the edge would refuse it.
+// - **It counts a lookup step** (ADR-0214 decision 5). A step running `integrations.lookup.run` is
+//   done for the table or order once its lookup is answered; when the lookup finds the cloud
+//   offline, its `offline` branch passes it, skipping it with its note or going to its other step
+//   (`lookupAnswered`, `lookupOffline`). The edge does not enforce such a step: it has no `done_when`.
 // - **It never decides alone.** The edge re-checks every guarded command (decision 4). Where the
 //   till cannot answer — the module not loaded yet, or an order whose facts it does not hold — it
 //   holds nothing back and lets the edge answer.
@@ -56,6 +60,51 @@ export function guestsOf(tableId: string): number | "skipped" | undefined {
 const [published, setPublished] = createSignal<readonly Variant<Flow>[] | null>(null);
 /** Whether the rules module holds the flows `activeFlows` returns. */
 const [loaded, setLoaded] = createSignal(false);
+
+/** The lookup steps each table or order has passed, as `flow_id/step_id`. */
+const [lookupPassed, setLookupPassed] = createSignal<Readonly<Record<string, readonly string[]>>>({});
+
+/** The act a lookup step runs. */
+const LOOKUP_ACT = "integrations.lookup.run";
+
+/** The lookup steps of the flows for `channel`. */
+function lookupSteps(channel: string): StepAt[] {
+  return stepsFor(LOOKUP_ACT, channel);
+}
+
+function pass(subject: string, steps: readonly StepAt[]): void {
+  if (steps.length > 0) {
+    const passed = steps.map((at) => `${at.flowId}/${at.step.step_id}`);
+    setLookupPassed((now) => ({ ...now, [subject]: [...new Set([...(now[subject] ?? []), ...passed])] }));
+  }
+}
+
+/** The lookup steps `subject` has passed, as `flow_id/step_id`. */
+export function passedLookupSteps(subject: string): readonly string[] {
+  return lookupPassed()[subject] ?? [];
+}
+
+/** The lookup for `subject` (a table or an order) was answered: its lookup steps are done. */
+export function lookupAnswered(subject: string, channel: string): void {
+  pass(subject, lookupSteps(channel));
+}
+
+/**
+ * The lookup for `subject` found the cloud offline: each lookup step with an offline branch is
+ * passed. Answers the note key of the first that skips with one, and the screen of the first that
+ * goes to a step showing one, for the till to show.
+ */
+export function lookupOffline(subject: string, channel: string): { readonly noteKey?: string; readonly screenId?: string } {
+  const branched = lookupSteps(channel).filter((at) => at.step.offline !== undefined);
+  pass(subject, branched);
+  const noteKey = branched.find((at) => at.step.offline?.skip_note_key !== undefined)?.step.offline?.skip_note_key;
+  const targets = branched.flatMap((at) => {
+    const variant = activeFlows().filter((candidate) => candidate.body.flow_id === at.flowId)[at.variant];
+    const target = variant?.body.steps.find((step) => step.step_id === at.step.offline?.step_id);
+    return target?.screen_id === undefined ? [] : [target.screen_id];
+  });
+  return { ...(noteKey === undefined ? {} : { noteKey }), ...(targets[0] === undefined ? {} : { screenId: targets[0] }) };
+}
 
 /** The default package's flows. */
 const DEFAULT_FLOWS: readonly Variant<Flow>[] =
@@ -140,14 +189,16 @@ export function guestStep(channel: string): { readonly required: boolean } | und
  * `guestsSkipped` says the operator skipped the guest count when seating it. `null` too when the
  * till cannot answer: the edge re-checks.
  */
-export function missingFor(actionId: string, channel: string, facts: Facts, guestsSkipped = false): string | null {
+export function missingFor(actionId: string, channel: string, facts: Facts, guestsSkipped = false, subject = ""): string | null {
   const rules = loaded() ? tillRules() : undefined;
   if (rules === undefined) {
     return null;
   }
   const skipped = guestsSkipped ? stepsFor("sales.table.seat", channel).map((at) => at.step.step_id) : [];
+  const passed = lookupPassed()[subject] ?? [];
   for (const at of stepsFor(actionId, channel)) {
-    const answer = rules.missing(at.flowId, at.step.step_id, { skipped }, facts, at.variant);
+    const done = passed.filter((id) => id.startsWith(`${at.flowId}/`)).map((id) => id.slice(at.flowId.length + 1));
+    const answer = rules.missing(at.flowId, at.step.step_id, { skipped, done }, facts, at.variant);
     if (answer.ok && answer.missing !== null) {
       return answer.missing;
     }
@@ -184,7 +235,7 @@ export function lineWaits(tableId: string, lineCount: number): string | null {
     guests === "skipped"
       ? { channel: DINE_IN_TOKEN, line_count: lineCount }
       : { channel: DINE_IN_TOKEN, line_count: lineCount, guest_count: guests };
-  return missingFor("sales.line.add", DINE_IN_TOKEN, { channel: DINE_IN_TOKEN, order }, guests === "skipped");
+  return missingFor("sales.line.add", DINE_IN_TOKEN, { channel: DINE_IN_TOKEN, order }, guests === "skipped", tableId);
 }
 
 /** What the till says of a step a line waits on. */
