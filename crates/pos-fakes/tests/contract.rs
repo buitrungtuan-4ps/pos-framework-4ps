@@ -21,8 +21,8 @@
 use pos_fakes::executor::run_ready;
 use pos_fakes::harness::{
     BlobHarness, ClockHarness, CloudHarness, DeliveryHarness, ErpHarness, FiscalHarness, IdHarness,
-    IntakeHarness, LinkHarness, MetricsHarness, PrinterHarness, RegistryHarness, ShippingHarness,
-    SignerFixture, StoreHarness, TerminalHarness, VaultHarness, WakeHarness,
+    IntakeHarness, KeeperHarness, LinkHarness, MetricsHarness, PrinterHarness, RegistryHarness,
+    ShippingHarness, SignerFixture, StoreHarness, TerminalHarness, VaultHarness, WakeHarness,
 };
 
 /// One module per port, so a failing test names its port in the path.
@@ -74,6 +74,11 @@ mod signer {
 mod key_vault {
     use super::{VaultHarness, run_ready};
     pos_contract_tests::key_vault_suite!(VaultHarness, run_ready);
+}
+
+mod key_keeper {
+    use super::{KeeperHarness, run_ready};
+    pos_contract_tests::key_keeper_suite!(KeeperHarness, run_ready);
 }
 
 mod cloud_sync {
@@ -131,7 +136,7 @@ mod device_registry {
     pos_contract_tests::device_registry_suite!(RegistryHarness, run_ready);
 }
 
-/// Twenty-one suites are invoked above, matching `PortName::ALL`.
+/// Twenty-two suites are invoked above, matching `PortName::ALL`.
 ///
 /// `pos_contract_tests` asserts that every port *has* a suite; this asserts that this crate *runs*
 /// every one. Without it a suite could be added and quietly never invoked here, which would look
@@ -160,6 +165,7 @@ fn every_suite_is_invoked_here() {
         "intake_ledger",
         "subject_store",
         "store_wake",
+        "key_keeper",
     ];
     assert_eq!(invoked.len(), pos_contract_tests::SUITES.len());
     for (port, _) in pos_contract_tests::SUITES {

@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use pos_ports::blob_store::{BlobKey, BlobStore};
 use pos_ports::cloud_sync::{ActivationGrant, CloudSync, SignedArtifact, UpdateReport};
 use pos_ports::device_registry::{DeviceRegistry, DeviceSession, PairedDevice, TokenDigest};
+use pos_ports::key_keeper::{KeyKeeper, WrappedKey};
 use pos_ports::key_vault::{KeyVault, Secret, SecretName};
 use pos_ports::message_link::{LinkCapacity, MessageLink, PublishOutcome};
 use pos_ports::metrics_sink::{MetricSample, MetricsSink};
@@ -388,6 +389,117 @@ impl KeyVault for FakeKeyVault {
     async fn delete(&self, name: SecretName) -> Result<(), PortError> {
         lock(&self.secrets).remove(&name);
         Ok(())
+    }
+}
+
+// -----------------------------------------------------------------------------------------------
+// KeyKeeper
+// -----------------------------------------------------------------------------------------------
+
+/// An in-memory `KeyKeeper` (ADR-0217): no cryptography, only what the contract can see. A wrap is
+/// a counter, the key masked by a stream drawn from the environment and the counter, and a
+/// checksum over all three, so a changed byte or another environment's wrap is refused.
+#[derive(Debug)]
+pub struct FakeKeyKeeper {
+    environment: u8,
+    wraps: std::sync::atomic::AtomicU64,
+}
+
+impl FakeKeyKeeper {
+    /// The one version a fake keeper holds.
+    pub const VERSION: u32 = 1;
+
+    /// A keeper for the environment `environment`: two keepers with different values are two
+    /// environments.
+    #[must_use]
+    pub const fn new(environment: u8) -> Self {
+        Self {
+            environment,
+            wraps: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    fn mask(&self, nonce: u64, at: usize, byte: u8) -> u8 {
+        let at = u8::try_from(at % 251).unwrap_or(0);
+        let stream = self.environment.wrapping_add(at).wrapping_mul(31)
+            ^ nonce.to_le_bytes().first().copied().unwrap_or(0)
+            ^ 0x5A;
+        byte ^ stream
+    }
+
+    fn checksum(&self, nonce: u64, key: &[u8]) -> u64 {
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for byte in core::iter::once(self.environment)
+            .chain(nonce.to_le_bytes())
+            .chain(key.iter().copied())
+        {
+            hash = (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+        }
+        hash
+    }
+}
+
+impl KeyKeeper for FakeKeyKeeper {
+    async fn wrap(&self, key: &Secret) -> Result<WrappedKey, PortError> {
+        let nonce = self
+            .wraps
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut bytes = nonce.to_le_bytes().to_vec();
+        bytes.extend(
+            key.expose()
+                .iter()
+                .enumerate()
+                .map(|(at, byte)| self.mask(nonce, at, *byte)),
+        );
+        bytes.extend(self.checksum(nonce, key.expose()).to_le_bytes());
+        Ok(WrappedKey {
+            keeper_version: Self::VERSION,
+            bytes,
+        })
+    }
+
+    async fn unwrap(&self, wrapped: &WrappedKey) -> Result<Secret, PortError> {
+        if wrapped.keeper_version != Self::VERSION {
+            return Err(PortError::not_found(
+                PortName::KeyKeeper,
+                format!(
+                    "this keeper holds no environment key v{}",
+                    wrapped.keeper_version
+                ),
+            ));
+        }
+        let refused =
+            || PortError::permission_denied(PortName::KeyKeeper, "the wrapped key does not open");
+        let bytes = &wrapped.bytes;
+        let body_end = bytes
+            .len()
+            .checked_sub(8)
+            .filter(|end| *end >= 8)
+            .ok_or_else(refused)?;
+        let nonce = u64::from_le_bytes(
+            bytes
+                .get(..8)
+                .and_then(|n| n.try_into().ok())
+                .ok_or_else(refused)?,
+        );
+        let tag = u64::from_le_bytes(
+            bytes
+                .get(body_end..)
+                .and_then(|t| t.try_into().ok())
+                .ok_or_else(refused)?,
+        );
+        let key: Vec<u8> = bytes
+            .get(8..body_end)
+            .ok_or_else(refused)?
+            .iter()
+            .enumerate()
+            .map(|(at, byte)| self.mask(nonce, at, *byte))
+            .collect();
+        if self.checksum(nonce, &key) == tag {
+            Ok(Secret::new(key))
+        } else {
+            Err(refused())
+        }
     }
 }
 

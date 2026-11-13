@@ -18,7 +18,6 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 - [ADR-0212](../adr/0212-the-heartbeat-names-the-version-each-till-last-read.md) The heartbeat names the package version each till last read
 - [ADR-0215](../adr/0215-a-delivery-order-names-its-vendor.md) A delivery order names its vendor, and a store answers it through the cloud
 - [ADR-0216](../adr/0216-integrations-come-in-three-tiers-and-functions-wait.md) Integrations come in three tiers, and WebAssembly functions wait for a real case
-- [ADR-0217](../adr/0217-secrets-are-sealed-under-versioned-tenant-keys.md) Secrets are sealed under versioned per-tenant keys that one environment key wraps
 
 ## Citations of ADRs that do not exist
 

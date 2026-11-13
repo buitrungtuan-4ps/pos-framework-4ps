@@ -80,7 +80,7 @@ impl ConnectionSecret {
         self.material().is_some()
     }
 
-    fn material(&self) -> Option<Zeroizing<[u8; KEY_LEN]>> {
+    pub(crate) fn material(&self) -> Option<Zeroizing<[u8; KEY_LEN]>> {
         let text = self.0.trim();
         if text.len() != KEY_TEXT_LEN {
             return None;
