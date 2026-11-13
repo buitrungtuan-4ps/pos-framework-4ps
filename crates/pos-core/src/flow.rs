@@ -22,9 +22,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use pos_proto::actions::Action;
+use pos_proto::actions::{Action, ActionEffect};
 use pos_proto::flow::{FLOWS_MAX, Flow, FlowStep, ID_CHARS_MAX, STEPS_MAX, StepKind};
 use pos_proto::package::Variant;
+
+use crate::package::LABEL_KEY_CHARS_MAX;
 
 /// Where conditions are compiled and evaluated: `pos-rules` on the cloud and the edge, a fake in
 /// tests.
@@ -68,6 +70,22 @@ pub enum FlowRefusal {
     },
     /// A step that names neither a screen nor an action, or both.
     NotOneThing {
+        /// The flow.
+        flow_id: String,
+        /// The step.
+        step_id: String,
+    },
+    /// A required step whose act needs the cloud (`ACTION_EFFECT_EXTERNAL`) and that says nothing
+    /// about what happens offline (ADR-0214 decision 5).
+    NoOfflineBranch {
+        /// The flow.
+        flow_id: String,
+        /// The step.
+        step_id: String,
+    },
+    /// An offline branch that names neither or both of a note and a step, a malformed note key,
+    /// or a step that is not another step of the same flow.
+    BadOfflineBranch {
         /// The flow.
         flow_id: String,
         /// The step.
@@ -125,6 +143,16 @@ impl core::fmt::Display for FlowRefusal {
             Self::NotOneThing { flow_id, step_id } => write!(
                 f,
                 "step {step_id} of flow {flow_id} must show one screen or run one action"
+            ),
+            Self::NoOfflineBranch { flow_id, step_id } => write!(
+                f,
+                "step {step_id} of flow {flow_id} is required and needs the cloud, so it must say \
+                 what happens offline"
+            ),
+            Self::BadOfflineBranch { flow_id, step_id } => write!(
+                f,
+                "step {step_id} of flow {flow_id}: an offline branch names one note key or one \
+                 other step of the flow"
             ),
             Self::UnknownKind { flow_id, step_id } => {
                 write!(
@@ -213,6 +241,8 @@ enum Refused {
     Duplicate,
     NotOneThing,
     UnknownKind,
+    NoOfflineBranch,
+    BadOfflineBranch,
 }
 
 fn refusal(flow: &Flow, step: &FlowStep, refused: Refused) -> FlowRefusal {
@@ -222,6 +252,8 @@ fn refusal(flow: &Flow, step: &FlowStep, refused: Refused) -> FlowRefusal {
         Refused::Duplicate => FlowRefusal::DuplicateStep { flow_id, step_id },
         Refused::NotOneThing => FlowRefusal::NotOneThing { flow_id, step_id },
         Refused::UnknownKind => FlowRefusal::UnknownKind { flow_id, step_id },
+        Refused::NoOfflineBranch => FlowRefusal::NoOfflineBranch { flow_id, step_id },
+        Refused::BadOfflineBranch => FlowRefusal::BadOfflineBranch { flow_id, step_id },
     }
 }
 
@@ -246,6 +278,7 @@ fn check_step(
     if step.kind.known() == StepKind::Unspecified {
         return Err(refusal(flow, step, Refused::UnknownKind));
     }
+    check_offline(flow, step, step_ids)?;
     for prerequisite in &step.prerequisites {
         if *prerequisite == step.step_id || !step_ids.contains(prerequisite.as_str()) {
             return Err(FlowRefusal::UnknownPrerequisite {
@@ -270,6 +303,44 @@ fn check_step(
     // An edge guard's `applies_when` is evaluated on the edge too, so it reads only edge facts.
     compiled(&step.applies_when, step.done_when.is_some())?;
     compiled(&step.done_when, true)
+}
+
+/// A step's offline branch (ADR-0214 decision 5): when it has one, exactly one of a well-formed
+/// note key and another step of the flow; when it has none, it is not a required step whose act
+/// needs the cloud.
+fn check_offline(
+    flow: &Flow,
+    step: &FlowStep,
+    step_ids: &BTreeSet<&str>,
+) -> Result<(), FlowRefusal> {
+    let Some(branch) = &step.offline else {
+        let external = step
+            .action_id
+            .as_deref()
+            .and_then(Action::find)
+            .is_some_and(|action| action.effect == ActionEffect::External);
+        return if external && step.kind.known() == StepKind::Required {
+            Err(refusal(flow, step, Refused::NoOfflineBranch))
+        } else {
+            Ok(())
+        };
+    };
+    let fits = match (&branch.skip_note_key, &branch.step_id) {
+        (Some(key), None) => {
+            !key.is_empty()
+                && key.chars().count() <= LABEL_KEY_CHARS_MAX
+                && key
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '.')
+        }
+        (None, Some(other)) => *other != step.step_id && step_ids.contains(other.as_str()),
+        (Some(_), Some(_)) | (None, None) => false,
+    };
+    if fits {
+        Ok(())
+    } else {
+        Err(refusal(flow, step, Refused::BadOfflineBranch))
+    }
 }
 
 /// Refuses prerequisites that wait on each other: Kahn's walk takes every step whose prerequisites

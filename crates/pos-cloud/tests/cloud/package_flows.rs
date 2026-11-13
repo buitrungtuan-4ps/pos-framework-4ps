@@ -105,7 +105,8 @@ async fn flows_and_reactions_are_published_as_written() {
 
 /// Each refusal says which flow and step, or which reaction, it is about, and the publish refuses
 /// what the dry run does: steps that wait on each other, an edge guard that reads the till's
-/// `role`, a condition outside the dialect, and a reaction that would move money.
+/// `role`, a condition outside the dialect, a required lookup without a well-formed offline
+/// branch, and a reaction that would move money.
 #[tokio::test]
 async fn a_refusal_names_the_flow_and_step_or_the_reaction() {
     let router = package_app(provisioned_admin(), Arc::new(NoopAuditRecorder));
@@ -128,12 +129,19 @@ async fn a_refusal_names_the_flow_and_step_or_the_reaction() {
             "steps": [{ "step_id": "ask", "screen_id": "tip", "kind": "STEP_KIND_OPTIONAL" }] } }),
     );
     second[1]["body"]["steps"][1]["prerequisites"] = serde_json::json!(["nowhere"]);
+    // ADR-0214 decision 5: a required lookup says what happens offline.
+    let mut offline = flows.clone();
+    offline[0]["body"]["steps"][1]["action_id"] = serde_json::json!("integrations.lookup.run");
+    let mut bad_branch = offline.clone();
+    bad_branch[0]["body"]["steps"][1]["offline"] = serde_json::json!({ "step_id": "order" });
 
     for (flows, flow_index, step_id, reason, name) in [
         (&cycle, 0, "guests", "CYCLE", None),
         (&till_guard, 0, "guests", "CONDITION", None),
         (&looping, 0, "guests", "CONDITION", None),
         (&second, 1, "order", "UNKNOWN_PREREQUISITE", Some("nowhere")),
+        (&offline, 0, "order", "NO_OFFLINE_BRANCH", None),
+        (&bad_branch, 0, "order", "BAD_OFFLINE_BRANCH", None),
     ] {
         let draft = body(&tenant, flows, &reactions);
         let (status, verdict) = send(&router, post_with_cookie(&dry_run, &draft, &cookie)).await;

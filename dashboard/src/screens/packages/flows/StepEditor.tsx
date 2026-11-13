@@ -3,14 +3,15 @@
 //
 // The prerequisites offered are `prerequisiteChoices`: no choice here can make steps wait on each
 // other. A step's `done_when` makes it an edge guard, so its condition, and its `applies_when` with
-// it, may read only what the edge holds.
+// it, may read only what the edge holds. A step whose act needs the cloud says what the flow does
+// when the store cannot reach it (ADR-0214 decision 5): skip it with a note, or go to another step.
 
 import { For, Show } from "solid-js";
 
 import { Button, CheckboxField, SelectField, TextField } from "../../../components/ui";
 import type { Flow, FlowStep } from "../../../api/schemas";
 import { t } from "../../../i18n";
-import { CATALOGUE } from "../../../lib/action-catalogue";
+import { actionAt, CATALOGUE } from "../../../lib/action-catalogue";
 import {
   isId,
   moveStep,
@@ -66,6 +67,45 @@ function StepTarget(props: { step: FlowStep; onChange: (change: Partial<FlowStep
   );
 }
 
+/** What the step does when its act cannot reach the cloud: nothing said, skip with a note, or another step. */
+function OfflineBranch(props: { flow: Flow; step: FlowStep; onChange: (change: Partial<FlowStep>) => void }) {
+  const branch = () => props.step.offline;
+  const mode = () => (branch()?.step_id !== undefined ? "step" : branch()?.skip_note_key !== undefined ? "skip" : "none");
+  const others = () => props.flow.steps.map((other) => other.step_id).filter((id) => id !== props.step.step_id);
+  const choose = (next: string) =>
+    props.onChange({ offline: next === "skip" ? { skip_note_key: "" } : next === "step" ? { step_id: others()[0] ?? "" } : undefined });
+  return (
+    <div class="grid gap-2 sm:grid-cols-2">
+      <SelectField
+        label={t("flow.step.offline")}
+        value={mode()}
+        options={[
+          { value: "none", label: t("flow.step.offlineNone") },
+          { value: "skip", label: t("flow.step.offlineSkip") },
+          { value: "step", label: t("flow.step.offlineGoTo") },
+        ]}
+        onChange={choose}
+      />
+      <Show when={mode() === "skip"}>
+        <TextField
+          label={t("flow.step.offlineNote")}
+          hint={t("flow.step.offlineNoteHint")}
+          value={branch()?.skip_note_key ?? ""}
+          onInput={(skip_note_key) => props.onChange({ offline: { skip_note_key } })}
+        />
+      </Show>
+      <Show when={mode() === "step"}>
+        <SelectField
+          label={t("flow.step.offlineStep")}
+          value={branch()?.step_id ?? ""}
+          options={others().map((id) => ({ value: id, label: id }))}
+          onChange={(step_id) => props.onChange({ offline: { step_id } })}
+        />
+      </Show>
+    </div>
+  );
+}
+
 /** The steps this one waits on, from those that do not already wait on it. */
 function Prerequisites(props: { flow: Flow; step: FlowStep; onChange: (flow: Flow) => void }) {
   const chosen = () => new Set(props.step.prerequisites ?? []);
@@ -111,6 +151,9 @@ function StepFields(props: { flow: Flow; step: FlowStep; onChange: (flow: Flow) 
         />
       </div>
       <StepTarget step={props.step} onChange={set} />
+      <Show when={actionAt(props.step.action_id ?? "")?.effect === "ACTION_EFFECT_EXTERNAL"}>
+        <OfflineBranch flow={props.flow} step={props.step} onChange={set} />
+      </Show>
       <Prerequisites flow={props.flow} step={props.step} onChange={props.onChange} />
       <ConditionEditor
         label={t("flow.step.appliesWhen")}

@@ -141,9 +141,13 @@ impl Refusal {
             }
             Self::Key(refusal) => {
                 located.name = Some(refusal.key.clone());
-                if let KeyAt::Screen { screen, node } = refusal.at {
-                    located.screen_index = Some(screen);
-                    located.node_index = Some(node);
+                match refusal.at {
+                    KeyAt::Screen { screen, node } => {
+                        located.screen_index = Some(screen);
+                        located.node_index = Some(node);
+                    }
+                    KeyAt::Flow(flow) => located.flow_index = Some(flow),
+                    _ => {}
                 }
             }
             _ => {}
@@ -192,6 +196,8 @@ const fn flow_reason(refusal: &FlowRefusal) -> &'static str {
         FlowRefusal::DuplicateStep { .. } => "DUPLICATE_STEP",
         FlowRefusal::NotOneThing { .. } => "NOT_ONE_THING",
         FlowRefusal::UnknownKind { .. } => "UNKNOWN_KIND",
+        FlowRefusal::NoOfflineBranch { .. } => "NO_OFFLINE_BRANCH",
+        FlowRefusal::BadOfflineBranch { .. } => "BAD_OFFLINE_BRANCH",
         FlowRefusal::UnknownAction(_) => "UNKNOWN_ACTION",
         FlowRefusal::UnknownScreen(_) => "UNKNOWN_SCREEN",
         FlowRefusal::UnknownPrerequisite { .. } => "UNKNOWN_PREREQUISITE",
@@ -207,6 +213,8 @@ fn flow_step(refusal: &FlowRefusal) -> Option<&str> {
         FlowRefusal::DuplicateStep { step_id, .. }
         | FlowRefusal::NotOneThing { step_id, .. }
         | FlowRefusal::UnknownKind { step_id, .. }
+        | FlowRefusal::NoOfflineBranch { step_id, .. }
+        | FlowRefusal::BadOfflineBranch { step_id, .. }
         | FlowRefusal::UnknownPrerequisite { step_id, .. }
         | FlowRefusal::Condition { step_id, .. } => Some(step_id),
         FlowRefusal::Cycle { step_ids, .. } => step_ids.first().map(String::as_str),
