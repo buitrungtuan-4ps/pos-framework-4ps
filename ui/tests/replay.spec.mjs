@@ -308,6 +308,12 @@ async function sendOrder(page) {
  * rather than answering it. The question has its own test.
  */
 async function sendThenTakePayment(page) {
+  // The till must be talking to its edge before the send is decided on. While its link is down the
+  // status bar reads "Reconnecting…", the order screen does not offer Send, and a check made then
+  // skipped the send: Take payment stayed on the table with the line "Not sent", and the pay screen
+  // a test was about never opened. Waiting for the link, as a cashier would, is the precondition the
+  // product itself has; nothing about paying is asserted any less.
+  await expect(page.locator("[data-link]")).toHaveAttribute("data-link", "open");
   await expect(page.locator('[data-outcome="writes-pending"]')).toHaveCount(0);
   // Whether there is anything to send is read off the lines, which say it for as long as it is
   // true, and never off the Send button's state at one instant: the button is briefly disabled

@@ -185,7 +185,7 @@ export function StatusBar() {
       >
         {t("app.brand")}
       </A>
-      <span class="inline-flex shrink-0 items-center gap-2 whitespace-nowrap text-ink-muted">
+      <span class="inline-flex shrink-0 items-center gap-2 whitespace-nowrap text-ink-muted" data-link={state.link}>
         <span class={`inline-block h-2.5 w-2.5 rounded-full ${linkColour()}`} aria-hidden="true" />
         {t(linkKey())}
       </span>
