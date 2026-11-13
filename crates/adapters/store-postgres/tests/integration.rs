@@ -151,7 +151,7 @@ impl EventStoreHarness for StoreHarness {
                  reason_codes, releases, role_templates, rollups, scheduled_publishes, setting_values, station_routing_rules, \
                  store_group_members, store_groups, store_lease, \
              store_liveness, stores, \
-                 subjects, super_admin, task_health, tenants, translations, vouchers, webhook_endpoints RESTART IDENTITY;",
+                 subjects, super_admin, task_health, tenant_keys, tenants, translations, vouchers, webhook_endpoints RESTART IDENTITY;",
             )
             .await
             .map_err(db_err)?;
@@ -217,7 +217,7 @@ async fn prepared() -> Setup<(PostgresStore, Client)> {
              reason_codes, releases, role_templates, rollups, scheduled_publishes, setting_values, station_routing_rules, \
                  store_group_members, store_groups, store_lease, \
              store_liveness, stores, \
-             subjects, super_admin, task_health, tenants, translations, vouchers, webhook_endpoints RESTART IDENTITY",
+             subjects, super_admin, task_health, tenant_keys, tenants, translations, vouchers, webhook_endpoints RESTART IDENTITY",
         )
         .await
         .map_err(db_err)?;
@@ -865,6 +865,11 @@ mod gateway_endpoints_store;
 /// overwritten inside it, and forgotten after it.
 #[path = "integration/gateway_calls_store.rs"]
 mod gateway_calls_store;
+
+/// Tenant keys (ADR-0217, migration 0100): a version is stored once, read oldest first, kept
+/// apart per tenant, and out of reach of the tenant-scoped role.
+#[path = "integration/tenant_keys_store.rs"]
+mod tenant_keys_store;
 
 // ---------------------------------------------------------------------------
 // A tenant's fee rules (ADR-0159, migration 0075).

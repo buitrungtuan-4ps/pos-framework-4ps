@@ -125,6 +125,8 @@ fn field(name: &str, kind: GatewayFieldKind) -> GatewayField {
 
 async fn endpoints(idempotent: bool) -> FakeEndpoints {
     let store = FakeEndpoints::default();
+    // Sealed in the format before tenant keys, version 0, which the router still opens under
+    // integration_secret (ADR-0217 decision 2).
     let header = seal(
         &key(),
         SealedFor {
@@ -163,7 +165,7 @@ fn app(endpoints: FakeEndpoints, target: Arc<FakeTarget>, keys: FakeKeys) -> axu
         keys,
         clock(),
         target,
-        Some(key()),
+        Some(crate::sealing_keys::file_keys("gateway_calls", &key())),
     )
 }
 
@@ -332,7 +334,7 @@ async fn a_key_kept_for_one_endpoint_is_refused_for_another() {
         keys,
         clock(),
         FakeTarget::answering(Vec::new()),
-        Some(key()),
+        Some(crate::sealing_keys::file_keys("gateway_calls", &key())),
     )
     .oneshot(post_json_bearer(
         &uri(),

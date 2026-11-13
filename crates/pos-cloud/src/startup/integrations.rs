@@ -24,6 +24,19 @@ pub(super) fn integration_routes(deps: &RouteDeps<'_>) -> Router {
         relay_wake,
         ..
     } = *deps;
+    // The keys every secret is sealed under (ADR-0217): the file keeper over integration_secret,
+    // each tenant's own key in `tenant_keys`, and integration_secret again for a value sealed
+    // before tenant keys. None while cloud.toml has no integration_secret.
+    let keys = config.integration_secret.as_ref().and_then(|secret| {
+        pos_cloud::keys::EnvironmentKeys::from_file_key(secret).map(|keeper| {
+            pos_cloud::keys::Keys::new(
+                keeper,
+                store.tenant_keys(),
+                Some(secret.clone()),
+                SystemClock,
+            )
+        })
+    });
     Router::new()
         // The vendor catalogue (ADR-0153): every provider compiled into this binary, with the
         // settings schema the console draws a connection form from.
@@ -33,12 +46,12 @@ pub(super) fn integration_routes(deps: &RouteDeps<'_>) -> Router {
             SystemClock,
         ))
         // A tenant's vendor connections (ADR-0153): per-record CRUD, every write checked against
-        // the provider's schema and every secret sealed under integration_secret before it is
+        // the provider's schema and every secret sealed under the tenant's key before it is
         // stored. Reads answer which secrets are set, never their values.
         .merge(http::connection_router(
             store.connections(),
             Arc::clone(providers),
-            config.integration_secret.clone(),
+            keys.clone(),
             store.admin(),
             SystemClock,
             Arc::clone(audit),
@@ -47,10 +60,10 @@ pub(super) fn integration_routes(deps: &RouteDeps<'_>) -> Router {
         ))
         // A tenant's gateway endpoints (ADR-0198 decisions 2 to 5): the https targets a store's
         // lookups name by id, each URL vetted by the webhook guard and each secret header sealed
-        // under the same integration_secret before it is stored.
+        // under the tenant's key before it is stored.
         .merge(http::gateway_endpoint_router(
             store.gateway_endpoints(),
-            config.integration_secret.clone(),
+            keys.clone(),
             store.admin(),
             SystemClock,
             Arc::clone(audit),
@@ -63,7 +76,7 @@ pub(super) fn integration_routes(deps: &RouteDeps<'_>) -> Router {
             store.gateway_calls(),
             store.api_keys(),
             SystemClock,
-            config.integration_secret.clone(),
+            keys.clone(),
         ))
         // A delivery vendor's own webhook (ADR-0083 decision 3): verified under the secret sealed on
         // the tenant's store-scoped connection, mapped through its item map, and submitted to the
@@ -79,7 +92,7 @@ pub(super) fn integration_routes(deps: &RouteDeps<'_>) -> Router {
             ),
             SystemClock,
             vec![Arc::new(pos_cloud::connectors::demo::DemoConnector)],
-            config.integration_secret.clone(),
+            keys.clone(),
         ))
         // Sending a store the connections that serve it (ADR-0153 decision 5): its own, its
         // brand's, its tenant's, resolved into the `integrations` node on its Store layer. A

@@ -47,7 +47,7 @@ use crate::archive::{hex_bytes, to_hex};
 use crate::version::{CreateOutcome, UpdateOutcome, Version, Versioned};
 
 /// Bytes in the sealing key.
-const KEY_LEN: usize = 32;
+pub(crate) const KEY_LEN: usize = 32;
 
 /// Characters in the key's text form.
 pub const KEY_TEXT_LEN: usize = KEY_LEN * 2;
@@ -110,12 +110,18 @@ pub struct SealedFor<'a> {
 
 impl SealedFor<'_> {
     fn associated_data(&self) -> Vec<u8> {
+        self.bound_under(SEAL_CONTEXT)
+    }
+
+    /// What a seal is bound to under `context`: the context, the tenant, the connection or
+    /// endpoint, and the field.
+    pub(crate) fn bound_under(&self, context: &[u8]) -> Vec<u8> {
         let tenant = self.tenant_id.to_string();
         let mut aad = Vec::with_capacity(
-            SEAL_CONTEXT.len() + tenant.len() + self.connection_id.len() + self.field_key.len() + 3,
+            context.len() + tenant.len() + self.connection_id.len() + self.field_key.len() + 3,
         );
         for part in [
-            SEAL_CONTEXT,
+            context,
             tenant.as_bytes(),
             self.connection_id.as_bytes(),
             self.field_key.as_bytes(),
@@ -145,9 +151,17 @@ pub enum SealError {
     /// The stored value is not something [`seal`] wrote.
     #[error("a stored connection secret is not a sealed value")]
     Malformed,
+    /// The tenant's keys could not be read, made or unwrapped (ADR-0217): the key store or the
+    /// environment keeper failed. The log names the version, never a key.
+    #[error("the tenant's keys could not be read, made or unwrapped")]
+    Keys,
 }
 
 /// Seals one secret value for storage, as lowercase hex of the nonce followed by the ciphertext.
+///
+/// This is the format before tenant keys, version 0 (ADR-0217 decision 2): sealed directly under
+/// `integration_secret`. A new value is sealed under its tenant's key ([`crate::keys`]); this stays
+/// so a test can make a version-0 value, and so [`open`] keeps reading those already stored.
 ///
 /// # Errors
 ///
@@ -159,15 +173,24 @@ pub fn seal(
     value: &str,
 ) -> Result<String, SealError> {
     let material = key.material().ok_or(SealError::Key)?;
+    seal_under(&material, &sealed_for.associated_data(), value)
+}
+
+/// Seals `value` under `material`, bound to `aad`, as lowercase hex of the nonce and the
+/// ciphertext.
+pub(crate) fn seal_under(
+    material: &[u8; KEY_LEN],
+    aad: &[u8],
+    value: &str,
+) -> Result<String, SealError> {
     let mut nonce = [0_u8; NONCE_LEN];
     getrandom::fill(&mut nonce).map_err(|_error| SealError::Entropy)?;
-    let aad = sealed_for.associated_data();
-    let sealed = XChaCha20Poly1305::new((&*material).into())
+    let sealed = XChaCha20Poly1305::new(material.into())
         .encrypt(
             &XNonce::from(nonce),
             Payload {
                 msg: value.as_bytes(),
-                aad: &aad,
+                aad,
             },
         )
         .map_err(|_error| SealError::Key)?;
@@ -192,20 +215,22 @@ pub fn open(
     stored: &str,
 ) -> Result<Zeroizing<String>, SealError> {
     let material = key.material().ok_or(SealError::Key)?;
+    open_under(&material, &sealed_for.associated_data(), stored)
+}
+
+/// Opens hex that [`seal_under`] wrote under `material`, bound to `aad`.
+pub(crate) fn open_under(
+    material: &[u8; KEY_LEN],
+    aad: &[u8],
+    stored: &str,
+) -> Result<Zeroizing<String>, SealError> {
     let bytes = hex_bytes(stored.trim()).ok_or(SealError::Malformed)?;
     let nonce = bytes.get(..NONCE_LEN).ok_or(SealError::Malformed)?;
     let body = bytes.get(NONCE_LEN..).ok_or(SealError::Malformed)?;
     let nonce = XNonce::try_from(nonce).map_err(|_error| SealError::Malformed)?;
-    let aad = sealed_for.associated_data();
     let opened = Zeroizing::new(
-        XChaCha20Poly1305::new((&*material).into())
-            .decrypt(
-                &nonce,
-                Payload {
-                    msg: body,
-                    aad: &aad,
-                },
-            )
+        XChaCha20Poly1305::new(material.into())
+            .decrypt(&nonce, Payload { msg: body, aad })
             .map_err(|_error| SealError::Key)?,
     );
     let text = core::str::from_utf8(&opened).map_err(|_error| SealError::Malformed)?;

@@ -29,10 +29,9 @@ use pos_proto::integrations::SettingValue;
 
 use super::{MappingRefusal, OrderConnector, item_map, to_inbound};
 use crate::auth::rate_limit::SlidingRateLimiter;
-use crate::connections::{
-    Connection, ConnectionSecret, ConnectionStore, ScopeLevel, SealedFor, open,
-};
+use crate::connections::{Connection, ConnectionStore, ScopeLevel, SealedFor};
 use crate::http::too_many_requests;
+use crate::keys::{Keys, TenantSealer};
 use crate::orders::{intake_error, order_response};
 
 /// The largest vendor webhook body accepted, in bytes.
@@ -51,7 +50,7 @@ pub(crate) struct ConnectorState<S, X, C> {
     intake: X,
     clock: C,
     connectors: Arc<[Arc<dyn OrderConnector>]>,
-    integration_secret: Option<ConnectionSecret>,
+    keys: Option<Keys>,
     limiter: SlidingRateLimiter,
 }
 
@@ -62,7 +61,7 @@ impl<S: Clone, X: Clone, C: Clone> Clone for ConnectorState<S, X, C> {
             intake: self.intake.clone(),
             clock: self.clock.clone(),
             connectors: Arc::clone(&self.connectors),
-            integration_secret: self.integration_secret.clone(),
+            keys: self.keys.clone(),
             limiter: self.limiter.clone(),
         }
     }
@@ -74,7 +73,7 @@ pub fn connector_router<S, X, C>(
     intake: X,
     clock: C,
     connectors: Vec<Arc<dyn OrderConnector>>,
-    integration_secret: Option<ConnectionSecret>,
+    keys: Option<Keys>,
 ) -> Router
 where
     S: ConnectionStore + Clone + Send + Sync + 'static,
@@ -92,7 +91,7 @@ where
             intake,
             clock,
             connectors: connectors.into(),
-            integration_secret,
+            keys,
             limiter: SlidingRateLimiter::new(PER_CONNECTION_PER_SECOND, 1),
         })
 }
@@ -132,8 +131,11 @@ where
         Ok(serving) => serving,
         Err(refusal) => return refusal,
     };
-    let Some(secret) = webhook_secret(&connection, tenant_id, state.integration_secret.as_ref())
-    else {
+    let tenant_keys = match &state.keys {
+        Some(keys) => keys.for_tenant(tenant_id).await.ok(),
+        None => None,
+    };
+    let Some(secret) = webhook_secret(&connection, tenant_id, tenant_keys.as_ref()) else {
         tracing::error!(%connection_id, "a connector's webhook secret cannot be opened");
         return api_error(ErrorStatus::Unavailable, "the connector is unavailable");
     };
@@ -205,19 +207,19 @@ where
 fn webhook_secret(
     connection: &Connection,
     tenant_id: TenantId,
-    key: Option<&ConnectionSecret>,
+    tenant_keys: Option<&TenantSealer>,
 ) -> Option<zeroize::Zeroizing<String>> {
     let sealed = connection.sealed_secrets.get(WEBHOOK_SECRET)?;
-    open(
-        key?,
-        SealedFor {
-            tenant_id,
-            connection_id: &connection.connection_id,
-            field_key: WEBHOOK_SECRET,
-        },
-        sealed,
-    )
-    .ok()
+    tenant_keys?
+        .open(
+            SealedFor {
+                tenant_id,
+                connection_id: &connection.connection_id,
+                field_key: WEBHOOK_SECRET,
+            },
+            sealed,
+        )
+        .ok()
 }
 
 /// The answer a mapping refusal becomes: the vendor's own item code named back, which is the

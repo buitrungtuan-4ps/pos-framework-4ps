@@ -128,6 +128,8 @@ mod reason_codes;
 mod reconcile;
 #[path = "cloud/registry.rs"]
 mod registry;
+#[path = "cloud/sealing_keys.rs"]
+mod sealing_keys;
 #[path = "cloud/settings.rs"]
 mod settings;
 #[path = "cloud/settings_country.rs"]
