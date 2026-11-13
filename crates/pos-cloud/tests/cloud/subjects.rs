@@ -377,3 +377,46 @@ async fn erasing_a_subject_nobody_holds_is_not_found() {
         .expect("route");
     assert_eq!(erased.status(), StatusCode::NOT_FOUND);
 }
+
+/// A delivery order's recipient (ADR-0215): the cloud holds the record and the store it was kept
+/// for holds a copy. An erasure masks the cloud's record and puts the id on that store's
+/// `erasures` node, pending until the store confirms.
+#[tokio::test]
+async fn erasing_a_subject_the_cloud_and_a_store_hold_reaches_both() {
+    let admin = provisioned_admin();
+    let holding = StoreId::new(Ulid::from_u128(0x5702));
+    let subject_id = SubjectId::new(Ulid::from_u128(0x0ACF));
+    let holders = FakeHolders::default();
+    holders
+        .rows
+        .lock()
+        .expect("lock")
+        .push((holding, subject_id, None));
+    let subjects = FakeSubjects::with(tenant(), a_subject(subject_id));
+    let trees = FakeConfigTrees::default();
+    let router = subjects_app_with(admin.clone(), subjects.clone(), holders, trees.clone());
+    let owner = role_session_cookie(&admin, AdminRole::Owner, "owner-token").await;
+    let erased = router
+        .oneshot(post_with_cookie(
+            &format!(
+                "/admin/subjects/{subject_id}/erase?tenant_id={}",
+                tenant().as_ulid()
+            ),
+            &serde_json::json!({}),
+            &owner,
+        ))
+        .await
+        .expect("route");
+    assert_eq!(erased.status(), StatusCode::OK);
+    let body = json_body(erased).await;
+    assert_eq!(body["erased"], false, "the store's copy is not masked yet");
+    assert_eq!(body["already_masked"], false);
+    assert_eq!(body["pending_store_ids"][0], holding.to_string());
+    let cloud = subjects.rows.lock().expect("lock")[0].1.clone();
+    assert!(cloud.masked_at.is_some(), "the cloud's record is masked");
+    let node = trees.load(tenant(), holding).await.expect("loads");
+    assert_eq!(
+        requested(node.as_ref().map(|versioned| &versioned.record)),
+        vec![subject_id]
+    );
+}
