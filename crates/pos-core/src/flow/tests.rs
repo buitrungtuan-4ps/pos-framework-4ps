@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use pos_proto::flow::{FLOWS_MAX, Flow, FlowStep, STEPS_MAX, StepKind};
+use pos_proto::flow::{FLOWS_MAX, Flow, FlowStep, OfflineBranch, STEPS_MAX, StepKind};
 use pos_proto::package::{Variant, VariantSelector};
 use pos_proto::wire_enum::Open;
 
@@ -55,6 +55,7 @@ fn step(step_id: &str, action_id: &str, kind: StepKind, prerequisites: &[&str]) 
         applies_when: None,
         prerequisites: prerequisites.iter().map(|p| (*p).to_owned()).collect(),
         done_when: None,
+        offline: None,
     }
 }
 
@@ -149,6 +150,57 @@ fn a_step_does_exactly_one_thing_of_a_known_kind() {
     let mut flow = guest_count_first();
     at(&mut flow, 0).kind = Open::parse("STEP_KIND_SOMETIMES");
     assert!(matches!(check(flow), Err(FlowRefusal::UnknownKind { .. })));
+}
+
+/// ADR-0214 decision 5: a required step that needs the cloud says what happens offline, and what
+/// it says is one note key or one other step of the flow.
+#[test]
+fn a_required_external_step_names_its_offline_branch() {
+    let lookup = || step("points", "integrations.lookup.run", StepKind::Required, &[]);
+    let mut flow = guest_count_first();
+    flow.steps.push(lookup());
+    assert_eq!(
+        check(flow.clone()),
+        Err(FlowRefusal::NoOfflineBranch {
+            flow_id: "dine_in".to_owned(),
+            step_id: "points".to_owned(),
+        })
+    );
+
+    let branch = |note: Option<&str>, to: Option<&str>| OfflineBranch {
+        skip_note_key: note.map(str::to_owned),
+        step_id: to.map(str::to_owned),
+    };
+    for good in [
+        branch(Some("loyalty.offline_note"), None),
+        branch(None, Some("first_line")),
+    ] {
+        at(&mut flow, 3).offline = Some(good);
+        assert_eq!(check(flow.clone()), Ok(()));
+    }
+    for bad in [
+        branch(None, None),
+        branch(Some("loyalty.offline_note"), Some("first_line")),
+        branch(Some("Loyalty Offline"), None),
+        branch(None, Some("points")),
+        branch(None, Some("dessert")),
+    ] {
+        at(&mut flow, 3).offline = Some(bad);
+        assert!(matches!(
+            check(flow.clone()),
+            Err(FlowRefusal::BadOfflineBranch { step_id, .. }) if step_id == "points"
+        ));
+    }
+
+    // An optional one may go without: the operator skips it.
+    let mut flow = guest_count_first();
+    flow.steps.push(step(
+        "points",
+        "integrations.lookup.run",
+        StepKind::Optional,
+        &[],
+    ));
+    assert_eq!(check(flow), Ok(()));
 }
 
 #[test]

@@ -6105,6 +6105,10 @@
             "$ref": "#/components/schemas/OpenStepKind_StepKind",
             "description": "Required or optional."
           },
+          "offline": {
+            "$ref": "#/components/schemas/OfflineBranch",
+            "description": "What the flow does when the step's act cannot reach the cloud\n([ADR-0214](../../../docs/adr/0214-a-tills-external-lookup-is-one-catalogue-act.md)\ndecision 5). Absent by default; a required step whose act is `ACTION_EFFECT_EXTERNAL` is\nrefused at publish without one."
+          },
           "prerequisites": {
             "type": "array",
             "items": {
@@ -7071,6 +7075,20 @@
         "type": "string",
         "description": "A `ObjectTypeId`: a ULID, 26 Crockford base-32 characters",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "OfflineBranch": {
+        "type": "object",
+        "description": "A step's offline branch: exactly one of skipping it with a note, or going to another step of\nthe same flow.",
+        "properties": {
+          "skip_note_key": {
+            "type": "string",
+            "description": "Skip the step, showing the text of this translation key."
+          },
+          "step_id": {
+            "type": "string",
+            "description": "Go to this step of the same flow instead."
+          }
+        }
       },
       "OpenCustomFieldType_CustomFieldType": {
         "type": "string",

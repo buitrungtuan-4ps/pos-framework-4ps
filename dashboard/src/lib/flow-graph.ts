@@ -154,6 +154,7 @@ export function renameStep(flow: Flow, stepId: string, nextId: string): Flow {
       ...(step.prerequisites === undefined
         ? {}
         : { prerequisites: step.prerequisites.map((id) => (id === stepId ? nextId : id)) }),
+      ...(step.offline?.step_id === stepId ? { offline: { step_id: nextId } } : {}),
     })),
   };
 }
