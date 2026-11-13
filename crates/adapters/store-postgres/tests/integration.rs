@@ -146,6 +146,7 @@ impl EventStoreHarness for StoreHarness {
                  catalog_modifier_groups, catalog_placements, catalog_tax_classes, catalog_tax_rate_versions, \
                  catalog_tax_rates, config_trees, custom_subjects, custom_value_cursors, custom_values, data_migrations, device_claims, device_credentials, device_proposals, devices, \
                  employee_scope_assignments, employee_store_assignments, employees, event_outbox, events, fee_rules, floor_areas, floor_tables, \
+                 gateway_calls, gateway_endpoints, \
                  integration_connections, inventory_items, kitchen_stations, media_assets, order_queue, ota_releases, \
                  people_republishes, reconcile_runs, \
                  reason_codes, releases, role_templates, rollups, scheduled_publishes, setting_values, station_routing_rules, \
@@ -212,6 +213,7 @@ async fn prepared() -> Setup<(PostgresStore, Client)> {
              catalog_modifier_groups, catalog_placements, catalog_tax_classes, catalog_tax_rate_versions, \
              catalog_tax_rates, config_trees, custom_subjects, custom_value_cursors, custom_values, data_migrations, device_claims, device_credentials, device_proposals, devices, \
              employee_scope_assignments, employee_store_assignments, employees, event_outbox, events, fee_rules, floor_areas, floor_tables, \
+             gateway_calls, gateway_endpoints, \
              integration_connections, inventory_items, kitchen_stations, media_assets, order_queue, ota_releases, \
              people_republishes, reconcile_runs, \
              reason_codes, releases, role_templates, rollups, scheduled_publishes, setting_values, station_routing_rules, \
