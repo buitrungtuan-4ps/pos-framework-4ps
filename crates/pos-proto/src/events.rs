@@ -76,6 +76,12 @@ event_catalogue! {
         /// wire while absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         vendor_id: Option<VendorId>,
+        /// The person a delivery order goes to, as the subject whose record the store keeps apart
+        /// ([ADR-0215](../../../docs/adr/0215-a-delivery-order-names-its-vendor.md) decision 3):
+        /// only the id, never a name, a phone number or an address. Absent for any other order and
+        /// on every order opened before this field; left off the wire while absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subject_id: Option<SubjectId>,
     },
     /// An order reached a terminal state.
     ///

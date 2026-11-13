@@ -51,6 +51,7 @@ impl<S: EventStore> Edge<S> {
             guest_count: None,
             package_version_id,
             vendor_id: None,
+            subject_id: None,
         };
         self.commit_and_publish(&ctx, &opened).await?;
         {

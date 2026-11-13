@@ -76,6 +76,7 @@ where
         origins,
         revocations,
         backup,
+        printers,
     } = wiring;
     let client = sync_client(cloud_url, cloud_roots, sync_key)?;
     let config_client = config_client(
@@ -94,7 +95,7 @@ where
         None => tokio::spawn(config_client.run(CONFIG_POLL_INTERVAL, shutdown)),
     };
     let heartbeat = spawn_heartbeat(&client, store_id, edge, lease, agents, shutdown_rx, drained);
-    spawn_relay(&client, store_id, edge, queue, shutdown_rx);
+    spawn_relay(&client, store_id, edge, queue, printers, shutdown_rx);
     // The tenant's labels, pulled whole beside the configuration (ADR-0043).
     tokio::spawn(
         crate::grid_client::GridClient::new(
@@ -226,16 +227,29 @@ fn spawn_relay<S, Q>(
     store_id: StoreId,
     edge: &Arc<Edge<S>>,
     queue: Q,
+    printers: Option<Arc<crate::printing::Printers>>,
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
 ) where
-    S: EventStore + IntakeLedger + Send + Sync + 'static,
+    S: EventStore + IntakeLedger + SubjectStore + Send + Sync + 'static,
     Q: QueueNumberAuthority + 'static,
 {
     let relay_client = RelayClient::new(
         RelayHttpTransport::new(client.clone(), store_id),
         EdgeOrderIn::new(Arc::clone(edge), queue, system_device_id(store_id)),
     );
-    tokio::spawn(relay_client.run(wait_for_shutdown(shutdown_rx.clone())));
+    let shutdown = wait_for_shutdown(shutdown_rx.clone());
+    // A store's delivery slip prints when it takes the order (ADR-0215 decision 3).
+    match printers {
+        Some(printers) => tokio::spawn(
+            relay_client
+                .telling(crate::delivery_slips::DeliverySlips::new(
+                    Arc::clone(edge),
+                    printers,
+                ))
+                .run(shutdown),
+        ),
+        None => tokio::spawn(relay_client.run(shutdown)),
+    };
 }
 
 /// The store's own off-box backup (ADR-0124): a `VACUUM INTO` snapshot, sealed at the till under

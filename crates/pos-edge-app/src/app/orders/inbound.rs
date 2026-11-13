@@ -10,6 +10,7 @@ use pos_core::menu::PricedLine;
 use pos_ports::TxContext;
 use pos_ports::event_store::EventStore;
 use pos_ports::intake_ledger::{IntakeLedger, IntakeRecord};
+use pos_ports::subject_store::{SubjectRecord, SubjectStore};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::events::{SalesOrderLineAdded, SalesOrderOpened, SalesTableMerged};
 use pos_proto::ids::{DeviceId, OrderId, OrderLineId, TableId};
@@ -59,7 +60,7 @@ impl<S: EventStore> Edge<S> {
         intake: Option<IntakeIntent<'_>>,
     ) -> Result<InboundOrderOpened, AppError>
     where
-        S: IntakeLedger,
+        S: IntakeLedger + SubjectStore,
     {
         // A replaced machine takes no new channel order (ADR-0123). Refused *before* the
         // idempotency row is written, so the delivery is left un-acknowledged and the cloud can
@@ -91,7 +92,8 @@ impl<S: EventStore> Edge<S> {
             table_id,
             guest_count: None,
             package_version_id,
-            vendor_id: intake.and_then(|intent| intent.vendor_id),
+            vendor_id: intake.as_ref().and_then(|intent| intent.vendor_id),
+            subject_id: intake.as_ref().and_then(|intent| intent.subject_id),
         };
         let prepared = self.prepare_inbound(stamp, &opened, lines, joins)?;
         let (envelopes, messages): (Vec<_>, Vec<_>) = prepared.events.into_iter().unzip();
@@ -110,12 +112,55 @@ impl<S: EventStore> Edge<S> {
                 joins,
             );
             projection.record_opened(order_id, None, package_version_id);
+            projection.record_recipient(order_id, opened.subject_id);
         }
         Ok(InboundOrderOpened {
             order_id,
             business_date,
             awaiting_staff_confirmation: holds_for_staff,
         })
+    }
+
+    /// The subject an open delivery order names as its recipient
+    /// ([ADR-0215](../../../../../docs/adr/0215-a-delivery-order-names-its-vendor.md) decision 3):
+    /// the id the delivery slip reads the store's record by, or `None` for any other order and once
+    /// it closes.
+    #[must_use]
+    pub fn order_recipient(&self, order_id: OrderId) -> Option<pos_proto::ids::SubjectId> {
+        self.lock_projection().recipient(order_id)
+    }
+
+    /// The recipient a delivery order's slip prints
+    /// ([ADR-0215](../../../../../docs/adr/0215-a-delivery-order-names-its-vendor.md) decision 3):
+    /// the store's record of the subject the open order names, while it still holds personal data.
+    /// `None` for an order with no recipient, a record this store does not hold, or one already
+    /// masked. Each read is audited by order and subject, never by value.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError`] if the subject store cannot be read.
+    pub async fn delivery_recipient(
+        &self,
+        order_id: OrderId,
+    ) -> Result<Option<SubjectRecord>, AppError>
+    where
+        S: SubjectStore,
+    {
+        let Some(subject_id) = self.order_recipient(order_id) else {
+            return Ok(None);
+        };
+        let record = SubjectStore::fetch(&self.store, self.identity.store_id, subject_id).await?;
+        let Some(record) = record.filter(|record| !record.is_masked()) else {
+            return Ok(None);
+        };
+        tracing::info!(
+            target: "audit",
+            action = "data.subject.printed",
+            order_id = %order_id,
+            subject_id = %subject_id,
+            "a delivery slip printed its recipient"
+        );
+        Ok(Some(record))
     }
 
     /// The inbound order's events, prepared in the order they are written: the order opened, one
@@ -190,7 +235,7 @@ impl<S: EventStore> Edge<S> {
         intake: Option<IntakeIntent<'_>>,
     ) -> Result<(), AppError>
     where
-        S: IntakeLedger,
+        S: IntakeLedger + SubjectStore,
     {
         let mut tx = self.store.begin().await?;
         self.store.append(&mut tx, envelopes).await?;
@@ -202,15 +247,27 @@ impl<S: EventStore> Edge<S> {
                 repriced: intent.repriced,
                 awaiting_staff_confirmation: holds_for_staff,
             };
-            self.store
-                .record(
+            IntakeLedger::record(
+                &self.store,
+                &mut tx,
+                self.identity.store_id,
+                intent.sales_channel,
+                intent.external_reference,
+                &record,
+            )
+            .await?;
+            // The recipient commits with the order that names it, or neither does (ADR-0215
+            // decision 3; the `SubjectStore` contract).
+            if let (Some(subject_id), Some(recipient)) = (intent.subject_id, intent.recipient) {
+                SubjectStore::record(
+                    &self.store,
                     &mut tx,
                     self.identity.store_id,
-                    intent.sales_channel,
-                    intent.external_reference,
-                    &record,
+                    subject_id,
+                    recipient,
                 )
                 .await?;
+            }
         }
         tx.commit().await?;
         Ok(())

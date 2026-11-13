@@ -23,6 +23,7 @@ use pos_core::menu::{PricedLine, RepriceError, RequestedLine, reprice_line};
 use pos_ports::event_store::EventStore;
 use pos_ports::intake_ledger::{IntakeLedger, IntakeRecord};
 use pos_ports::order_in::{ExternalReference, InboundOrder, OrderAcceptance, OrderIn};
+use pos_ports::subject_store::{SubjectRecord, SubjectStore};
 use pos_ports::{PortError, PortName};
 use pos_proto::error::ErrorStatus;
 use pos_proto::ids::{DeviceId, OrderId};
@@ -64,7 +65,7 @@ impl<S, Q> EdgeOrderIn<S, Q> {
 
 impl<S, Q> EdgeOrderIn<S, Q>
 where
-    S: EventStore + IntakeLedger + Send + Sync,
+    S: EventStore + IntakeLedger + SubjectStore + Send + Sync,
     Q: QueueNumberAuthority,
 {
     /// Rebuilds the acceptance a repeat is owed from its stored record. The queue number is
@@ -185,6 +186,7 @@ where
         &self,
         order: &InboundOrder,
         priced: &PricedOrder,
+        recipient: Option<&SubjectRecord>,
     ) -> Result<InboundOrderOpened, AppError> {
         let intent = IntakeIntent {
             sales_channel: order.sales_channel.as_wire(),
@@ -192,6 +194,9 @@ where
             total: priced.total,
             repriced: priced.repriced,
             vendor_id: order.vendor_id,
+            subject_id: order.subject_id,
+            // Kept only with the subject the order names: a record without one has nowhere to go.
+            recipient: recipient.filter(|_| order.subject_id.is_some()),
         };
         self.edge
             .open_inbound_order(
@@ -245,12 +250,23 @@ where
     }
 }
 
-impl<S, Q> OrderIn for EdgeOrderIn<S, Q>
+impl<S, Q> EdgeOrderIn<S, Q>
 where
-    S: EventStore + IntakeLedger + Send + Sync,
+    S: EventStore + IntakeLedger + SubjectStore + Send + Sync,
     Q: QueueNumberAuthority,
 {
-    async fn submit(&self, order: &InboundOrder) -> Result<OrderAcceptance, PortError> {
+    /// [`OrderIn::submit`], keeping the recipient the order's `subject_id` names in the order's own
+    /// transaction ([ADR-0215](../../../docs/adr/0215-a-delivery-order-names-its-vendor.md)
+    /// decision 3): the relay passes the record the cloud kept. A repeat keeps nothing new.
+    ///
+    /// # Errors
+    ///
+    /// As [`OrderIn::submit`].
+    pub async fn submit_with_recipient(
+        &self,
+        order: &InboundOrder,
+        recipient: Option<&SubjectRecord>,
+    ) -> Result<OrderAcceptance, PortError> {
         refuse_misaddressed(order, self.edge.store_id())?;
         // A repeat — the caller's retry, or the relay's at-least-once delivery — returns the recorded
         // acceptance and reports it did not create a second order.
@@ -269,7 +285,7 @@ where
             order_id,
             business_date,
             awaiting_staff_confirmation,
-        } = match self.open(order, &priced).await {
+        } = match self.open(order, &priced, recipient).await {
             Ok(opened) => opened,
             Err(AppError::Port(error)) if error.status() == ErrorStatus::AlreadyExists => {
                 return self.race_winner(order).await;
@@ -291,6 +307,16 @@ where
             // they came to differ.
             awaiting_staff_confirmation,
         })
+    }
+}
+
+impl<S, Q> OrderIn for EdgeOrderIn<S, Q>
+where
+    S: EventStore + IntakeLedger + SubjectStore + Send + Sync,
+    Q: QueueNumberAuthority,
+{
+    async fn submit(&self, order: &InboundOrder) -> Result<OrderAcceptance, PortError> {
+        self.submit_with_recipient(order, None).await
     }
 
     async fn look_up(

@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 
 use pos_core::decision::Actor;
 use pos_ports::event_store::EventStore;
+use pos_ports::subject_store::SubjectStore;
 use pos_proto::ids::{OrderId, ReasonCodeId};
 use pos_proto::money::Money;
 use pos_proto::quantity::Quantity;
@@ -168,20 +169,28 @@ where
     ),
     tag = "orders",
 ))]
-/// `POST /api/orders/{id}/confirm` — release a guest's order to the kitchen.
+/// `POST /api/orders/{id}/confirm` — release a guest's order to the kitchen. A delivery order's
+/// slip prints once it is confirmed (ADR-0215 decision 3); the answer does not wait on the paper.
 pub(crate) async fn confirm_order<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
+    printers: Option<Extension<Arc<crate::printing::Printers>>>,
     Path(id): Path<String>,
 ) -> Response
 where
-    S: EventStore + Send + Sync + 'static,
+    S: EventStore + SubjectStore + Send + Sync + 'static,
 {
     let Some(order_id) = parse_ulid(&id).map(OrderId::new) else {
         return bad_request("an order id is a ULID");
     };
     match edge.confirm_inbound_order(actor, order_id).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            if let Some(Extension(printers)) = printers {
+                let _outcome =
+                    crate::delivery_slips::print_delivery_slip(&printers, &edge, order_id).await;
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(error) => error_response(&error),
     }
 }

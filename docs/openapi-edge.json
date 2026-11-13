@@ -2287,7 +2287,7 @@
         "tags": [
           "orders"
         ],
-        "summary": "`POST /api/orders/{id}/confirm` — release a guest's order to the kitchen.",
+        "summary": "`POST /api/orders/{id}/confirm` — release a guest's order to the kitchen. A delivery order's\nslip prints once it is confirmed (ADR-0215 decision 3); the answer does not wait on the paper.",
         "operationId": "confirm_order",
         "parameters": [
           {
