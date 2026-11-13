@@ -54,6 +54,8 @@ import type {
   ReprintResponse,
   SettledBill,
   CustomDataResponse,
+  LookupRequest,
+  LookupResponse,
   CustomRecordsResponse,
   RecordSlipResponse,
   NewRecordRequest,
@@ -499,6 +501,8 @@ export const api = {
   printRecordSlip: (customRecordId: string) =>
     request<RecordSlipResponse>("POST", `/api/custom-records/${customRecordId}/slip`),
   subject: (subjectId: string) => request<SubjectResponse>("GET", `/api/subjects/${subjectId}`),
+  // A lookup through the cloud gateway (ADR-0214): the endpoint's declared result, never kept.
+  lookup: (body: LookupRequest) => request<LookupResponse>("POST", "/api/gateway/calls", body),
   // What the store has taken today (ADR-0160): `403` unless the person's own role grants
   // `reports.takings.view`, whether or not the store enforces each person's own set.
   takings: () => request<TakingsResponse>("GET", "/api/reports/takings"),

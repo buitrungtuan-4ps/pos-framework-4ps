@@ -42,6 +42,7 @@ export type PermissionId =
   | "cash.shift.open"
   | "data.personal.read"
   | "data.record.write"
+  | "integrations.lookup.run"
   | "reports.shift.read_x"
   | "reports.takings.view"
   | "sales.item.mark_unavailable"

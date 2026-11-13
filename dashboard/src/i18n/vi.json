@@ -3116,5 +3116,12 @@
   "gateway.deleteTypePrompt": "Nhập tên điểm kết nối để xác nhận",
   "provider.delivery.demo": "Giao hàng mẫu (sandbox)",
   "provider.field.item_map": "Bảng món (mã của đối tác=mã món, mỗi dòng một món)",
-  "provider.field.webhook_secret": "Khóa ký webhook"
+  "provider.field.webhook_secret": "Khóa ký webhook",
+  "designer.component.lookup_field": "Ô tra cứu",
+  "designer.component.lookup_result": "Kết quả tra cứu",
+  "designer.property.field": "Trường của điểm kết nối",
+  "designer.property.kind": "Kiểu nhập",
+  "designer.token.text": "Chữ",
+  "designer.token.number": "Số nguyên",
+  "designer.screens.fieldHint": "Tên một trường của điểm kết nối cổng mà tra cứu của màn hình gọi, đúng như điểm kết nối khai báo."
 }

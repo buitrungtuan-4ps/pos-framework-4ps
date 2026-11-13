@@ -17,6 +17,7 @@ import { BASE } from "../../../packages/package-renderer/src/base";
 import { region } from "../../../packages/package-renderer/src/regions";
 import type { Implementations } from "../../../packages/package-renderer/src/render";
 import { FloorAlerts, FloorPlan } from "../screens/Floor";
+import { LookupField, LookupResult } from "./lookup";
 import { OrderColumn, OrderLayout, OrderMenu } from "./order-regions";
 
 /** Every catalogued component's implementation. */
@@ -52,4 +53,6 @@ export const IMPLEMENTATIONS: Implementations = {
   pair_body: region("pair_body"),
   setup_body: region("setup_body"),
   sign_in_screen: region("sign_in_screen"),
+  lookup_field: LookupField,
+  lookup_result: LookupResult,
 };

@@ -620,5 +620,14 @@
   "records.refused_permission": "You may not do this.",
   "records.save_failed": "The record could not be saved. Try again.",
   "records.print_slip": "Print slip",
-  "records.slip_printed": "Slip printed."
+  "records.slip_printed": "Slip printed.",
+  "error.gateway_offline": "The store cannot reach the cloud right now, so nothing was looked up. Carry on without it, or try again later.",
+  "error.gateway_timeout": "The lookup got no answer in time. Try again.",
+  "error.gateway_refused": "The service being asked turned the lookup down or did not answer properly. Check what was typed, or ask your manager.",
+  "error.gateway_busy": "Too many lookups are on their way. Wait a moment and try again.",
+  "error.unknown_gateway_endpoint": "This lookup is not set up for the store. Ask your manager.",
+  "lookup.pending": "Looking up…",
+  "lookup.none": "Not given",
+  "lookup.yes": "Yes",
+  "lookup.no": "No"
 }

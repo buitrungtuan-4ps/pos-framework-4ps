@@ -95,6 +95,12 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
   ACTIVATION_UNAVAILABLE: "error.activation_unavailable",
   ACTIVATION_CLOUD_UNTRUSTED: "error.activation_cloud_untrusted",
   ACTIVATION_CLOUD_UNREACHABLE: "error.activation_cloud_unreachable",
+  // A lookup through the cloud gateway (ADR-0214 decision 3).
+  GATEWAY_OFFLINE: "error.gateway_offline",
+  GATEWAY_TIMEOUT: "error.gateway_timeout",
+  GATEWAY_REFUSED: "error.gateway_refused",
+  GATEWAY_BUSY: "error.gateway_busy",
+  UNKNOWN_GATEWAY_ENDPOINT: "error.unknown_gateway_endpoint",
 };
 
 // The sentence for anything a command threw: a translated refusal, the edge's own words for a

@@ -3116,5 +3116,12 @@
   "gateway.deleteTypePrompt": "Type the endpoint's name to confirm",
   "provider.delivery.demo": "Demo delivery (sandbox)",
   "provider.field.item_map": "Item map (vendor code=menu item id, one per line)",
-  "provider.field.webhook_secret": "Webhook signing secret"
+  "provider.field.webhook_secret": "Webhook signing secret",
+  "designer.component.lookup_field": "Lookup field",
+  "designer.component.lookup_result": "Lookup answer",
+  "designer.property.field": "Endpoint field",
+  "designer.property.kind": "Typed as",
+  "designer.token.text": "Text",
+  "designer.token.number": "Whole number",
+  "designer.screens.fieldHint": "The name of a field of the gateway endpoint the screen's lookup calls, as the endpoint declares it."
 }

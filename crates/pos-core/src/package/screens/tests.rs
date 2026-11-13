@@ -129,6 +129,43 @@ fn a_property_is_one_the_component_takes_of_its_own_kind() {
     }
 }
 
+/// ADR-0214: a lookup's screen names endpoint fields as an endpoint declares them, and its button
+/// runs the lookup with the endpoint fixed and the values the screen's fields supply.
+#[test]
+fn a_lookup_screen_names_its_fields_and_fixes_only_the_endpoint() {
+    let lookup = |field: &str, endpoint: &str| {
+        screen(&format!(
+            r#"{{"screen_id":"points","root":{{"component_id":"stack","children":[
+            {{"component_id":"lookup_field","properties":{{"field":"{field}","label_key":"points.card","kind":"text"}}}},
+            {{"component_id":"action_button","properties":{{"label_key":"points.look",
+                "action":{{"action_id":"integrations.lookup.run","params":{{{endpoint}}}}}}}}},
+            {{"component_id":"lookup_result","properties":{{"field":"points","label_key":"points.balance"}}}}]}}}}"#
+        ))
+    };
+    let endpoint = r#""gateway_endpoint_id":"01J0000000000000000000GW01""#;
+    assert_eq!(check(&[lookup("card_code", endpoint)]), Ok(()));
+    for bad in ["Card", "1card", "card-code", ""] {
+        assert_eq!(
+            fault(&[lookup(bad, endpoint)]),
+            Some(ScreenFault::PropertyValue(1, "field")),
+            "{bad}"
+        );
+    }
+    assert_eq!(
+        fault(&[lookup(&"c".repeat(65), endpoint)]),
+        Some(ScreenFault::PropertyValue(1, "field"))
+    );
+    assert_eq!(
+        fault(&[lookup("card_code", "")]),
+        Some(ScreenFault::MissingParam(2, "gateway_endpoint_id"))
+    );
+    // The values are a person's to type, never the package's to fix.
+    assert_eq!(
+        fault(&[lookup("card_code", &format!(r#"{endpoint},"values":"x""#))]),
+        Some(ScreenFault::FixedParam(2, "action"))
+    );
+}
+
 #[test]
 fn an_action_property_names_a_catalogued_act_and_fixes_only_what_it_may() {
     let button = |action: &str| {
