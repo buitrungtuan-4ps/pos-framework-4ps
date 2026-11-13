@@ -3123,5 +3123,14 @@
   "designer.property.kind": "Typed as",
   "designer.token.text": "Text",
   "designer.token.number": "Whole number",
-  "designer.screens.fieldHint": "The name of a field of the gateway endpoint the screen's lookup calls, as the endpoint declares it."
+  "designer.screens.fieldHint": "The name of a field of the gateway endpoint the screen's lookup calls, as the endpoint declares it.",
+  "flow.refusal.noOfflineBranch": "This step is required and needs the cloud: say what happens when the store cannot reach it.",
+  "flow.refusal.badOfflineBranch": "When offline, the step either is skipped with a note key or goes to another step of this flow.",
+  "flow.step.offline": "When the store cannot reach the cloud",
+  "flow.step.offlineNone": "Nothing said",
+  "flow.step.offlineSkip": "Skip it, showing a note",
+  "flow.step.offlineGoTo": "Go to another step",
+  "flow.step.offlineNote": "Note",
+  "flow.step.offlineNoteHint": "A key of your translations, shown at the till when the step is skipped.",
+  "flow.step.offlineStep": "Step to go to"
 }
