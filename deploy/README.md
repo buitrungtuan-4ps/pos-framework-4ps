@@ -75,6 +75,42 @@ is deliberately *not* a repository secret, is in [`fork-checklist.md`](../docs/f
 publishes and image tags the posture implies, so a later `docker compose up -d` typed by hand
 reproduces the same posture instead of reverting to the defaults.
 
+## Keys — production does not run on the file keeper
+
+Every vendor credential and gateway secret header is sealed under its tenant's own key, which is
+stored only wrapped by the **environment key** ([ADR-0217](../docs/adr/0217-secrets-are-sealed-under-versioned-tenant-keys.md)).
+`cloud.toml`'s `key_keeper` says where that key is kept:
+
+| `key_keeper` | The environment key | Where |
+|---|---|---|
+| `file` (default) | `integration_secret` in `secrets/cloud.toml` | development and demonstrations **only** |
+| `systemd-creds` | versioned keys sealed by `systemd-creds` to the host's TPM2 (or its root-only host key) | **production** |
+
+**Production must not use the file keeper.** On the file keeper the key sits in a file anyone who
+can read the box can copy, beside the database it protects, and it cannot be rotated. `pos_cloud`
+logs a warning at every boot that runs on it. To run on `systemd-creds`:
+
+1. As root, `deploy/cloud-keys.sh new` seals version 1 into `/etc/credstore.encrypted`. The key is
+   32 random bytes from the kernel; nobody sees or types it.
+2. Before every start, `deploy/cloud-keys.sh unseal` decrypts each version into
+   `/run/pos-cloud/credentials` (tmpfs, readable by uid `10001` only). Run it as the
+   `ExecStartPre` of the unit that brings the stack up.
+3. Mount it into the container read-only and point the keeper at it, in a
+   `compose.override.yml` beside `compose.yml`:
+   `services: { pos_cloud: { volumes: ["/run/pos-cloud/credentials:/run/credentials/pos-cloud:ro"] } }`,
+   and in `secrets/cloud.toml`: `key_keeper = "systemd-creds"` and
+   `key_credentials_dir = "/run/credentials/pos-cloud"`. Keep `integration_secret`: a value sealed
+   before tenant keys opens under it until the re-seal pass has moved it.
+4. `pos_cloud` refuses to boot when the keeper is `systemd-creds` and no key can be read.
+
+**Rotating.** `deploy/cloud-keys.sh new`, `unseal`, restart, then
+`docker compose exec pos_cloud pos-cloud keys rotate --environment` re-wraps every tenant key under
+the new version. A tenant's own key rotates with `pos-cloud keys rotate --tenant <id>`; the re-seal
+pass (every 15 minutes) moves its values and retires the old version. `pos-cloud keys erase` makes
+a tenant's secrets unreadable for good and needs the owner's approval reference
+([`docs/architecture.md`](../docs/architecture.md), tenant keys). Never delete a sealed key file by
+hand: what it wrapped would be lost.
+
 ## TLS — four postures, chosen by `TLS_MODE`
 
 `TLS_MODE` is explicit and nothing is inferred from the hostname
