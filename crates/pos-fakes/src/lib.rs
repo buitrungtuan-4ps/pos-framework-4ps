@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! In-memory implementations of all twenty-one ports (`pos_ports::PortName::ALL`).
+//! In-memory implementations of all twenty-two ports (`pos_ports::PortName::ALL`).
 //!
 //! # What this crate is for
 //!
@@ -14,7 +14,7 @@
 //! the suites are what make *swappable* a verified fact — but there is a circularity in that claim
 //! if the fakes are exempt: the domain suite runs against the fakes, so a fake that disagrees with
 //! the real store makes every domain test a test of the wrong thing. So these are held to exactly
-//! the same suites as `store-sqlite` will be. `tests/contract.rs` runs all twenty-one.
+//! the same suites as `store-sqlite` will be. `tests/contract.rs` runs all twenty-two.
 //!
 //! # Fixed capacities, on purpose
 //!
@@ -54,8 +54,8 @@ pub use determinism::{FakeClock, FakeIdGenerator};
 pub use devices::{FakePaymentTerminal, FakePrinter};
 pub use executor::run_ready;
 pub use infra::{
-    FakeBlobStore, FakeCloudSync, FakeDeviceRegistry, FakeKeyVault, FakeLink, FakeMetricsSink,
-    FakeSigner,
+    FakeBlobStore, FakeCloudSync, FakeDeviceRegistry, FakeKeyKeeper, FakeKeyVault, FakeLink,
+    FakeMetricsSink, FakeSigner,
 };
 pub use store::{FakeStore, FakeTx};
 pub use vendors::{FakeDeliveryVendor, FakeErp, FakeFiscal, FakeIntake, FakeShipping};
