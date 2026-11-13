@@ -370,6 +370,17 @@ export const SCREENS = {
   // Console-level: the admin roster is the console's own users, not a tenant's.
   admins: { path: "/admins", key: "nav.admins", roles: ADMIN_MANAGERS, tenantScoped: false, icon: "user-cog" },
 
+  // A tenant's gateway endpoints (ADR-0198): the https targets its stores' lookups go to.
+  gatewayEndpoints: {
+    path: "/gateway-endpoints",
+    key: "nav.gatewayEndpoints",
+    scope: "tenant",
+    roles: ADMIN_MANAGERS,
+    tenantScoped: true,
+    inPalette: true,
+    icon: "server",
+  },
+
   webhooks: {
     path: "/webhooks",
     key: "nav.webhooks",
@@ -488,7 +499,7 @@ export const NAV_GROUPS: readonly {
   // or out". Integrations moved here from Settings when Shared settings filled that group's sixth
   // place: a vendor connection is credentials and an endpoint, which is this group's subject and
   // its name.
-  { key: "nav.group.access", items: ["admins", "apiKeys", "webhooks", "integrations"] },
+  { key: "nav.group.access", items: ["admins", "apiKeys", "webhooks", "integrations", "gatewayEndpoints"] },
   // What an auditor or a regulator asks for: what was done, by whom, what a named person's data
   // may be made to do (ADR-0076, Decree 13), and whether the trading record itself is intact
   // (ADR-0131, ADR-0132). Chain integrity sits here rather than under the estate because it is not

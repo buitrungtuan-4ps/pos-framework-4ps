@@ -1,6 +1,6 @@
 # ADR-0214 — A till's external lookup is one catalogue act, answered by the gateway through its edge
 
-**Status** Proposed · **Owner** @maintainers-architecture · **Date** 2026-11-12
+**Status** Accepted · **Owner** @maintainers-architecture · **Date** 2026-11-13
 · Extends [ADR-0198](0198-a-store-reaches-the-internet-only-through-the-cloud.md) (the till's end of
 the path) and [ADR-0191](0191-every-act-is-in-a-typed-catalogue.md) (the first `ACTION_EFFECT_EXTERNAL`
 act) · Relates to [ADR-0190](0190-a-screen-is-drawn-from-the-package.md),
@@ -30,16 +30,16 @@ contract this repository holds to an ADR:
 3. **One generic lookup act, parameterised by the endpoint id, whose answer is read-only data
    drawn by one component** (proposed).
 
-## Decision (proposed)
+## Decision
 
 1. **One act, `integrations.lookup.run`**, effect `ACTION_EFFECT_EXTERNAL`, frequency `RARE`.
    Parameters: `gateway_endpoint_id` (fixed by the package, never typed) and `values`, the
    endpoint's request fields by name, each supplied by the screen (`order_id`, `table_id`) or by a
    `lookup_field` component on the same screen that a person types into. A value's kind is the
    endpoint's declared kind; the edge refuses a mismatch before calling out.
-2. **A permission, `integrations.lookup.run`**, not PIN-flagged. Every role that exists when it
-   lands is granted it directly once by migration, as `0073` did for the till's acts; the owner
-   may say otherwise.
+2. **A permission, `integrations.lookup.run`**, not PIN-flagged. No role is granted it by
+   migration: a tenant grants it to the roles it chooses on the console, and until it does, no one
+   at the till can run a lookup (the owner's decision, 2026-11-13).
 3. **The edge route `POST /api/gateway/calls`**, behind the till session and that permission. The
    edge mints the `idempotency_key` per act (the till sends its own on a retry of the same act),
    calls the cloud with ADR-0198's deadline plus one second, and answers the typed result or a
@@ -63,6 +63,7 @@ contract this repository holds to an ADR:
 
 ## Consequences accepted
 
+- A tenant that wants lookups must grant the permission to a role first; nothing is open by default.
 - Additive `pos-proto` changes (one act, one component, one `FlowStep` field), one permission and
   one edge route, each held by its snapshot, with the owner's review of `pos-proto`.
 - A lookup depends on the cloud, as ADR-0198 accepts; the till says so at once when it is offline.

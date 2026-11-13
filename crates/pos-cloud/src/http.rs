@@ -214,10 +214,18 @@ pub(crate) use integrations::{
     __path_admin_list_connections, __path_admin_list_providers, __path_admin_publish_integrations,
     __path_admin_update_connection,
 };
+pub(crate) use integrations::{
+    __path_admin_create_gateway_endpoint, __path_admin_delete_gateway_endpoint,
+    __path_admin_get_gateway_endpoint, __path_admin_list_gateway_endpoints,
+    __path_admin_update_gateway_endpoint,
+};
 use integrations::{
     admin_delete_webhook, admin_enable_webhook, admin_list_webhooks, admin_register_webhook,
 };
-pub use integrations::{config_integrations_router, connection_router, provider_catalogue_router};
+pub use integrations::{
+    config_integrations_router, connection_router, gateway_endpoint_router,
+    provider_catalogue_router,
+};
 pub use inventory::{config_inventory_router, inventory_router};
 pub use media::media_router;
 pub use ota::{

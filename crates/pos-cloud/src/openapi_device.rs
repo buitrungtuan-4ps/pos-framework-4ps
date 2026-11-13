@@ -57,6 +57,7 @@ use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorResponse};
         crate::http::reconcile::store_reconcile,
         crate::relay::pull_orders,
         crate::relay::ack_order,
+        crate::gateway::sync::store_gateway_call,
         crate::http::ota::receive_store_report,
         crate::http::ota::serve_ota_artifact,
         crate::http::serve_store_archive_key,
@@ -81,6 +82,9 @@ use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorResponse};
         (name = "order relay", description = "Orders taken for the store elsewhere, pulled by a \
                                               bounded long-poll and acknowledged with the store's \
                                               outcome (ADR-0061)."),
+        (name = "gateway", description = "A store's external call, made by the cloud on its behalf \
+                                          to an endpoint its tenant declared, behind the webhook \
+                                          guard, within the endpoint's deadline (ADR-0198)."),
         (name = "updates", description = "The signed release a store installs, and what it reports \
                                           once it runs it (ADR-0088, ADR-0078)."),
         (name = "archives", description = "The key a store seals its archives with, and the sealed \
@@ -151,8 +155,11 @@ fn is_device_path(path: &str) -> bool {
 #[cfg(test)]
 fn registered_device_paths() -> std::collections::BTreeSet<String> {
     let mut sources = crate::openapi_routes::router_sources();
-    let relay = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/relay.rs");
-    sources.push(std::fs::read_to_string(relay).unwrap_or_default());
+    // The relay and the gateway serve `/sync` outside the router sources.
+    for module in ["src/relay.rs", "src/gateway/sync.rs"] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(module);
+        sources.push(std::fs::read_to_string(path).unwrap_or_default());
+    }
     let constant = |name: &str| {
         let declaration = format!("const {name}: &str = \"");
         sources.iter().find_map(|source| {

@@ -275,6 +275,10 @@ export interface SessionState {
   // The edge stays the authority: it refuses what the person may not do whatever the till shows.
   permissions?: string[];
   permissions_with_approval?: string[];
+  // The ids of the roles the signed-in person holds, sorted, which choose a package screen's role
+  // variant and a role's home (ADR-0213). Empty when nobody is signed in; absent from an edge too
+  // old to send them, which reads as no role: the base.
+  role_ids?: string[];
   // The store's display language (a BCP 47 tag), sent whoever is signed in, so a device that has
   // never signed in draws its sign-in screen in it. Absent where the store sets none, and from an
   // edge too old to send it.

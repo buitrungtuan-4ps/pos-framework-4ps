@@ -66,6 +66,10 @@ pub struct PersistedWebhook {
     pub cursor: Option<EventId>,
     /// Whether the endpoint has been auto-disabled (a day of continuous failure) and awaits a human.
     pub disabled: bool,
+    /// The event types the endpoint is sent, as `domain.resource.action` tokens, sorted and once
+    /// each; empty for every event (roadmap-v3 B6.2,
+    /// [ADR-0083](../../../../docs/adr/0083-integration-doctrine.md) decision 2).
+    pub event_types: Vec<String>,
 }
 
 /// An endpoint's metadata for a listing — everything but the secret, which never leaves the store.
@@ -82,6 +86,8 @@ pub struct WebhookSummary {
     pub cursor: Option<String>,
     /// Whether the endpoint is auto-disabled.
     pub disabled: bool,
+    /// The event types the endpoint is sent, sorted; empty for every event.
+    pub event_types: Vec<String>,
 }
 
 /// Persists and reads webhook endpoints.

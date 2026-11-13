@@ -12,8 +12,8 @@
 //! `code`, `name`, the permissions they hold directly (every active role they hold at the store,
 //! flattened to its `pos-core` permission ids, unioned, deduped and sorted), those they hold only
 //! with approval (the same, less anything held directly), the highest of those roles' discount
-//! ceilings, and the **Argon2id PIN hash** the edge verifies against offline (ADR-0030) — never the
-//! PIN itself. Staff are emitted sorted by `code` so the document is stable (two publishes of the
+//! ceilings, the ids of those roles (ADR-0213), and the **Argon2id PIN hash** the edge verifies
+//! against offline (ADR-0030) — never the PIN itself. Staff are emitted sorted by `code` so the document is stable (two publishes of the
 //! same state produce byte-identical JSON).
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -31,6 +31,7 @@ struct Held<'a> {
     permissions: BTreeSet<String>,
     permissions_with_approval: BTreeSet<String>,
     discount_ceiling_minor: Option<i64>,
+    role_ids: BTreeSet<String>,
 }
 
 /// Compiles a store's assignments into its `permissions` document.
@@ -97,6 +98,7 @@ pub fn compile_permissions(
             permissions: BTreeSet::new(),
             permissions_with_approval: BTreeSet::new(),
             discount_ceiling_minor: None,
+            role_ids: BTreeSet::new(),
         });
         if let Some(role) = active_role_by_id.get(&assignment.role_template_id.to_string()) {
             person.permissions.extend(role.permissions.iter().cloned());
@@ -109,6 +111,10 @@ pub fn compile_permissions(
             person.discount_ceiling_minor = person
                 .discount_ceiling_minor
                 .max(role.discount_ceiling_minor);
+            // The roles a package's role variants and homes are chosen by (ADR-0213 decision 1):
+            // the active ones only, so an archived role draws its screens for nobody, as it grants
+            // nothing.
+            person.role_ids.insert(role.role_template_id.to_string());
         }
     }
 
@@ -133,6 +139,7 @@ pub fn compile_permissions(
                     .get(&person.employee.employee_id.to_string())
                     .cloned()
                     .flatten(),
+                role_ids: person.role_ids.into_iter().collect(),
             }
         })
         .collect();
@@ -392,6 +399,53 @@ mod tests {
             "only the active role counts"
         );
         assert_eq!(bao.discount_ceiling_minor, Some(20_000));
+        assert!(
+            alice.role_ids.is_empty(),
+            "an archived role is no role a screen is chosen by"
+        );
+        assert_eq!(
+            bao.role_ids,
+            [RoleTemplateId::new(Ulid::from_u128(11)).to_string()]
+        );
+    }
+
+    /// ADR-0213 decision 1: each person carries the ids of the active roles they hold at the store,
+    /// sorted and once each however many assignments name a role; a person with none is written as
+    /// before the field.
+    #[test]
+    fn a_person_carries_the_ids_of_their_roles_sorted_and_once_each() {
+        let store = StoreId::new(Ulid::from_u128(0x5703C));
+        let employees = vec![
+            employee(1, "C01", "Alice", EntityStatus::Active),
+            employee(2, "C02", "Bao", EntityStatus::Active),
+        ];
+        let roles = vec![
+            role(12, "Shift lead", &["cash.shift.open"]),
+            role(10, "Cashier", &["billing.payment.take"]),
+        ];
+        let assignments = vec![
+            // Alice holds the shift lead role at the store and through its group, and the cashier
+            // role tenant-wide; Bao's only role is missing.
+            assignment(20, 1, 0x5703C, 12),
+            assignment(21, 1, 0x5703C, 10),
+            assignment(22, 1, 0x5703C, 12),
+            assignment(23, 2, 0x5703C, 999),
+        ];
+
+        let document =
+            compile_permissions(store, &employees, &roles, &assignments, &BTreeMap::new());
+
+        let id = |n: u128| RoleTemplateId::new(Ulid::from_u128(n)).to_string();
+        assert_eq!(document.staff[0].role_ids, [id(10), id(12)]);
+        assert!(
+            document.staff[1].role_ids.is_empty(),
+            "a missing role is no role"
+        );
+        let json = serde_json::to_value(&document).expect("serialise");
+        assert!(
+            json["staff"][1].get("role_ids").is_none(),
+            "no role ids, no key: {json}"
+        );
     }
 
     /// ADR-0158 decision 3: a person with several roles at one store holds all of them at once,

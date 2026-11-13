@@ -77,10 +77,16 @@ mod fleet;
 #[path = "cloud/fleet_rows.rs"]
 mod fleet_rows;
 use fleet_rows::store_in_handover;
+#[path = "cloud/connectors.rs"]
+mod connectors;
 #[path = "cloud/floor.rs"]
 mod floor;
 #[path = "cloud/floor_tree.rs"]
 mod floor_tree;
+#[path = "cloud/gateway_calls.rs"]
+mod gateway_calls;
+#[path = "cloud/gateway_endpoints.rs"]
+mod gateway_endpoints;
 #[path = "cloud/hq_rollups.rs"]
 mod hq_rollups;
 #[path = "cloud/integrations.rs"]
@@ -1538,6 +1544,7 @@ impl WebhookEndpointStore for FakeWebhooks {
                 url: row.url.clone(),
                 cursor: row.cursor.as_ref().map(ToString::to_string),
                 disabled: row.disabled,
+                event_types: row.event_types.clone(),
             })
             .collect())
     }

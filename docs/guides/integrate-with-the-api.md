@@ -52,9 +52,9 @@ for an integrator:
 | `place_orders` | `POST /v1/orders` and `GET /v1/orders` — the public order intake |
 | `read_rollups` | `GET /v1/stores/{store_id}/rollups/daily` — per-store daily activity |
 
-The remaining scopes (`read_config`, `relay_orders`, `publish_events`, `manage_devices`) are
-**store** credentials — a shop's own box holds them to pull its configuration and its queued orders
-and to publish its events. An integrator has no use
+The remaining scopes (`read_config`, `relay_orders`, `publish_events`, `manage_devices`,
+`call_gateway`) are **store** credentials — a shop's own box holds them to pull its configuration and
+its queued orders, to publish its events, and to make its external calls through the cloud. An integrator has no use
 for them and should not be given them.
 
 Ask only for what you use. A key with `place_orders` alone cannot read a single figure, which is the
@@ -225,6 +225,11 @@ Documented in [ADR-0057](../adr/0057-qr-ordering.md); it is not a general integr
 
 An operator registers your endpoint in the console (**Settings → Webhooks**) with an `https://` URL,
 and is shown a **signing secret** once. From then on the cloud pushes that store's events to you.
+The registration may name the **event types** you want, as `domain.resource.action` tokens from the
+event catalogue (`docs/snapshots/events.txt`), for example `sales.order.opened`; then you are sent
+only those, and the cursor moves past the rest, so a page holds only what you asked for and a
+quiet stretch sends nothing. Naming none sends every event. A token the catalogue does not hold is
+refused when the endpoint is registered (`event_types`, `UNKNOWN_EVENT_TYPE`).
 
 Three properties to build against
 ([ADR-0032](../adr/0032-webhooks.md)):

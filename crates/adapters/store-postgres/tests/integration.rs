@@ -856,6 +856,16 @@ mod chain_window;
 #[path = "integration/integration_connections.rs"]
 mod integration_connections;
 
+/// The gateway endpoint table (ADR-0198, migration 0098): the same per-record shape and tenant
+/// isolation as the connections above.
+#[path = "integration/gateway_endpoints_store.rs"]
+mod gateway_endpoints_store;
+
+/// The gateway's idempotency record (ADR-0198, migration 0099): a key recalled for a day, never
+/// overwritten inside it, and forgotten after it.
+#[path = "integration/gateway_calls_store.rs"]
+mod gateway_calls_store;
+
 // ---------------------------------------------------------------------------
 // A tenant's fee rules (ADR-0159, migration 0075).
 // ---------------------------------------------------------------------------

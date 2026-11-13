@@ -1054,7 +1054,7 @@ async fn publishing_permissions_writes_the_config_node_without_pii_in_the_audit(
     let store = store_id();
 
     // Seed a store's people directly through the seam: an employee with a PIN, a role, an assignment.
-    seed_a_cashier(&people, store).await;
+    let (_, cashier) = seed_a_cashier(&people, store).await;
 
     let router = people_publish_app(
         admin,
@@ -1106,6 +1106,11 @@ async fn publishing_permissions_writes_the_config_node_without_pii_in_the_audit(
         serde_json::json!("argon2id$phc$alice"),
         "the PIN hash rides to the store for offline verification"
     );
+    assert_eq!(
+        staff[0]["role_ids"],
+        serde_json::json!([cashier.to_string()]),
+        "the role rides to the store, for the till to choose its screens by (ADR-0213)"
+    );
 
     // The audit records the publish — the config version and staff count, never a name or PIN.
     let recorded = audit.list(None, 10).await.expect("list audit");
@@ -1122,5 +1127,9 @@ async fn publishing_permissions_writes_the_config_node_without_pii_in_the_audit(
     assert!(
         !dump.to_lowercase().contains("argon2"),
         "no PIN hash in the audit trail"
+    );
+    assert!(
+        !dump.contains(&cashier.to_string()),
+        "no role id in the audit trail (ADR-0213 decision 5)"
     );
 }

@@ -87,8 +87,8 @@ pub use app::{
     AppError, Approval, BillCheckView, BillView, CashMovement, ClosedDrawers, CombinedReport,
     CounterOrderOpened, DrawerFigures, DrawerView, DrawersView, EVENT_LOG_DAYS, Edge, EdgeSession,
     FiredLine, InboundOrderOpened, LineDraft, LineView, MAX_SETTLED_LISTED, OrderLineChoice,
-    ReceiptCopy, ReceiptLine, SettledBillView, SettledVoidView, ShiftView, StaffAuth, StaffRoster,
-    StoreIdentity, TableView, TillScope, TransferView,
+    ReceiptCopy, ReceiptLine, RoleIds, SettledBillView, SettledVoidView, ShiftView, StaffAuth,
+    StaffRoster, StoreIdentity, TableView, TillScope, TransferView,
 };
 pub use auth::{
     Admission, DEFAULT_SIGN_IN_IDLE_TIMEOUT, Lockout, LockoutPolicy, SessionSettingsSource,

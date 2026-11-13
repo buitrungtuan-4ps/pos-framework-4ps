@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use pos_core::ota::ReleaseVersion;
 use pos_proto::actions::Action;
 use pos_proto::ids::{PackageId, PackageVersionId, TenantId};
-use pos_proto::package::PackageContent;
+use pos_proto::package::{PackageContent, VariantSelector};
 use pos_proto::screen::{Component, PropertyValue, ScreenNode};
 use pos_proto::text::{DisplayName, ReleaseTag};
 use pos_proto::time::Timestamp;
@@ -52,6 +52,15 @@ pub const DATA_PART_SINCE: &str = "0.14.1";
 /// **When the first release that carries `pos_core::package::check_homes` is tagged, set this to
 /// that release** if it is not 0.14.1.
 pub const HOME_SCREENS_SINCE: &str = "0.14.1";
+
+/// The first release whose edge answers the signed-in person's roles on `GET /api/session` and
+/// whose till resolves a role's screen variants and home with them
+/// ([ADR-0213](../../../docs/adr/0213-a-store-knows-each-persons-roles.md)). A version a selector
+/// of which states a role needs at least it; an older edge would run it with the base for everyone.
+///
+/// It reads "0.14.1" for [`DATA_PART_SINCE`]'s reason. **When the first release whose session
+/// answers `role_ids` is tagged, set this to that release** if it is not 0.14.1.
+pub const ROLE_VARIANTS_SINCE: &str = "0.14.1";
 
 /// The most packages, and the most versions of all packages, the in-memory store holds.
 pub const IN_MEMORY_ROWS: usize = 1024;
@@ -83,8 +92,9 @@ pub struct PackageVersionRecord {
 }
 
 /// The oldest edge release that runs `content`: [`PACKAGE_NODE_SINCE`] until a part a version
-/// uses introduces a later one: the data part, its homes, each component and act its screens name,
-/// and each act its flows and reactions run (ADR-0190, ADR-0191, ADR-0210). Nobody types it.
+/// uses introduces a later one: the data part, its homes, a selector stating a role, each component
+/// and act its screens name, and each act its flows and reactions run (ADR-0190, ADR-0191,
+/// ADR-0210, ADR-0213). Nobody types it.
 #[must_use]
 pub fn min_edge_version(content: &PackageContent) -> ReleaseTag {
     let floor = if content.data.is_empty() {
@@ -100,6 +110,9 @@ pub fn min_edge_version(content: &PackageContent) -> ReleaseTag {
     let mut latest = floor;
     if !content.home_screens.is_empty() && release(HOME_SCREENS_SINCE) > release(latest) {
         latest = HOME_SCREENS_SINCE;
+    }
+    if states_a_role(content) && release(ROLE_VARIANTS_SINCE) > release(latest) {
+        latest = ROLE_VARIANTS_SINCE;
     }
     while let Some(node) = pending.pop() {
         let component = Component::find(&node.component_id).map(|found| found.since);
@@ -137,6 +150,19 @@ pub fn min_edge_version(content: &PackageContent) -> ReleaseTag {
         }
     }
     ReleaseTag::new(latest)
+}
+
+/// Whether a selector of any part of `content` states a role.
+fn states_a_role(content: &PackageContent) -> bool {
+    let screens = content.screens.iter().map(|variant| &variant.selector);
+    let homes = content.home_screens.iter().map(|variant| &variant.selector);
+    let flows = content.flows.iter().map(|variant| &variant.selector);
+    let reactions = content.reactions.iter().map(|variant| &variant.selector);
+    screens
+        .chain(homes)
+        .chain(flows)
+        .chain(reactions)
+        .any(VariantSelector::states_role)
 }
 
 /// A catalogue's `since`, ordered; one that does not parse orders first.
@@ -324,5 +350,31 @@ impl PackageStore for InMemoryPackages {
         }
         rows.versions.insert(key, version.clone());
         Ok(CreateOutcome::Created(first_version()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ROLE_VARIANTS_SINCE, min_edge_version};
+    use pos_proto::package::PackageContent;
+
+    fn content(json: &str) -> PackageContent {
+        serde_json::from_str(json).unwrap_or_else(|error| panic!("{error}: {json}"))
+    }
+
+    const HEAD: &str = r#""package_id":"01J00000000000000000000P01","package_version_id":"01J00000000000000000000V01","version_label":"v1","min_edge_version":"""#;
+
+    /// ADR-0213: a version a selector of which states a role needs an edge whose session answers
+    /// the person's roles.
+    #[test]
+    fn a_role_stated_anywhere_raises_the_floor_to_the_role_release() {
+        let screen = r#"{"screen_id":"welcome","root":{"component_id":"stack"}}"#;
+        let base = content(&format!(r#"{{{HEAD},"screens":[{{"body":{screen}}}]}}"#));
+        let role = content(&format!(
+            r#"{{{HEAD},"screens":[{{"body":{screen}}},{{"selector":{{"role_id":"01J00000000000000000000R01"}},"body":{screen}}}]}}"#
+        ));
+        assert_eq!(min_edge_version(&role).as_str(), ROLE_VARIANTS_SINCE);
+        assert!(super::states_a_role(&role));
+        assert!(!super::states_a_role(&base), "the base states no role");
     }
 }

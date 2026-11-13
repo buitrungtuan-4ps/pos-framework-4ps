@@ -25,6 +25,7 @@ async fn seed(hooks: &PostgresWebhooks) {
             STORE_1,
             "https://a.example/hook1",
             "secret-a1",
+            &[],
         )
         .await
         .expect("register A's first endpoint");
@@ -35,6 +36,7 @@ async fn seed(hooks: &PostgresWebhooks) {
             STORE_1,
             "https://a.example/hook2",
             "secret-a2",
+            &[],
         )
         .await
         .expect("register A's second endpoint");
@@ -45,6 +47,10 @@ async fn seed(hooks: &PostgresWebhooks) {
             STORE_2,
             "https://b.example/hook",
             "secret-b1",
+            &[
+                "billing.payment.captured".to_owned(),
+                "sales.order.opened".to_owned(),
+            ],
         )
         .await
         .expect("register B's endpoint");
@@ -91,6 +97,20 @@ fn list_is_tenant_scoped_and_enabled_load_carries_the_secret() {
         assert_eq!(a1.tenant_id, TENANT_A);
         assert_eq!(a1.secret, "secret-a1", "the secret is loaded for signing");
         assert!(a1.cursor.is_none(), "no cursor until the first delivery");
+        assert!(a1.event_types.is_empty(), "no filter: every event");
+        let b1 = enabled
+            .iter()
+            .find(|row| row.id == HOOK_B1)
+            .expect("B's endpoint is in the enabled load");
+        assert_eq!(
+            b1.event_types,
+            ["billing.payment.captured", "sales.order.opened"],
+            "the event types it is sent are kept, in order (migration 0097)"
+        );
+        assert_eq!(
+            listed_b.first().expect("one row").event_types,
+            b1.event_types
+        );
 
         // A successful delivery advances the cursor; the next enabled load reflects it.
         hooks

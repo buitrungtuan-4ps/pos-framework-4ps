@@ -64,7 +64,7 @@ pub(in crate::http) struct ListApiKeysQuery {
         content = CreateApiKeyRequest, description = "`tenant_id`; `store_id` to bind the key to one store, or absent for a \
                        tenant-wide key (a store's own sync credential must name its store); \
                        `scopes`, the only things the key may do: `read_rollups`, `read_config`, \
-                       `manage_devices`, `place_orders`, `relay_orders` or `publish_events`; and \
+                       `manage_devices`, `place_orders`, `relay_orders`, `publish_events` or `call_gateway`; and \
                        `expires_at_ms`, or absent for a key that never expires",
         content_type = "application/json",
     ),
