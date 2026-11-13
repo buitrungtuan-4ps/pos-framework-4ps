@@ -84,6 +84,16 @@ pub(super) fn integration_routes(deps: &RouteDeps<'_>) -> Router {
             vec![Arc::new(pos_cloud::connectors::demo::DemoConnector)],
             keys.clone(),
         ))
+        // A store's answer to a delivery vendor (ADR-0215 decision 4): accept, reject, ready or
+        // busy, sent on by the vendor's connector to its connection's answer_url over the guarded
+        // outbound client.
+        .merge(pos_cloud::connectors::answer::https_delivery_answer_router(
+            store.connections(),
+            store.api_keys(),
+            SystemClock,
+            vec![Arc::new(pos_cloud::connectors::demo::DemoConnector)],
+            keys.clone(),
+        ))
         // Sending a store the connections that serve it (ADR-0153 decision 5): its own, its
         // brand's, its tenant's, resolved into the `integrations` node on its Store layer. A
         // publish like every other node, so it is console.config.publish, not the authoring

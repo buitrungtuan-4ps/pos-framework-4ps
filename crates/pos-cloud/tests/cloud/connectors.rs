@@ -66,10 +66,16 @@ async fn connection(
         scope_id: scope.1,
         display_name: "Demo delivery".to_owned(),
         enabled,
-        settings: [(
-            "item_map".to_owned(),
-            SettingValue::Text(format!("PIZZA-M={}", pizza())),
-        )]
+        settings: [
+            (
+                "item_map".to_owned(),
+                SettingValue::Text(format!("PIZZA-M={}", pizza())),
+            ),
+            (
+                "answer_url".to_owned(),
+                SettingValue::Text("https://vendor.example/answers".to_owned()),
+            ),
+        ]
         .into(),
         sealed_secrets: [("webhook_secret".to_owned(), sealed)].into(),
         processing_country: None,
@@ -285,5 +291,132 @@ async fn what_the_connector_refuses_before_the_intake() {
     assert!(
         queue.entries.lock().expect("lock").is_empty(),
         "nothing reached the intake"
+    );
+}
+
+/// A vendor endpoint that records what it is sent and answers `status`.
+struct Vendor {
+    sent: std::sync::Mutex<Vec<pos_cloud::gateway::call::OutboundRequest>>,
+    status: u16,
+}
+
+impl pos_cloud::gateway::call::GatewayTransport for Vendor {
+    async fn send(
+        &self,
+        request: &pos_cloud::gateway::call::OutboundRequest,
+    ) -> Result<pos_cloud::gateway::call::TargetAnswer, String> {
+        self.sent
+            .lock()
+            .expect("lock")
+            .push(pos_cloud::gateway::call::OutboundRequest {
+                method: request.method,
+                url: request.url.clone(),
+                headers: request.headers.clone(),
+                body: request.body.clone(),
+            });
+        Ok(pos_cloud::gateway::call::TargetAnswer {
+            status: self.status,
+            body: Vec::new(),
+        })
+    }
+}
+
+/// ADR-0215 decision 4: a store answers its vendor through the cloud. The answer reaches the
+/// connection's `answer_url` signed as the vendor's webhooks are, under the vendor's own reference,
+/// with the same idempotency key on a retry; a malformed answer, a vendor that is not this store's
+/// and a key without `relay_orders` are refused before anything is sent.
+#[tokio::test]
+async fn a_store_answers_its_delivery_vendor_through_the_cloud() {
+    use pos_cloud::connectors::answer::delivery_answer_router;
+
+    let connections = FakeConnections::default();
+    connection(
+        &connections,
+        CONNECTION,
+        "delivery.demo",
+        store_scope(),
+        true,
+    )
+    .await;
+    let keys = FakeKeys::default();
+    let relay = issue_store_key(
+        &keys,
+        tenant(),
+        order_store(),
+        &[pos_cloud::auth::apikey::Scope::RelayOrders],
+    );
+    let other = issue_store_key(&keys, tenant(), order_store(), &[]);
+    let vendor = Arc::new(Vendor {
+        sent: std::sync::Mutex::new(Vec::new()),
+        status: 200,
+    });
+    let app = delivery_answer_router(
+        connections,
+        keys,
+        clock(),
+        Arc::clone(&vendor),
+        vec![Arc::new(DemoConnector)],
+        Some(crate::sealing_keys::file_keys("connectors", &key())),
+    );
+    let uri = format!("/sync/stores/{}/delivery/answers", order_store());
+    let accept = serde_json::json!({ "vendor_id": CONNECTION,
+        "external_reference": format!("{CONNECTION}:D-1001"), "answer": "DELIVERY_ANSWER_ACCEPT", "prep_minutes": 15 });
+    for _ in 0..2 {
+        let answered = app
+            .clone()
+            .oneshot(crate::post_json_bearer(&uri, &accept, &relay))
+            .await
+            .expect("answers");
+        assert_eq!(answered.status(), StatusCode::NO_CONTENT);
+    }
+    let sent = std::mem::take(&mut *vendor.sent.lock().expect("lock"));
+    assert_eq!(sent.len(), 2);
+    let first = sent.first().expect("sent");
+    assert_eq!(first.url, "https://vendor.example/answers");
+    let body = first.body.clone().expect("a body");
+    let read: serde_json::Value = serde_json::from_slice(&body).expect("json");
+    assert_eq!(read["order_ref"], "D-1001", "the vendor's own reference");
+    assert_eq!(read["answer"], "accept");
+    let header = |request: &pos_cloud::gateway::call::OutboundRequest, name: &str| {
+        request
+            .headers
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.clone())
+    };
+    assert_eq!(header(first, SIGNATURE_HEADER), sign(&body, SECRET));
+    assert_eq!(
+        header(first, "Idempotency-Key"),
+        header(sent.get(1).expect("retried"), "Idempotency-Key")
+    );
+
+    for (request, token, status) in [
+        (
+            serde_json::json!({ "vendor_id": CONNECTION, "external_reference": "x", "answer": "DELIVERY_ANSWER_REJECT" }),
+            &relay,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            serde_json::json!({ "vendor_id": CONNECTION, "answer": "DELIVERY_ANSWER_READY" }),
+            &relay,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            serde_json::json!({ "vendor_id": Ulid::from_u128(9).to_string(), "external_reference": "x", "answer": "DELIVERY_ANSWER_READY" }),
+            &relay,
+            StatusCode::NOT_FOUND,
+        ),
+        (accept.clone(), &other, StatusCode::FORBIDDEN),
+    ] {
+        let answered = app
+            .clone()
+            .oneshot(crate::post_json_bearer(&uri, &request, token))
+            .await
+            .expect("answers");
+        assert_eq!(answered.status(), status, "{request}");
+    }
+    assert!(
+        vendor.sent.lock().expect("lock").is_empty(),
+        "nothing refused was sent"
     );
 }
