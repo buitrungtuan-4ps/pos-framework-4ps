@@ -44,6 +44,7 @@ pub mod config;
 pub mod config_changes;
 pub mod config_client;
 pub mod countries;
+pub mod delivery_slips;
 #[cfg(feature = "demo-fixtures")]
 pub mod demo;
 pub mod device_revocations;

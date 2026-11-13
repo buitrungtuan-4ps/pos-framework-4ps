@@ -40,7 +40,8 @@ use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::ClientConfig;
 use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName};
 
-use pos_proto::ids::StoreId;
+use pos_ports::subject_store::SubjectRecord;
+use pos_proto::ids::{StoreId, SubjectId};
 
 use crate::config_client::{ConfigTransport, ConfigTransportError, SyncedConfig};
 use crate::heartbeat_client::{HeartbeatError, HeartbeatReport, HeartbeatTransport};
@@ -669,16 +670,6 @@ impl RelayHttpTransport {
     }
 }
 
-/// The pull route for a store. Pure, so the path the transport builds is checked without a socket.
-fn relay_pull_path(store_id: StoreId) -> String {
-    format!("/sync/stores/{store_id}/orders")
-}
-
-/// The ack route for one pulled order. Pure, for the same reason.
-fn relay_ack_path(store_id: StoreId, queued_id: &str) -> String {
-    format!("/sync/stores/{store_id}/orders/{queued_id}/ack")
-}
-
 impl RelayTransport for RelayHttpTransport {
     async fn pull(&self) -> Result<Vec<PendingOrderDto>, RelayTransportError> {
         let path = relay_pull_path(self.store_id);
@@ -720,10 +711,19 @@ impl RelayTransport for RelayHttpTransport {
             ))),
         }
     }
+
+    async fn recipient(
+        &self,
+        subject_id: SubjectId,
+    ) -> Result<Option<SubjectRecord>, RelayTransportError> {
+        relay::fetch_recipient(&self.client, self.store_id, subject_id).await
+    }
 }
 
 mod gateway;
+mod relay;
 pub use gateway::GatewayHttpTransport;
+use relay::{relay_ack_path, relay_pull_path};
 
 // -------------------------------------------------------------------------------------------------
 // OTA transport

@@ -136,6 +136,13 @@ pub struct PaperLabels {
     pub counted_in: &'static str,
     /// The incoming count less the outgoing one.
     pub handover_difference: &'static str,
+    /// The heading of a delivery slip
+    /// ([ADR-0215](../../../docs/adr/0215-a-delivery-order-names-its-vendor.md) decision 3).
+    pub delivery: &'static str,
+    /// The line before the recipient's name and address on it.
+    pub deliver_to: &'static str,
+    /// The word before the recipient's phone number.
+    pub phone: &'static str,
 }
 
 /// English, and the fallback for every case the module documentation names.
@@ -195,6 +202,9 @@ pub static ENGLISH: PaperLabels = PaperLabels {
     counted_out: "Counted out",
     counted_in: "Counted in",
     handover_difference: "Difference",
+    delivery: "DELIVERY",
+    deliver_to: "Deliver to",
+    phone: "Phone",
 };
 
 /// Vietnamese, in the words a Vietnamese receipt and cash-up sheet use.
@@ -254,6 +264,9 @@ pub static VIETNAMESE: PaperLabels = PaperLabels {
     counted_out: "Ca trước đếm giao",
     counted_in: "Ca sau đếm nhận",
     handover_difference: "Chênh lệch giao ca",
+    delivery: "GIAO HÀNG",
+    deliver_to: "Giao đến",
+    phone: "Điện thoại",
 };
 
 impl PaperLabels {

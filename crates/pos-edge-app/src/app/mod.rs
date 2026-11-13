@@ -128,6 +128,10 @@ struct Projection {
     /// The package version each open order opened under, where it opened under one: its flows and
     /// guards are that version's until it closes (ADR-0192 decision 5). Dropped when it closes.
     package_versions: HashMap<OrderId, PackageVersionId>,
+    /// The subject each open delivery order names as its recipient
+    /// ([ADR-0215](../../../../docs/adr/0215-a-delivery-order-names-its-vendor.md) decision 3): the
+    /// id only, which the delivery slip reads the record by. Dropped when the order closes.
+    recipients: HashMap<OrderId, pos_proto::ids::SubjectId>,
     /// The orders a member of staff has confirmed or refused
     /// ([ADR-0116](../../../../docs/adr/0116-the-qr-hold-is-derived-and-it-gates-firing.md)), folded
     /// from `sales.order.confirmed_by_staff` and `sales.order.rejected_by_staff`.
@@ -339,6 +343,12 @@ pub struct IntakeIntent<'a> {
     /// The vendor a delivery order came through, which `sales.order.opened` records
     /// ([ADR-0215](../../../../docs/adr/0215-a-delivery-order-names-its-vendor.md) decision 1).
     pub vendor_id: Option<pos_proto::ids::VendorId>,
+    /// The person a delivery order goes to, which `sales.order.opened` names by id only
+    /// ([ADR-0215](../../../../docs/adr/0215-a-delivery-order-names-its-vendor.md) decision 3).
+    pub subject_id: Option<pos_proto::ids::SubjectId>,
+    /// That person's record as the cloud kept it, written to the store's subject store in the
+    /// order's own transaction; never in an event or a log.
+    pub recipient: Option<&'a pos_ports::subject_store::SubjectRecord>,
 }
 
 #[cfg(test)]

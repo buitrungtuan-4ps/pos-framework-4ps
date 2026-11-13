@@ -206,6 +206,7 @@ fn an_envelope_round_trips_through_json() {
         guest_count: Some(4),
         package_version_id: None,
         vendor_id: None,
+        subject_id: None,
     };
     let envelope = sample_envelope(EventType::SalesOrderOpened, payload.clone());
     let json = serde_json::to_string(&envelope).expect("serialise");
@@ -1006,6 +1007,24 @@ fn a_delivery_order_names_its_vendor_and_others_stay_as_they_were() {
     };
     let json = serde_json::to_string(&delivered).expect("serialise");
     assert!(json.contains(r#""vendor_id":"#), "{json}");
+    let back: SalesOrderOpened = serde_json::from_str(&json).expect("deserialise");
+    assert_eq!(back, delivered);
+}
+
+/// A delivery order names its recipient's subject only (ADR-0215 decision 3): the id, never a
+/// value, absent for any other order and left off the wire then.
+#[test]
+fn a_delivery_order_names_its_recipient_by_subject_id_only() {
+    let before = r#"{"order_id":"01J00000000000000000000001","channel":"SALES_CHANNEL_DELIVERY","table_id":null,"guest_count":null}"#;
+    let opened: SalesOrderOpened = serde_json::from_str(before).expect("an old order replays");
+    assert_eq!(opened.subject_id, None);
+    assert_eq!(serde_json::to_string(&opened).expect("serialise"), before);
+    let delivered = SalesOrderOpened {
+        subject_id: Some(crate::ids::SubjectId::new(Ulid::from_parts(1, 11))),
+        ..opened
+    };
+    let json = serde_json::to_string(&delivered).expect("serialise");
+    assert!(json.contains(r#""subject_id":"#), "{json}");
     let back: SalesOrderOpened = serde_json::from_str(&json).expect("deserialise");
     assert_eq!(back, delivered);
 }
