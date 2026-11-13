@@ -44,6 +44,16 @@ pub trait SubjectStore {
         limit: u32,
     ) -> impl Future<Output = Result<Vec<SubjectRecord>, RetentionError>> + Send;
 
+    /// The unmasked records that carry their own expiry and whose expiry is at or before `now`, at
+    /// most `limit` of them: a store's subject record, kept under the store's retention
+    /// ([ADR-0215](../../../../docs/adr/0215-a-delivery-order-names-its-vendor.md) decision 3). A
+    /// record with its own expiry is never one of [`due_before`](SubjectStore::due_before)'s.
+    fn expired_by(
+        &self,
+        now: Timestamp,
+        limit: u32,
+    ) -> impl Future<Output = Result<Vec<SubjectRecord>, RetentionError>> + Send;
+
     /// Persists masked records, returning how many rows were updated.
     fn save_masked(
         &self,
@@ -88,7 +98,9 @@ pub struct SweepReport {
     pub batches: u32,
 }
 
-/// Masks every record past retention as of `now`, in bounded pages.
+/// Masks every record past retention as of `now`, in bounded pages: first each record whose own
+/// expiry has come, then, when the cloud has a retention period, each record without one collected
+/// at or before its cutoff.
 ///
 /// # Errors
 ///
@@ -96,38 +108,55 @@ pub struct SweepReport {
 /// whatever it committed, and the next run resumes (masking is idempotent).
 pub async fn sweep<S>(
     store: &S,
-    policy: RetentionPolicy,
+    policy: Option<RetentionPolicy>,
     now: Timestamp,
 ) -> Result<SweepReport, RetentionError>
 where
     S: SubjectStore,
 {
-    let cutoff = policy.cutoff(now);
     let mut report = SweepReport::default();
-    loop {
-        let due = store.due_before(cutoff, BATCH).await?;
-        if due.is_empty() {
-            break;
-        }
-        let page = u32::try_from(due.len()).unwrap_or(BATCH);
-        let masked: Vec<SubjectRecord> = due.iter().map(|record| record.masked(now)).collect();
-        let saved = store.save_masked(&masked).await?;
-        report.masked = report.masked.saturating_add(saved);
-        report.batches = report.batches.saturating_add(1);
-        if page < BATCH {
-            break;
+    let mut passes = vec![Pass::Expired];
+    if let Some(policy) = policy {
+        passes.push(Pass::Due(policy.cutoff(now)));
+    }
+    for pass in passes {
+        loop {
+            let due = match pass {
+                Pass::Expired => store.expired_by(now, BATCH).await?,
+                Pass::Due(cutoff) => store.due_before(cutoff, BATCH).await?,
+            };
+            if due.is_empty() {
+                break;
+            }
+            let page = u32::try_from(due.len()).unwrap_or(BATCH);
+            let masked: Vec<SubjectRecord> = due.iter().map(|record| record.masked(now)).collect();
+            let saved = store.save_masked(&masked).await?;
+            report.masked = report.masked.saturating_add(saved);
+            report.batches = report.batches.saturating_add(1);
+            if page < BATCH {
+                break;
+            }
         }
     }
     Ok(report)
 }
 
+/// One pass of a sweep: the records past their own expiry, or those without one past a cutoff.
+#[derive(Clone, Copy)]
+enum Pass {
+    Expired,
+    Due(Timestamp),
+}
+
 /// Runs the retention sweep on `interval` until `shutdown` resolves, taking `now` from `clock`.
+/// Without a `policy` it masks only the records that carry their own expiry: the cloud guesses no
+/// period (ADR-0035), but a record whose period was decided when it was kept still expires.
 ///
 /// A sweep error is logged and retried on the next tick rather than crashing the cloud — a masking
 /// pass that is a day late is a far smaller problem than a cloud that will not start.
 pub async fn run<S, C, H>(
     store: S,
-    policy: RetentionPolicy,
+    policy: Option<RetentionPolicy>,
     clock: C,
     health: H,
     interval: Duration,
@@ -222,13 +251,24 @@ mod tests {
     #[derive(Clone)]
     struct FakeStore {
         rows: std::sync::Arc<Mutex<Vec<SubjectRecord>>>,
+        /// The records that carry their own expiry, and when.
+        expiring: std::sync::Arc<Mutex<Vec<(SubjectId, Timestamp)>>>,
     }
 
     impl FakeStore {
         fn with(rows: Vec<SubjectRecord>) -> Self {
             Self {
                 rows: std::sync::Arc::new(Mutex::new(rows)),
+                expiring: std::sync::Arc::new(Mutex::new(Vec::new())),
             }
+        }
+
+        fn expiring_at(self, id: u128, until_ms: i64) -> Self {
+            self.expiring
+                .lock()
+                .expect("lock")
+                .push((SubjectId::new(Ulid::from_u128(id)), at(until_ms)));
+            self
         }
 
         fn snapshot(&self) -> Vec<SubjectRecord> {
@@ -242,10 +282,35 @@ mod tests {
             cutoff: Timestamp,
             limit: u32,
         ) -> Result<Vec<SubjectRecord>, RetentionError> {
+            let expiring = self.expiring.lock().expect("lock");
             let rows = self.rows.lock().expect("lock");
             Ok(rows
                 .iter()
-                .filter(|row| row.masked_at.is_none() && row.collected_at <= cutoff)
+                .filter(|row| {
+                    row.masked_at.is_none()
+                        && row.collected_at <= cutoff
+                        && !expiring.iter().any(|(id, _)| *id == row.subject_id)
+                })
+                .take(limit as usize)
+                .cloned()
+                .collect())
+        }
+
+        async fn expired_by(
+            &self,
+            now: Timestamp,
+            limit: u32,
+        ) -> Result<Vec<SubjectRecord>, RetentionError> {
+            let expiring = self.expiring.lock().expect("lock");
+            let rows = self.rows.lock().expect("lock");
+            Ok(rows
+                .iter()
+                .filter(|row| {
+                    row.masked_at.is_none()
+                        && expiring
+                            .iter()
+                            .any(|(id, until)| *id == row.subject_id && *until <= now)
+                })
                 .take(limit as usize)
                 .cloned()
                 .collect())
@@ -289,7 +354,7 @@ mod tests {
             record(3, 40 * DAY_MS), // 60 days old: due
         ]);
 
-        let report = sweep(&store, policy, now).await.expect("sweep");
+        let report = sweep(&store, Some(policy), now).await.expect("sweep");
         assert_eq!(report.masked, 2);
 
         let rows = store.snapshot();
@@ -315,9 +380,11 @@ mod tests {
         let now = at(100 * DAY_MS);
         let store = FakeStore::with(vec![record(1, 10 * DAY_MS), record(2, 20 * DAY_MS)]);
 
-        let first = sweep(&store, policy, now).await.expect("first sweep");
+        let first = sweep(&store, Some(policy), now).await.expect("first sweep");
         assert_eq!(first.masked, 2);
-        let second = sweep(&store, policy, now).await.expect("second sweep");
+        let second = sweep(&store, Some(policy), now)
+            .await
+            .expect("second sweep");
         assert_eq!(second.masked, 0, "already-masked records are not revisited");
     }
 
@@ -354,7 +421,7 @@ mod tests {
         // and returns — so `run` masks once and then terminates rather than looping forever.
         super::run(
             store,
-            RetentionPolicy::from_days(1),
+            Some(RetentionPolicy::from_days(1)),
             clock,
             NoopHealth,
             Duration::from_secs(3600),
@@ -375,7 +442,7 @@ mod tests {
         let original = record(0xABCD, 0);
         let store = FakeStore::with(vec![original.clone()]);
 
-        sweep(&store, policy, now).await.expect("sweep");
+        sweep(&store, Some(policy), now).await.expect("sweep");
         let rows = store.snapshot();
         assert_eq!(rows.len(), 1);
         assert_eq!(
@@ -383,5 +450,43 @@ mod tests {
             "the id an invoice references survives masking"
         );
         assert!(rows[0].is_masked());
+    }
+
+    #[tokio::test]
+    async fn a_record_with_its_own_expiry_is_masked_then_and_not_by_the_cloud_period() {
+        let now = at(100 * DAY_MS);
+        let store = FakeStore::with(vec![
+            record(1, 99 * DAY_MS), // 1 day old, but its own expiry has come
+            record(2, 10 * DAY_MS), // 90 days old, but kept until day 200
+            record(3, 10 * DAY_MS), // no expiry of its own: the cloud's period
+        ])
+        .expiring_at(1, 100 * DAY_MS)
+        .expiring_at(2, 200 * DAY_MS);
+
+        let report = sweep(&store, Some(RetentionPolicy::from_days(30)), now)
+            .await
+            .expect("sweep");
+        assert_eq!(report.masked, 2);
+        let masked: Vec<bool> = store
+            .snapshot()
+            .iter()
+            .map(SubjectRecord::is_masked)
+            .collect();
+        assert_eq!(masked, vec![true, false, true]);
+    }
+
+    #[tokio::test]
+    async fn without_a_cloud_period_only_records_with_their_own_expiry_are_masked() {
+        let now = at(100 * DAY_MS);
+        let store = FakeStore::with(vec![record(1, 0), record(2, 0)]).expiring_at(1, 50 * DAY_MS);
+
+        let report = sweep(&store, None, now).await.expect("sweep");
+        assert_eq!(report.masked, 1, "no period is guessed for the other");
+        let masked: Vec<bool> = store
+            .snapshot()
+            .iter()
+            .map(SubjectRecord::is_masked)
+            .collect();
+        assert_eq!(masked, vec![true, false]);
     }
 }

@@ -29,7 +29,7 @@ use crate::{
 // --- Subject-request tooling (`/admin/subjects`, owner-only, ADR-0076) ---------------------------
 
 /// An in-memory subject store: rows keyed by `(tenant, record)`. Only `fetch` and `save_masked` are
-/// exercised by the tooling; `due_before` is the cron's and returns nothing here.
+/// exercised by the tooling; `due_before` and `expired_by` are the cron's and return nothing here.
 #[derive(Clone, Default)]
 struct FakeSubjects {
     rows: Arc<Mutex<Vec<(TenantId, SubjectRecord)>>>,
@@ -47,6 +47,14 @@ impl SubjectStore for FakeSubjects {
     async fn due_before(
         &self,
         _cutoff: Timestamp,
+        _limit: u32,
+    ) -> Result<Vec<SubjectRecord>, RetentionError> {
+        Ok(Vec::new())
+    }
+
+    async fn expired_by(
+        &self,
+        _now: Timestamp,
         _limit: u32,
     ) -> Result<Vec<SubjectRecord>, RetentionError> {
         Ok(Vec::new())

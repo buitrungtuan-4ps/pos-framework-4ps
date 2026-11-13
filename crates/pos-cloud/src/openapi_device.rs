@@ -57,6 +57,7 @@ use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorResponse};
         crate::http::reconcile::store_reconcile,
         crate::relay::pull_orders,
         crate::relay::ack_order,
+        crate::connectors::recipient::read_recipient,
         crate::gateway::sync::store_gateway_call,
         crate::http::ota::receive_store_report,
         crate::http::ota::serve_ota_artifact,
@@ -155,8 +156,12 @@ fn is_device_path(path: &str) -> bool {
 #[cfg(test)]
 fn registered_device_paths() -> std::collections::BTreeSet<String> {
     let mut sources = crate::openapi_routes::router_sources();
-    // The relay and the gateway serve `/sync` outside the router sources.
-    for module in ["src/relay.rs", "src/gateway/sync.rs"] {
+    // The relay, the gateway and the delivery recipient serve `/sync` outside the router sources.
+    for module in [
+        "src/relay.rs",
+        "src/gateway/sync.rs",
+        "src/connectors/recipient.rs",
+    ] {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(module);
         sources.push(std::fs::read_to_string(path).unwrap_or_default());
     }

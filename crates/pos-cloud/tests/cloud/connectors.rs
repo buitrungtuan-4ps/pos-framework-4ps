@@ -6,7 +6,7 @@
 //! uses, and the store pulls it; everything a vendor or a prober could get wrong is refused before
 //! the intake sees it.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -14,10 +14,12 @@ use pos_cloud::connections::{
     Connection, ConnectionSecret, ConnectionStore as _, ScopeLevel, SealedFor, seal,
 };
 use pos_cloud::connectors::demo::{DemoConnector, SIGNATURE_HEADER, sign};
+use pos_cloud::connectors::recipient::{KeptRecipient, RecipientStore, recipient_sync_router};
 use pos_cloud::connectors::route::connector_router;
 use pos_cloud::relay::{OrderRelay, orders_sync_router_with_cap};
 use pos_cloud::wake::SharedWake;
-use pos_proto::ids::{MenuItemId, TenantId};
+use pos_ports::PortError;
+use pos_proto::ids::{MenuItemId, StoreId, SubjectId, TenantId};
 use pos_proto::integrations::SettingValue;
 use pos_proto::ulid::Ulid;
 use tower::ServiceExt;
@@ -116,25 +118,90 @@ fn signed(tenant_id: TenantId, connection_id: &str, body: Vec<u8>) -> Request<Bo
     webhook(tenant_id, connection_id, body, &signature)
 }
 
+/// The store's personal-data retention the fake recipients report, in days.
+const STORE_RETENTION_DAYS: u16 = 30;
+
+/// Kept recipients in memory, by tenant and store, under a store retention of
+/// [`STORE_RETENTION_DAYS`]; a subject already kept stays as it is.
+#[derive(Clone, Default)]
+struct FakeRecipients {
+    kept: Arc<Mutex<Vec<(TenantId, StoreId, KeptRecipient)>>>,
+}
+
+impl RecipientStore for FakeRecipients {
+    async fn retention_days(
+        &self,
+        _tenant: TenantId,
+        _store_id: StoreId,
+    ) -> Result<Option<u16>, PortError> {
+        Ok(Some(STORE_RETENTION_DAYS))
+    }
+
+    async fn keep(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+        recipient: &KeptRecipient,
+    ) -> Result<(), PortError> {
+        let mut kept = self.kept.lock().expect("lock");
+        if !kept
+            .iter()
+            .any(|(_, _, row)| row.subject_id == recipient.subject_id)
+        {
+            kept.push((tenant, store_id, recipient.clone()));
+        }
+        Ok(())
+    }
+
+    async fn fetch(
+        &self,
+        tenant: TenantId,
+        store_id: StoreId,
+        subject_id: SubjectId,
+    ) -> Result<Option<KeptRecipient>, PortError> {
+        Ok(self
+            .kept
+            .lock()
+            .expect("lock")
+            .iter()
+            .find(|(t, s, row)| *t == tenant && *s == store_id && row.subject_id == subject_id)
+            .map(|(_, _, row)| row.clone()))
+    }
+}
+
 /// The connector over a real relay and an in-memory queue, merged with the store's pull, as the
 /// binary wires them: one wake for both halves.
 fn app(connections: FakeConnections, queue: FakeOrderQueue, keys: FakeKeys) -> axum::Router {
+    app_keeping(connections, queue, keys, FakeRecipients::default())
+}
+
+/// [`app`] keeping recipients in `recipients`, with the store's read of them merged.
+fn app_keeping(
+    connections: FakeConnections,
+    queue: FakeOrderQueue,
+    keys: FakeKeys,
+    recipients: FakeRecipients,
+) -> axum::Router {
     let wake = SharedWake::new();
     connector_router(
-        connections,
-        OrderRelay::new(
-            FakeDirectory {
-                owner: Some(tenant()),
-            },
-            EmptyConfigTrees,
-            queue.clone(),
-            clock(),
-            wake.clone(),
+        (
+            connections,
+            OrderRelay::new(
+                FakeDirectory {
+                    owner: Some(tenant()),
+                },
+                EmptyConfigTrees,
+                queue.clone(),
+                clock(),
+                wake.clone(),
+            ),
+            recipients.clone(),
         ),
         clock(),
         vec![Arc::new(DemoConnector)],
         Some(crate::sealing_keys::file_keys("connectors", &key())),
     )
+    .merge(recipient_sync_router(recipients, keys.clone(), clock()))
     .merge(orders_sync_router_with_cap(
         queue,
         keys,
@@ -142,6 +209,169 @@ fn app(connections: FakeConnections, queue: FakeOrderQueue, keys: FakeKeys) -> a
         wake,
         std::time::Duration::ZERO,
     ))
+}
+
+/// A demo order naming who it goes to, with fake data only.
+fn delivered(reference: &str, address: &str) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "order_ref": reference,
+        "placed_at_ms": 1_800_000_000_000_i64,
+        "items": [{ "sku": "PIZZA-M", "quantity": 1 }],
+        "deliver_to": { "name": "Test Guest", "phone": "000-0000", "address": address },
+    }))
+    .expect("json")
+}
+
+/// A vendor order's recipient is kept apart as a subject record for its store, under the store's
+/// retention: the queued order carries only its `subject_id`, a retry keeps no second copy, and
+/// only the store's own relay credential reads it back.
+#[tokio::test(start_paused = true)]
+async fn a_delivery_recipient_is_kept_apart_and_only_its_store_reads_it() {
+    let connections = FakeConnections::default();
+    connection(
+        &connections,
+        CONNECTION,
+        "delivery.demo",
+        store_scope(),
+        true,
+    )
+    .await;
+    let queue = FakeOrderQueue::new();
+    let keys = FakeKeys::default();
+    let scope = [pos_cloud::auth::apikey::Scope::RelayOrders];
+    let relay = issue_store_key(&keys, tenant(), order_store(), &scope);
+    let elsewhere = issue_store_key(
+        &keys,
+        tenant(),
+        StoreId::new(Ulid::from_u128(0xE15E)),
+        &scope,
+    );
+    let recipients = FakeRecipients::default();
+    let app = app_keeping(connections, queue, keys, recipients.clone());
+
+    for _attempt in 0..2 {
+        let submitted = app
+            .clone()
+            .oneshot(signed(
+                tenant(),
+                CONNECTION,
+                delivered("D-7", "1 Example Street"),
+            ))
+            .await
+            .expect("route the webhook");
+        assert_eq!(
+            submitted.status(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "queued"
+        );
+    }
+    let kept = recipients.kept.lock().expect("lock").clone();
+    assert_eq!(kept.len(), 1, "the vendor's retry kept no second copy");
+    let (kept_tenant, kept_store, record) = &kept[0];
+    assert_eq!((*kept_tenant, *kept_store), (tenant(), order_store()));
+    assert_eq!(
+        record
+            .retain_until
+            .map(|until| until.as_milliseconds_since_epoch()
+                - record.collected_at.as_milliseconds_since_epoch()),
+        Some(i64::from(STORE_RETENTION_DAYS) * 24 * 60 * 60 * 1_000),
+        "kept for the store's retention from when the cloud kept it"
+    );
+
+    let pulled = app
+        .clone()
+        .oneshot(get(
+            &format!("/sync/stores/{}/orders", order_store()),
+            Some(&relay),
+        ))
+        .await
+        .expect("route the pull");
+    let pulled = json_body(pulled).await;
+    assert_eq!(
+        pulled[0]["order"]["subject_id"],
+        record.subject_id.to_string()
+    );
+    let text = pulled.to_string();
+    for value in ["Test Guest", "000-0000", "Example Street"] {
+        assert!(!text.contains(value), "the order carries no personal value");
+    }
+
+    let path = format!(
+        "/sync/stores/{}/subjects/{}",
+        order_store(),
+        record.subject_id
+    );
+    let read = app
+        .clone()
+        .oneshot(get(&path, Some(&relay)))
+        .await
+        .expect("route the read");
+    assert_eq!(read.status(), StatusCode::OK);
+    let read = json_body(read).await;
+    assert_eq!(read["fields"]["address"], "1 Example Street");
+    assert_eq!(read["fields"]["name"], "Test Guest");
+    assert!(read["retain_until_time"].is_i64());
+
+    only_its_store_reads(app, &path, &relay, &elsewhere).await;
+}
+
+/// Another store's credential is refused, an unknown subject is not found, and no credential is
+/// unauthenticated.
+async fn only_its_store_reads(app: axum::Router, path: &str, relay: &str, elsewhere: &str) {
+    let theirs = app
+        .clone()
+        .oneshot(get(path, Some(elsewhere)))
+        .await
+        .expect("route");
+    assert_eq!(
+        theirs.status(),
+        StatusCode::FORBIDDEN,
+        "another store's credential"
+    );
+    let unknown = format!(
+        "/sync/stores/{}/subjects/{}",
+        order_store(),
+        SubjectId::new(Ulid::from_u128(77))
+    );
+    let unknown = app
+        .clone()
+        .oneshot(get(&unknown, Some(relay)))
+        .await
+        .expect("route");
+    assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+    let anonymous = app.oneshot(get(path, None)).await.expect("route");
+    assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// A recipient with a field missing or too long refuses the order, naming the field and never its
+/// value, and nothing is kept or queued.
+#[tokio::test(start_paused = true)]
+async fn a_bad_recipient_refuses_the_order_and_keeps_nothing() {
+    let connections = FakeConnections::default();
+    connection(
+        &connections,
+        CONNECTION,
+        "delivery.demo",
+        store_scope(),
+        true,
+    )
+    .await;
+    let queue = FakeOrderQueue::new();
+    let recipients = FakeRecipients::default();
+    let app = app_keeping(
+        connections,
+        queue.clone(),
+        FakeKeys::default(),
+        recipients.clone(),
+    );
+    let refused = app
+        .oneshot(signed(tenant(), CONNECTION, delivered("D-8", "   ")))
+        .await
+        .expect("route");
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    assert!(json_body(refused).await.to_string().contains("address"));
+    assert!(recipients.kept.lock().expect("lock").is_empty());
+    assert!(queue.entries.lock().expect("lock").is_empty());
 }
 
 /// A demo vendor's signed order reaches the store as a delivery order: the store pulls it with its
@@ -296,7 +526,7 @@ async fn what_the_connector_refuses_before_the_intake() {
 
 /// A vendor endpoint that records what it is sent and answers `status`.
 struct Vendor {
-    sent: std::sync::Mutex<Vec<pos_cloud::gateway::call::OutboundRequest>>,
+    sent: Mutex<Vec<pos_cloud::gateway::call::OutboundRequest>>,
     status: u16,
 }
 
@@ -347,7 +577,7 @@ async fn a_store_answers_its_delivery_vendor_through_the_cloud() {
     );
     let other = issue_store_key(&keys, tenant(), order_store(), &[]);
     let vendor = Arc::new(Vendor {
-        sent: std::sync::Mutex::new(Vec::new()),
+        sent: Mutex::new(Vec::new()),
         status: 200,
     });
     let app = delivery_answer_router(

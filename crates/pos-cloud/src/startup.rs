@@ -152,7 +152,7 @@ pub(super) fn cloud_app(
 /// The background loops this deployment turned on, for the health endpoint to check against.
 pub(super) fn expected_tasks(config: &CloudConfig) -> Vec<String> {
     // The background loops this deployment turned on, for the health endpoint to check against: the
-    // projector and webhook dispatcher always run; the retention cron only when a period is set. A loop
+    // projector, webhook dispatcher and retention cron always run. A loop
     // in this set that has never ticked reads as unhealthy rather than being silently absent.
     let mut expected_tasks = vec![
         pos_cloud::health::ROLLUP_PROJECTOR.to_owned(),
@@ -162,9 +162,9 @@ pub(super) fn expected_tasks(config: &CloudConfig) -> Vec<String> {
     if config.nats.is_some() {
         expected_tasks.push(pos_cloud::health::CONFIG_WAKE.to_owned());
     }
-    if config.retention_days.is_some() {
-        expected_tasks.push(pos_cloud::health::RETENTION.to_owned());
-    }
+    // The retention cron always runs: records kept with their own expiry are masked whether or not
+    // the cloud has a period of its own (ADR-0215).
+    expected_tasks.push(pos_cloud::health::RETENTION.to_owned());
     expected_tasks
 }
 

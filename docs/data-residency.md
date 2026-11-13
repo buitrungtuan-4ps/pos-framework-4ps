@@ -1,6 +1,6 @@
 # Data residency: where the data rests, and when it crosses a border
 
-**Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-10-28
+**Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-11-13
 
 > **This is not legal advice.** This page describes what the code does: where each class of data
 > rests and when it leaves the country of the store it belongs to. Whether a given flow is a
@@ -33,7 +33,7 @@ the configuration described.
 | Sales events (outbox, event log) | No, by construction: a name in an event payload is a compile error (`crates/pos-proto/src/pii.rs`); events carry a `subject_id` | Store SQLite, then the cell's PostgreSQL and NATS | The cell runs outside the store's country |
 | Buyer record for a B2B invoice (name, tax code, address) | Yes | The store's `subjects` table only; never published to the cloud ([ADR-0107](adr/0107-the-buyer-is-a-subject.md)) | Only inside a sealed store archive (below) |
 | Custom data values ([ADR-0194](adr/0194-custom-data-is-declared-and-personal-fields-are-kept-apart.md)) | No: only non-personal typed values (numbers, yes or no, list entries, dates, quantities) and the `subject_id` of an object's personal record; free text and every personal value stay on the store ([ADR-0206](adr/0206-a-personal-custom-value-stays-on-its-store-and-expires-on-its-own-clock.md) decision 3) | The store's event log, then the cell's `custom_values` table; the cell's `custom_subjects` table holds only which store holds which `subject_id` | The cell runs outside the store's country |
-| Cloud subject records (marketplace or delivery contact) | Yes | The cell's `subjects` table, with the masking sweep and the request tool ([ADR-0076](adr/0076-subject-request-tooling.md)) | The cell runs outside the store's country |
+| Cloud subject records (marketplace or delivery contact) | Yes | The cell's `subjects` table, with the masking sweep and the request tool ([ADR-0076](adr/0076-subject-request-tooling.md)). A delivery order's recipient is one: kept for the store that makes the order and read only by it, until the store's retention ends ([below](#a-delivery-orders-recipient-dpia-note)) | The cell runs outside the store's country |
 | Personal custom values entered at a till | Yes | The store's `subjects` table only, expiring on each field's own period. The request tool reaches them by id: an erasure travels to the store on its `erasures` config node, and the store confirms with `data.subject.masked`, which carries only the id and the time ([ADR-0206](adr/0206-a-personal-custom-value-stays-on-its-store-and-expires-on-its-own-clock.md) decision 4) | Only inside a sealed store archive |
 | Employees (name, staff code) and PIN hashes | Yes | The cell; the config pull sends id, code, permissions and the Argon2id PIN hash to the store | The cell, or a hosted edge, runs outside the store's country |
 | Console admins (email) and the audit trail | Yes | The cell's PostgreSQL | The cell runs outside the admin's country |
@@ -48,6 +48,39 @@ the configuration described.
 | E-invoice submission (buyer fields) | Yes | Sent from the cell to the e-invoice provider ([ADR-0156](adr/0156-a-store-issues-its-e-invoice-and-the-cloud-submits-it.md)) | The provider processes abroad |
 | Hosted edge placement (the whole store) | Yes | Wherever the admin chose; the region is recorded and shown beside the store's country ([ADR-0114](adr/0114-region-is-required-recorded-visible.md)) | The region differs from the store's country |
 | HQ reporting across cells | No: only daily aggregates cross a cell boundary, never personal data | Each cell; HQ reads rollups through `/v1` | Always, by design, and only aggregates |
+
+## A delivery order's recipient: DPIA note
+
+[ADR-0215](adr/0215-a-delivery-order-names-its-vendor.md) decision 3. This records what the software
+does, as input to the tenant's data protection impact assessment; it is not that assessment.
+
+- **What is collected.** When a delivery vendor's order names who it goes to, three fields: `name`,
+  `phone` and `address`, each trimmed and bounded (120, 32 and 500 characters). Nothing else about
+  the person, and nothing the vendor sends beyond its order format.
+- **Purpose and lawful basis.** Getting the order to the person who placed it with the vendor. The
+  basis is the tenant's decision: under Vietnam's PDPD (Decree 13/2023/NĐ-CP) and, where it applies,
+  the GDPR, performance of the contract the person made through the vendor is the likely one, and
+  the vendor's own notice is where the person was told. The tenant confirms it, and whether the
+  vendor's agreement covers it, before a live store takes delivery orders (gate L1/L2 in
+  [`gate-register.md`](gate-register.md)).
+- **Where it rests.** The cell's `subjects` table (store-postgres migration 0101 adds the store and
+  the expiry), never the order relay's queue, an event, a log, a `Debug` print or a webhook. The
+  relayed order carries only the `subject_id`. The id is derived from the tenant and the order's
+  key, so a vendor's retry keeps no second copy.
+- **Who reads it.** The store the order is for, with its `relay_orders` credential, one subject at a
+  time (`GET /sync/stores/{store_id}/subjects/{subject_id}`; each read is logged by store and
+  subject id, never by value); and the Data Protection contact through the subject-request tool
+  ([ADR-0076](adr/0076-subject-request-tooling.md)), which reads, exports and erases it.
+- **Retention.** The store's own personal-data retention: the `default_retention_days` its locale
+  publishes, from its country pack (365 days in every pack today, each marked a starting value the
+  operator must confirm), counted from when the cloud kept the record. The masking cron masks it
+  then, whether or not the cloud has a `retention_days` of its own; a store that publishes no
+  retention leaves the record to the cloud's period ([ADR-0035](adr/0035-retention-and-pii-masking.md)).
+  A shorter period for delivery recipients would be a new setting and the owner's decision.
+- **Erasure.** Through the request tool, which masks the cloud's record.
+- **Crossing a border.** Only if the cell runs outside the store's country (the table above); a
+  Vietnamese store's cell is hosted in Vietnam (gate L6). A cell abroad needs a data transfer
+  agreement or the person's explicit consent.
 
 ## The mechanisms the framework gives
 

@@ -11,8 +11,11 @@
 //!
 //! ```json
 //! { "order_ref": "D-1001", "placed_at_ms": 1800000000000,
-//!   "items": [{ "sku": "PIZZA-M", "quantity": 2, "note": "no basil" }] }
+//!   "items": [{ "sku": "PIZZA-M", "quantity": 2, "note": "no basil" }],
+//!   "deliver_to": { "name": "…", "phone": "…", "address": "…" } }
 //! ```
+//!
+//! `deliver_to` is optional; when it is there, all three are.
 //!
 //! and the header `x-demo-signature` is `sha256=` and the lowercase hex HMAC-SHA256 of the raw body
 //! under the connection's `webhook_secret`.
@@ -24,7 +27,7 @@ use serde::Deserialize;
 use sha2::Sha256;
 
 use super::answer::{AnswerCall, AnswerKind, DeliveryAnswer};
-use super::{OrderConnector, VendorLine, VendorOrder};
+use super::{OrderConnector, VendorLine, VendorOrder, VendorRecipient};
 use crate::archive::hex_bytes;
 
 /// The connection setting that holds the item map, one `code=menu_item_id` per line.
@@ -74,6 +77,17 @@ struct DemoOrder {
     order_ref: String,
     placed_at_ms: i64,
     items: Vec<DemoItem>,
+    #[serde(default)]
+    deliver_to: Option<DemoRecipient>,
+}
+
+/// Who the demo vendor's order goes to.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DemoRecipient {
+    name: String,
+    phone: String,
+    address: String,
 }
 
 #[derive(Deserialize)]
@@ -121,6 +135,11 @@ impl OrderConnector for DemoConnector {
                     note: item.note,
                 })
                 .collect(),
+            recipient: order.deliver_to.map(|to| VendorRecipient {
+                name: to.name,
+                phone: to.phone,
+                address: to.address,
+            }),
         })
     }
 
@@ -211,11 +230,30 @@ mod tests {
         assert_eq!(order.lines[0].item_code, "PIZZA-M");
         assert_eq!(order.lines[0].quantity, 2);
         assert!(DemoConnector.read(br#"{"order_ref":"x"}"#).is_err());
+        assert!(order.recipient.is_none());
         assert!(
             DemoConnector
                 .read(br#"{"order_ref":"x","placed_at_ms":1,"items":[],"address":"1 Street"}"#)
                 .is_err(),
-            "a field the format does not have, an address among them, is refused"
+            "a field the format does not have is refused"
+        );
+    }
+
+    #[test]
+    fn the_demo_order_names_its_recipient_under_deliver_to() {
+        let order = DemoConnector
+            .read(
+                br#"{"order_ref":"D-1","placed_at_ms":1,"items":[],"deliver_to":{"name":"Test Guest","phone":"000-0000","address":"1 Example Street"}}"#,
+            )
+            .expect("reads");
+        let recipient = order.recipient.expect("a recipient");
+        assert_eq!(recipient.address, "1 Example Street");
+        assert_eq!(format!("{recipient:?}"), "VendorRecipient([REDACTED])");
+        assert!(
+            DemoConnector
+                .read(br#"{"order_ref":"D-1","placed_at_ms":1,"items":[],"deliver_to":{"address":"x"}}"#)
+                .is_err(),
+            "a recipient names all three"
         );
     }
 

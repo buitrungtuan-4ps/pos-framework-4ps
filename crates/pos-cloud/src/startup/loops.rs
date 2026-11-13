@@ -57,7 +57,7 @@ impl Loops {
             .zip(consumer)
             .map(|(queue, consumer)| config_wake_sender(queue, &consumer, store));
         let projector = rollup_projector(config, store);
-        let retention = retention_cron(config, store);
+        let retention = Some(retention_cron(config, store));
         let webhook = webhook_dispatcher(config, store);
         let alert = alert_evaluator(config, store, stream_probe).await;
         let scheduled_publish = scheduled_publish_activator(config, store);
@@ -215,39 +215,36 @@ pub(crate) fn rollup_projector(config: &CloudConfig, store: &PostgresStore) -> J
     ))
 }
 
-/// The retention / PII-masking cron, when a retention period is configured.
-pub(crate) fn retention_cron(
-    config: &CloudConfig,
-    store: &PostgresStore,
-) -> Option<JoinHandle<()>> {
-    // The retention / PII-masking cron, only if a retention period is configured. The period is a
-    // legal decision, not a code default (ADR-0035), so an absent `retention_days` leaves the cron
-    // off rather than masking on a guessed schedule. When on, it sweeps the subject store fleet-wide
-    // and masks every record past its period; masking (not deletion) keeps the books reconcilable,
-    // and erasure/access requests stay escalated to the Data Protection contact, never on this cron.
-    let retention_task = config.retention_days.map(|days| {
-        let interval = Duration::from_secs(config.retention_sweep_interval_secs);
+/// The retention / PII-masking cron. It always runs: a record kept with its own expiry, such as a
+/// delivery order's recipient under its store's retention (ADR-0215), is masked when that comes.
+/// Records without one are swept only when a retention period is configured.
+pub(crate) fn retention_cron(config: &CloudConfig, store: &PostgresStore) -> JoinHandle<()> {
+    // The period is a legal decision, not a code default (ADR-0035), so an absent `retention_days`
+    // masks nothing on a guessed schedule: only the records whose expiry was decided when they were
+    // kept are masked then. Masking (not deletion) keeps the books reconcilable, and erasure/access
+    // requests stay escalated to the Data Protection contact, never on this cron.
+    let interval = Duration::from_secs(config.retention_sweep_interval_secs);
+    if let Some(days) = config.retention_days {
         tracing::info!(
             retention_days = days,
             interval_secs = config.retention_sweep_interval_secs,
             "retention/PII-masking cron started"
         );
-        tokio::spawn(retention::run(
-            store.subjects(),
-            RetentionPolicy::from_days(days),
-            SystemClock,
-            store.task_health(),
-            interval,
-            shutdown_signal(),
-        ))
-    });
-    if retention_task.is_none() {
+    } else {
         tracing::warn!(
-            "no retention_days configured; the PII-masking cron is off (set it from the country's \
-             configured retention period — ADR-0035)"
+            interval_secs = config.retention_sweep_interval_secs,
+            "no retention_days configured; the PII-masking cron masks only records kept with their \
+             own expiry (set it from the country's configured retention period — ADR-0035)"
         );
     }
-    retention_task
+    tokio::spawn(retention::run(
+        store.subjects(),
+        config.retention_days.map(RetentionPolicy::from_days),
+        SystemClock,
+        store.task_health(),
+        interval,
+        shutdown_signal(),
+    ))
 }
 
 /// The webhook dispatcher, which always runs.

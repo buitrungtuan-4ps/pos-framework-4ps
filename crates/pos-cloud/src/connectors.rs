@@ -18,14 +18,18 @@
 //! - its idempotency key is the vendor's own order reference prefixed by the connection id, so a
 //!   vendor's retry finds the order it already placed and two vendors' references never meet.
 //!
-//! # What is not here
+//! # The recipient
 //!
-//! The order carries no vendor id and no delivery address: those change the intake port and carry
-//! personal data, and wait on their own decision. A connector answers the vendor's webhook and
-//! nothing more; accepting, rejecting and reporting an order ready back to the vendor is not built.
+//! A vendor's order may name who it goes to: a name, a phone number and an address
+//! ([`VendorRecipient`]). That is personal data
+//! ([ADR-0215](../../../docs/adr/0215-a-delivery-order-names-its-vendor.md) decision 3), so it never
+//! enters the order: [`recipient`] keeps it as a subject record on the cloud, apart from the relay's
+//! queue and under the store's retention, and the order carries only its `subject_id`. It is never
+//! logged and never printed by `Debug`.
 
 pub mod answer;
 pub mod demo;
+pub mod recipient;
 pub mod route;
 
 use std::collections::BTreeMap;
@@ -54,6 +58,26 @@ pub struct VendorOrder {
     pub placed_at_ms: i64,
     /// What was ordered.
     pub lines: Vec<VendorLine>,
+    /// Who it goes to, when the vendor says.
+    pub recipient: Option<VendorRecipient>,
+}
+
+/// Who a delivery goes to, as the vendor sent it. Personal data: kept as a subject record
+/// ([`recipient`]), never in the order, a log or an event, and its `Debug` prints no value.
+#[derive(Clone, PartialEq, Eq)]
+pub struct VendorRecipient {
+    /// The recipient's name.
+    pub name: String,
+    /// The recipient's phone number.
+    pub phone: String,
+    /// Where it goes.
+    pub address: String,
+}
+
+impl core::fmt::Debug for VendorRecipient {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("VendorRecipient([REDACTED])")
+    }
 }
 
 /// One line of a vendor's order.
@@ -209,6 +233,7 @@ mod tests {
             reference: "D-1001".to_owned(),
             placed_at_ms: 1_800_000_000_000,
             lines,
+            recipient: None,
         }
     }
 
