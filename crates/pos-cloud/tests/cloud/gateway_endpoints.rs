@@ -137,6 +137,7 @@ fn endpoint_app(
     secret: Option<pos_cloud::connections::ConnectionSecret>,
     audit: Arc<dyn AuditRecorder>,
 ) -> axum::Router {
+    let keys = secret.map(|secret| crate::sealing_keys::file_keys("gateway_endpoints", &secret));
     let app = app_all(
         Cloud::new(FakeStore::new()),
         FakeRollups::default(),
@@ -147,7 +148,7 @@ fn endpoint_app(
     );
     http::router(app).merge(http::gateway_endpoint_router(
         endpoints,
-        secret,
+        keys,
         admin,
         clock(),
         audit,
@@ -213,16 +214,24 @@ async fn an_endpoint_seals_its_secret_headers_and_no_read_or_trail_carries_them(
         !sealed.contains(PLAINTEXT),
         "what reached the store is ciphertext"
     );
-    let opened = pos_cloud::connections::open(
-        &key(),
-        pos_cloud::connections::SealedFor {
-            tenant_id: TenantId::new(Ulid::from_u128(1)),
-            connection_id: &id,
-            field_key: "header:x-api-key",
-        },
-        sealed,
-    )
-    .expect("opens under the configured key");
+    assert!(
+        sealed.starts_with("t1."),
+        "sealed under the tenant's key: {sealed}"
+    );
+    let tenant_keys = crate::sealing_keys::file_keys("gateway_endpoints", &key())
+        .for_tenant(TenantId::new(Ulid::from_u128(1)))
+        .await
+        .expect("the tenant's keys");
+    let opened = tenant_keys
+        .open(
+            pos_cloud::connections::SealedFor {
+                tenant_id: TenantId::new(Ulid::from_u128(1)),
+                connection_id: &id,
+                field_key: "header:x-api-key",
+            },
+            sealed,
+        )
+        .expect("opens under the tenant's key");
     assert_eq!(opened.as_str(), PLAINTEXT);
 
     let listed = router

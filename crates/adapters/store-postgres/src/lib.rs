@@ -62,6 +62,7 @@ mod store_groups;
 mod subjects;
 mod task_health;
 mod tax_rates;
+mod tenant_keys;
 mod translations;
 mod tx;
 mod vouchers;
@@ -123,6 +124,7 @@ pub use store_groups::{BatchResultRow, ConfigBatchRow, PostgresStoreGroups, Stor
 pub use subjects::{PostgresSubjects, SubjectRow};
 pub use task_health::{PostgresTaskHealth, TaskHealthRow};
 pub use tax_rates::{PostgresTaxRates, TaxRateRow};
+pub use tenant_keys::{PostgresTenantKeys, TenantKeyRow};
 pub use translations::PostgresTranslations;
 pub use tx::PgTx;
 pub use vouchers::{NewVoucherRow, PostgresVouchers, VoucherRow};

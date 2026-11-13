@@ -13,9 +13,16 @@
 //! material it is handed: the **file keeper**, whose one version is `integration_secret` from
 //! `cloud.toml`, for development and demonstrations only. A production cloud must not run on it:
 //! ADR-0217 decision 5 names a `systemd-creds` keeper, the key sealed to the host's TPM2, and a
-//! managed KMS for that. Sealing secrets under tenant keys, rotation and the re-seal pass build on
-//! this keeper.
+//! managed KMS for that.
+//!
+//! [`Keys`] puts the layers together: it reads a tenant's key versions from the
+//! [`TenantKeyStore`], unwraps them through the keeper, and hands a request a [`TenantSealer`]
+//! that seals under the newest and opens under any (`sealer.rs`).
 
 mod environment;
+mod sealer;
+mod tenant;
 
 pub use environment::{ENVIRONMENT_KEY_LEN, EnvironmentKeys};
+pub use sealer::{KEY_VERSIONS_MAX, Keys, TenantSealer, sealed_version};
+pub use tenant::{MemoryTenantKeys, TenantKey, TenantKeyStore, TenantKeyStoreError};

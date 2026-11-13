@@ -61,13 +61,13 @@ pub(crate) use webhooks::{
 // --- Vendor connections (`/admin/integrations/connections`, ADR-0153) ---------------------------
 
 /// The collaborators the connection routes need: the store, the catalogue a connection is checked
-/// against, the key its secrets are sealed under (absent when `cloud.toml` has none), and the
+/// against, the keys its secrets are sealed under (absent when `cloud.toml` has none), and the
 /// admin, clock and audit every write carries.
 #[derive(Clone)]
 struct ConnectionState<S, A, C> {
     connections: S,
     providers: Arc<pos_providers::Registry>,
-    integration_secret: Option<crate::connections::ConnectionSecret>,
+    keys: Option<crate::keys::Keys>,
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
@@ -154,7 +154,7 @@ impl ConnectionAuditSummary {
 pub fn connection_router<S, A, C>(
     connections: S,
     providers: Arc<pos_providers::Registry>,
-    integration_secret: Option<crate::connections::ConnectionSecret>,
+    keys: Option<crate::keys::Keys>,
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
@@ -179,7 +179,7 @@ where
         .with_state(ConnectionState {
             connections,
             providers,
-            integration_secret,
+            keys,
             admin,
             clock,
             audit,
@@ -222,15 +222,15 @@ fn seal_connection_secrets(
     secrets: &std::collections::BTreeMap<String, String>,
     tenant_id: TenantId,
     connection_id: &str,
-    integration_secret: Option<&crate::connections::ConnectionSecret>,
+    tenant_keys: Option<&crate::keys::TenantSealer>,
     sealed: &mut std::collections::BTreeMap<String, String>,
 ) -> Result<(), Response> {
-    use crate::connections::{SealedFor, seal};
+    use crate::connections::SealedFor;
 
     if secrets.is_empty() {
         return Ok(());
     }
-    let Some(key) = integration_secret else {
+    let Some(tenant_keys) = tenant_keys else {
         return Err(api_error(
             ErrorStatus::Unavailable,
             "this cloud has no integration_secret in cloud.toml, so it cannot store a credential: \
@@ -243,7 +243,7 @@ fn seal_connection_secrets(
             connection_id,
             field_key,
         };
-        match seal(key, sealed_for, value) {
+        match tenant_keys.seal(sealed_for, value) {
             Ok(value) => {
                 sealed.insert(field_key.clone(), value);
             }
@@ -254,6 +254,23 @@ fn seal_connection_secrets(
         }
     }
     Ok(())
+}
+
+/// The tenant's sealer, when `needed` (a write carries secrets) and the cloud has keys; `None`
+/// otherwise, which [`seal_connection_secrets`] refuses only when there is something to seal.
+async fn sealer_for(
+    keys: Option<&crate::keys::Keys>,
+    tenant_id: TenantId,
+    needed: bool,
+) -> Result<Option<crate::keys::TenantSealer>, Response> {
+    match keys {
+        Some(keys) if needed => keys
+            .for_tenant(tenant_id)
+            .await
+            .map(Some)
+            .map_err(|_error| service_unavailable("tenant keys")),
+        _ => Ok(None),
+    }
 }
 
 /// Checks a connection request and builds the record to store, sealing its new secrets.
@@ -269,7 +286,7 @@ fn build_connection(
     tenant_id: TenantId,
     connection_id: &str,
     providers: &pos_providers::Registry,
-    integration_secret: Option<&crate::connections::ConnectionSecret>,
+    tenant_keys: Option<&crate::keys::TenantSealer>,
     existing: Option<&crate::connections::Connection>,
 ) -> Result<crate::connections::Connection, Response> {
     use crate::connections::Connection;
@@ -341,7 +358,7 @@ fn build_connection(
         &request.secrets,
         tenant_id,
         connection_id,
-        integration_secret,
+        tenant_keys,
         &mut sealed,
     )?;
     Ok(Connection {

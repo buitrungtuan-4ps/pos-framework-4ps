@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use crate::audit::AuditRecorder;
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
-use crate::connections::{ConnectionSecret, SealedFor, seal};
+use crate::connections::SealedFor;
 use crate::gateway::endpoints::{
     EndpointRefusal, GatewayEndpoint, GatewayEndpointStore, GatewayEndpointStoreError,
     GatewayEndpointView, GatewayField, GatewayMethod, MAX_SECRET_HEADERS, check_fields,
@@ -39,6 +39,7 @@ use crate::http::{
     FieldRefusal, Json, RegistryTenantQuery, already_exists, if_match, not_found, version_mismatch,
     versioned_created, versioned_ok,
 };
+use crate::keys::Keys;
 use crate::version::{CreateOutcome, UpdateOutcome, Versioned};
 use crate::webhook::ssrf::{resolve_host, vet};
 
@@ -46,7 +47,7 @@ use crate::webhook::ssrf::{resolve_host, vet};
 #[derive(Clone)]
 pub(super) struct EndpointState<S, A, C> {
     endpoints: S,
-    integration_secret: Option<ConnectionSecret>,
+    keys: Option<Keys>,
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
@@ -136,7 +137,7 @@ fn names(fields: &[GatewayField]) -> Vec<String> {
 /// Builds the endpoint sub-router.
 pub fn gateway_endpoint_router<S, A, C>(
     endpoints: S,
-    integration_secret: Option<ConnectionSecret>,
+    keys: Option<Keys>,
     admin: A,
     clock: C,
     audit: Arc<dyn AuditRecorder>,
@@ -160,7 +161,7 @@ where
         )
         .with_state(EndpointState {
             endpoints,
-            integration_secret,
+            keys,
             admin,
             clock,
             audit,
@@ -603,12 +604,15 @@ async fn build_endpoint<S, A, C>(
     };
 
     if !setting.is_empty() {
-        let Some(key) = state.integration_secret.as_ref() else {
+        let Some(keys) = state.keys.as_ref() else {
             return Err(api_error(
                 ErrorStatus::Unavailable,
                 "this cloud has no integration_secret in cloud.toml, so it cannot store a \
                  credential: add one (openssl rand -hex 32) and restart",
             ));
+        };
+        let Ok(tenant_keys) = keys.for_tenant(tenant_id).await else {
+            return Err(service_unavailable("tenant keys"));
         };
         for (name, value) in setting {
             let field_key = format!("header:{name}");
@@ -617,7 +621,7 @@ async fn build_endpoint<S, A, C>(
                 connection_id: endpoint_id,
                 field_key: &field_key,
             };
-            match seal(key, sealed_for, value) {
+            match tenant_keys.seal(sealed_for, value) {
                 Ok(value) => {
                     sealed.insert(name, value);
                 }

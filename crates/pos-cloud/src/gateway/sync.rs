@@ -41,8 +41,9 @@ use super::endpoints::{GatewayEndpoint, GatewayEndpointStore};
 use crate::auth::apikey::{ApiKeyStore, Scope};
 use crate::auth::bearer::{authenticate, require_scope, require_store};
 use crate::auth::rate_limit::SlidingRateLimiter;
-use crate::connections::{ConnectionSecret, SealedFor, open};
+use crate::connections::SealedFor;
 use crate::http::too_many_requests;
+use crate::keys::{Keys, TenantSealer};
 use crate::webhook::breaker::{BreakerConfig, CircuitBreaker};
 
 /// Calls a second one store may make (decision 7).
@@ -74,7 +75,7 @@ pub(crate) struct GatewayCallState<E, R, K, C, T> {
     keys: K,
     clock: C,
     transport: Arc<T>,
-    integration_secret: Option<ConnectionSecret>,
+    sealing: Option<Keys>,
     per_store: SlidingRateLimiter,
     per_endpoint: SlidingRateLimiter,
     breakers: Arc<Mutex<BTreeMap<String, CircuitBreaker>>>,
@@ -88,7 +89,7 @@ impl<E: Clone, R: Clone, K: Clone, C: Clone, T> Clone for GatewayCallState<E, R,
             keys: self.keys.clone(),
             clock: self.clock.clone(),
             transport: Arc::clone(&self.transport),
-            integration_secret: self.integration_secret.clone(),
+            sealing: self.sealing.clone(),
             per_store: self.per_store.clone(),
             per_endpoint: self.per_endpoint.clone(),
             breakers: Arc::clone(&self.breakers),
@@ -112,7 +113,7 @@ pub fn gateway_call_router<E, R, K, C, T>(
     keys: K,
     clock: C,
     transport: Arc<T>,
-    integration_secret: Option<ConnectionSecret>,
+    sealing: Option<Keys>,
 ) -> Router
 where
     E: GatewayEndpointStore + Clone + Send + Sync + 'static,
@@ -132,7 +133,7 @@ where
             keys,
             clock,
             transport,
-            integration_secret,
+            sealing,
             per_store: SlidingRateLimiter::new(PER_STORE_PER_SECOND, 1),
             per_endpoint: SlidingRateLimiter::new(PER_ENDPOINT_PER_SECOND, 1),
             breakers: Arc::new(Mutex::new(BTreeMap::new())),
@@ -145,7 +146,7 @@ pub fn https_gateway_call_router<E, R, K, C>(
     calls: R,
     keys: K,
     clock: C,
-    integration_secret: Option<ConnectionSecret>,
+    sealing: Option<Keys>,
 ) -> Router
 where
     E: GatewayEndpointStore + Clone + Send + Sync + 'static,
@@ -159,7 +160,7 @@ where
         keys,
         clock,
         Arc::new(crate::outbound::HttpsGet::new()),
-        integration_secret,
+        sealing,
     )
 }
 
@@ -367,12 +368,15 @@ where
     C: ClockSource + Clone + Send + Sync + 'static,
     T: GatewayTransport + Send + Sync + 'static,
 {
-    let Some(secret_headers) =
-        opened_headers(endpoint, tenant_id, state.integration_secret.as_ref())
-    else {
+    let tenant_keys = match (&state.sealing, endpoint.sealed_headers.is_empty()) {
+        (Some(sealing), false) => sealing.for_tenant(tenant_id).await.ok(),
+        _ => None,
+    };
+    let Some(secret_headers) = opened_headers(endpoint, tenant_id, tenant_keys.as_ref()) else {
         return api_error(
             ErrorStatus::Unavailable,
-            "the endpoint's credentials cannot be opened: check integration_secret in cloud.toml",
+            "the endpoint's credentials cannot be opened: check the cloud's keys and \
+             integration_secret in cloud.toml",
         );
     };
     let Some(call_id) = mint_ulid(now.as_milliseconds_since_epoch()) else {
@@ -448,30 +452,30 @@ fn answer_of(call_id: String, outcome: CallOutcome) -> GatewayCallAnswer {
     }
 }
 
-/// The endpoint's secret headers, opened, or `None` when one is set and cannot be: no key, or not
-/// the key it was sealed under. An endpoint with none needs no key.
+/// The endpoint's secret headers, opened, or `None` when one is set and cannot be: no keys, or
+/// not the key it was sealed under. An endpoint with none needs no key.
 fn opened_headers(
     endpoint: &GatewayEndpoint,
     tenant_id: TenantId,
-    key: Option<&ConnectionSecret>,
+    tenant_keys: Option<&TenantSealer>,
 ) -> Option<Vec<(String, String)>> {
     if endpoint.sealed_headers.is_empty() {
         return Some(Vec::new());
     }
-    let key = key?;
+    let tenant_keys = tenant_keys?;
     let mut opened = Vec::with_capacity(endpoint.sealed_headers.len());
     for (name, sealed) in &endpoint.sealed_headers {
         let field_key = format!("header:{name}");
-        let value = open(
-            key,
-            SealedFor {
-                tenant_id,
-                connection_id: &endpoint.gateway_endpoint_id,
-                field_key: &field_key,
-            },
-            sealed,
-        )
-        .ok()?;
+        let value = tenant_keys
+            .open(
+                SealedFor {
+                    tenant_id,
+                    connection_id: &endpoint.gateway_endpoint_id,
+                    field_key: &field_key,
+                },
+                sealed,
+            )
+            .ok()?;
         opened.push((name.clone(), value.as_str().to_owned()));
     }
     Some(opened)

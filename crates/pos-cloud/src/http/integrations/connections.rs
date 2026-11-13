@@ -14,7 +14,7 @@ use pos_proto::ids::TenantId;
 
 use super::{
     ConnectionAuditSummary, ConnectionRequest, ConnectionState, build_connection,
-    exclusive_scope_taken,
+    exclusive_scope_taken, sealer_for,
 };
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
@@ -205,12 +205,17 @@ where
         return service_unavailable("id");
     };
     let connection_id = connection_id.to_string();
+    let tenant_keys =
+        match sealer_for(state.keys.as_ref(), tenant_id, !request.secrets.is_empty()).await {
+            Ok(tenant_keys) => tenant_keys,
+            Err(refusal) => return refusal,
+        };
     let connection = match build_connection(
         &request,
         tenant_id,
         &connection_id,
         &state.providers,
-        state.integration_secret.as_ref(),
+        tenant_keys.as_ref(),
         None,
     ) {
         Ok(connection) => connection,
@@ -320,12 +325,17 @@ where
         Ok(None) => return not_found("connection"),
         Err(error) => return connection_error_response(&error),
     };
+    let tenant_keys =
+        match sealer_for(state.keys.as_ref(), tenant_id, !request.secrets.is_empty()).await {
+            Ok(tenant_keys) => tenant_keys,
+            Err(refusal) => return refusal,
+        };
     let connection = match build_connection(
         &request,
         tenant_id,
         &connection_id,
         &state.providers,
-        state.integration_secret.as_ref(),
+        tenant_keys.as_ref(),
         Some(&before),
     ) {
         Ok(connection) => connection,

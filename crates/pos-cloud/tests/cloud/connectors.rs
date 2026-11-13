@@ -47,6 +47,8 @@ async fn connection(
     scope: (ScopeLevel, Option<String>),
     enabled: bool,
 ) {
+    // Sealed in the format before tenant keys, version 0, which the router still opens under
+    // integration_secret (ADR-0217 decision 2).
     let sealed = seal(
         &key(),
         SealedFor {
@@ -125,7 +127,7 @@ fn app(connections: FakeConnections, queue: FakeOrderQueue, keys: FakeKeys) -> a
         ),
         clock(),
         vec![Arc::new(DemoConnector)],
-        Some(key()),
+        Some(crate::sealing_keys::file_keys("connectors", &key())),
     )
     .merge(orders_sync_router_with_cap(
         queue,

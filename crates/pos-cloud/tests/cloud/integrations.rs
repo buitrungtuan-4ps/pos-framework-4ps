@@ -266,7 +266,7 @@ fn connection_app(
     http::router(app).merge(http::connection_router(
         connections,
         Arc::new(providers),
-        secret,
+        secret.map(|secret| crate::sealing_keys::file_keys("integrations", &secret)),
         admin,
         clock(),
         audit,
@@ -328,16 +328,24 @@ async fn a_connection_seals_its_secret_and_no_read_or_trail_carries_it() {
         !sealed.contains(plaintext),
         "what reached the store is ciphertext"
     );
-    let opened = pos_cloud::connections::open(
-        &test_integration_secret(),
-        pos_cloud::connections::SealedFor {
-            tenant_id: TenantId::new(Ulid::from_u128(1)),
-            connection_id: &id,
-            field_key: "api_key",
-        },
-        sealed,
-    )
-    .expect("opens under the configured key");
+    assert!(
+        sealed.starts_with("t1."),
+        "sealed under the tenant's key: {sealed}"
+    );
+    let tenant_keys = crate::sealing_keys::file_keys("integrations", &test_integration_secret())
+        .for_tenant(TenantId::new(Ulid::from_u128(1)))
+        .await
+        .expect("the tenant's keys");
+    let opened = tenant_keys
+        .open(
+            pos_cloud::connections::SealedFor {
+                tenant_id: TenantId::new(Ulid::from_u128(1)),
+                connection_id: &id,
+                field_key: "api_key",
+            },
+            sealed,
+        )
+        .expect("opens under the tenant's key");
     assert_eq!(opened.as_str(), plaintext);
 
     let listed = json_body(
