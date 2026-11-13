@@ -148,6 +148,10 @@ pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
         ]),
     ),
     (
+        "POST /api/gateway/calls",
+        RouteGate::Person(&[Permission::RunLookup]),
+    ),
+    (
         "POST /api/kds/bump",
         RouteGate::Person(&[Permission::BumpTicket]),
     ),

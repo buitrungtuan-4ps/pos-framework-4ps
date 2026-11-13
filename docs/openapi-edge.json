@@ -1289,6 +1289,71 @@
         ]
       }
     },
+    "/api/gateway/calls": {
+      "post": {
+        "tags": [
+          "integrations"
+        ],
+        "summary": "`POST /api/gateway/calls` — runs one lookup through the cloud gateway.",
+        "operationId": "gateway_call",
+        "requestBody": {
+          "description": "The endpoint, the act's key on a retry, and the endpoint's request fields as `values`. No value is logged",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LookupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The endpoint's declared result, the call's id and its key. Nothing is kept and no event is written",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LookupResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The endpoint id is not a ULID, the key is malformed, there are more than 32 values, or a value is missing, undeclared or of the wrong kind (`INVALID_ARGUMENT`)"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in, or the person's role lacks integrations.lookup.run (`PERMISSION_DENIED`)"
+          },
+          "404": {
+            "description": "The tenant has no enabled endpoint with that id (`UNKNOWN_GATEWAY_ENDPOINT`)"
+          },
+          "409": {
+            "description": "The key was used for another endpoint in the last 24 hours (`INVALID_ARGUMENT`)"
+          },
+          "429": {
+            "description": "A limit or the endpoint's breaker held the call back (`GATEWAY_BUSY`)"
+          },
+          "502": {
+            "description": "The target answered with its own error or without the declared fields, or the cloud could not reach it (`GATEWAY_REFUSED`)"
+          },
+          "503": {
+            "description": "The cloud cannot be reached or did not take the call (`GATEWAY_OFFLINE`)"
+          },
+          "504": {
+            "description": "No answer within the endpoint's deadline (`GATEWAY_TIMEOUT`)"
+          }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "integrations.lookup.run"
+      }
+    },
     "/api/integrations": {
       "get": {
         "tags": [
@@ -6564,6 +6629,61 @@
           }
         }
       },
+      "LookupRequest": {
+        "type": "object",
+        "description": "A till's lookup.",
+        "required": [
+          "gateway_endpoint_id"
+        ],
+        "properties": {
+          "gateway_endpoint_id": {
+            "type": "string",
+            "description": "The endpoint, a ULID the package names."
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The act's key, 1 to 64 letters, digits, `-` and `_`: sent again on a retry of the same act,\nwhich gets the first answer back. Absent, the edge names one."
+          },
+          "values": {
+            "type": "object",
+            "description": "The endpoint's request fields by name, each of its declared kind.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "LookupResponse": {
+        "type": "object",
+        "description": "A lookup's result, drawn by the till and never kept.",
+        "required": [
+          "call_id",
+          "idempotency_key",
+          "result"
+        ],
+        "properties": {
+          "call_id": {
+            "type": "string",
+            "description": "The cloud's id for the call, a ULID: what its log names it by."
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "The key the call was made under, the till's or the one the edge named."
+          },
+          "result": {
+            "type": "object",
+            "description": "The endpoint's declared response fields, by name.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "MenuItemId": {
         "type": "string",
         "description": "A `MenuItemId`: a ULID, 26 Crockford base-32 characters",
@@ -9520,6 +9640,10 @@
     {
       "name": "custom data",
       "description": "Custom fields on an order, line, bill, table or shift, records of a package's object types, and one subject's personal values, kept on the store (ADR-0194, ADR-0206)."
+    },
+    {
+      "name": "integrations",
+      "description": "A till's lookup through the cloud gateway, answered and drawn but never kept (ADR-0198, ADR-0214)."
     }
   ]
 }

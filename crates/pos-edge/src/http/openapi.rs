@@ -59,6 +59,7 @@ use utoipa::{Modify, OpenApi};
         super::printers::list_printers,
         super::sync::sync_status,
         super::reports::takings,
+        super::gateway::gateway_call,
         super::live::live_orders,
         super::counter::open_orders,
         super::counter::open_order,
@@ -166,6 +167,8 @@ use utoipa::{Modify, OpenApi};
         (name = "custom data", description = "Custom fields on an order, line, bill, table or shift, \
                                               records of a package's object types, and one subject's \
                                               personal values, kept on the store (ADR-0194, ADR-0206)."),
+        (name = "integrations", description = "A till's lookup through the cloud gateway, answered and \
+                                               drawn but never kept (ADR-0198, ADR-0214)."),
     )
 )]
 pub(crate) struct EdgeApiDoc;

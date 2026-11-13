@@ -33,6 +33,7 @@ From [`docs/openapi-edge.json`](../openapi-edge.json).
 | POST | `/api/custom-records/{id}/values` | `change_custom_record` | `till_session` | `data.record.write` | [`crates/pos-edge/src/http/custom_data.rs`](../../crates/pos-edge/src/http/custom_data.rs) |
 | POST | `/api/drawer/open` | `open_drawer` | `till_session` | `cash.drawer.open_no_sale`, `cash.drawer.override_assignment` | [`crates/pos-edge/src/http/cash_movements.rs`](../../crates/pos-edge/src/http/cash_movements.rs) |
 | GET | `/api/floor` | `floor_plan` | `till_session` | — | [`crates/pos-edge/src/http/floor.rs`](../../crates/pos-edge/src/http/floor.rs) |
+| POST | `/api/gateway/calls` | `gateway_call` | `till_session` | `integrations.lookup.run` | [`crates/pos-edge/src/http/gateway.rs`](../../crates/pos-edge/src/http/gateway.rs) |
 | GET | `/api/integrations` | `list_integrations` | `till_session` | — | [`crates/pos-edge/src/http/integrations.rs`](../../crates/pos-edge/src/http/integrations.rs) |
 | POST | `/api/kds/bump` | `bump_ticket` | `till_session` | `sales.ticket.bump` | [`crates/pos-edge/src/http/kds.rs`](../../crates/pos-edge/src/http/kds.rs) |
 | GET | `/api/layout` | `layout_plan` | `till_session` | — | [`crates/pos-edge/src/http/layout.rs`](../../crates/pos-edge/src/http/layout.rs) |

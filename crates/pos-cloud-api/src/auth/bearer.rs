@@ -428,7 +428,8 @@ mod tests {
         assert_eq!(grant.tenant(), tenant());
         require_store(&grant, store()).expect("bound to its own store");
         for scope in DEVICE_SCOPES {
-            require_scope(&grant, scope).expect("a box syncs, relays and publishes");
+            require_scope(&grant, scope)
+                .expect("a box syncs, relays, publishes and calls the gateway");
         }
         for scope in [Scope::ReadRollups, Scope::PlaceOrders, Scope::ManageDevices] {
             assert!(

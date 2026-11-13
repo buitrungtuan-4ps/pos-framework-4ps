@@ -101,7 +101,7 @@ impl RiskLevel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum Role {
-    /// The tenant owner. Everything, by default.
+    /// The tenant owner. Everything by default, but a permission an ADR grants to no role (ADR-0214).
     Owner,
     /// A store manager.
     Manager,
@@ -624,6 +624,19 @@ permissions! {
         pin: false,
         default_roles: [Manager, Owner],
         description: "Show a saved personal custom value again; every read is audited",
+    },
+
+    // ---- External lookups ----
+    /// Run a lookup through the cloud gateway from the till
+    /// ([ADR-0214](../../../docs/adr/0214-a-tills-external-lookup-is-one-catalogue-act.md)
+    /// decision 2). No role holds it by default: a tenant grants it to the roles it chooses.
+    RunLookup {
+        id: "integrations.lookup.run",
+        group: Sales,
+        risk: Medium,
+        pin: false,
+        default_roles: [],
+        description: "Run a lookup the tenant declared through the cloud gateway; nothing is kept",
     },
 
     // ---- Cloud administration ----

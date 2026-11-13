@@ -4,7 +4,7 @@
 //! The entries of the action catalogue, by domain. A new act is a release: its route first, then
 //! its entry here, and for money its own ADR (ADR-0191 decision 5).
 
-use super::ActionEffect::{EdgeWrite, Money, Ui};
+use super::ActionEffect::{EdgeWrite, External, Money, Ui};
 use super::ActionFrequency::{Common, Rare};
 use super::ActionParamKind::{Amount, Count, Entered, Id, IdList, Text, Token};
 use super::{Action, optional, required};
@@ -689,6 +689,23 @@ pub const CATALOGUE: &[Action] = &[
         permissions: DATA_RECORD_WRITE,
         refusals: &["UNKNOWN_CUSTOM_RECORD", "NOTHING_TO_PRINT"],
         summary: "Print a custom record's slip",
+        ..BASE
+    },
+    // ---- Through the cloud gateway (ADR-0198) ----
+    // A lookup the tenant declared, answered and drawn but never kept (ADR-0214). Its refusals
+    // (`GATEWAY_OFFLINE`, `_TIMEOUT`, `_REFUSED`, `_BUSY`) are the answer's, not ones the till can
+    // decide before it sends.
+    Action {
+        action_id: "integrations.lookup.run",
+        effect: External,
+        frequency: Rare,
+        params: &[
+            required("gateway_endpoint_id", Id),
+            required("values", Entered),
+        ],
+        routes: &["POST /api/gateway/calls"],
+        permissions: &["integrations.lookup.run"],
+        summary: "Look something up through one of the tenant's gateway endpoints",
         ..BASE
     },
 ];

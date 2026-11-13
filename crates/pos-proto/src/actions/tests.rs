@@ -39,14 +39,12 @@ fn every_action_id_is_three_snake_case_words_and_unique() {
     assert!(Action::find("sales.line.teleport").is_none());
 }
 
-/// `ACTION_EFFECT_UNSPECIFIED` is refused, and no act goes out through the cloud gateway before
-/// the gateway exists (ADR-0198, phase 5).
+/// `ACTION_EFFECT_UNSPECIFIED` is refused.
 #[test]
 fn every_action_states_its_effect_and_its_frequency() {
     for action in CATALOGUE {
         let id = action.action_id;
         assert_ne!(action.effect, ActionEffect::Unspecified, "{id}");
-        assert_ne!(action.effect, ActionEffect::External, "{id}");
         assert_ne!(
             action.frequency,
             super::ActionFrequency::Unspecified,
@@ -176,5 +174,25 @@ fn every_action_appears_in_the_snapshot_with_its_effect() {
     for action in CATALOGUE {
         let line = format!("{}\teffect={}", action.action_id, action.effect.as_wire());
         assert!(rendered.lines().any(|l| l == line), "{line}");
+    }
+}
+
+/// An act goes out through the cloud gateway only as the one lookup ADR-0214 accepted, and that act
+/// calls the edge's gateway route alone: no act reaches the internet any other way, and a new
+/// external act is a new ADR (ADR-0198, ADR-0214 decision 1).
+#[test]
+fn only_the_lookup_goes_out_through_the_gateway() {
+    for action in CATALOGUE {
+        let id = action.action_id;
+        let external = action.effect == ActionEffect::External;
+        assert_eq!(external, id == "integrations.lookup.run", "{id}");
+        assert_eq!(
+            external,
+            action.routes.contains(&"POST /api/gateway/calls"),
+            "{id}"
+        );
+        if external {
+            assert_eq!(action.routes, &["POST /api/gateway/calls"], "{id}");
+        }
     }
 }

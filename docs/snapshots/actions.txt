@@ -317,6 +317,14 @@ data.custom_record.print	refusal=NOTHING_TO_PRINT
 data.custom_record.print	refusal=UNKNOWN_CUSTOM_RECORD
 data.custom_record.print	route=POST /api/custom-records/{id}/slip
 data.custom_record.print	since=0.14.1
+integrations.lookup.run
+integrations.lookup.run	effect=ACTION_EFFECT_EXTERNAL
+integrations.lookup.run	frequency=ACTION_FREQUENCY_RARE
+integrations.lookup.run	param=gateway_endpoint_id:ACTION_PARAM_KIND_ID:required
+integrations.lookup.run	param=values:ACTION_PARAM_KIND_ENTERED:required
+integrations.lookup.run	permission=integrations.lookup.run
+integrations.lookup.run	route=POST /api/gateway/calls
+integrations.lookup.run	since=0.14.1
 reports.shift.print_handover
 reports.shift.print_handover	effect=ACTION_EFFECT_EDGE_WRITE
 reports.shift.print_handover	frequency=ACTION_FREQUENCY_RARE

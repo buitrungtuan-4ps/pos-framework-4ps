@@ -1747,6 +1747,7 @@
   "permission.cash.shift.open": "Mở ca",
   "permission.data.personal.read": "Xem lại giá trị cá nhân đã lưu",
   "permission.data.record.write": "Nhập và sửa bản ghi và trường tùy chỉnh",
+  "permission.integrations.lookup.run": "Tra cứu qua cổng kết nối đám mây",
   "permission.inventory.receipt.record": "Ghi nhận hàng nhập",
   "permission.inventory.stocktake.perform": "Kiểm kho",
   "permission.inventory.waste.record": "Ghi nhận hao hụt",
@@ -2928,6 +2929,7 @@
   "designer.action.data_custom_record_create": "Tạo bản ghi",
   "designer.action.data_custom_record_change": "Sửa bản ghi",
   "designer.action.data_custom_record_print": "In bản ghi",
+  "designer.action.integrations_lookup_run": "Tra cứu thông tin",
   "rule.fact.orderChannel": "Kênh của đơn",
   "rule.fact.lineCount": "Số dòng trong đơn",
   "rule.fact.guestCount": "Số khách của đơn",
@@ -3114,6 +3116,5 @@
   "gateway.deleteTypePrompt": "Nhập tên điểm kết nối để xác nhận",
   "provider.delivery.demo": "Giao hàng mẫu (sandbox)",
   "provider.field.item_map": "Bảng món (mã của đối tác=mã món, mỗi dòng một món)",
-  "provider.field.webhook_secret": "Khóa ký webhook",
-  "scope.call_gateway": "Gọi dịch vụ bên ngoài qua cloud"
+  "provider.field.webhook_secret": "Khóa ký webhook"
 }

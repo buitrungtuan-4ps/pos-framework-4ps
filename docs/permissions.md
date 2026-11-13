@@ -42,5 +42,6 @@ Generated from `crates/pos-core/src/permission.rs`. Do not edit by hand — run 
 | `admin.package.choose` | STORE_ADMINISTRATION | MEDIUM | · | ✓ | ✓ | · | · | · | · |
 | `data.record.write` | SALES | LOW | · | ✓ | ✓ | ✓ | ✓ | ✓ | · |
 | `data.personal.read` | STORE_ADMINISTRATION | HIGH | · | ✓ | ✓ | · | · | · | · |
+| `integrations.lookup.run` | SALES | MEDIUM | · | · | · | · | · | · | · |
 | `cloud.tenant.manage` | CLOUD_ADMINISTRATION | HIGH | · | ✓ | · | · | · | · | · |
 | `cloud.staff.manage` | CLOUD_ADMINISTRATION | HIGH | · | ✓ | · | · | · | · | · |

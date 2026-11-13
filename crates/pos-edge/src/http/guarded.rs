@@ -17,8 +17,9 @@ use pos_ports::subject_store::SubjectStore;
 
 use super::revalidated;
 use super::{
-    bills, cash_movements, check, custom_data, floor, integrations, kds, layout, lines, live,
-    locale, menu, package, printers, qr, reason_codes, reports, shift_x, shifts, sync, tables,
+    bills, cash_movements, check, custom_data, floor, gateway, integrations, kds, layout, lines,
+    live, locale, menu, package, printers, qr, reason_codes, reports, shift_x, shifts, sync,
+    tables,
 };
 use crate::app::Edge;
 
@@ -288,6 +289,9 @@ where
             "/api/integrations",
             get(integrations::list_integrations::<S>),
         )
+        // A till's lookup through the cloud gateway (ADR-0214), to a person whose role grants
+        // `integrations.lookup.run`, checked in the handler.
+        .route("/api/gateway/calls", post(gateway::gateway_call::<S>))
         .route("/api/printers", get(printers::list_printers::<S>))
         .route("/api/printers/{id}/test", post(printers::test_printer::<S>))
 }

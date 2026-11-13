@@ -175,6 +175,10 @@ data.record.write	default_role=SUPERVISOR
 data.record.write	group=SALES
 data.record.write	pin_required=false
 data.record.write	risk=LOW
+integrations.lookup.run
+integrations.lookup.run	group=SALES
+integrations.lookup.run	pin_required=false
+integrations.lookup.run	risk=MEDIUM
 inventory.receipt.record
 inventory.receipt.record	default_role=MANAGER
 inventory.receipt.record	default_role=OWNER
