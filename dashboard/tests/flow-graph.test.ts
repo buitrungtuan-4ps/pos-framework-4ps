@@ -49,6 +49,11 @@ describe("a step's id", () => {
     expect(renameStep(seating(), "seat", "Seat Table")).toEqual(seating());
     expect(renameStep(seating(), "seat", "order")).toEqual(seating());
   });
+
+  it("is renamed where another step's offline branch goes to it (ADR-0214)", () => {
+    const flow = updateStep(seating(), "order", { offline: { step_id: "drinks" } });
+    expect(renameStep(flow, "drinks", "drink_list").steps[2]?.offline).toEqual({ step_id: "drink_list" });
+  });
 });
 
 describe("prerequisites", () => {

@@ -3116,5 +3116,14 @@
   "gateway.deleteTypePrompt": "Nhập tên điểm kết nối để xác nhận",
   "provider.delivery.demo": "Giao hàng mẫu (sandbox)",
   "provider.field.item_map": "Bảng món (mã của đối tác=mã món, mỗi dòng một món)",
-  "provider.field.webhook_secret": "Khóa ký webhook"
+  "provider.field.webhook_secret": "Khóa ký webhook",
+  "flow.refusal.noOfflineBranch": "Bước này bắt buộc và cần đến đám mây: hãy cho biết điều gì xảy ra khi cửa hàng không kết nối được.",
+  "flow.refusal.badOfflineBranch": "Khi mất kết nối, bước này hoặc được bỏ qua kèm một khóa ghi chú, hoặc chuyển sang một bước khác của luồng này.",
+  "flow.step.offline": "Khi cửa hàng không kết nối được đám mây",
+  "flow.step.offlineNone": "Chưa nói gì",
+  "flow.step.offlineSkip": "Bỏ qua và hiện một ghi chú",
+  "flow.step.offlineGoTo": "Chuyển sang bước khác",
+  "flow.step.offlineNote": "Ghi chú",
+  "flow.step.offlineNoteHint": "Một khóa trong bản dịch của bạn, hiện ở máy bán hàng khi bước này bị bỏ qua.",
+  "flow.step.offlineStep": "Bước chuyển đến"
 }

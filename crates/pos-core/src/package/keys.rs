@@ -27,6 +27,8 @@ pub enum KeyAt {
         /// The node's position in the tree's pre-order.
         node: usize,
     },
+    /// The offline note of a step of the flow variant at this position in `flows` (ADR-0214).
+    Flow(usize),
     /// A key of the field at this position in `data.custom_fields`.
     CustomField(usize),
     /// A key of the object type at this position in `data.object_types`, or of one of its fields.
@@ -52,6 +54,7 @@ impl KeyRefusal {
         match self.at {
             KeyAt::TimeSlot(_) => "time_slots.label_key",
             KeyAt::Screen { .. } => "screens",
+            KeyAt::Flow(_) => "flows",
             KeyAt::CustomField(_) => "data.custom_fields",
             KeyAt::ObjectType(_) => "data.object_types",
             KeyAt::List(_) => "data.lists",
@@ -65,6 +68,7 @@ impl core::fmt::Display for KeyRefusal {
         match self.at {
             KeyAt::TimeSlot(index) => write!(f, "time slot {index}: ")?,
             KeyAt::Screen { screen, node } => write!(f, "screen {screen}: node {node}: ")?,
+            KeyAt::Flow(index) => write!(f, "flow {index}: ")?,
             KeyAt::CustomField(index) => write!(f, "custom field {index}: ")?,
             KeyAt::ObjectType(index) => write!(f, "object type {index}: ")?,
             KeyAt::List(index) => write!(f, "list {index}: ")?,
@@ -85,7 +89,7 @@ impl core::error::Error for KeyRefusal {}
 /// # Errors
 ///
 /// The first [`KeyRefusal`], in field order: time slots, screens (each tree in pre-order, a node's
-/// properties by name), then the data part's fields, object types and lists.
+/// properties by name), flows' offline notes, then the data part's fields, object types and lists.
 pub fn check_keys(
     content: &PackageContent,
     has_en: impl Fn(&str) -> bool,
@@ -112,6 +116,16 @@ pub fn check_keys(
             }
             pending.extend(current.children.iter().rev());
             node += 1;
+        }
+    }
+    for (index, variant) in content.flows.iter().enumerate() {
+        let notes = variant.body.steps.iter().filter_map(|step| {
+            step.offline
+                .as_ref()
+                .and_then(|branch| branch.skip_note_key.as_deref())
+        });
+        for key in notes {
+            check(KeyAt::Flow(index), key)?;
         }
     }
     let data = &content.data;
@@ -164,7 +178,7 @@ mod tests {
     use pos_proto::package::PackageContent;
 
     /// A version naming a key in each place a version can: a slot's name, a screen's title, a
-    /// field's label and unit, an object type and its personal field's consent purpose, a list and
+    /// flow step's offline note, a field's label and unit, an object type and its personal field's consent purpose, a list and
     /// its entry.
     const CONTENT: &str = r#"{
         "package_id":"01J00000000000000000000P01","package_version_id":"01J00000000000000000000V01",
@@ -172,6 +186,8 @@ mod tests {
         "time_slots":[{"time_slot_id":"lunch","label_key":"slot.lunch","schedules":[{"days":31,"start_minute":660,"end_minute":840}]}],
         "screens":[{"body":{"screen_id":"welcome","root":{"component_id":"screen_frame","children":[
             {"component_id":"page_header","properties":{"title_key":"welcome.title"}}]}}}],
+        "flows":[{"body":{"flow_id":"points","start_action_id":"integrations.lookup.run","steps":[
+            {"step_id":"look","action_id":"integrations.lookup.run","kind":"STEP_KIND_REQUIRED","offline":{"skip_note_key":"points.offline"}}]}}],
         "data":{
             "custom_fields":[{"custom_field_id":"01J0000000000000000000CF01","object":"DATA_OBJECT_ORDER","label_key":"data.weight","field_type":"CUSTOM_FIELD_TYPE_QUANTITY","personal":false,"unit_key":"data.unit.kg"}],
             "object_types":[{"object_type_id":"01J00000000000000000000B01","label_key":"data.reservation","fields":[
@@ -181,9 +197,10 @@ mod tests {
         }
     }"#;
 
-    const EVERY_KEY: [&str; 9] = [
+    const EVERY_KEY: [&str; 10] = [
         "slot.lunch",
         "welcome.title",
+        "points.offline",
         "data.weight",
         "data.unit.kg",
         "data.reservation",
@@ -210,6 +227,7 @@ mod tests {
         let expected = [
             (KeyAt::TimeSlot(0), "time_slots.label_key"),
             (KeyAt::Screen { screen: 0, node: 1 }, "screens"),
+            (KeyAt::Flow(0), "flows"),
             (KeyAt::CustomField(0), "data.custom_fields"),
             (KeyAt::CustomField(0), "data.custom_fields"),
             (KeyAt::ObjectType(0), "data.object_types"),
@@ -246,6 +264,7 @@ mod tests {
     fn a_token_or_an_act_is_never_read_as_a_key() {
         let mut content = content();
         content.time_slots.clear();
+        content.flows.clear();
         content.data = pos_proto::package::PackageData::default();
         content.screens = serde_json::from_str(
             r#"[{"body":{"screen_id":"pay","root":{"component_id":"screen_frame","children":[

@@ -82,6 +82,28 @@ pub struct FlowStep {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub done_when: Option<String>,
+    /// What the flow does when the step's act cannot reach the cloud
+    /// ([ADR-0214](../../../docs/adr/0214-a-tills-external-lookup-is-one-catalogue-act.md)
+    /// decision 5). Absent by default; a required step whose act is `ACTION_EFFECT_EXTERNAL` is
+    /// refused at publish without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    pub offline: Option<OfflineBranch>,
+}
+
+/// A step's offline branch: exactly one of skipping it with a note, or going to another step of
+/// the same flow.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct OfflineBranch {
+    /// Skip the step, showing the text of this translation key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    pub skip_note_key: Option<String>,
+    /// Go to this step of the same flow instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    pub step_id: Option<String>,
 }
 
 impl FlowStep {
@@ -128,6 +150,21 @@ mod tests {
         let flow = &content.flows.first().expect("a flow").body;
         assert_eq!(flow.flow_id, "dine_in");
         assert_eq!(serde_json::to_string(&content).expect("serialise"), with);
+    }
+
+    /// An offline branch rides the step and round-trips; a step without one is written as before.
+    #[test]
+    fn an_offline_branch_round_trips() {
+        let with = r#"{"flow_id":"f","start_action_id":"integrations.lookup.run","steps":[{"step_id":"points","action_id":"integrations.lookup.run","kind":"STEP_KIND_REQUIRED","offline":{"skip_note_key":"loyalty.offline"}},{"step_id":"later","action_id":"integrations.lookup.run","kind":"STEP_KIND_OPTIONAL","offline":{"step_id":"points"}}]}"#;
+        let flow: Flow = serde_json::from_str(with).expect("parses");
+        let skip = flow.steps.first().and_then(|step| step.offline.as_ref());
+        assert_eq!(
+            skip.and_then(|branch| branch.skip_note_key.as_deref()),
+            Some("loyalty.offline")
+        );
+        assert_eq!(serde_json::to_string(&flow).expect("serialise"), with);
+        let without: Flow = serde_json::from_str(GUEST_COUNT_FIRST).expect("parses");
+        assert!(without.steps.iter().all(|step| step.offline.is_none()));
     }
 
     /// A field from a newer release is ignored, and a kind from a newer release is kept as it came.

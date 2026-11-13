@@ -25,6 +25,8 @@ const FLOW_REASON: Readonly<Record<string, MessageKey>> = {
   DUPLICATE_STEP: "flow.problem.stepId",
   NOT_ONE_THING: "flow.problem.oneThing",
   UNKNOWN_KIND: "flow.refusal.unknownKind",
+  NO_OFFLINE_BRANCH: "flow.refusal.noOfflineBranch",
+  BAD_OFFLINE_BRANCH: "flow.refusal.badOfflineBranch",
   UNKNOWN_ACTION: "flow.refusal.unknownAction",
   UNKNOWN_SCREEN: "flow.refusal.unknownScreen",
   UNKNOWN_PREREQUISITE: "flow.problem.prerequisite",
