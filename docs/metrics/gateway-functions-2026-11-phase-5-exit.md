@@ -7,7 +7,7 @@ shows it is met, and what the phase's scope still leaves open. Like
 [console-designers-2026-11-phase-4-exit.md](console-designers-2026-11-phase-4-exit.md), it records
 one moment and is not regenerated.
 
-**Measured at** `a3322a64` on `main`, with the two changes still in review named below.
+**Measured at** `ba546958` on `main`, with the delivery edge half still in review, named below.
 
 ## The criterion
 
