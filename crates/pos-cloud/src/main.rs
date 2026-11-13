@@ -39,6 +39,11 @@ async fn main() -> ExitCode {
 /// Boots the cloud: config from `POS_CLOUD_CONFIG`, the PostgreSQL store migrated, the HTTP server
 /// bound and served until shutdown.
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    // `pos-cloud keys …` is an operator's command on the cloud's host, not a boot (ADR-0217).
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(result) = startup::keys::command(&args).await {
+        return result;
+    }
     let config = startup::load_config()?;
     let (cell, directory_reload) = startup::cell_directory(&config)?;
     let (store, one_switch, wakes) = startup::open_store(&config).await?;
@@ -51,6 +56,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let app = startup::cloud_app(&cloud, &store, &config, &audit, &one_switch);
 
     let loops = startup::loops::Loops::spawn(&config, &cloud, &store, &audit, wakes).await?;
+    let reseal_task =
+        startup::keys::reseal_loop(startup::keys::keys(&config, &store), &store, &audit);
 
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
     tracing::info!(bind = %config.bind, "pos_cloud listening");
@@ -97,6 +104,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     loops.wind_down(archive_retention_task).await;
     catch_up_task.abort();
+    if let Some(task) = reseal_task {
+        task.abort();
+    }
     if let Some(task) = directory_reload {
         task.abort();
     }

@@ -24,19 +24,8 @@ pub(super) fn integration_routes(deps: &RouteDeps<'_>) -> Router {
         relay_wake,
         ..
     } = *deps;
-    // The keys every secret is sealed under (ADR-0217): the file keeper over integration_secret,
-    // each tenant's own key in `tenant_keys`, and integration_secret again for a value sealed
-    // before tenant keys. None while cloud.toml has no integration_secret.
-    let keys = config.integration_secret.as_ref().and_then(|secret| {
-        pos_cloud::keys::EnvironmentKeys::from_file_key(secret).map(|keeper| {
-            pos_cloud::keys::Keys::new(
-                keeper,
-                store.tenant_keys(),
-                Some(secret.clone()),
-                SystemClock,
-            )
-        })
-    });
+    // The keys every secret is sealed under (ADR-0217, `super::keys`).
+    let keys = super::keys::keys(config, store);
     Router::new()
         // The vendor catalogue (ADR-0153): every provider compiled into this binary, with the
         // settings schema the console draws a connection form from.

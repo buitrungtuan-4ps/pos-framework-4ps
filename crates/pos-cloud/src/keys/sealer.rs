@@ -113,13 +113,16 @@ impl TenantSealer {
     }
 }
 
-/// The future [`KeySource::for_tenant`] answers.
-type SealerFuture<'a> = Pin<Box<dyn Future<Output = Result<TenantSealer, SealError>> + Send + 'a>>;
+/// A boxed future, so [`KeySource`] stays object-safe.
+type KeyFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, SealError>> + Send + 'a>>;
 
-/// Where a tenant's sealer comes from, object-safe so a router holds it without the keeper's and
-/// the store's types.
+/// Where a tenant's sealer comes from, and what changes its keys, object-safe so a router holds it
+/// without the keeper's and the store's types.
 trait KeySource: Send + Sync {
-    fn for_tenant(&self, tenant_id: TenantId) -> SealerFuture<'_>;
+    fn for_tenant(&self, tenant_id: TenantId) -> KeyFuture<'_, TenantSealer>;
+    fn rotate(&self, tenant_id: TenantId) -> KeyFuture<'_, u32>;
+    fn rewrap(&self, tenant_id: TenantId) -> KeyFuture<'_, usize>;
+    fn delete(&self, tenant_id: TenantId, below: Option<u32>) -> KeyFuture<'_, u64>;
 }
 
 /// The keys every secret is sealed under: an environment keeper, the tenant-key store, and
@@ -158,6 +161,55 @@ impl Keys {
     pub async fn for_tenant(&self, tenant_id: TenantId) -> Result<TenantSealer, SealError> {
         self.0.for_tenant(tenant_id).await
     }
+
+    /// Creates the tenant's next key version, which new seals use from now on; older versions keep
+    /// opening until the re-seal pass retires them (ADR-0217 decision 3). Answers the new version.
+    ///
+    /// # Errors
+    ///
+    /// [`SealError::Keys`] if the keys cannot be read, made or stored.
+    pub async fn rotate_tenant(&self, tenant_id: TenantId) -> Result<u32, SealError> {
+        self.0.rotate(tenant_id).await
+    }
+
+    /// Re-wraps each of the tenant's key versions that an older environment-key version wrapped
+    /// under the keeper's newest: the tenant's half of rotating the environment key. Answers how
+    /// many were re-wrapped.
+    ///
+    /// # Errors
+    ///
+    /// [`SealError::Keys`] if a key cannot be read, unwrapped, wrapped or stored.
+    pub async fn rewrap_tenant(&self, tenant_id: TenantId) -> Result<usize, SealError> {
+        self.0.rewrap(tenant_id).await
+    }
+
+    /// Retires the tenant's key versions below `version`. Only the re-seal pass calls it, once
+    /// nothing is sealed under them.
+    pub(crate) async fn retire_below(
+        &self,
+        tenant_id: TenantId,
+        version: u32,
+    ) -> Result<u64, SealError> {
+        self.0.delete(tenant_id, Some(version)).await
+    }
+
+    /// Deletes every version of the tenant's key, which makes every secret sealed under them
+    /// unreadable at once and cannot be undone (ADR-0217 decision 4). The caller has the owner's
+    /// confirmation and audits it: `pos-cloud keys erase` is the one caller. A value from before
+    /// tenant keys is not under them, and the re-seal pass is what moves those first.
+    ///
+    /// # Errors
+    ///
+    /// [`SealError::Keys`] if the store cannot be reached.
+    pub async fn erase_tenant(&self, tenant_id: TenantId) -> Result<u64, SealError> {
+        self.0.delete(tenant_id, None).await
+    }
+}
+
+/// Logs a key-store failure, by its message only, and answers [`SealError::Keys`].
+fn store_failed(error: &super::tenant::TenantKeyStoreError) -> SealError {
+    tracing::error!(%error, "the tenant key store failed");
+    SealError::Keys
 }
 
 struct Envelope<K, S, C> {
@@ -238,14 +290,109 @@ where
     }
 }
 
+impl<K, S, C> Envelope<K, S, C>
+where
+    K: KeyKeeper,
+    S: TenantKeyStore,
+    C: ClockSource + Send + Sync,
+{
+    async fn next_version(&self, tenant_id: TenantId) -> Result<u32, SealError> {
+        let held = self.versions(tenant_id).await?;
+        let next = held
+            .last()
+            .map_or(1, |newest| newest.key_version.saturating_add(1));
+        let mut key = Zeroizing::new([0_u8; KEY_LEN]);
+        getrandom::fill(key.as_mut_slice()).map_err(|_error| SealError::Entropy)?;
+        let wrapped = self
+            .keeper
+            .wrap(&Secret::new(key.to_vec()))
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, "a tenant key could not be wrapped");
+                SealError::Keys
+            })?;
+        let created_at_ms = self.clock.now().as_milliseconds_since_epoch();
+        let stored = self
+            .store
+            .insert(
+                tenant_id,
+                &TenantKey {
+                    key_version: next,
+                    wrapped,
+                    created_at_ms,
+                },
+            )
+            .await
+            .map_err(|error| store_failed(&error))?;
+        if stored {
+            tracing::info!(key_version = next, "a tenant key was rotated");
+            Ok(next)
+        } else {
+            tracing::error!(
+                key_version = next,
+                "another writer made this tenant key version first"
+            );
+            Err(SealError::Keys)
+        }
+    }
+
+    async fn rewrapped(&self, tenant_id: TenantId) -> Result<usize, SealError> {
+        let mut moved = 0;
+        for held in self
+            .store
+            .versions(tenant_id)
+            .await
+            .map_err(|error| store_failed(&error))?
+        {
+            let key = self.keeper.unwrap(&held.wrapped).await.map_err(|error| {
+                tracing::error!(%error, key_version = held.key_version, "a tenant key could not be unwrapped");
+                SealError::Keys
+            })?;
+            let wrapped = self.keeper.wrap(&key).await.map_err(|error| {
+                tracing::error!(%error, "a tenant key could not be wrapped");
+                SealError::Keys
+            })?;
+            if wrapped.keeper_version != held.wrapped.keeper_version {
+                let again = TenantKey { wrapped, ..held };
+                if self
+                    .store
+                    .rewrap(tenant_id, &again)
+                    .await
+                    .map_err(|error| store_failed(&error))?
+                {
+                    moved += 1;
+                }
+            }
+        }
+        Ok(moved)
+    }
+}
+
 impl<K, S, C> KeySource for Envelope<K, S, C>
 where
     K: KeyKeeper,
     S: TenantKeyStore,
     C: ClockSource + Send + Sync,
 {
-    fn for_tenant(&self, tenant_id: TenantId) -> SealerFuture<'_> {
+    fn for_tenant(&self, tenant_id: TenantId) -> KeyFuture<'_, TenantSealer> {
         Box::pin(self.sealer(tenant_id))
+    }
+
+    fn rotate(&self, tenant_id: TenantId) -> KeyFuture<'_, u32> {
+        Box::pin(self.next_version(tenant_id))
+    }
+
+    fn rewrap(&self, tenant_id: TenantId) -> KeyFuture<'_, usize> {
+        Box::pin(self.rewrapped(tenant_id))
+    }
+
+    fn delete(&self, tenant_id: TenantId, below: Option<u32>) -> KeyFuture<'_, u64> {
+        Box::pin(async move {
+            self.store
+                .delete(tenant_id, below)
+                .await
+                .map_err(|error| store_failed(&error))
+        })
     }
 }
 
