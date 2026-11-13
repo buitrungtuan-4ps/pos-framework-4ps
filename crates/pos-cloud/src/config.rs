@@ -352,6 +352,18 @@ pub struct CloudConfig {
     /// losing it orphans every secret sealed under it, so it is never rotated in place.
     #[serde(default)]
     pub integration_secret: Option<crate::connections::ConnectionSecret>,
+    /// Where the environment key that wraps every tenant key is kept
+    /// ([ADR-0217](../../../docs/adr/0217-secrets-are-sealed-under-versioned-tenant-keys.md)
+    /// decision 5): `file` (the default), `integration_secret` itself, for development and
+    /// demonstrations only; or `systemd-creds`, the versioned keys systemd decrypted from the
+    /// host's TPM2-sealed credentials into [`Self::key_credentials_dir`]. Production must not run
+    /// on `file`.
+    #[serde(default)]
+    pub key_keeper: crate::keys::KeeperChoice,
+    /// The directory the `systemd-creds` keeper reads `pos-cloud-environment-key-v<N>` from.
+    /// Unset, `$CREDENTIALS_DIRECTORY`, which systemd sets for a service that loads credentials.
+    #[serde(default)]
+    pub key_credentials_dir: Option<std::path::PathBuf>,
     /// The optional monitoring profile (metrics-vm → `VictoriaMetrics`,
     /// [ADR-0031](../../../docs/adr/0031-cloud-adapter-transports.md)). **No default / off**: per
     /// `docs/capacity-and-reliability.md` the monitoring profile is off below ~50 stores in favour of

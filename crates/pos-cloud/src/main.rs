@@ -57,7 +57,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let loops = startup::loops::Loops::spawn(&config, &cloud, &store, &audit, wakes).await?;
     let reseal_task =
-        startup::keys::reseal_loop(startup::keys::keys(&config, &store), &store, &audit);
+        startup::keys::reseal_loop(startup::keys::keys(&config, &store)?, &store, &audit);
 
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
     tracing::info!(bind = %config.bind, "pos_cloud listening");
