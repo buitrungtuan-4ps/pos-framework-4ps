@@ -427,6 +427,16 @@ where
             return subject_error_response(&error);
         }
     }
+    // A record the cloud kept for a store, a delivery order's recipient (ADR-0215), has a copy at
+    // that store: the erasure reaches it on the store's `erasures` node, as a custom value's does.
+    let holders = match state.holders.holders(tenant, subject).await {
+        Ok(holders) => holders,
+        Err(error) => return holders_unavailable(&error),
+    };
+    let pending = match publish_erasures(&state, tenant, subject, &holders).await {
+        Ok(pending) => pending,
+        Err(refusal) => return refusal,
+    };
     audit_action(
         &state.audit,
         &state.clock,
@@ -436,27 +446,59 @@ where
         "subject",
         &subject.to_string(),
         None,
-        Some(serde_json::json!({ "already_masked": already_masked })),
+        Some(serde_json::json!({
+            "already_masked": already_masked,
+            "stores": holders.len(),
+            "pending": pending.len(),
+        })),
     )
     .await;
     (
         StatusCode::OK,
         Json(SubjectErased {
-            erased: true,
+            erased: pending.is_empty(),
             already_masked,
-            pending_store_ids: Vec::new(),
+            pending_store_ids: pending,
         }),
     )
         .into_response()
 }
 
-/// Erases a subject the cloud does not hold at every store whose events name it (ADR-0206 decision
-/// 4): its id goes on each store that has not confirmed masking it, on that store's `erasures`
-/// node. A subject no store names is not found.
+/// Puts `subject` on the `erasures` node of each of `holders` that has not confirmed masking it,
+/// and returns those stores' ids.
 #[expect(
     clippy::result_large_err,
     reason = "the composing closure's Err is an axum Response by design, as every node publish's is"
 )]
+async fn publish_erasures<Su, H, Cfg, A, C>(
+    state: &SubjectState<Su, H, Cfg, A, C>,
+    tenant: TenantId,
+    subject: SubjectId,
+    holders: &[crate::erasures::SubjectHolder],
+) -> Result<Vec<String>, Response>
+where
+    Cfg: ConfigTreeStore,
+    C: ClockSource,
+{
+    let mut pending = Vec::new();
+    for holder in holders.iter().filter(|holder| holder.masked_time.is_none()) {
+        publish_config_nodes_with(
+            &state.config_trees,
+            &state.clock,
+            tenant,
+            holder.store_id,
+            ConfigLevel::Store,
+            |before| append_erasure(before, subject),
+        )
+        .await?;
+        pending.push(holder.store_id.to_string());
+    }
+    Ok(pending)
+}
+
+/// Erases a subject the cloud does not hold at every store whose events name it (ADR-0206 decision
+/// 4): its id goes on each store that has not confirmed masking it, on that store's `erasures`
+/// node. A subject no store names is not found.
 async fn erase_at_stores<Su, H, Cfg, A, C>(
     state: &SubjectState<Su, H, Cfg, A, C>,
     context: &crate::auth::admin::AdminContext,
@@ -473,22 +515,10 @@ where
         Ok(holders) => holders,
         Err(error) => return holders_unavailable(&error),
     };
-    let mut pending = Vec::new();
-    for holder in holders.iter().filter(|holder| holder.masked_time.is_none()) {
-        if let Err(refusal) = publish_config_nodes_with(
-            &state.config_trees,
-            &state.clock,
-            tenant,
-            holder.store_id,
-            ConfigLevel::Store,
-            |before| append_erasure(before, subject),
-        )
-        .await
-        {
-            return refusal;
-        }
-        pending.push(holder.store_id.to_string());
-    }
+    let pending = match publish_erasures(state, tenant, subject, &holders).await {
+        Ok(pending) => pending,
+        Err(refusal) => return refusal,
+    };
     audit_action(
         &state.audit,
         &state.clock,
