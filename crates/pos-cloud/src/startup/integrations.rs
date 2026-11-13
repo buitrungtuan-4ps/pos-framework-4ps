@@ -115,7 +115,7 @@ fn delivery_routes(store: &PostgresStore, keys: Option<&Keys>, relay_wake: &Shar
         // busy, sent on by the vendor's connector to its connection's answer_url over the guarded
         // outbound client.
         .merge(pos_cloud::connectors::answer::https_delivery_answer_router(
-            store.connections(),
+            (store.connections(), store.order_queue()),
             store.api_keys(),
             SystemClock,
             vec![Arc::new(pos_cloud::connectors::demo::DemoConnector)],

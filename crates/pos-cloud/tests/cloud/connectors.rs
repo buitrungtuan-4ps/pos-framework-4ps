@@ -13,6 +13,7 @@ use axum::http::{Request, StatusCode};
 use pos_cloud::connections::{
     Connection, ConnectionSecret, ConnectionStore as _, ScopeLevel, SealedFor, seal,
 };
+use pos_cloud::connectors::answer::DeliveryOrders;
 use pos_cloud::connectors::demo::{DemoConnector, SIGNATURE_HEADER, sign};
 use pos_cloud::connectors::recipient::{KeptRecipient, RecipientStore, recipient_sync_router};
 use pos_cloud::connectors::route::connector_router;
@@ -581,7 +582,7 @@ async fn a_store_answers_its_delivery_vendor_through_the_cloud() {
         status: 200,
     });
     let app = delivery_answer_router(
-        connections,
+        (connections, FakeOrders),
         keys,
         clock(),
         Arc::clone(&vendor),
@@ -649,4 +650,56 @@ async fn a_store_answers_its_delivery_vendor_through_the_cloud() {
         vendor.sent.lock().expect("lock").is_empty(),
         "nothing refused was sent"
     );
+
+    answers_by_order_id(app, &uri, &relay, &vendor).await;
+}
+
+/// A store that names the order by the id it gave it: the cloud finds the vendor's reference from
+/// the acceptance the store reported, and refuses an order it reported none of.
+async fn answers_by_order_id(app: axum::Router, uri: &str, relay: &str, vendor: &Vendor) {
+    let by_order = |order_id: Ulid| {
+        serde_json::json!({ "vendor_id": CONNECTION, "order_id": order_id.to_string(),
+            "answer": "DELIVERY_ANSWER_REJECT", "reason_code_id": Ulid::from_u128(3).to_string() })
+    };
+    let answered = app
+        .clone()
+        .oneshot(crate::post_json_bearer(uri, &by_order(TAKEN_ORDER), relay))
+        .await
+        .expect("answers");
+    assert_eq!(answered.status(), StatusCode::NO_CONTENT);
+    let sent = std::mem::take(&mut *vendor.sent.lock().expect("lock"));
+    let read: serde_json::Value =
+        serde_json::from_slice(&sent[0].body.clone().expect("a body")).expect("json");
+    assert_eq!(read["order_ref"], "D-1001");
+    assert_eq!(read["answer"], "reject");
+    let unknown = app
+        .oneshot(crate::post_json_bearer(
+            uri,
+            &by_order(Ulid::from_u128(77)),
+            relay,
+        ))
+        .await
+        .expect("answers");
+    assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+}
+
+/// The one order the fake store took, as the id it gave it.
+const TAKEN_ORDER: Ulid = Ulid::from_u128(0x0D1);
+
+/// The orders a store took: [`TAKEN_ORDER`] at this connection's `D-1001`, for [`order_store`].
+#[derive(Clone)]
+struct FakeOrders;
+
+impl DeliveryOrders for FakeOrders {
+    async fn reference_of(
+        &self,
+        tenant_id: TenantId,
+        store_id: StoreId,
+        order_id: pos_proto::ids::OrderId,
+    ) -> Result<Option<String>, PortError> {
+        Ok((tenant_id == tenant()
+            && store_id == order_store()
+            && order_id.as_ulid() == TAKEN_ORDER)
+            .then(|| format!("{CONNECTION}:D-1001")))
+    }
 }

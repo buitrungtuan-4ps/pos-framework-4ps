@@ -14,6 +14,7 @@
 //! `Idempotency-Key` that is the same for the same answer. No vendor is special: a vendor whose
 //! protocol these answers cannot express needs a new ADR. Nothing personal is sent or logged.
 
+use core::future::Future;
 use core::time::Duration;
 use std::sync::Arc;
 
@@ -24,8 +25,11 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use pos_cloud_api::response::{api_error, parse_ulid_fields};
+use pos_ports::PortError;
 use pos_proto::ErrorStatus;
-use pos_proto::ids::{StoreId, TenantId};
+use pos_proto::SalesChannel;
+use pos_proto::WireEnum as _;
+use pos_proto::ids::{OrderId, StoreId, TenantId};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -85,9 +89,14 @@ pub struct AnswerCall {
 pub struct AnswerRequest {
     /// The vendor, the opaque id the order carried (`vendor_id`).
     pub vendor_id: String,
-    /// The order's reference as the store received it; absent only for busy.
+    /// The order's reference as the store received it. A store that names the order by
+    /// `order_id` instead leaves it out; absent for busy.
     #[serde(default)]
     pub external_reference: Option<String>,
+    /// The id the store gave the order, a ULID: the cloud finds the vendor's reference from the
+    /// acceptance the store reported for it. Used when `external_reference` is absent.
+    #[serde(default)]
+    pub order_id: Option<String>,
     /// The answer.
     pub answer: AnswerKind,
     /// Minutes to ready: 1 to 240 for accept, 0 to 240 for busy.
@@ -98,8 +107,38 @@ pub struct AnswerRequest {
     pub reason_code_id: Option<String>,
 }
 
+/// The orders a store took, by the id it gave each: where a store that names an order by its own id
+/// has its vendor's reference looked up.
+pub trait DeliveryOrders: Send + Sync {
+    /// The reference `store_id` accepted as `order_id` on the delivery channel, or `None`.
+    fn reference_of(
+        &self,
+        tenant_id: TenantId,
+        store_id: StoreId,
+        order_id: OrderId,
+    ) -> impl Future<Output = Result<Option<String>, PortError>> + Send;
+}
+
+impl DeliveryOrders for store_postgres::PostgresOrderQueue {
+    async fn reference_of(
+        &self,
+        tenant_id: TenantId,
+        store_id: StoreId,
+        order_id: OrderId,
+    ) -> Result<Option<String>, PortError> {
+        self.reference_of_order(
+            &tenant_id.to_string(),
+            &store_id.to_string(),
+            SalesChannel::Delivery.as_wire(),
+            &order_id.to_string(),
+        )
+        .await
+    }
+}
+
 /// What the route shares.
-pub(crate) struct AnswerState<S, K, C, T> {
+pub(crate) struct AnswerState<S, K, C, T, O> {
+    orders: O,
     connections: S,
     keys: K,
     clock: C,
@@ -108,9 +147,10 @@ pub(crate) struct AnswerState<S, K, C, T> {
     sealing: Option<Keys>,
 }
 
-impl<S: Clone, K: Clone, C: Clone, T> Clone for AnswerState<S, K, C, T> {
+impl<S: Clone, K: Clone, C: Clone, T, O: Clone> Clone for AnswerState<S, K, C, T, O> {
     fn clone(&self) -> Self {
         Self {
+            orders: self.orders.clone(),
             connections: self.connections.clone(),
             keys: self.keys.clone(),
             clock: self.clock.clone(),
@@ -121,9 +161,9 @@ impl<S: Clone, K: Clone, C: Clone, T> Clone for AnswerState<S, K, C, T> {
     }
 }
 
-/// The store-facing answers route.
-pub fn delivery_answer_router<S, K, C, T>(
-    connections: S,
+/// The store-facing answers route, finding an order a store names by its own id in `orders`.
+pub fn delivery_answer_router<S, K, C, T, O>(
+    (connections, orders): (S, O),
     keys: K,
     clock: C,
     transport: Arc<T>,
@@ -135,13 +175,15 @@ where
     K: ApiKeyStore + Clone + Send + Sync + 'static,
     C: pos_proto::ClockSource + Clone + Send + Sync + 'static,
     T: GatewayTransport + Send + Sync + 'static,
+    O: DeliveryOrders + Clone + 'static,
 {
     Router::new()
         .route(
             "/sync/stores/{store_id}/delivery/answers",
-            post(store_answer::<S, K, C, T>),
+            post(store_answer::<S, K, C, T, O>),
         )
         .with_state(AnswerState {
+            orders,
             connections,
             keys,
             clock,
@@ -153,8 +195,8 @@ where
 
 /// [`delivery_answer_router`] over the outbound HTTPS client, which vets the URL before every
 /// attempt and dials only what it vetted.
-pub fn https_delivery_answer_router<S, K, C>(
-    connections: S,
+pub fn https_delivery_answer_router<S, K, C, O>(
+    (connections, orders): (S, O),
     keys: K,
     clock: C,
     connectors: Vec<Arc<dyn OrderConnector>>,
@@ -164,9 +206,10 @@ where
     S: ConnectionStore + Clone + Send + Sync + 'static,
     K: ApiKeyStore + Clone + Send + Sync + 'static,
     C: pos_proto::ClockSource + Clone + Send + Sync + 'static,
+    O: DeliveryOrders + Clone + 'static,
 {
     delivery_answer_router(
-        connections,
+        (connections, orders),
         keys,
         clock,
         Arc::new(crate::outbound::HttpsGet::new()),
@@ -184,6 +227,7 @@ fn checked(request: &AnswerRequest) -> Result<DeliveryAnswer, &'static str> {
             .external_reference
             .as_deref()
             .is_none_or(str::is_empty)
+        && request.order_id.is_none()
     {
         return Err("external_reference");
     }
@@ -222,8 +266,8 @@ fn refused(status: ErrorStatus, message: &str) -> Response {
 }
 
 /// `POST /sync/stores/{store_id}/delivery/answers` — a store's answer, sent on to its vendor.
-async fn store_answer<S, K, C, T>(
-    State(state): State<AnswerState<S, K, C, T>>,
+async fn store_answer<S, K, C, T, O>(
+    State(state): State<AnswerState<S, K, C, T, O>>,
     headers: HeaderMap,
     Path(store_id): Path<String>,
     Json(request): Json<AnswerRequest>,
@@ -233,6 +277,7 @@ where
     K: ApiKeyStore + Clone + Send + Sync + 'static,
     C: pos_proto::ClockSource + Clone + Send + Sync + 'static,
     T: GatewayTransport + Send + Sync + 'static,
+    O: DeliveryOrders + Clone + 'static,
 {
     let grant = match authenticate(&state.keys, &state.clock, &headers).await {
         Ok(grant) => grant,
@@ -259,15 +304,56 @@ where
             );
         }
     };
+    let held = match held_reference(&state.orders, grant.tenant(), store_id, &request).await {
+        Ok(held) => held,
+        Err(refusal) => return refusal,
+    };
     send(
         &state,
-        grant.tenant(),
-        store_id,
+        (grant.tenant(), store_id),
         &connection_id,
-        &request,
+        held.as_deref(),
         &answer,
     )
     .await
+}
+
+/// The order's reference as the store holds it: the one it sent, or the one it accepted as the
+/// order it names by `order_id`. `404` for an order the store reported no acceptance of.
+async fn held_reference<O: DeliveryOrders>(
+    orders: &O,
+    tenant_id: TenantId,
+    store_id: StoreId,
+    request: &AnswerRequest,
+) -> Result<Option<String>, Response> {
+    if let Some(reference) = request
+        .external_reference
+        .clone()
+        .filter(|reference| !reference.is_empty())
+    {
+        return Ok(Some(reference));
+    }
+    let Some(order_id) = request.order_id.as_deref() else {
+        return Ok(None);
+    };
+    let order_id = match parse_ulid_fields([("order_id", order_id)]) {
+        Ok([order_id]) => OrderId::new(order_id),
+        Err(refusal) => return Err(refusal),
+    };
+    match orders.reference_of(tenant_id, store_id, order_id).await {
+        Ok(Some(reference)) => Ok(Some(reference)),
+        Ok(None) => Err(refused(
+            ErrorStatus::NotFound,
+            "this store took no such order",
+        )),
+        Err(error) => {
+            tracing::error!(%store_id, status = ?error.status(), "the order queue failed");
+            Err(refused(
+                ErrorStatus::Unavailable,
+                "the vendor cannot be reached now",
+            ))
+        }
+    }
 }
 
 /// The connection's webhook secret, opened under its tenant's keys, or `None`.
@@ -289,12 +375,11 @@ async fn opened_secret(
     tenant_keys.open(bound, sealed).ok()
 }
 
-async fn send<S, K, C, T>(
-    state: &AnswerState<S, K, C, T>,
-    tenant_id: TenantId,
-    store_id: StoreId,
+async fn send<S, K, C, T, O>(
+    state: &AnswerState<S, K, C, T, O>,
+    (tenant_id, store_id): (TenantId, StoreId),
     connection_id: &str,
-    request: &AnswerRequest,
+    held: Option<&str>,
     answer: &DeliveryAnswer,
 ) -> Response
 where
@@ -325,9 +410,7 @@ where
         return unknown();
     };
     // The vendor's own reference: the store holds it prefixed by the connection.
-    let reference = request
-        .external_reference
-        .as_deref()
+    let reference = held
         .map(|held| {
             held.strip_prefix(&format!("{connection_id}:"))
                 .unwrap_or(held)
