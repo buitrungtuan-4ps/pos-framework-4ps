@@ -11,9 +11,10 @@
 //!
 //! This module holds the keepers this binary carries. [`EnvironmentKeys`] is the keeper over key
 //! material it is handed: the **file keeper**, whose one version is `integration_secret` from
-//! `cloud.toml`, for development and demonstrations only. A production cloud must not run on it:
-//! ADR-0217 decision 5 names a `systemd-creds` keeper, the key sealed to the host's TPM2, and a
-//! managed KMS for that.
+//! `cloud.toml`, for development and demonstrations only; and the **`systemd-creds` keeper**,
+//! [`EnvironmentKeys::from_credentials`], over the versioned keys systemd decrypted from
+//! credentials sealed to the host's TPM2 (`deploy/cloud-keys.sh`), which production runs on. A
+//! managed KMS waits for its own ADR.
 //!
 //! [`Keys`] puts the layers together: it reads a tenant's key versions from the
 //! [`TenantKeyStore`], unwraps them through the keeper, and hands a request a [`TenantSealer`]
@@ -24,7 +25,19 @@ mod reseal;
 mod sealer;
 mod tenant;
 
-pub use environment::{ENVIRONMENT_KEY_LEN, EnvironmentKeys};
+pub use environment::{CREDENTIAL_PREFIX, ENVIRONMENT_KEY_LEN, EnvironmentKeys};
+
+/// Which keeper holds the environment key, as `cloud.toml`'s `key_keeper` names it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+pub enum KeeperChoice {
+    /// `integration_secret` as version 1: development and demonstrations only.
+    #[default]
+    #[serde(rename = "file")]
+    File,
+    /// Versioned keys systemd decrypted from TPM2-sealed credentials.
+    #[serde(rename = "systemd-creds")]
+    SystemdCreds,
+}
 pub use reseal::{ResealError, ResealReport, reseal_tenant};
 pub use sealer::{KEY_VERSIONS_MAX, Keys, TenantSealer, sealed_version};
 pub use tenant::{MemoryTenantKeys, TenantKey, TenantKeyStore, TenantKeyStoreError};
