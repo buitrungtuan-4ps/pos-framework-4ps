@@ -64,6 +64,7 @@ pub mod fiscalization;
 pub mod fixtures;
 pub mod harness;
 pub mod intake_ledger;
+pub mod key_keeper;
 pub mod key_vault;
 pub mod message_link;
 pub mod metrics_sink;
@@ -102,6 +103,8 @@ pub const __PORT_ID_GENERATOR: PortName = PortName::IdGenerator;
 /// Not public API: the suite macros expand to this.
 #[doc(hidden)]
 pub const __PORT_INTAKE_LEDGER: PortName = PortName::IntakeLedger;
+#[doc(hidden)]
+pub const __PORT_KEY_KEEPER: PortName = PortName::KeyKeeper;
 #[doc(hidden)]
 pub const __PORT_KEY_VAULT: PortName = PortName::KeyVault;
 #[doc(hidden)]
@@ -382,7 +385,7 @@ pub fn report(port: PortName, case: &'static str, outcome: Result<(), CaseFailur
 /// `docs/roadmap.md` P2's exit criterion is *"every port has a contract suite"*, and a criterion
 /// nothing checks is a criterion that stops being true the first time somebody is in a hurry.
 ///
-/// Twenty-one entries, matching `PortName::ALL`.
+/// Twenty-two entries, matching `PortName::ALL`.
 pub const SUITES: &[(PortName, &str)] = &[
     (PortName::EventStore, "event_store_suite"),
     (PortName::ConfigStore, "config_store_suite"),
@@ -405,6 +408,7 @@ pub const SUITES: &[(PortName, &str)] = &[
     (PortName::IntakeLedger, "intake_ledger_suite"),
     (PortName::SubjectStore, "subject_store_suite"),
     (PortName::StoreWake, "store_wake_suite"),
+    (PortName::KeyKeeper, "key_keeper_suite"),
 ];
 
 /// Turns a list of *synchronous* case functions into `#[test]` functions.

@@ -16,10 +16,10 @@
 use pos_contract_tests::harness::{
     BlobStoreHarness, ClockSourceHarness, CloudSyncHarness, ConfigStoreHarness,
     DeliveryVendorHarness, DeviceRegistryHarness, ErpSinkHarness, EventStoreHarness,
-    FiscalizationHarness, HarnessError, IdGeneratorHarness, IntakeLedgerHarness, KeyVaultHarness,
-    MessageLinkHarness, MetricsSinkHarness, OrderInHarness, PaymentTerminalHarness,
-    PrinterDriverHarness, Setup, ShippingDispatchHarness, SignerHarness, StoreWakeHarness,
-    SubjectStoreHarness,
+    FiscalizationHarness, HarnessError, IdGeneratorHarness, IntakeLedgerHarness, KeyKeeperHarness,
+    KeyVaultHarness, MessageLinkHarness, MetricsSinkHarness, OrderInHarness,
+    PaymentTerminalHarness, PrinterDriverHarness, Setup, ShippingDispatchHarness, SignerHarness,
+    StoreWakeHarness, SubjectStoreHarness,
 };
 use pos_ports::{
     AccountCode, BusyMode, CourierJobRef, MetricSample, PrinterCapabilities, PublicKey, Signature,
@@ -209,6 +209,22 @@ impl SignerHarness for SignerFixture {
 /// Harness for [`FakeKeyVault`].
 #[derive(Debug, Default)]
 pub struct VaultHarness;
+
+/// Supplies [`crate::FakeKeyKeeper`]s for two environments.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct KeeperHarness;
+
+impl KeyKeeperHarness for KeeperHarness {
+    type Keeper = crate::FakeKeyKeeper;
+
+    async fn fresh(&self) -> Setup<Self::Keeper> {
+        Ok(crate::FakeKeyKeeper::new(1))
+    }
+
+    async fn other(&self) -> Setup<Self::Keeper> {
+        Ok(crate::FakeKeyKeeper::new(2))
+    }
+}
 
 impl KeyVaultHarness for VaultHarness {
     type Vault = FakeKeyVault;

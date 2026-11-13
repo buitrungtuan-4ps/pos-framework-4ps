@@ -93,6 +93,7 @@ pub mod erasures;
 pub mod fleet;
 pub mod gateway;
 pub mod http;
+pub mod keys;
 pub mod lease;
 pub mod metrics;
 mod openapi;

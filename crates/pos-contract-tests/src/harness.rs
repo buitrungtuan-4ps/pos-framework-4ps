@@ -43,9 +43,9 @@ use core::time::Duration;
 
 use pos_ports::{
     BlobStore, CloudSync, ConfigStore, DeliveryVendor, DeviceRegistry, ErpSink, EventStore,
-    Fiscalization, IntakeLedger, KeyVault, MessageLink, MetricsSink, OrderIn, PaymentTerminal,
-    PrinterDriver, PublicKey, ShippingDispatch, Signature, Signer, StoreWake, SubjectStore,
-    UpdateReport,
+    Fiscalization, IntakeLedger, KeyKeeper, KeyVault, MessageLink, MetricsSink, OrderIn,
+    PaymentTerminal, PrinterDriver, PublicKey, ShippingDispatch, Signature, Signer, StoreWake,
+    SubjectStore, UpdateReport,
 };
 use pos_proto::wake::ConfigWake;
 use pos_proto::{ClockSource, DeviceId, IdGenerator, ReleaseTag, StoreId};
@@ -210,6 +210,18 @@ pub trait SignerHarness: Send + Sync {
     ///
     /// [`HarnessError`] if the fixture cannot be prepared.
     fn other_key(&self) -> Setup<PublicKey>;
+}
+
+/// Supplies a [`KeyKeeper`], and a second one under another environment's key.
+pub trait KeyKeeperHarness: Send + Sync {
+    /// The implementation under test.
+    type Keeper: KeyKeeper;
+
+    /// A keeper holding one environment key.
+    fn fresh(&self) -> impl Future<Output = Setup<Self::Keeper>> + Send;
+
+    /// A keeper of the same kind holding a different key, as another environment's would.
+    fn other(&self) -> impl Future<Output = Setup<Self::Keeper>> + Send;
 }
 
 /// Supplies a fresh [`KeyVault`].
