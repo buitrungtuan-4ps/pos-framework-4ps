@@ -76,7 +76,7 @@ where
         origins,
         revocations,
         backup,
-        printers,
+        delivery,
     } = wiring;
     let client = sync_client(cloud_url, cloud_roots, sync_key)?;
     let config_client = config_client(
@@ -95,7 +95,7 @@ where
         None => tokio::spawn(config_client.run(CONFIG_POLL_INTERVAL, shutdown)),
     };
     let heartbeat = spawn_heartbeat(&client, store_id, edge, lease, agents, shutdown_rx, drained);
-    spawn_relay(&client, store_id, edge, queue, printers, shutdown_rx);
+    spawn_relay(&client, store_id, edge, queue, delivery, shutdown_rx);
     // The tenant's labels, pulled whole beside the configuration (ADR-0043).
     tokio::spawn(
         crate::grid_client::GridClient::new(
@@ -227,27 +227,34 @@ fn spawn_relay<S, Q>(
     store_id: StoreId,
     edge: &Arc<Edge<S>>,
     queue: Q,
-    printers: Option<Arc<crate::printing::Printers>>,
+    delivery: Option<crate::delivery_slips::Delivery>,
     shutdown_rx: &tokio::sync::watch::Receiver<bool>,
 ) where
     S: EventStore + IntakeLedger + SubjectStore + Send + Sync + 'static,
     Q: QueueNumberAuthority + 'static,
 {
+    let transport = RelayHttpTransport::new(client.clone(), store_id);
     let relay_client = RelayClient::new(
-        RelayHttpTransport::new(client.clone(), store_id),
+        transport.clone(),
         EdgeOrderIn::new(Arc::clone(edge), queue, system_device_id(store_id)),
     );
     let shutdown = wait_for_shutdown(shutdown_rx.clone());
-    // A store's delivery slip prints when it takes the order (ADR-0215 decision 3).
-    match printers {
-        Some(printers) => tokio::spawn(
-            relay_client
-                .telling(crate::delivery_slips::DeliverySlips::new(
-                    Arc::clone(edge),
-                    printers,
-                ))
-                .run(shutdown),
-        ),
+    // A store's delivery slip prints, and its vendor is accepted, when it takes the order; its
+    // answers go to the cloud from their own queue (ADR-0215 decisions 3 and 4).
+    match delivery {
+        Some(delivery) => {
+            tokio::spawn(crate::delivery_answers::run(
+                delivery.queue,
+                transport,
+                wait_for_shutdown(shutdown_rx.clone()),
+            ));
+            let slips = crate::delivery_slips::DeliverySlips::new(
+                Arc::clone(edge),
+                delivery.printers,
+                delivery.answers,
+            );
+            tokio::spawn(relay_client.telling(slips).run(shutdown))
+        }
         None => tokio::spawn(relay_client.run(shutdown)),
     };
 }

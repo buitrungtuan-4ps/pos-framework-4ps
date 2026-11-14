@@ -81,6 +81,7 @@ impl From<BumpView> for BumpResponse {
 pub(crate) async fn bump_ticket<S>(
     State(edge): State<Arc<Edge<S>>>,
     Extension(actor): Extension<Actor>,
+    answers: Option<Extension<crate::delivery_answers::DeliveryAnswers>>,
     Json(request): Json<BumpRequest>,
 ) -> Response
 where
@@ -99,11 +100,23 @@ where
         };
         order_line_ids.push(line_id);
     }
+    // A delivery order is ready for its vendor's rider once this bump makes its last line
+    // (ADR-0215 decision 4): told once, when the order turns made, not on every later bump.
+    let made_before = edge.order_made(order_id);
     match edge
         .bump_ticket(actor, order_id, station_id, order_line_ids)
         .await
     {
-        Ok(view) => Json(BumpResponse::from(view)).into_response(),
+        Ok(view) => {
+            if !made_before && edge.order_made(order_id) {
+                crate::delivery_slips::made(
+                    answers.as_ref().map(|Extension(answers)| answers),
+                    &edge,
+                    order_id,
+                );
+            }
+            Json(BumpResponse::from(view)).into_response()
+        }
         Err(error) => error_response(&error),
     }
 }

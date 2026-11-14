@@ -85,6 +85,22 @@ impl Projection {
         }
     }
 
+    /// Records the vendor an open delivery order came through.
+    pub(in crate::app) fn record_vendor(
+        &mut self,
+        order_id: OrderId,
+        vendor_id: Option<pos_proto::ids::VendorId>,
+    ) {
+        if let Some(vendor_id) = vendor_id {
+            self.order_vendors.insert(order_id, vendor_id);
+        }
+    }
+
+    /// The vendor an open order came through, if any.
+    pub(in crate::app) fn vendor(&self, order_id: OrderId) -> Option<pos_proto::ids::VendorId> {
+        self.order_vendors.get(&order_id).copied()
+    }
+
     /// The subject an open order names as its recipient, if any.
     pub(in crate::app) fn recipient(&self, order_id: OrderId) -> Option<pos_proto::ids::SubjectId> {
         self.recipients.get(&order_id).copied()
@@ -203,7 +219,11 @@ impl Projection {
         self.staff_decision(order_id).is_none()
             && !self.closed_orders.contains(&order_id)
             && self.order_origin(order_id).is_some_and(|origin| {
-                session.holds_for_staff_confirmation(origin.channel, origin.table_id)
+                session.holds_for_staff_confirmation(
+                    origin.channel,
+                    origin.table_id,
+                    self.vendor(order_id),
+                )
             })
     }
 
@@ -283,6 +303,7 @@ impl Projection {
         self.guest_counts.remove(&order_id);
         self.package_versions.remove(&order_id);
         self.recipients.remove(&order_id);
+        self.order_vendors.remove(&order_id);
         if let Some(table_id) = self.table_for_order(order_id) {
             self.table_orders.remove(&table_id);
         }

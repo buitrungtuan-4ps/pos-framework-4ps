@@ -222,6 +222,9 @@ pub struct EdgeSession {
     /// and never could: a store never talks to an internet vendor itself, and the node has no field
     /// a credential could travel in.
     pub integrations: PublishedIntegrations,
+    /// The delivery vendors this store takes orders from (ADR-0215 decision 5): the `vendors`
+    /// node. Empty until one is published, which holds no delivery order and answers no vendor.
+    pub vendors: pos_proto::vendors::PublishedVendors,
     /// Who this store legally is, as the receipt prints it
     /// ([ADR-0106](../../../../docs/adr/0106-the-store-is-a-legal-person.md)): its registered name, its
     /// address, and the tax registration number a Japanese qualified invoice or an Indian tax

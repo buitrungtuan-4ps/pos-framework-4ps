@@ -80,7 +80,9 @@ impl<S: EventStore> Edge<S> {
         // back to the caller below rather than recomputed there. The caller holds its own snapshot
         // taken microseconds earlier, and the config-pull loop can swap the session between the
         // two; recomputing would reintroduce the disagreement this replaces, just more rarely.
-        let holds_for_staff = session.holds_for_staff_confirmation(order_channel, table_id);
+        let vendor_id = intake.as_ref().and_then(|intent| intent.vendor_id);
+        let holds_for_staff =
+            session.holds_for_staff_confirmation(order_channel, table_id, vendor_id);
         let joins =
             self.order_joined_on_arrival(&session, order_channel, table_id, holds_for_staff);
 
@@ -92,7 +94,7 @@ impl<S: EventStore> Edge<S> {
             table_id,
             guest_count: None,
             package_version_id,
-            vendor_id: intake.as_ref().and_then(|intent| intent.vendor_id),
+            vendor_id,
             subject_id: intake.as_ref().and_then(|intent| intent.subject_id),
         };
         let prepared = self.prepare_inbound(stamp, &opened, lines, joins)?;
@@ -113,6 +115,7 @@ impl<S: EventStore> Edge<S> {
             );
             projection.record_opened(order_id, None, package_version_id);
             projection.record_recipient(order_id, opened.subject_id);
+            projection.record_vendor(order_id, vendor_id);
         }
         Ok(InboundOrderOpened {
             order_id,
@@ -128,6 +131,21 @@ impl<S: EventStore> Edge<S> {
     #[must_use]
     pub fn order_recipient(&self, order_id: OrderId) -> Option<pos_proto::ids::SubjectId> {
         self.lock_projection().recipient(order_id)
+    }
+
+    /// The vendor an open delivery order came through, and the store's entry for it in the
+    /// `vendors` node, when the store takes that vendor's orders (ADR-0215 decision 5): who a
+    /// store answers about this order, and with how many minutes. `None` for any other order.
+    #[must_use]
+    pub fn order_vendor(&self, order_id: OrderId) -> Option<pos_proto::vendors::PublishedVendor> {
+        let vendor_id = self.lock_projection().vendor(order_id)?;
+        self.session().vendors.get(vendor_id).cloned()
+    }
+
+    /// Whether the kitchen has made every line of `order_id`: each one still on it bumped.
+    #[must_use]
+    pub fn order_made(&self, order_id: OrderId) -> bool {
+        self.lock_projection().order_made(order_id)
     }
 
     /// The recipient a delivery order's slip prints

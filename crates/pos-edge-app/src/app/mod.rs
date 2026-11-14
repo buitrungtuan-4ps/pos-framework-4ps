@@ -132,6 +132,10 @@ struct Projection {
     /// ([ADR-0215](../../../../docs/adr/0215-a-delivery-order-names-its-vendor.md) decision 3): the
     /// id only, which the delivery slip reads the record by. Dropped when the order closes.
     recipients: HashMap<OrderId, pos_proto::ids::SubjectId>,
+    /// The vendor each open delivery order came through (ADR-0215 decision 1): what decides,
+    /// against the `vendors` node, whether it waits for staff and which vendor is answered.
+    /// Dropped when the order closes.
+    order_vendors: HashMap<OrderId, pos_proto::ids::VendorId>,
     /// The orders a member of staff has confirmed or refused
     /// ([ADR-0116](../../../../docs/adr/0116-the-qr-hold-is-derived-and-it-gates-firing.md)), folded
     /// from `sales.order.confirmed_by_staff` and `sales.order.rejected_by_staff`.
