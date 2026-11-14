@@ -70,6 +70,7 @@ To find the files a change touches, start from the **[repository map](repository
 | [metrics/till-latency-2026-11-phase-2-exit.md](metrics/till-latency-2026-11-phase-2-exit.md) | Phase 2's exit proof: every till act against ADR-0208's gate at 2×, on CI and locally, and the replays green normally and on two CPUs |
 | [metrics/custom-data-2026-11-phase-3-exit.md](metrics/custom-data-2026-11-phase-3-exit.md) | Phase 3's exit proof: a custom object type designed, synced, entered on a till, reported and printed, and a test that a personal value reaches no event and no log |
 | [metrics/console-designers-2026-11-phase-4-exit.md](metrics/console-designers-2026-11-phase-4-exit.md) | Phase 4's exit record: HQ builds and publishes a package in the console's designers with no JSON or CEL typed, and a test that the preview draws exactly what the till draws |
+| [metrics/gateway-functions-2026-11-phase-5-exit.md](metrics/gateway-functions-2026-11-phase-5-exit.md) | Phase 5's exit record: a till's lookup and a delivery order both go through the gateway, and a partner places an order through the public API; functions deferred by ADR-0216 |
 | [../CHANGELOG.md](../CHANGELOG.md) | What changed, when, and the upgrade notes |
 | [../SECURITY.md](../SECURITY.md) · [../MAINTAINERS.md](../MAINTAINERS.md) | Reporting a vulnerability; who owns which area |
 | [../packages/shared/README.md](../packages/shared/README.md) | The design tokens and the scripts both front ends share, and how they reach them |
