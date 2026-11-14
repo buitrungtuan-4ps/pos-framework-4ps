@@ -7,7 +7,7 @@ shows it is met, and what the phase's scope still leaves open. Like
 [console-designers-2026-11-phase-4-exit.md](console-designers-2026-11-phase-4-exit.md), it records
 one moment and is not regenerated.
 
-**Measured at** `ba546958` on `main`, with the delivery edge half still in review, named below.
+**Measured at** `ba546958` on `main`, with the delivery edge half (#1289) merged after it.
 
 ## The criterion
 
@@ -50,7 +50,7 @@ runs.
 | The store keeps the recipient with the order and prints it once, on the delivery slip | #1286 | `a_delivery_order_keeps_its_recipient_with_the_order_and_tells_its_slip` (`crates/pos-edge/tests/relay_client.rs`) |
 | An erasure of the recipient reaches the store's copy too | #1288 | `subjects::erasing_a_subject_the_cloud_and_a_store_hold_reaches_both`; `custom_values::a_subject_the_cloud_kept_for_a_store_is_held_by_that_store` |
 | The `vendors` node: the vendors a store takes, `staff_confirm` and `prep_minutes` each; an answer may name the order by the store's own id | #1285 | `integrations::publishing_integrations_sends_a_store_the_vendors_it_takes`; `connectors::a_store_answers_its_delivery_vendor_through_the_cloud` |
-| The store holds a vendor's orders for staff where the node says so, and accepts, rejects and readies them with the vendor through the cloud | `feat/store-takes-delivery-orders-by-vendor` (in review) | `a_vendor_s_orders_wait_for_staff_where_it_says_and_are_accepted_when_taken`, `a_store_rejects_and_readies_only_orders_of_its_vendors` (`crates/pos-edge/tests/relay_client.rs`) |
+| The store holds a vendor's orders for staff where the node says so, and accepts, rejects and readies them with the vendor through the cloud | #1289 | `a_vendor_s_orders_wait_for_staff_where_it_says_and_are_accepted_when_taken`, `a_store_rejects_and_readies_only_orders_of_its_vendors` (`crates/pos-edge/tests/relay_client.rs`) |
 
 ### A partner places an order through the public API
 
