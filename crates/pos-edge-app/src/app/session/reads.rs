@@ -122,6 +122,7 @@ impl EdgeSession {
             layout: DisplayPlan::new(),
             devices: PublishedDevices::default(),
             integrations: PublishedIntegrations::default(),
+            vendors: pos_proto::vendors::PublishedVendors::default(),
             // Nothing is invented here: a receipt headed with a guessed shop name is worse than one
             // headed with nothing (ADR-0106).
             profile: StoreProfile::default(),
@@ -336,10 +337,16 @@ impl EdgeSession {
         &self,
         channel: Option<SalesChannel>,
         table_id: Option<TableId>,
+        vendor_id: Option<pos_proto::ids::VendorId>,
     ) -> bool {
-        channel == Some(SalesChannel::Qr)
+        let qr = channel == Some(SalesChannel::Qr)
             && table_id.is_some()
-            && self.qr_staff_confirmation_required
+            && self.qr_staff_confirmation_required;
+        // A delivery order waits where its vendor's entry in the `vendors` node says staff confirm
+        // each of its orders (ADR-0215 decision 5), as a QR order waits (ADR-0012).
+        let delivery =
+            channel == Some(SalesChannel::Delivery) && self.vendors.staff_confirm(vendor_id);
+        qr || delivery
     }
 
     /// Installs a capability profile, for a test or the on-fakes example. The real store's profile

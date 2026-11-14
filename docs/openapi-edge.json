@@ -2554,7 +2554,7 @@
         "tags": [
           "orders"
         ],
-        "summary": "`POST /api/orders/{id}/reject` — refuse a guest's order, with a reason, and close it.",
+        "summary": "`POST /api/orders/{id}/reject` — refuse a guest's order, with a reason, and close it. A delivery\norder is rejected with its vendor, citing the reason (ADR-0215 decision 4).",
         "operationId": "reject_order",
         "parameters": [
           {
@@ -9485,10 +9485,14 @@
           },
           "table_id": {
             "type": "string",
-            "description": "The table the guest scanned. Always present: a held order is a tabled QR order by\ndefinition (ADR-0116), and a screen that could not say which table would be useless."
+            "description": "The table the guest scanned, for a QR order; empty for a delivery order, which sits at no\ntable (ADR-0215 decision 5)."
           },
           "total": {
             "$ref": "#/components/schemas/Money"
+          },
+          "vendor_name": {
+            "type": "string",
+            "description": "What the delivery vendor an order came through is called, where it came through one: the\nheading a member of staff sees in place of a table."
           }
         }
       },
