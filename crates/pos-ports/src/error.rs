@@ -31,7 +31,9 @@ use pos_proto::wire_enum::WireEnum;
 /// twentieth) and [ADR-0195](../../../docs/adr/0195-the-cloud-wakes-a-store-to-pull-its-config.md)
 /// (`StoreWake`, the twenty-first) and
 /// [ADR-0217](../../../docs/adr/0217-secrets-are-sealed-under-versioned-tenant-keys.md)
-/// (`KeyKeeper`, the twenty-second); a twenty-third variant needs an ADR first.
+/// (`KeyKeeper`, the twenty-second) and
+/// [ADR-0223](../../../docs/adr/0223-a-weighed-item-is-priced-by-its-weight.md) (`Scale`, the
+/// twenty-third); a twenty-fourth variant needs an ADR first.
 ///
 /// `IntakeLedger` is the odd one: ADR-0064 called it a port when it landed, but it was given no
 /// variant here — so [`crate::IntakeLedger`] had no suite and no row in `docs/architecture.md` §5,
@@ -85,6 +87,8 @@ pub enum PortName {
     StoreWake,
     /// [`crate::KeyKeeper`].
     KeyKeeper,
+    /// [`crate::Scale`].
+    Scale,
 }
 
 impl PortName {
@@ -115,6 +119,7 @@ impl PortName {
         Self::SubjectStore,
         Self::StoreWake,
         Self::KeyKeeper,
+        Self::Scale,
     ];
 
     /// The port's name in `snake_case`, for metric labels and log fields.
@@ -146,6 +151,7 @@ impl PortName {
             Self::SubjectStore => "subject_store",
             Self::StoreWake => "store_wake",
             Self::KeyKeeper => "key_keeper",
+            Self::Scale => "scale",
         }
     }
 }
@@ -360,12 +366,12 @@ mod tests {
     }
 
     #[test]
-    fn the_port_list_is_the_twenty_two_adr_0021_and_its_amendments_name() {
+    fn the_port_list_is_the_twenty_three_adr_0021_and_its_amendments_name() {
         // Sixteen from ADR-0021, plus `CloudSync` (ADR-0053), `DeviceRegistry` (ADR-0091),
         // `IntakeLedger` (ADR-0064 — a port from the start, registered late), `SubjectStore`
-        // (ADR-0107), `StoreWake` (ADR-0195) and `KeyKeeper` (ADR-0217). The number is asserted rather than described so that adding a port without its
+        // (ADR-0107), `StoreWake` (ADR-0195), `KeyKeeper` (ADR-0217) and `Scale` (ADR-0223). The number is asserted rather than described so that adding a port without its
         // ADR, its suite and its row in `docs/architecture.md` §5 fails here first.
-        assert_eq!(PortName::ALL.len(), 22);
+        assert_eq!(PortName::ALL.len(), 23);
     }
 
     #[test]
