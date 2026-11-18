@@ -7,7 +7,8 @@
 import { For, Show } from "solid-js";
 
 import type { CheckPayment, CheckResponse } from "../api/schemas";
-import { locale, t, type MessageKey } from "../i18n";
+import { t, type MessageKey } from "../i18n";
+import { clockTime } from "../lib/clock-time";
 import { money } from "../lib/money";
 import { formatAmount } from "../state/store";
 
@@ -23,13 +24,6 @@ function methodKey(method: string): MessageKey {
   }
 }
 
-// When a payment was taken, as a clock time in the reader's own language.
-function takenAt(time: string): string {
-  return new Date(Date.parse(time)).toLocaleTimeString(locale() === "vi" ? "vi-VN" : "en-GB", {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
 
 export function PartPayments(props: {
   /** The bill's read; nothing is shown until it has a payment or a split is chosen. */
@@ -68,7 +62,7 @@ export function PartPayments(props: {
               <li class="flex items-center justify-between gap-2 text-sm" data-outcome="share-taken">
                 <span>
                   {t("pay.share_taken", { part: index() + 1, method: t(methodKey(payment.method)) })} ·{" "}
-                  {takenAt(payment.taken_time)}
+                  {clockTime(payment.taken_time)}
                 </span>
                 <span class="tabular-nums">{formatAmount(payment.amount)}</span>
               </li>

@@ -6,15 +6,9 @@
 import { Show } from "solid-js";
 
 import type { CheckPrintedResponse } from "../api/schemas";
-import { locale, t } from "../i18n";
+import { t } from "../i18n";
+import { clockTime } from "../lib/clock-time";
 
-// The printed instant as a clock time, in the reader's own language.
-function printedAt(time: string): string {
-  return new Date(Date.parse(time)).toLocaleTimeString(locale() === "vi" ? "vi-VN" : "en-GB", {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
 
 export function PrintedCheck(props: { readonly printed: CheckPrintedResponse | undefined; readonly class?: string }) {
   return (
@@ -27,7 +21,7 @@ export function PrintedCheck(props: { readonly printed: CheckPrintedResponse | u
           data-outcome={printed().stale ? "check-printed-stale" : "check-printed"}
         >
           {t(printed().stale ? "check.printed_stale" : "check.printed", {
-            time: printedAt(printed().printed_time),
+            time: clockTime(printed().printed_time),
             copy: printed().copy,
           })}
         </p>

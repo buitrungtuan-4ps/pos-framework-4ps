@@ -38,6 +38,11 @@
 == counter · every device
 [region counter_frame]
   [region counter_flow]
+== tabs · every device
+<section class="mx-auto max-w-xl p-4">
+  <h1 class="mb-4 text-lg font-semibold">
+    "«tabs.title»"
+  [region tabs_list]
 == today · every device
 <section class="p-4">
   <h1 class="mb-4 text-lg font-semibold">
