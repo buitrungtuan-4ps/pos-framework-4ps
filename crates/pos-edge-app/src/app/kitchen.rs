@@ -7,6 +7,8 @@
 mod board;
 mod fire;
 
+pub(in crate::app) use fire::PreparedFires;
+
 // The unit tests name these as `super::`, as they did beside them in `app/mod.rs`.
 #[cfg(test)]
 use super::{AppError, MAX_COOKING, Projection};

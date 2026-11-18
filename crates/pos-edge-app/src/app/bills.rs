@@ -9,6 +9,7 @@ mod comp;
 
 pub use checks::CheckPrinted;
 mod open;
+mod pay_first;
 mod reads;
 mod receipts;
 mod reductions;

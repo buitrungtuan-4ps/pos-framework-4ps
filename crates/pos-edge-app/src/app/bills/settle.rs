@@ -124,10 +124,15 @@ impl<S: EventStore> Edge<S> {
             .checked_add(proved.totals.comp_total)
             .map_err(DomainError::from)?;
 
+        // A pay-first counter's unsent lines go to the kitchen with the payment (ADR-0222), first.
+        let (mut envelopes, mut messages, fires) =
+            self.fires_at_settle(&ctx, bill_id, proved.table_id.is_none())?;
         // One `billing.payment.captured` per tender, then `billing.bill.settled`, all in one
         // transaction so a crash never leaves a receipt without its payments (or the reverse).
-        let (mut envelopes, mut messages) =
+        let (captured, captured_messages) =
             self.capture_payments(&ctx, bill_id, &payments, shift)?;
+        envelopes.extend(captured);
+        messages.extend(captured_messages);
         let settled = self.settled_event(
             bill_id,
             receipt_number,
@@ -147,6 +152,7 @@ impl<S: EventStore> Edge<S> {
         self.commit_settle(&ctx, &envelopes, &messages, buyer)
             .await?;
 
+        let _fired = self.apply_fires(&ctx, fires);
         let table_state = self.fold_settled(&settled, (shift, &payments), &ctx, &proved)?;
         // The last part of a split settles the order off the boards, and its notes go with it.
         self.forget_notes_off_screen();

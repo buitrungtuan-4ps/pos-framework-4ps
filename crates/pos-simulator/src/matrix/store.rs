@@ -43,6 +43,8 @@ pub(super) struct Till {
     pub(super) tables: bool,
     /// Whether the store sends lines to a kitchen display.
     pub(super) kitchen: bool,
+    /// Whether the store takes the money before the kitchen hears of the order (ADR-0222).
+    pub(super) pay_first: bool,
 }
 
 impl Till {
@@ -99,6 +101,7 @@ impl Till {
             currency,
             tables: preset.enabled(Capability::Tables),
             kitchen: preset.enabled(Capability::Kds),
+            pay_first: preset.enabled(Capability::PayFirst),
         };
         till.send(
             "POST",

@@ -76,9 +76,9 @@ const TABLES = "tables_enabled";
 // the server serves but this map does not know is treated as satisfied here (never a false block) and
 // is still enforced on publish.
 const CONFLICT_CHECKS: Record<string, (on: (key: string) => boolean) => boolean> = {
-  // `pay_first_enabled` is not offered (ADR-0160 decision 5), so the form never holds it and this
-  // never fires here: a publish that turns tables on clears a stored pay-first instead (see
-  // `clearsPayFirst`). The cloud still applies the rule on publish.
+  // `pay_first_enabled` is offered again since a settle reads it (ADR-0222), so the form holds it and
+  // this previews the conflict; `clearsPayFirst` applies only to a catalogue that does not offer it.
+  // The cloud still applies the rule on publish.
   "pay_first.excludes.tables": (on) => !(on("pay_first_enabled") && on("tables_enabled")),
   "seats.requires.tables": (on) => !on("seats_enabled") || on("tables_enabled"),
 };

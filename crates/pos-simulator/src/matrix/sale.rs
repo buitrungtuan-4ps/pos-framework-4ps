@@ -108,6 +108,9 @@ pub(super) async fn sell(till: &Till) -> Result<Sale, Failed> {
         return Err(("pay the bill", format!("receipt number {settled}")));
     }
 
+    if till.kitchen && till.pay_first {
+        sent_at_settle(till).await?;
+    }
     let expected_cash = close_shift(till, &shift_id, paid).await?;
     Ok(Sale {
         receipt_number,
@@ -255,7 +258,8 @@ async fn at_the_counter(till: &Till, items: &[Value]) -> Result<(String, String)
             first_line = text(&line, "order_line_id").map_err(|detail| ("add a line", detail))?;
         }
     }
-    if till.kitchen {
+    // A pay-first counter sends nothing before it is paid: the settle sends it (ADR-0222).
+    if till.kitchen && !till.pay_first {
         fire(till, &order_id).await?;
     }
     let bill = till
@@ -264,6 +268,32 @@ async fn at_the_counter(till: &Till, items: &[Value]) -> Result<(String, String)
         .map_err(|detail| ("open the bill", detail))?;
     let bill_id = text(&bill, "bill_id").map_err(|detail| ("open the bill", detail))?;
     Ok((bill_id, first_line))
+}
+
+/// Checks the kitchen has the order a pay-first counter just settled, every line of it sent with the
+/// payment (ADR-0222).
+async fn sent_at_settle(till: &Till) -> Result<(), Failed> {
+    let board = till
+        .send("GET", "/api/orders/kitchen", None)
+        .await
+        .map_err(|detail| ("send at settle", detail))?;
+    let lines: Vec<&Value> = board
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|order| order["lines"].as_array().into_iter().flatten())
+        .collect();
+    if lines.is_empty()
+        || lines
+            .iter()
+            .any(|line| line["state"] != "ORDER_LINE_STATE_FIRED")
+    {
+        return Err((
+            "send at settle",
+            format!("the kitchen does not have it: {board}"),
+        ));
+    }
+    Ok(())
 }
 
 /// Sends every unsent line of the order to the kitchen.
