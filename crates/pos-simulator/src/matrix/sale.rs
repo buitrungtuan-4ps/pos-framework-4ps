@@ -59,10 +59,21 @@ pub(super) async fn sell(till: &Till) -> Result<Sale, Failed> {
         at_the_counter(till, &items).await?
     };
 
+    // The guest is shown the check first (ADR-0218): the print is recorded whether or not a
+    // printer answers, and the check read then carries it, fresh.
+    till.send("POST", &format!("/api/bills/{bill_id}/check/print"), None)
+        .await
+        .map_err(|detail| ("print the check", detail))?;
     let check = till
         .send("GET", &format!("/api/bills/{bill_id}/check"), None)
         .await
         .map_err(|detail| ("read the check", detail))?;
+    if check["check_printed"]["copy"] != 1 || check["check_printed"]["stale"] != false {
+        return Err((
+            "print the check",
+            format!("no fresh check on the bill: {check}"),
+        ));
+    }
     let paid: Money = serde_json::from_value(check["total_due"].clone())
         .map_err(|error| ("read the check", format!("no total due: {error}: {check}")))?;
     if paid.currency_code != till.currency || paid.amount_minor <= 0 {

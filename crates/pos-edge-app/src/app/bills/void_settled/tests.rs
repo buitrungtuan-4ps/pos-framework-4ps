@@ -320,6 +320,7 @@ fn by_shift_only_a_bill_the_open_shift_took_is_voided() {
         let mut by_shift = session();
         by_shift.billing = PublishedBilling {
             settled_void_window: Open::from_known(SettledVoidWindow::Shift),
+            ..PublishedBilling::default()
         };
         let edge = over(FakeStore::default(), by_shift);
         let before_the_shift = a_paid_bill(&edge, 508, vec![card(165_000)]).await;

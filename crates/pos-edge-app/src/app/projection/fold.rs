@@ -11,13 +11,14 @@ use pos_ports::event_store::{EventQuery, EventStore};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::events::{
     BillingBillMerged, BillingBillOpened, BillingBillSettled, BillingBillSplit, BillingBillVoided,
-    BillingDiscountApplied, BillingFeeWaived, BillingPaymentCaptured, BillingReceiptReprinted,
-    CashDrawerDropped, CashDrawerPaidIn, CashDrawerPaidOut, CashShiftClosed, CashShiftCounted,
-    CashShiftOpened, DataCustomFieldSet, DataCustomRecordChanged, DataSubjectMasked, EventType,
-    InventoryItemRestored, InventoryItemSoldOut, KitchenTicketBumped, SalesOrderClosed,
-    SalesOrderConfirmedByStaff, SalesOrderLineAdded, SalesOrderLineFired, SalesOrderLineUpdated,
-    SalesOrderLineVoided, SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed,
-    SalesTableMerged, SalesTableOpened, SalesTableTransferred,
+    BillingCheckPrinted, BillingDiscountApplied, BillingFeeWaived, BillingPaymentCaptured,
+    BillingReceiptReprinted, CashDrawerDropped, CashDrawerPaidIn, CashDrawerPaidOut,
+    CashShiftClosed, CashShiftCounted, CashShiftOpened, DataCustomFieldSet,
+    DataCustomRecordChanged, DataSubjectMasked, EventType, InventoryItemRestored,
+    InventoryItemSoldOut, KitchenTicketBumped, SalesOrderClosed, SalesOrderConfirmedByStaff,
+    SalesOrderLineAdded, SalesOrderLineFired, SalesOrderLineUpdated, SalesOrderLineVoided,
+    SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed, SalesTableMerged,
+    SalesTableOpened, SalesTableTransferred,
 };
 use pos_proto::time::Timestamp;
 use pos_proto::{BillState, OrderLineState, PaymentMethod, ShiftState, TableState};
@@ -375,6 +376,18 @@ impl<S: EventStore> Edge<S> {
             // its log without them would reopen a bill somebody has already been charged for
             // through its parts (ADR-0128 decision 10). Each part's own `billing.bill.opened`, in
             // the same transaction, folds the lines it covers; the split adds its fees' wholes.
+            EventType::BillingCheckPrinted => {
+                // A printed check's marker (ADR-0218 decision 2), at the instant it printed.
+                let event: BillingCheckPrinted =
+                    envelope.data.decode().map_err(AppError::Encode)?;
+                projection.record_check(
+                    event.order_id,
+                    event.bill_id,
+                    envelope.event_time,
+                    event.total_due,
+                    event.copy,
+                );
+            }
             EventType::BillingBillSplit | EventType::BillingBillMerged => {
                 Self::fold_regroup(projection, envelope, known)?;
             }

@@ -28,6 +28,7 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
   BILL_ALREADY_OPEN: "error.bill_already_open",
   ORDER_NOT_EMPTY: "error.order_not_empty",
   NOTHING_TO_BILL: "error.nothing_to_bill",
+  CHECK_REQUIRED: "error.check_required",
   NOT_SETTLED: "error.not_settled",
   RECEIPT_FROM_ANOTHER_DAY: "error.receipt_from_another_day",
   NOTHING_TO_PRINT: "error.nothing_to_print",

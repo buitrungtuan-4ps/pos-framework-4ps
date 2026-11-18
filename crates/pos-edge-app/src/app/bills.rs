@@ -4,6 +4,9 @@
 //! The bill: opening it, reading what it owes, voiding, discounting and waiving a fee on it, splitting
 //! and merging it, settling it, and the receipts, takings and buyers a settle leaves behind.
 
+mod checks;
+
+pub use checks::CheckPrinted;
 mod open;
 mod reads;
 mod receipts;

@@ -140,6 +140,7 @@
   "error.count_does_not_add_up": "The notes counted do not add up to the amount. Check each row and the other amount, then try again.",
   "error.awaiting_staff_confirmation": "A member of staff must confirm or refuse this guest order first.",
   "error.bill_already_open": "A bill is already open for this order.",
+  "error.check_required": "Print the check first: this store takes payment only against a check that shows what the bill now comes to.",
   "error.drawer_assigned_to_another": "This drawer is another person's for their shift. A manager's code and PIN let you take cash into it, open it, count it or close it. Cards still work.",
   "error.fee_not_on_bill": "That fee is no longer on this bill.",
   "error.fee_not_waivable": "This fee cannot be waived.",

@@ -54,6 +54,9 @@ pub struct ReceiptLine {
 /// what the bill settles against.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreBill {
+    /// The part of a split bill this check is for, or `None` for the whole order, before or after
+    /// its one bill opens (ADR-0218).
+    pub bill_id: Option<BillId>,
     /// The rows, as the receipt will print them.
     pub lines: Vec<ReceiptLine>,
     /// What they come to.
