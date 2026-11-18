@@ -46,6 +46,7 @@ import type {
   OpenDrawerRequest,
   OpenDrawerResponse,
   OpenedOrder,
+  Tab,
   OpenShiftRequest,
   OrderLineRequest,
   PairAccepted,
@@ -470,6 +471,14 @@ export const api = {
   // (ADR-0160 decision 2).
   openOrder: (channel?: string) =>
     request<OpenedOrder>("POST", "/api/orders", channel === undefined ? {} : { channel }),
+  // Bar tabs (ADR-0221): open one, numbered for the day; list the open ones; label one where the
+  // store keeps labels; and close one nothing was sold on, with the store's reason.
+  openTab: () => request<OpenedOrder>("POST", "/api/orders", { tab: true }),
+  openTabs: () => request<Tab[]>("GET", "/api/tabs"),
+  labelTab: (orderId: string, label: string) =>
+    request<unknown>("POST", `/api/tabs/${orderId}/label`, { label }),
+  closeOrder: (orderId: string, reasonCodeId?: string) =>
+    request<unknown>("POST", `/api/orders/${orderId}/close`, reasonCodeId === undefined ? {} : { reason_code_id: reasonCodeId }),
   addOrderLine: (orderId: string, line: OrderLineRequest) =>
     request<LineResponse>("POST", `/api/orders/${orderId}/lines`, line),
 

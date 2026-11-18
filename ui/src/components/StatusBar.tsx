@@ -7,6 +7,7 @@ import { type MessageKey, locale, setLocale, t } from "../i18n";
 import { afterPaint } from "../lib/after-paint";
 import { can, canAny } from "../state/permissions";
 import { signedOut } from "../state/session";
+import { tabsEnabled } from "../state/tabs";
 import { drawerPerTill, kdsEnabled, loadSync, state, tablesEnabled } from "../state/store";
 
 // The screens a device sees before anyone is signed in on it.
@@ -68,6 +69,8 @@ const NAV: { href: string; key: MessageKey; needs?: () => boolean }[] = [
   // A guest order that nobody confirms never reaches the kitchen (ADR-0116), so the queue needs to
   // be one tap from every screen rather than somewhere a server has to remember to look.
   { href: "/guests", key: "nav.confirm", needs: () => can("sales.order.confirm_qr") },
+  // A bar's open tabs (ADR-0221), for whoever takes orders where the store keeps tabs.
+  { href: "/tabs", key: "nav.tabs", needs: () => tabsEnabled() && can("sales.line.add") },
   { href: "/kds", key: "nav.kitchen", needs: () => kdsEnabled() && can("sales.ticket.bump") },
   { href: "/expo", key: "nav.pass", needs: () => kdsEnabled() && can("sales.ticket.bump") },
   { href: "/today", key: "nav.today" },

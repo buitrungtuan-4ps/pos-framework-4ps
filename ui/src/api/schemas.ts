@@ -11,6 +11,7 @@ export type LineRequest = Schemas["LineRequest"];
 export type LineResponse = Schemas["LineResponse"];
 export type OrderLineRequest = Schemas["OrderLineRequest"];
 export type OpenedOrder = Schemas["OpenedOrderResponse"];
+export type Tab = Schemas["TabResponse"];
 export type QuantityRequest = Schemas["QuantityRequest"];
 export type FireRequest = Schemas["FireRequest"];
 export type FloorGridPosition = Schemas["GridPosition"];
