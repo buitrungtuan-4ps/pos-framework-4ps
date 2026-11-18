@@ -783,7 +783,7 @@
           "bills"
         ],
         "summary": "`POST /api/bills/{id}/void` — void a bill before it settles, citing a reason from the store's\nmanaged list (ADR-0115, roadmap B2.2).",
-        "description": "Always needs a manager's PIN: a bill is money whether or not the kitchen started, so unlike a\nline there is no unfired shape to let through. A settled bill is refused by the bill machine —\nreversing one is a refund, with its own permission and its own reason.",
+        "description": "Always needs a manager's PIN: a bill is money whether or not the kitchen started, so unlike a\nline there is no unfired shape to let through. A settled bill is refused by the bill machine —\nreversing one is a refund, with its own permission and its own reason. A bill that holds\npayments taken one at a time gives each back (ADR-0220 decision 4): its cash out of the drawer of\nthe till this device is, which opens for it, and every other tender recorded as reversed.",
         "operationId": "void_bill",
         "parameters": [
           {
@@ -809,7 +809,7 @@
         },
         "responses": {
           "200": {
-            "description": "Voided: the `state` the bill came to rest in",
+            "description": "Voided: the `state` the bill came to rest in and, where payments had been taken towards it, the cash given back, the other tenders reversed and what came of opening the drawer",
             "content": {
               "application/json": {
                 "schema": {
@@ -9738,11 +9738,23 @@
       },
       "VoidBillResponse": {
         "type": "object",
-        "description": "The state a voided bill came to rest in, so the till can show it rather than re-reading.",
+        "description": "The state a voided bill came to rest in, so the till can show it rather than re-reading, and\nwhat it gave back where payments had been taken towards it (ADR-0220 decision 4).",
         "required": [
           "state"
         ],
         "properties": {
+          "cash_returned": {
+            "$ref": "#/components/schemas/Money",
+            "description": "The cash given back from this till's drawer. Absent where nothing had been paid."
+          },
+          "drawer_open": {
+            "type": "string",
+            "description": "What came of opening the drawer, where cash was given back."
+          },
+          "other_reversed": {
+            "$ref": "#/components/schemas/Money",
+            "description": "Every other tender, recorded as reversed. Absent where nothing had been paid."
+          },
           "state": {
             "type": "string"
           }

@@ -215,7 +215,7 @@ impl<S: EventStore> Edge<S> {
         })
     }
 
-    /// Refuses an act that would regroup or void `bill_ids` while any of them holds a payment
+    /// Refuses an act that would regroup `bill_ids` while any of them holds a payment
     /// (ADR-0220 decision 4): what was paid is the bill's, and a split or a merge would leave it on
     /// nobody's.
     pub(in crate::app) fn refuse_part_paid(&self, bill_ids: &[BillId]) -> Result<(), AppError> {

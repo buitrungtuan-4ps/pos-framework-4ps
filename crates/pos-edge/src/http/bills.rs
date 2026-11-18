@@ -655,13 +655,6 @@ where
     }
 }
 
-/// The state a voided bill came to rest in, so the till can show it rather than re-reading.
-#[derive(Debug, Serialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-pub(crate) struct VoidBillResponse {
-    state: &'static str,
-}
-
 /// A discount as a till asks for it: how much, why, and the manager standing at the till for it.
 ///
 /// The approval is optional in the shape and required by the act today, exactly as a line void's
@@ -924,64 +917,6 @@ where
     {
         Ok(bill_id) => Json(MergeResponse {
             bill_id: bill_id.to_string(),
-        })
-        .into_response(),
-        Err(error) => error_response(&error),
-    }
-}
-
-#[cfg_attr(feature = "openapi", utoipa::path(
-    post,
-    path = "/api/bills/{id}/void",
-    security(("till_session" = [])),
-    extensions(("x-permission" = json!("billing.bill.void"))),
-    params(
-        ("id" = String, Path, description = "The bill's id, a ULID"),
-    ),
-    request_body(
-        content = VoidBillRequest, description = "`reason_code_id`, a void reason from the managed list, with `approver_code` and \
-                       `approver_pin`, which a bill void always needs. Both are secrets and are never logged",
-        content_type = "application/json",
-    ),
-    responses(
-        (status = 200, body = VoidBillResponse, description = "Voided: the `state` the bill came to rest in"),
-        (status = 400, description = "The id is not a ULID"),
-        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
-        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; the void \
-                                      needs a manager's approval that was missing or refused, or the \
-                                      approver is locked out; or this box was superseded by a replacement"),
-        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
-                                      state the command applies to. `pos-error-reason` names which"),
-        (status = 503, description = "The store is unavailable, and nothing was recorded"),
-        (status = 500, description = "The edge could not apply the command"),
-    ),
-    tag = "bills",
-))]
-/// `POST /api/bills/{id}/void` — void a bill before it settles, citing a reason from the store's
-/// managed list (ADR-0115, roadmap B2.2).
-///
-/// Always needs a manager's PIN: a bill is money whether or not the kitchen started, so unlike a
-/// line there is no unfired shape to let through. A settled bill is refused by the bill machine —
-/// reversing one is a refund, with its own permission and its own reason.
-pub(crate) async fn void_bill<S>(
-    State(edge): State<Arc<Edge<S>>>,
-    Extension(actor): Extension<Actor>,
-    Path(id): Path<String>,
-    Json(request): Json<VoidBillRequest>,
-) -> Response
-where
-    S: EventStore + Send + Sync + 'static,
-{
-    let Some(bill_id) = parse_ulid(&id).map(BillId::new) else {
-        return bad_request("a bill id is a ULID");
-    };
-    let approval = request.approval();
-    match edge
-        .void_bill(actor, bill_id, request.reason_code_id, approval.as_ref())
-        .await
-    {
-        Ok(state) => Json(VoidBillResponse {
-            state: state.as_wire(),
         })
         .into_response(),
         Err(error) => error_response(&error),

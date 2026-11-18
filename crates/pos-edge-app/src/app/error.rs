@@ -42,9 +42,9 @@ pub enum AppError {
     /// one does not cover it.
     #[error("this store takes a bill in one payment")]
     PartPaymentsOff,
-    /// A payment has been taken towards the bill, so it may not be split, merged or voided here,
-    /// reduced below what is paid, or its drawer's shift closed until it settles (ADR-0220
-    /// decisions 4 and 5).
+    /// A payment has been taken towards the bill, so it may not be split or merged, reduced below
+    /// what is paid, or its drawer's shift closed until it settles or is voided (ADR-0220 decisions
+    /// 4 and 5).
     #[error("a payment has been taken towards this bill")]
     BillPartPaid,
     /// A comp named a line already given away: a line is comped at most once

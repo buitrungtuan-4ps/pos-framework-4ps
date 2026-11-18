@@ -2,7 +2,10 @@
 // Proprietary and confidential. Internal use only. See LICENSE.
 
 //! `POST /api/bills/{id}/void_settled`: voiding a paid bill, whole
-//! ([ADR-0184](../../../../docs/adr/0184-a-settled-bill-is-voided-whole-not-refunded.md)).
+//! ([ADR-0184](../../../../docs/adr/0184-a-settled-bill-is-voided-whole-not-refunded.md)), and
+//! `POST /api/bills/{id}/void`: voiding one before it settles, which gives back any payment taken
+//! towards it the same way
+//! ([ADR-0220](../../../../docs/adr/0220-a-bill-takes-its-payments-one-at-a-time.md) decision 4).
 
 use std::sync::Arc;
 
@@ -178,4 +181,112 @@ where
     printers
         .print_void_slip(&session, &till, edge.store_id(), view.job_id, &slip)
         .await
+}
+
+/// The state a voided bill came to rest in, so the till can show it rather than re-reading, and
+/// what it gave back where payments had been taken towards it (ADR-0220 decision 4).
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub(crate) struct VoidBillResponse {
+    state: &'static str,
+    /// The cash given back from this till's drawer. Absent where nothing had been paid.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    cash_returned: Option<Money>,
+    /// Every other tender, recorded as reversed. Absent where nothing had been paid.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    other_reversed: Option<Money>,
+    /// What came of opening the drawer, where cash was given back.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    drawer_open: Option<String>,
+}
+
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/bills/{id}/void",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("billing.bill.void"))),
+    params(
+        ("id" = String, Path, description = "The bill's id, a ULID"),
+    ),
+    request_body(
+        content = VoidBillRequest, description = "`reason_code_id`, a void reason from the managed list, with `approver_code` and \
+                       `approver_pin`, which a bill void always needs. Both are secrets and are never logged",
+        content_type = "application/json",
+    ),
+    responses(
+        (status = 200, body = VoidBillResponse, description = "Voided: the `state` the bill came to rest in and, where payments had \
+                                      been taken towards it, the cash given back, the other tenders \
+                                      reversed and what came of opening the drawer"),
+        (status = 400, description = "The id is not a ULID"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; the void \
+                                      needs a manager's approval that was missing or refused, or the \
+                                      approver is locked out; or this box was superseded by a replacement"),
+        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
+                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, and nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "bills",
+))]
+/// `POST /api/bills/{id}/void` — void a bill before it settles, citing a reason from the store's
+/// managed list (ADR-0115, roadmap B2.2).
+///
+/// Always needs a manager's PIN: a bill is money whether or not the kitchen started, so unlike a
+/// line there is no unfired shape to let through. A settled bill is refused by the bill machine —
+/// reversing one is a refund, with its own permission and its own reason. A bill that holds
+/// payments taken one at a time gives each back (ADR-0220 decision 4): its cash out of the drawer of
+/// the till this device is, which opens for it, and every other tender recorded as reversed.
+pub(crate) async fn void_bill<S>(
+    State(edge): State<Arc<Edge<S>>>,
+    Extension(actor): Extension<Actor>,
+    printers: Option<Extension<Arc<Printers>>>,
+    Path(id): Path<String>,
+    Json(request): Json<VoidBillRequest>,
+) -> Response
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    let Some(bill_id) = parse_ulid(&id).map(BillId::new) else {
+        return bad_request("a bill id is a ULID");
+    };
+    let scope = match shifts::till_scope(&edge, printers.as_deref(), actor, None).await {
+        Ok(scope) => scope,
+        Err(error) => {
+            tracing::warn!(%error, "the till a device is could not be read; it gives back no cash");
+            TillScope::default()
+        }
+    };
+    let approval = request.approval();
+    let voided = match edge
+        .void_bill_at(
+            actor,
+            scope,
+            bill_id,
+            request.reason_code_id,
+            approval.as_ref(),
+        )
+        .await
+    {
+        Ok(voided) => voided,
+        Err(error) => return error_response(&error),
+    };
+    let drawer_open = if voided.open_drawer() {
+        let opened =
+            cash_movements::open_drawer_through(printers.as_deref(), &edge, voided.drawer_till)
+                .await;
+        Some(opened.as_wire().to_owned())
+    } else {
+        None
+    };
+    Json(VoidBillResponse {
+        state: voided.state.as_wire(),
+        cash_returned: voided.cash_returned,
+        other_reversed: voided.other_reversed,
+        drawer_open,
+    })
+    .into_response()
 }

@@ -59,8 +59,8 @@ pub struct KeptBills {
     /// Cash applied to a bill whose settle has not been folded yet. A bill taken one payment at a
     /// time records each as it is taken
     /// ([ADR-0220](../../../../docs/adr/0220-a-bill-takes-its-payments-one-at-a-time.md)), so an
-    /// entry holds every payment so far until the bill's settle lands, minutes later or more; a
-    /// bill that holds a payment is not voided before it settles.
+    /// entry holds every payment so far until the bill's settle lands, minutes later or more, or
+    /// until a void before the settle gives the cash back.
     #[serde(default)]
     pub pending_cash: BTreeMap<String, i64>,
     /// The drawer each open shift counts, its till's id or [`STORE_DRAWER`], from
@@ -197,25 +197,43 @@ fn fold_void(
                 .find_map(|(day, bills)| bills.remove(bill_id).map(|bill| (day.clone(), bill)))
         });
     let Some((settled_on, bill)) = found else {
+        // A bill voided before it settled with payments taken towards it gives their cash back
+        // ([ADR-0220](../../../../docs/adr/0220-a-bill-takes-its-payments-one-at-a-time.md)
+        // decision 4); it added no revenue, so there is none to take back.
+        if let Some(paid) = kept.pending_cash.remove(bill_id) {
+            give_back_cash(kept, cash, event, paid);
+        }
         return;
     };
     let day = revenue
         .entry(settled_on.clone())
         .or_insert_with(|| empty_revenue(&settled_on));
     take_back(day, &bill);
+    give_back_cash(kept, cash, event, bill.cash);
+}
 
-    if bill.cash != 0 {
-        let drawer = event
-            .shift_id
-            .and_then(|shift| kept.shift_drawers.get(&shift.to_string()).cloned())
-            .unwrap_or_else(|| STORE_DRAWER.to_owned());
-        let day = cash
-            .entry(today.clone())
-            .or_insert_with(|| empty_cash(&today));
-        day.voided_cash = day.voided_cash.saturating_add(bill.cash);
-        let figures = day.by_drawer.entry(drawer).or_default();
-        figures.voided_cash = figures.voided_cash.saturating_add(bill.cash);
+/// Counts `amount` of cash as voided on the void's own day, against the drawer whose shift the void
+/// was stamped with.
+fn give_back_cash(
+    kept: &KeptBills,
+    cash: &mut BTreeMap<String, DailyCash>,
+    event: &EventEnvelope<RawPayload>,
+    amount: i64,
+) {
+    if amount == 0 {
+        return;
     }
+    let today = event.business_date.to_string();
+    let drawer = event
+        .shift_id
+        .and_then(|shift| kept.shift_drawers.get(&shift.to_string()).cloned())
+        .unwrap_or_else(|| STORE_DRAWER.to_owned());
+    let day = cash
+        .entry(today.clone())
+        .or_insert_with(|| empty_cash(&today));
+    day.voided_cash = day.voided_cash.saturating_add(amount);
+    let figures = day.by_drawer.entry(drawer).or_default();
+    figures.voided_cash = figures.voided_cash.saturating_add(amount);
 }
 
 /// Subtracts what `bill`'s settle added to `day`, and counts it as voided after payment.
