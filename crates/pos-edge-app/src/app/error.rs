@@ -221,6 +221,11 @@ pub enum AppError {
     /// reasons listed for it, so a message naming the drawer sends an operator to the right rows.
     #[error("that reason code is not valid for this act on the drawer")]
     CashReasonNotValid,
+    /// A label was written on a tab where the store has not turned `tabs.guest_label` on
+    /// ([ADR-0221](../../../../docs/adr/0221-a-bar-tab-is-an-order-without-a-table-that-stays-open.md)):
+    /// a guest's name is recorded only once the store has confirmed its notice (ADR-0169).
+    #[error("this store keeps a tab's number only")]
+    GuestLabelOff,
     /// Closing an empty tableless order cited a reason the store's list does not hold for
     /// `REASON_ACTION_CLOSE_ORDER`, or cited none while the list gives one
     /// ([ADR-0221](../../../../docs/adr/0221-a-bar-tab-is-an-order-without-a-table-that-stays-open.md)).

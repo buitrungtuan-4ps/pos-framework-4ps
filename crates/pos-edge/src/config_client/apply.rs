@@ -20,6 +20,7 @@ use crate::origins::Origins;
 use pos_proto::billing::PublishedBilling;
 use pos_proto::receipt::PublishedReceipt;
 use pos_proto::scan::PublishedScan;
+use pos_proto::tabs::PublishedTabs;
 use pos_proto::vendors::PublishedVendors;
 
 /// The store's display language from the `locale` node, and the `menu` node in it (ADR-0066,
@@ -418,7 +419,7 @@ pub(super) fn apply_bill_rules(session: &mut EdgeSession, document: &serde_json:
     }
 }
 
-/// The `tender_keys`, `counter`, `scan` and `backup` nodes of settings (ADR-0160).
+/// The `tender_keys`, `counter`, `scan`, `tabs` and `backup` nodes of settings (ADR-0160).
 pub(super) fn apply_till_settings(session: &mut EdgeSession, document: &serde_json::Value) {
     // The `tender_keys` node (ADR-0160 decision 2): the keys the pay screen offers. A node of
     // settings like `shift`, so absent puts the defaults back and a node that is not an object keeps
@@ -458,6 +459,15 @@ pub(super) fn apply_till_settings(session: &mut EdgeSession, document: &serde_js
         Some(value) => {
             if let Ok(scan) = serde_json::from_value::<PublishedScan>(value.clone()) {
                 session.scan = scan;
+            }
+        }
+    }
+    // The `tabs` node (ADR-0221): whether a tab may carry a label. A node of settings like `scan`.
+    match document.get(PublishedTabs::NODE) {
+        None => session.tabs = PublishedTabs::default(),
+        Some(value) => {
+            if let Ok(tabs) = serde_json::from_value::<PublishedTabs>(value.clone()) {
+                session.tabs = tabs;
             }
         }
     }

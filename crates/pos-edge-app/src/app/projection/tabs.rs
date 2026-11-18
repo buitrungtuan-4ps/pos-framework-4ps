@@ -18,6 +18,11 @@ impl Projection {
         }
     }
 
+    /// Whether `order_id` is a tab still open: one that has not settled, closed or been refused.
+    pub(in crate::app) fn is_open_tab(&self, order_id: OrderId) -> bool {
+        self.tabs.contains_key(&order_id)
+    }
+
     /// Whether `order_id` opened without a table, is on none now, and has not ended: what
     /// [`crate::app::Edge::close_empty_order`] may close. An empty order is in no live list, which
     /// counts only orders with lines.
