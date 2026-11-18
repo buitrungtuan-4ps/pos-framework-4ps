@@ -59,6 +59,14 @@ amount paid with no variance; a failure names the step and the edge's answer, wi
 `pos-error-reason`. The command exits non-zero when a cell fails, and `2` when the filter names no
 shipped template or country. `cargo test -p pos-simulator` runs all 24 cells.
 
+In CI, the `templates` workflow ([`templates.yml`](../../.github/workflows/templates.yml)) runs it:
+a pull request that changes a file under `business-types/<dir>/` runs `--template <dir>`, and one
+that changes a file under `countries/<cc>/` runs `--country <cc>`
+([`.github/scripts/matrix-cells.sh`](../../.github/scripts/matrix-cells.sh) turns the changed paths
+into those filters), and every night, or on a manual run, it takes all 24 cells. The `pr` workflow
+counts a change under `business-types/` as a change to `pos-business-types` and the crates that
+depend on it (`cargo xtask affected`), so its tests run the matrix too.
+
 An item the pack does not price is left unsold, as a till cannot ring it up: India's pack has no
 alcohol rate, because a state sets it, and neither does the neutral `zz`, so the bar sells its food
 there. Self-order sells as table service and the bar without a tab until their own capabilities
