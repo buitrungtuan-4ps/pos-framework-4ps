@@ -5,7 +5,7 @@
 Relates to [ADR-0146](0146-a-counter-store-starts-its-own-orders.md),
 [ADR-0194](0194-custom-data-is-declared-and-personal-fields-are-kept-apart.md),
 [ADR-0206](0206-a-personal-custom-value-stays-on-its-store-and-expires-on-its-own-clock.md),
-[ADR-0220](0220-a-bill-takes-its-payments-one-at-a-time.md)
+ADR-0220
 
 Waits on the owner: whether a tab may carry a guest's name, and whether holding a card on a tab
 waits for the card terminal (phase 8).
