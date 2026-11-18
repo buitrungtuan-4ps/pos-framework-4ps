@@ -580,6 +580,10 @@ fn read_back(node: &str, field: &str, value: Option<&Value>) -> Option<Value> {
                 _ => None,
             }
         }
+        crate::scan::PublishedScan::NODE => {
+            let scan: crate::scan::PublishedScan = serde_json::from_value(document).ok()?;
+            (field == "keystroke_window_ms").then(|| json!(scan.keystroke_window_ms()))
+        }
         PublishedPackage::NODE => read_back_package(field, document),
         PublishedReceipt::NODE => read_back_receipt(field, document),
         PublishedBilling::NODE => read_back_billing(field, document),
