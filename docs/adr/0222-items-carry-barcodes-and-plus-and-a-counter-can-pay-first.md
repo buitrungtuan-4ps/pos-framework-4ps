@@ -1,13 +1,15 @@
 # ADR-0222 — Items carry barcodes and PLUs, a quick sale scans them, and a counter can pay first
 
-**Status** Proposed · **Owner** @maintainers-architecture · **Date** 2026-11-18
+**Status** Accepted 2026-11-18 (owner) · **Owner** @maintainers-architecture · **Date** 2026-11-18
 · Completes roadmap-v3 B5.1 and B5.2 · Needed by
 [ADR-0200](0200-six-business-type-templates-ship-with-the-framework.md) decision 5 · Amends
 [ADR-0146](0146-a-counter-store-starts-its-own-orders.md) ("pay-first stays out") · Relates to
 [ADR-0105](0105-a-country-pack-is-values.md), [ADR-0161](0161-a-paid-order-without-a-table-stays-on-the-kitchen-board-until-it-is-done.md),
 [ADR-0197](0197-every-tap-paints-within-ten-milliseconds.md)
 
-Waits on the owner: open-price items without a manager, and firing the kitchen at payment.
+Accepted by the owner on 2026-11-18 as recommended: an open-price item typed within its published
+bounds needs no manager; on a pay-first store the settle fires the unsent lines; phase 6 supports
+keyboard-wedge scanners only, and camera scanning comes with the devices in phase 8.
 
 ## Context
 
@@ -44,6 +46,19 @@ kept a paid tableless order on the board. Café, fast food, bakery and kiosk all
    keeps it there). `tables_enabled` with `pay_first_enabled` stays refused.
 7. **Capability readers:** `barcode_enabled` turns on the scan listener and the code fields;
    `pay_first_enabled` the fire at settle.
+
+## Configuration
+
+- **Capabilities** (§10): `barcode_enabled`, which the bakery-retail preset turns on, and
+  `pay_first_enabled`, which the café, fast-food and bakery-retail presets turn on.
+- **Catalogue data,** per item: its barcodes, its PLU, and whether it is open-price with its minimum
+  and maximum, authored in the console.
+- **A setting** (ADR-0160): `scan.keystroke_window_ms`, 20 to 200, **default 50**: how quickly a
+  scanner's digits arrive, which tells a scan from typing on a given model of scanner.
+- **Variable-measure layouts** are a setting each country pack seeds for a new store (ADR-0183),
+  because each national GS1 body assigns its prefixes; a store may override it.
+- **Fixed rules:** a GTIN's check digit and a code's uniqueness within a menu (data integrity); the
+  edge prices every line (money integrity); pay-first with tables stays refused (§10's rule).
 
 ## Consequences accepted
 
