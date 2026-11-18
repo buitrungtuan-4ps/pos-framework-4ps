@@ -1,13 +1,15 @@
 # ADR-0223 — A weighed item is priced by its weight, read from a label, a scale or a hand
 
-**Status** Proposed · **Owner** @maintainers-architecture · **Date** 2026-11-18
+**Status** Accepted 2026-11-18 (owner) · **Owner** @maintainers-architecture · **Date** 2026-11-18
 · Needed by [ADR-0200](0200-six-business-type-templates-ship-with-the-framework.md) decision 5 ·
 Adds a port (AGENTS.md §7) · Relates to [ADR-0021](0021-corrected-port-list.md),
 [ADR-0105](0105-a-country-pack-is-values.md), [ADR-0153](0153-a-vendor-is-a-provider-the-cloud-chooses.md),
 ADR-0222
 
-Waits on the owner: whether a real scale driver ships now or in phase 8, and whether a weight may be
-typed by hand.
+Accepted by the owner on 2026-11-18 as recommended: the `Scale` port, its contract tests and a fake
+come in phase 6 and real drivers in phase 8; a weight typed by hand is allowed only in `zz` until
+phase 7, as a setting the country pack seeds; a weighed item is priced per kilogram and its line
+quantity is in grams.
 
 ## Context
 
@@ -36,14 +38,27 @@ by it (legal for trade).
    - a **scale** beside the till, through a new port, `Scale` (the 23rd): read one stable net weight
      with its unit, or answer unstable, overloaded or absent. The edge drives it (a device on the
      store's network or a port, ADR-0153). Phase 6 ships the port, its contract tests and a fake;
-   - a **hand-typed** weight, only where the country pack's `weight_manual_entry` value allows it.
-3. **The country pack states the law**: `weight_manual_entry` (allowed or not) and the smallest
-   weight a line may carry. `zz` allows hand entry; `vn`, `jp` and `in` are set by phase 7's legal
-   suites, refusing hand entry until then.
+   - a **hand-typed** weight, only where the store's `weighing.manual_entry` setting, seeded by its
+     country pack, allows it.
+3. **The country pack states the law**: it seeds `weighing.manual_entry`. `zz` allows hand entry;
+   `vn`, `jp` and `in` refuse it until phase 7's legal suites decide.
 4. **Catalogue:** `sales.line.weigh` (`ACTION_EFFECT_EDGE_WRITE`, waits on an external device and is
    excluded from the 10 ms budget for that wait, ADR-0197) and a `weight_display` component.
 
+## Configuration
+
+- **Catalogue data,** per item: `sold_by` and `tare_grams`, authored in the console.
+- **A setting** (ADR-0160), seeded by the country pack (ADR-0183): `weighing.manual_entry`, on or
+  off, **default off**; the `zz` pack seeds it on, and `vn`, `jp` and `in` seed nothing until
+  phase 7's legal suites decide. A store may set it only where its country allows (the cloud refuses
+  a value its pack forbids, as law).
+- **A setting:** `weighing.min_grams`, 1 to 1,000, **default 1**: the smallest weight a line may carry.
+- **The bakery-retail template** uses weighed items in its demo menu.
+- **Fixed rules:** kilograms only, a line in grams and one rounding by the currency's rule (money
+  integrity); the weight's source on every line (audit); a scale's reading is never edited.
+
 ## Consequences accepted
 
-- A new port, an additive event field, additive catalogue fields and two country-pack values.
+- A new port, an additive event field, additive catalogue fields and two settings, one seeded by
+  the country pack.
 - A real scale driver (a vendor's protocol) is an adapter, added in phase 8 with the other devices.
