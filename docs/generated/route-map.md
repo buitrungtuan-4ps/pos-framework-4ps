@@ -19,6 +19,7 @@ From [`docs/openapi-edge.json`](../openapi-edge.json).
 | POST | `/api/bills/{id}/discount` | `discount_bill` | `till_session` | `billing.discount.apply`, `billing.discount.override_ceiling` | [`crates/pos-edge/src/http/bills.rs`](../../crates/pos-edge/src/http/bills.rs) |
 | POST | `/api/bills/{id}/fees/{fee_id}/waive` | `waive_fee` | `till_session` | `billing.fee.waive` | [`crates/pos-edge/src/http/bills.rs`](../../crates/pos-edge/src/http/bills.rs) |
 | POST | `/api/bills/{id}/merge` | `merge_bills` | `till_session` | `billing.bill.split` | [`crates/pos-edge/src/http/bills.rs`](../../crates/pos-edge/src/http/bills.rs) |
+| POST | `/api/bills/{id}/payments` | `take_payment` | `till_session` | `billing.payment.take`, `cash.drawer.override_assignment` | [`crates/pos-edge/src/http/payments.rs`](../../crates/pos-edge/src/http/payments.rs) |
 | POST | `/api/bills/{id}/receipt/reprint` | `reprint_receipt` | `till_session` | `billing.receipt.reprint` | [`crates/pos-edge/src/http/bills.rs`](../../crates/pos-edge/src/http/bills.rs) |
 | POST | `/api/bills/{id}/settle` | `settle_bill` | `till_session` | `billing.payment.take`, `cash.drawer.override_assignment` | [`crates/pos-edge/src/http/bills.rs`](../../crates/pos-edge/src/http/bills.rs) |
 | POST | `/api/bills/{id}/split` | `split_bill` | `till_session` | `billing.bill.split` | [`crates/pos-edge/src/http/bills.rs`](../../crates/pos-edge/src/http/bills.rs) |

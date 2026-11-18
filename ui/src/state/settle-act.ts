@@ -1,7 +1,7 @@
 // Taking payment as a money act (ADR-0196, ADR-0204): the settle's predictable refusals, how the
 // till learns what came of a settle the edge did not answer, and the pay screen's hook.
 
-import type { BillResponse, BuyerRequest, PaymentRequest } from "../api/schemas";
+import type { BillResponse, BuyerRequest, CheckPrintedResponse, PaymentRequest } from "../api/schemas";
 import { api } from "../api/client";
 import { t } from "../i18n";
 import { reasonMessage } from "../lib/errors";
@@ -14,11 +14,20 @@ const CHECKED = PRECHECKED["billing.bill.settle"] ?? [];
 
 /**
  * The first refusal the till can decide about this settle, as the sentence the operator reads, or
- * null. `due` is what the edge said the bill comes to.
+ * null. `due` is what the edge said the bill comes to, and `printed` the check it said was last
+ * printed for the bill, if any (ADR-0218): a store that takes payment only against a fresh check
+ * refuses one never printed, or printed before the order last changed.
  */
-export function settleRefusal(payments: readonly PaymentRequest[], due: number): string | null {
+export function settleRefusal(
+  payments: readonly PaymentRequest[],
+  due: number,
+  printed?: CheckPrintedResponse,
+): string | null {
   if (CHECKED.includes(WRITES_PENDING) && writesPending()) {
     return t("pay.wait_for_writes");
+  }
+  if (CHECKED.includes("CHECK_REQUIRED") && state.checkBeforePayment && (printed === undefined || printed.stale)) {
+    return reasonMessage("CHECK_REQUIRED");
   }
   const cash = payments.some((payment) => payment.method === "PAYMENT_METHOD_CASH");
   if (CHECKED.includes("DRAWER_COUNTED") && cash && state.shift?.state === "SHIFT_STATE_COUNTED") {
@@ -64,16 +73,23 @@ export interface SettleAct extends MoneyAct<BillResponse> {
     payments: PaymentRequest[],
     due: number,
     buyer: BuyerRequest | undefined,
+    printed?: CheckPrintedResponse,
   ) => Promise<void>;
 }
 
 /** The pay screen's settle: `onSettled` gets the edge's answer, or what a re-read found. */
 export function useSettleAct(onSettled: (bill: BillResponse) => void): SettleAct {
   const act = useMoneyAct<BillResponse>({ act: "settle", recheck: recheckSettle, committed: onSettled });
-  const pay = (billId: string, payments: PaymentRequest[], due: number, buyer: BuyerRequest | undefined) =>
+  const pay = (
+    billId: string,
+    payments: PaymentRequest[],
+    due: number,
+    buyer: BuyerRequest | undefined,
+    printed?: CheckPrintedResponse,
+  ) =>
     act.run(
       billId,
-      () => settleRefusal(payments, due),
+      () => settleRefusal(payments, due, printed),
       () => settle(billId, payments, buyer),
     );
   return { ...act, pay };
