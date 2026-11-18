@@ -1,13 +1,15 @@
 # ADR-0220 — A bill takes its payments one at a time, and every till sees what is paid
 
-**Status** Proposed · **Owner** @maintainers-architecture · **Date** 2026-11-18
+**Status** Accepted 2026-11-18 (owner) · **Owner** @maintainers-architecture · **Date** 2026-11-18
 · Completes roadmap-v3 B2.4 · Needed by [ADR-0200](0200-six-business-type-templates-ship-with-the-framework.md)
 decision 5 · Amends [ADR-0028](0028-settlement-and-payment-invariant.md) (when payments are
 recorded) · Relates to [ADR-0128](0128-a-bill-splits-and-merges.md), [ADR-0184](0184-a-settled-bill-is-voided-whole-not-refunded.md),
 [ADR-0196](0196-every-act-paints-first-and-money-waits-for-the-edge.md)
 
-Waits on the owner: what may still change on a bill once a payment is taken, and whether a shift
-can close while one of its drawer's bills is part paid.
+Accepted by the owner on 2026-11-18 as recommended: once a payment is taken, the bill is neither
+split nor merged and a reduction may take it no lower than what is paid; a shift does not close while
+one of its drawer's bills is part paid; one bill has one receipt and one number, taken at the last
+payment.
 
 ## Context
 
@@ -45,6 +47,18 @@ how a bill settles (AGENTS.md §7).
    refused while a bill holds a payment taken into its drawer and has not settled.
 6. **Catalogue.** A new act, `billing.payment.take` (`ACTION_EFFECT_MONEY`), with the settle's
    predictable refusals.
+
+## Configuration
+
+- **A setting** (ADR-0160): `billing.part_payments`, on or off, **default on**: whether the till
+  offers taking a bill in parts. The full-service, bar and self-order templates keep it on; the café,
+  fast-food and bakery-retail templates recommend off, since a counter bill is paid at once.
+- **How many even shares** a bill may be split into stays `tender_keys.split_ways_max`.
+- **Which tenders** a store takes stays its tender configuration (roadmap-v3 B4.5).
+- **Fixed rules,** all money integrity: a payment is an event when it is taken; no split or merge
+  after a payment; no reduction below what is paid; no shift close over a part-paid bill of its
+  drawer; one receipt number per bill, at the last payment (ADR-0025); a voided part-paid bill gives
+  each payment back.
 
 ## Consequences accepted
 
