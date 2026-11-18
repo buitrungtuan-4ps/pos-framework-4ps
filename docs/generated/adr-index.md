@@ -17,7 +17,6 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 - [ADR-0212](../adr/0212-the-heartbeat-names-the-version-each-till-last-read.md) The heartbeat names the package version each till last read
 - [ADR-0216](../adr/0216-integrations-come-in-three-tiers-and-functions-wait.md) Integrations come in three tiers, and WebAssembly functions wait for a real case
 - [ADR-0221](../adr/0221-a-bar-tab-is-an-order-without-a-table-that-stays-open.md) A bar tab is an order without a table that stays open, named by a number
-- [ADR-0223](../adr/0223-a-weighed-item-is-priced-by-its-weight.md) A weighed item is priced by its weight, read from a label, a scale or a hand
 - [ADR-0224](../adr/0224-self-order-is-a-guest-page-and-a-kiosk.md) Self-order is a guest page the cloud serves and a kiosk that signs in as itself
 
 ## Citations of ADRs that do not exist
