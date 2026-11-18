@@ -151,7 +151,7 @@
   "error.guest_label_off": "This store keeps a tab's number only.",
   "error.not_settled": "This bill has not been paid, so it has no receipt to print again. Print a pre-bill instead.",
   "error.not_the_shift_handed_over": "This drawer was not just closed by that shift. Count it and open it again from the Shift screen.",
-  "error.order_not_empty": "Something is sold on this table. Take payment, or void the lines first.",
+  "error.order_not_empty": "Something is sold on this order. Take payment, or void the lines first.",
   "error.nothing_to_bill": "Nothing is sold on this order, so there is nothing to bill.",
   "error.bills_on_different_tables": "Bills on different tables cannot be merged.",
   "error.bills_on_different_orders": "Bills on different orders cannot be merged. Take payment for each order on its own.",

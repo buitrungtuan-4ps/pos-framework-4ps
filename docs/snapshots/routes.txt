@@ -65,6 +65,7 @@ POST /api/menu/{id}/sold-out
 POST /api/orders
 POST /api/orders/{id}/bill
 POST /api/orders/{id}/check/print
+POST /api/orders/{id}/close
 POST /api/orders/{id}/confirm
 POST /api/orders/{id}/fire
 POST /api/orders/{id}/fire/{course_id}
