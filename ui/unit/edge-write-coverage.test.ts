@@ -16,8 +16,6 @@ const EXEMPT: Readonly<Record<string, string>> = {
   "admin.print_agent.claim": "store administration on Devices: which terminal is held is the edge's to say",
   "admin.print_agent.revoke": "store administration on Devices: which terminal is held is the edge's to say",
   "admin.printer.test": "store administration on Devices: the test page's outcome is the printer's to say",
-  "sales.tab.open": "no till screen sends it yet: tabs come with their own list screen (ADR-0221)",
-  "sales.order.close": "no till screen sends it yet: the tabs list closes an empty tab (ADR-0221)",
   "sales.line.scan": "the quick-sale screen sends it; the order screen resolves a scan in the till's own index (ADR-0222)",
   "data.custom_field.set": "no till screen sends it yet: fields on an order or a bill come with their own panel (ADR-0206)",
   "data.custom_record.create":

@@ -22,6 +22,7 @@ import { Claim } from "./screens/Claim";
 import { Shift } from "./screens/Shift";
 import { Confirm } from "./screens/Confirm";
 import { Takeaway } from "./screens/Takeaway";
+import { Tabs } from "./screens/Tabs";
 import { SignIn } from "./screens/SignIn";
 import { Today } from "./screens/Today";
 import { Records } from "./screens/Records";
@@ -130,6 +131,7 @@ const COMPONENTS: Record<ScreenId, Component> = {
   counter: Takeaway,
   counterOrder: Order,
   guests: Confirm,
+  tabs: Tabs,
   today: Today,
   records: Records,
   shift: Shift,

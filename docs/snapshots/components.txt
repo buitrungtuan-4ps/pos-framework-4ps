@@ -338,6 +338,15 @@ stack	property=direction:PROPERTY_KIND_TOKEN:optional
 stack	property=direction:token=horizontal
 stack	property=direction:token=vertical
 stack	since=0.14.1
+tabs_list
+tabs_list	children=false
+tabs_list	device_class=DEVICE_CLASS_KIOSK
+tabs_list	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+tabs_list	device_class=DEVICE_CLASS_PHONE
+tabs_list	device_class=DEVICE_CLASS_TABLET
+tabs_list	device_class=DEVICE_CLASS_TERMINAL
+tabs_list	reads=tabs
+tabs_list	since=0.14.1
 text
 text	children=false
 text	device_class=DEVICE_CLASS_KIOSK

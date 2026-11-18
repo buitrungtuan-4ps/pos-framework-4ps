@@ -24,6 +24,7 @@ const ROUTES: Readonly<Record<string, string>> = {
   kds: SCREENS.kds.path,
   expo: SCREENS.expo.path,
   guests: SCREENS.guests.path,
+  tabs: SCREENS.tabs.path,
   counter: SCREENS.counter.path,
   today: SCREENS.today.path,
   records: SCREENS.records.path,

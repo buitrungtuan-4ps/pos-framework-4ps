@@ -19,6 +19,7 @@ use crate::session::{self, PublishedSession};
 use crate::shift::{
     self, CloseReport, DrawerAccess, DrawerDayEnd, DrawerModel, NoShiftSelling, PublishedShift,
 };
+use crate::tabs::{GuestLabel, PublishedTabs};
 use crate::tender_keys::{self, PublishedTenderKeys};
 use crate::wire_enum::WireEnum;
 
@@ -619,6 +620,35 @@ pub(super) fn counter_settings() -> Vec<Setting> {
                       has the cashier choose Eat in or Take away for each walk-in. A store that \
                       publishes the channels it accepts must accept the one a walk-in takes, or \
                       the order is refused.",
+    }]
+}
+
+/// The setting on the `tabs` node: whether a tab may carry a guest's label (ADR-0221), written only
+/// with a recorded confirmation (ADR-0169).
+pub(super) fn tabs_settings() -> Vec<Setting> {
+    vec![Setting {
+        node: PublishedTabs::NODE,
+        field: "guest_label",
+        shape: SettingShape::Choice {
+            values: choices::<GuestLabel>(),
+            default: PublishedTabs::default().guest_label().as_wire(),
+            // ADR-0221, accepted by the owner on 2026-11-18: no template turns a label on.
+            preset: None,
+        },
+        scopes: STORE_WIDE,
+        since: NEXT_RELEASE,
+        // A label is usually a guest's name: personal data, which a store records only once it has
+        // confirmed its lawful basis and DPIA entry (ADR-0221, ADR-0169).
+        confirm: Some(Confirm {
+            value: "GUEST_LABEL_ON",
+            notice: "settings.item.tabs.guest_label.confirm",
+        }),
+        summary: "Whether staff may type a label, up to 32 characters, beside a bar tab's number to \
+                      find it again. `GUEST_LABEL_OFF`, the default, gives a tab its number only. \
+                      `GUEST_LABEL_ON` keeps the label on the store alone, never in an event, a \
+                      log, a ticket or the cloud, and masks it the store's \
+                      `default_retention_days` after the day it was typed. It is written only with \
+                      a recorded confirmation (ADR-0169). Read only where tabs are on.",
     }]
 }
 

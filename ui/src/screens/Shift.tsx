@@ -11,6 +11,7 @@ import { Keypad } from "../components/Keypad";
 import { PageHeader } from "../components/ui";
 import { SafeDrop } from "../components/SafeDrop";
 import { PendingSettle } from "../components/PendingSettle";
+import { OpenTabsWarning } from "../components/OpenTabsWarning";
 import { RefusalPanel } from "../components/RefusalPanel";
 import { useOwnShiftActs } from "../state/shift-acts";
 import { useMovementAct, useNoSaleAct } from "../state/cash-acts";
@@ -753,6 +754,7 @@ export function Shift() {
       <p class="text-ink-muted" data-outcome="shift-counted">
         {t("shift.counted_hint")}
       </p>
+      <OpenTabsWarning />
       <Show when={can("cash.shift.close")}>
       <button
         type="button"

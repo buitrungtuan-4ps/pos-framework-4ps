@@ -368,6 +368,17 @@ shift.variance_reason_minor	scope=SETTING_SCOPE_STORE_GROUP
 shift.variance_reason_minor	scope=SETTING_SCOPE_TENANT
 shift.variance_reason_minor	since=0.14.1
 shift.variance_reason_minor	unit=SETTING_UNIT_MINOR_UNITS
+tabs.guest_label
+tabs.guest_label	confirm=GUEST_LABEL_ON
+tabs.guest_label	default=GUEST_LABEL_OFF
+tabs.guest_label	kind=SETTING_KIND_CHOICE
+tabs.guest_label	scope=SETTING_SCOPE_BRAND
+tabs.guest_label	scope=SETTING_SCOPE_STORE
+tabs.guest_label	scope=SETTING_SCOPE_STORE_GROUP
+tabs.guest_label	scope=SETTING_SCOPE_TENANT
+tabs.guest_label	since=0.14.1
+tabs.guest_label	value=GUEST_LABEL_OFF
+tabs.guest_label	value=GUEST_LABEL_ON
 tender_keys.first_tip_percent
 tender_keys.first_tip_percent	default=5
 tender_keys.first_tip_percent	kind=SETTING_KIND_INT

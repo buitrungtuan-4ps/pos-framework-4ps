@@ -377,6 +377,7 @@ pub fn register() -> Vec<Setting> {
         nodes::tender_key_settings(),
         nodes::counter_settings(),
         nodes::scan_settings(),
+        nodes::tabs_settings(),
         nodes::backup_settings(),
         nodes::billing_settings(),
         nodes::package_settings(),

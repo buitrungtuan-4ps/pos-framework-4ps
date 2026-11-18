@@ -333,6 +333,10 @@ pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
         RouteGate::Person(&[Permission::OpenBill]),
     ),
     (
+        "POST /api/tabs/{id}/label",
+        RouteGate::Person(&[Permission::AddLine]),
+    ),
+    (
         "POST /api/tables/{id}/clean",
         RouteGate::Person(&[Permission::ManageTables]),
     ),
