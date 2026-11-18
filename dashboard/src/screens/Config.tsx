@@ -15,8 +15,8 @@
 // stored value stays as it is. A store that has one on is told so in one muted line. One exception
 // keeps table service reachable: table service excludes pay-first (§10), so a publish that leaves
 // tables on for a store whose stored pay-first is on turns pay-first off too, and the line says so.
-// A preset that turns on none of the offered switches, as Retail names only barcode entry, is not
-// offered either: it would only turn every switch off.
+// A preset that turns on none of the offered switches is not offered either: it would only turn
+// every switch off.
 
 import { createEffect, createSignal, For, Show } from "solid-js";
 
@@ -164,7 +164,7 @@ export function Config() {
     );
   /**
    * Whether the form offers `preset`: it turns on at least one switch the form offers. A preset that
-   * names none, as Retail names only barcode entry, would only turn every switch off.
+   * names none would only turn every switch off.
    */
   const presetOffered = (preset: CapabilityPreset): boolean => {
     const offered = new Set(formFlags().map((flag) => flag.key));

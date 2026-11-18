@@ -62,7 +62,7 @@ import type {
   AuditEntry,
   Brand,
   CapabilityCatalogue,
-  CatalogItem,
+  CatalogItem, ItemCodesBody,
   ChainFinding,
   ChannelPrice,
   ConfigBatchReport,
@@ -2164,8 +2164,7 @@ export const api = {
       name,
       name_translations: taxonomy.nameTranslations ?? {},
       tax_class_id: taxClassId,
-      item_category_id: taxonomy.itemCategoryId,
-      item_subcategory_id: taxonomy.itemSubcategoryId,
+      item_category_id: taxonomy.itemCategoryId, item_subcategory_id: taxonomy.itemSubcategoryId,
       image_ref: taxonomy.imageRef ?? null,
     }),
   updateItem: (
@@ -2179,6 +2178,7 @@ export const api = {
       itemSubcategoryId: string | null;
       imageRef?: string | null;
       status: EntityStatus;
+      codes?: ItemCodesBody; // ADR-0222: absent keeps the item's own
     },
     etag: ETag,
   ) =>
@@ -2190,7 +2190,7 @@ export const api = {
       item_category_id: fields.itemCategoryId,
       item_subcategory_id: fields.itemSubcategoryId,
       image_ref: fields.imageRef ?? null,
-      status: fields.status,
+      status: fields.status, codes: fields.codes,
     }),
   listMenus: (tenantId: string) =>
     requestJson<Menu[]>("GET", `/admin/catalog/menus?${tenantQuery(tenantId)}`),
