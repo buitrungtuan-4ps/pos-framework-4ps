@@ -96,6 +96,14 @@ event_catalogue! {
     SalesOrderClosed => "sales.order.closed", version = 1 {
         /// The order.
         order_id: OrderId,
+        /// Why a tableless order nothing was sold on was closed, from the store's reasons for
+        /// `REASON_ACTION_CLOSE_ORDER`
+        /// ([ADR-0221](../../../docs/adr/0221-a-bar-tab-is-an-order-without-a-table-that-stays-open.md)).
+        /// Absent on a released table, a refused guest order, a close where the store's list
+        /// gives no such reason, and every close written before this field; left off the wire
+        /// while absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason_code_id: Option<ReasonCodeId>,
     },
     /// A line was added to an order.
     ///

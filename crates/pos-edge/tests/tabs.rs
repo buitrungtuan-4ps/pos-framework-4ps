@@ -5,7 +5,7 @@
 //! ([ADR-0221](../../../docs/adr/0221-a-bar-tab-is-an-order-without-a-table-that-stays-open.md)):
 //! a store that keeps tabs opens one with the day's next number, every till lists the open ones by
 //! number, a settled tab leaves the list, and a restart finds the same tabs; a store without tabs
-//! is refused.
+//! is refused. A tab nothing was sold on closes with a reason the store lists for closing.
 
 use std::sync::Arc;
 
@@ -23,6 +23,7 @@ use pos_proto::locale::{TaxRate, TaxRateTable};
 use pos_proto::menu::{MenuCatalog, MenuEntry};
 use pos_proto::money::{CurrencyCode, Money};
 use pos_proto::quantity::Quantity;
+use pos_proto::reason_codes::ReasonAction;
 use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
 use pos_proto::{PaymentMethod, SalesChannel};
@@ -174,5 +175,77 @@ fn tabs_are_listed_by_number_until_settled_and_a_restart_finds_them() {
             [(second, 2)],
             "the number rides the event"
         );
+    });
+}
+
+#[test]
+fn an_empty_tab_closes_with_a_listed_reason_and_one_with_a_round_does_not() {
+    run_ready(async {
+        let store = FakeStore::default();
+        let numbers = InMemoryQueueNumbers::new();
+        let edge = edge_over(store.clone(), bar());
+        let empty = edge
+            .open_tab(bartender(), SalesChannel::Takeaway, &numbers)
+            .await
+            .expect("opens a tab")
+            .order_id;
+        let drinking = edge
+            .open_tab(bartender(), SalesChannel::Takeaway, &numbers)
+            .await
+            .expect("opens another")
+            .order_id;
+        a_round(&edge, drinking).await;
+        let reason = edge
+            .session()
+            .reason_codes
+            .for_action(ReasonAction::CloseOrder)
+            .next()
+            .expect("the framework's list gives a reason for closing")
+            .id;
+        let void_only = edge
+            .session()
+            .reason_codes
+            .codes()
+            .iter()
+            .find(|code| !code.is_valid_for(ReasonAction::CloseOrder))
+            .expect("a reason for something else")
+            .id;
+
+        let unreasoned = edge.close_empty_order(bartender(), empty, None).await;
+        assert!(
+            matches!(unreasoned, Err(AppError::CloseReasonNotValid)),
+            "{unreasoned:?}"
+        );
+        let wrong = edge
+            .close_empty_order(bartender(), empty, Some(void_only))
+            .await;
+        assert!(
+            matches!(wrong, Err(AppError::CloseReasonNotValid)),
+            "{wrong:?}"
+        );
+        let sold = edge
+            .close_empty_order(bartender(), drinking, Some(reason))
+            .await;
+        assert!(matches!(sold, Err(AppError::OrderNotEmpty)), "{sold:?}");
+
+        edge.close_empty_order(bartender(), empty, Some(reason))
+            .await
+            .expect("closes the empty tab");
+        let numbers_open = |edge: &Edge<FakeStore>| -> Vec<u64> {
+            edge.open_tabs()
+                .expect("lists")
+                .iter()
+                .map(|tab| tab.tab_number)
+                .collect()
+        };
+        assert_eq!(numbers_open(&edge), [2], "the closed tab leaves the list");
+        let again = edge
+            .close_empty_order(bartender(), empty, Some(reason))
+            .await;
+        assert!(matches!(again, Err(AppError::UnknownOrder)), "{again:?}");
+
+        let restarted = edge_over(store, bar());
+        restarted.rebuild().await.expect("rebuilds from the log");
+        assert_eq!(numbers_open(&restarted), [2], "the close is folded back");
     });
 }

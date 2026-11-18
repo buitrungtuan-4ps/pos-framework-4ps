@@ -111,6 +111,11 @@ wire_enum! {
     /// ([ADR-0219](../../../docs/adr/0219-a-comp-and-a-price-override-each-need-a-reason-and-an-approver.md)
     /// decision 2).
     PriceOverride = "PRICE_OVERRIDE",
+    /// Closing a tableless order nothing was sold on, such as a bar tab opened by mistake or whose
+    /// guest left before ordering — `sales.order.closed`
+    /// ([ADR-0221](../../../docs/adr/0221-a-bar-tab-is-an-order-without-a-table-that-stays-open.md)).
+    /// The reason is asked only where the store's list gives one for it.
+    CloseOrder = "CLOSE_ORDER",
 }
 
 impl ReasonAction {
@@ -122,13 +127,14 @@ impl ReasonAction {
     /// ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 12), so an
     /// uncovered variance blocks nothing and nothing should say it does. A drop to the safe
     /// ([`Self::CashDropped`]) asks its reason only where one is given (ADR-0186 amendment), so an
-    /// uncovered drop blocks nothing either. `Unspecified` is no act
+    /// uncovered drop blocks nothing either, nor does closing an empty order
+    /// ([`Self::CloseOrder`]), which a list published before it could not cover. `Unspecified` is no act
     /// at all.
     #[must_use]
     pub const fn blocks_when_uncovered(self) -> bool {
         !matches!(
             self,
-            Self::Unspecified | Self::CashVariance | Self::CashDropped
+            Self::Unspecified | Self::CashVariance | Self::CashDropped | Self::CloseOrder
         )
     }
 }
@@ -357,8 +363,9 @@ impl PublishedReasonCodes {
     #[must_use]
     pub fn framework_default() -> Self {
         use ReasonAction::{
-            CashPaidIn, CashPaidOut, CashVariance, Comp, Discount, DrawerOpen, PriceOverride,
-            Refund, RejectOrder, StockAdjustment, StockWaste, VoidBill, VoidLine, WaiveFee,
+            CashPaidIn, CashPaidOut, CashVariance, CloseOrder, Comp, Discount, DrawerOpen,
+            PriceOverride, Refund, RejectOrder, StockAdjustment, StockWaste, VoidBill, VoidLine,
+            WaiveFee,
         };
 
         let vi = |text: &str| BTreeMap::from([("vi".to_owned(), DisplayName::new(text))]);
@@ -383,7 +390,7 @@ impl PublishedReasonCodes {
                     framework_id(3),
                     ReasonCode::new("CUSTOMER_CHANGED_MIND"),
                     DisplayName::new("Customer changed their mind"),
-                    vec![VoidLine, VoidBill, Refund, RejectOrder],
+                    vec![VoidLine, VoidBill, Refund, RejectOrder, CloseOrder],
                 )
                 .with_name_translations(vi("Khách đổi ý")),
                 PublishedReasonCode::new(
@@ -398,6 +405,7 @@ impl PublishedReasonCodes {
                         StockAdjustment,
                         WaiveFee,
                         CashVariance,
+                        CloseOrder,
                     ],
                 )
                 .with_name_translations(vi("Nhân viên nhập sai")),
@@ -556,7 +564,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_variance_and_a_drop_go_on_without_a_reason_to_cite() {
+    fn only_a_variance_a_drop_and_a_close_go_on_without_a_reason_to_cite() {
         // ADR-0167 decision 12: a store whose list offers no reason for a variance still closes,
         // so an uncovered variance is no gap; a drop's reason is optional (ADR-0186 amendment).
         // Every other action stops with an empty picker.
@@ -570,7 +578,8 @@ mod tests {
             [
                 ReasonAction::Unspecified,
                 ReasonAction::CashVariance,
-                ReasonAction::CashDropped
+                ReasonAction::CashDropped,
+                ReasonAction::CloseOrder
             ]
         );
     }

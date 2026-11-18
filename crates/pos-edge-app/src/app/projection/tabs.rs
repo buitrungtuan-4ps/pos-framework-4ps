@@ -23,6 +23,17 @@ impl Projection {
         self.tabs.contains_key(&order_id)
     }
 
+    /// Whether `order_id` opened without a table, is on none now, and has not ended: what
+    /// [`crate::app::Edge::close_empty_order`] may close. An empty order is in no live list, which
+    /// counts only orders with lines.
+    pub(in crate::app) fn open_tableless(&self, order_id: OrderId) -> bool {
+        self.order_origin(order_id)
+            .is_some_and(|origin| origin.table_id.is_none())
+            && self.table_for_order(order_id).is_none()
+            && !self.closed_orders.contains(&order_id)
+            && !self.voided_after_payment(order_id)
+    }
+
     /// Every open tab not moved to a table, by number: its order, number, the newest fire among
     /// its lines (its last round) and any bill open on it.
     pub(in crate::app) fn open_tabs(

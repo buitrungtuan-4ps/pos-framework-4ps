@@ -66,7 +66,8 @@ pub enum AppError {
     /// A table was released with something sold on it: a line not voided, or a bill open
     /// ([ADR-0163](../../../../docs/adr/0163-a-table-seated-by-mistake-is-released.md)). Releasing
     /// says nobody ate, so it can only end an order with nothing on it.
-    #[error("that table has something sold on it; take payment or void the lines first")]
+    /// The same of a tableless order closed with something sold on it (ADR-0221).
+    #[error("that order has something sold on it; take payment or void the lines first")]
     OrderNotEmpty,
     /// A bill was asked for on an order with nothing to bill: no line, or every line voided
     /// (ADR-0163). It could never settle, and its table would wait for a payment that cannot come.
@@ -225,6 +226,11 @@ pub enum AppError {
     /// a guest's name is recorded only once the store has confirmed its notice (ADR-0169).
     #[error("this store keeps a tab's number only")]
     GuestLabelOff,
+    /// Closing an empty tableless order cited a reason the store's list does not hold for
+    /// `REASON_ACTION_CLOSE_ORDER`, or cited none while the list gives one
+    /// ([ADR-0221](../../../../docs/adr/0221-a-bar-tab-is-an-order-without-a-table-that-stays-open.md)).
+    #[error("give a reason the store lists for closing an order")]
+    CloseReasonNotValid,
     /// A close of a counted drawer over or short by more than the store's
     /// `shift.variance_reason_minor`, while the store's list offers a reason for that, without one
     /// ([ADR-0167](../../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md) decision 12).
