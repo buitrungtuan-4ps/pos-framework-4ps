@@ -1102,6 +1102,7 @@ mod resolving {
             } else {
                 EntityStatus::Archived
             },
+            codes: pos_proto::item_codes::ItemCodes::default(),
         }
     }
 

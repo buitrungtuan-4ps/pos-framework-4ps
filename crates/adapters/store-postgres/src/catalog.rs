@@ -45,6 +45,9 @@ pub struct CatalogItemRow {
     pub image_ref: Option<String>,
     /// `active` or `archived`.
     pub status: String,
+    /// The item's barcodes, PLU and open price as a JSON object, the `codes` jsonb column verbatim;
+    /// `{}` when it has none ([ADR-0222](../../../../docs/adr/0222-items-carry-barcodes-and-plus-and-a-counter-can-pay-first.md)).
+    pub codes: String,
     /// The version the row was read at, for a conditional write
     /// ([ADR-0094](../../../../docs/adr/0094-console-optimistic-concurrency.md)). Opaque: this is
     /// `xmin::text`, and nothing above this crate may assume that.
@@ -229,7 +232,7 @@ pub struct CatalogCourseRow {
 /// The columns both item reads return, in a stable order matching [`catalog_item_row`].
 const CATALOG_ITEM_COLUMNS: &str = "menu_item_id, tenant_id, name, name_translations::text, \
      tax_class_id, item_category_id, item_subcategory_id, course_id, image_ref, status, \
-     xmin::text";
+     xmin::text, codes::text";
 
 /// A field the item master can be ordered by, as store-postgres knows it.
 ///
@@ -314,14 +317,15 @@ impl PostgresCatalog {
         item_subcategory_id: Option<&str>,
         course_id: Option<&str>,
         image_ref: Option<&str>,
+        codes: &str,
     ) -> Result<String, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
         let row = connection
             .query_one(
                 "INSERT INTO catalog_items \
                  (menu_item_id, tenant_id, name, name_translations, tax_class_id, item_category_id, \
-                 item_subcategory_id, course_id, image_ref) \
-                 VALUES ($1, $2, $3, $4::text::jsonb, $5, $6, $7, $8, $9) \
+                 item_subcategory_id, course_id, image_ref, codes) \
+                 VALUES ($1, $2, $3, $4::text::jsonb, $5, $6, $7, $8, $9, $10::text::jsonb) \
                  RETURNING xmin::text",
                 &[
                     &menu_item_id,
@@ -333,6 +337,7 @@ impl PostgresCatalog {
                     &item_subcategory_id,
                     &course_id,
                     &image_ref,
+                    &codes,
                 ],
             )
             .await
@@ -437,6 +442,7 @@ impl PostgresCatalog {
         course_id: Option<&str>,
         image_ref: Option<&str>,
         status: &str,
+        codes: &str,
         expected: &str,
     ) -> Result<RowUpdate, PortError> {
         let connection = self.pool.get().await.map_err(pool_unavailable)?;
@@ -444,7 +450,8 @@ impl PostgresCatalog {
             .query_opt(
                 "UPDATE catalog_items SET name = $3, name_translations = $4::text::jsonb, \
                  tax_class_id = $5, item_category_id = $6, item_subcategory_id = $7, \
-                 course_id = $8, image_ref = $9, status = $10, updated_at = now() \
+                 course_id = $8, image_ref = $9, status = $10, codes = $12::text::jsonb, \
+                 updated_at = now() \
                  WHERE tenant_id = $1 AND menu_item_id = $2 \
                  AND xmin::text = $11 RETURNING xmin::text",
                 &[
@@ -459,6 +466,7 @@ impl PostgresCatalog {
                     &image_ref,
                     &status,
                     &expected,
+                    &codes,
                 ],
             )
             .await
@@ -1792,6 +1800,7 @@ fn catalog_item_row(row: &tokio_postgres::Row) -> CatalogItemRow {
         image_ref: row.get(8),
         status: row.get(9),
         version: row.get(10),
+        codes: row.get(11),
     }
 }
 

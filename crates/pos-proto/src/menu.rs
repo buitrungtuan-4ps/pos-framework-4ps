@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::enums::SalesChannel;
 use crate::ids::{CourseId, MenuItemId, ModifierGroupId, TaxClassId};
+use crate::item_codes::OpenPrice;
 use crate::money::Money;
 use crate::text::DisplayName;
 use crate::wire_enum::Open;
@@ -98,6 +99,19 @@ pub struct MenuEntry {
     /// item on the menu is sellable unless something says otherwise.
     #[serde(default = "available_by_default")]
     pub available: bool,
+    /// The barcodes a till scans to find this item, up to [`crate::item_codes::BARCODES_MAX`] GTINs
+    /// with valid check digits, each unique within the menu
+    /// ([ADR-0222](../../../docs/adr/0222-items-carry-barcodes-and-plus-and-a-counter-can-pay-first.md)
+    /// decision 1). Additive: empty on an item that has none, and on a book that predates them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub barcodes: Vec<String>,
+    /// The PLU a cashier keys to find it, one to five digits, unique within the menu.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plu: Option<String>,
+    /// Where the item is sold at a price the cashier types: the bounds it must lie within
+    /// (decision 4). `None` is every item sold at `unit_price`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_price: Option<OpenPrice>,
 }
 
 /// The default for [`MenuEntry::available`] when a document omits it: an item on the menu is for sale.
@@ -123,6 +137,9 @@ impl MenuEntry {
             modifier_group_ids: Vec::new(),
             course_id: None,
             available: true,
+            barcodes: Vec::new(),
+            plu: None,
+            open_price: None,
         }
     }
 

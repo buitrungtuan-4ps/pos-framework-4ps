@@ -24,6 +24,8 @@ mod archives;
 mod audit;
 #[path = "cloud/capabilities.rs"]
 mod capabilities;
+#[path = "cloud/catalog_item_codes.rs"]
+mod catalog_item_codes;
 #[path = "cloud/catalog_items.rs"]
 mod catalog_items;
 #[path = "cloud/catalog_menus.rs"]

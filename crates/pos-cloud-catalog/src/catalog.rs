@@ -31,6 +31,7 @@ use pos_proto::enums::SalesChannel;
 use pos_proto::ids::{
     CourseId, DisplayCategoryId, DisplaySubcategoryId, MenuItemId, TaxClassId, TenantId,
 };
+use pos_proto::item_codes::ItemCodes;
 use pos_proto::money::Money;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::Open;
@@ -217,6 +218,12 @@ pub struct CatalogItem {
     pub image_ref: Option<MediaId>,
     /// Active or archived.
     pub status: EntityStatus,
+    /// Its barcodes, PLU and open price
+    /// ([ADR-0222](../../../docs/adr/0222-items-carry-barcodes-and-plus-and-a-counter-can-pay-first.md)
+    /// decision 1): `barcodes`, `plu` and `open_price` beside the other fields, each absent when the
+    /// item has none. The compiler carries them onto the [`pos_proto::MenuEntry`].
+    #[serde(flatten)]
+    pub codes: ItemCodes,
 }
 
 /// A menu — a named set of placements that may **inherit** from a parent menu.
@@ -1636,6 +1643,7 @@ mod tests {
             course_id: None,
             image_ref: None,
             status: EntityStatus::Active,
+            codes: pos_proto::item_codes::ItemCodes::default(),
         }
     }
 

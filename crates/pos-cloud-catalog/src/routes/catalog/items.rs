@@ -16,6 +16,7 @@ use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{CourseId, MenuItemId, TaxClassId, TenantId};
 use pos_proto::ulid::Ulid;
 
+use super::item_codes::checked_codes;
 use super::requests::{CreateItemRequest, UpdateItemRequest, clean_name_translations};
 use super::{CatalogState, catalog_entropy_unavailable, catalog_error_response};
 use crate::auth::admin::AdminStore;
@@ -272,6 +273,17 @@ where
     let Ok(image_ref) = parse_optional_ulid(request.image_ref.as_deref(), MediaId::new) else {
         return ulid_refusal(&["image_ref"]);
     };
+    let codes = match checked_codes(
+        &state.catalog,
+        tenant_id,
+        (None, &request.name),
+        request.codes,
+    )
+    .await
+    {
+        Ok(codes) => codes,
+        Err(refusal) => return refusal,
+    };
     let Some(menu_item_id) =
         mint_ulid(state.clock.now().as_milliseconds_since_epoch()).map(MenuItemId::new)
     else {
@@ -288,6 +300,7 @@ where
         course_id,
         image_ref,
         status: EntityStatus::Active,
+        codes,
     };
     match state.catalog.create_item(&record).await {
         Ok(version) => {
@@ -397,6 +410,17 @@ where
     let Ok(image_ref) = parse_optional_ulid(request.image_ref.as_deref(), MediaId::new) else {
         return ulid_refusal(&["image_ref"]);
     };
+    let codes = match checked_codes(
+        &state.catalog,
+        tenant_id,
+        (Some(menu_item_id), &request.name),
+        request.codes,
+    )
+    .await
+    {
+        Ok(codes) => codes,
+        Err(refusal) => return refusal,
+    };
     let record = CatalogItem {
         menu_item_id,
         tenant_id,
@@ -408,6 +432,7 @@ where
         course_id,
         image_ref,
         status,
+        codes,
     };
     let expected = match if_match(&headers) {
         Ok(expected) => expected,

@@ -24,6 +24,7 @@ async fn stock(catalog: &PostgresCatalog, tenant: &str, count: u32) {
                 None,
                 None,
                 None,
+                "{}",
             )
             .await
             .expect("insert an item");
@@ -59,6 +60,7 @@ fn an_items_per_locale_names_round_trip_through_a_create_and_an_update() {
                 None,
                 None,
                 None,
+                r#"{"plu":"4011"}"#,
             )
             .await
             .expect("a create must reach the database, not fail at the driver");
@@ -70,6 +72,10 @@ fn an_items_per_locale_names_round_trip_through_a_create_and_an_update() {
             row.name_translations.contains("Bánh Margherita"),
             "the per-locale name round-trips through the jsonb column; got {:?}",
             row.name_translations,
+        );
+        assert!(
+            row.codes.contains("4011"),
+            "the codes round-trip too (ADR-0222)"
         );
 
         let outcome = catalog
@@ -84,6 +90,7 @@ fn an_items_per_locale_names_round_trip_through_a_create_and_an_update() {
                 None,
                 None,
                 "active",
+                "{}",
                 &version,
             )
             .await
@@ -273,6 +280,7 @@ fn a_search_narrows_the_page_and_its_total_including_per_locale_names() {
                     None,
                     None,
                     None,
+                    "{}",
                 )
                 .await
                 .expect("insert an item");
@@ -341,6 +349,7 @@ fn every_offered_order_partitions_the_master_in_both_directions() {
                     None,
                     None,
                     None,
+                    "{}",
                 )
                 .await
                 .expect("insert an item");

@@ -184,6 +184,7 @@ mod tests {
             course_id: None,
             image_ref: None,
             status: EntityStatus::Active,
+            codes: pos_proto::item_codes::ItemCodes::default(),
         }
     }
 
@@ -272,6 +273,7 @@ mod tests {
             course_id: None,
             image_ref: None,
             status: EntityStatus::Active,
+            codes: pos_proto::item_codes::ItemCodes::default(),
         };
         let csv = as_string(items_csv(&[item]).expect("serialise"));
         let mut lines = csv.lines();
@@ -299,6 +301,7 @@ mod tests {
             course_id: None,
             image_ref: None,
             status: EntityStatus::Archived,
+            codes: pos_proto::item_codes::ItemCodes::default(),
         };
         let csv = as_string(items_csv(&[item]).expect("serialise"));
         // The comma-bearing field is quoted, so the record still parses as seven columns.

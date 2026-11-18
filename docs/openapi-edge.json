@@ -6986,6 +6986,13 @@
             "type": "boolean",
             "description": "Whether the item can be sold right now. An item present but 86'd is shown and refused, not\nhidden, so staff can see why it cannot be ordered."
           },
+          "barcodes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The barcodes a till indexes to resolve a scan without asking the edge\n([ADR-0222](../../../../docs/adr/0222-items-carry-barcodes-and-plus-and-a-counter-can-pay-first.md)\ndecision 2). Absent where the item has none; the edge still prices the line."
+          },
           "course_id": {
             "$ref": "#/components/schemas/CourseId",
             "description": "The course this item goes out on, or absent for an item on none (ADR-0130).\n\nAn id, not a name: the courses are listed once on the response below, for the reason the\nmodifier groups are. The till reads it to group an order into starters, mains and desserts,\nand to know which lines a fire-by-course will send."
@@ -7004,6 +7011,14 @@
               "$ref": "#/components/schemas/ModifierGroupId"
             },
             "description": "The modifier groups the till must ask about before this item is sold\n([ADR-0127](../../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).\n\nIds, not copies: the groups themselves are listed once on the response below, because one\n\"Size\" group attached to forty pizzas would otherwise be forty copies of the same rule on\nevery menu read."
+          },
+          "open_price": {
+            "$ref": "#/components/schemas/OpenPrice",
+            "description": "The bounds of the price a cashier types for an open-price item (decision 4)."
+          },
+          "plu": {
+            "type": "string",
+            "description": "The PLU a cashier keys for it, one to five digits."
           },
           "sold_out": {
             "type": "boolean",
@@ -7438,6 +7453,24 @@
       "OpenPaymentMethod_PaymentMethod": {
         "type": "string",
         "description": "A `PaymentMethod` token: PAYMENT_METHOD_UNSPECIFIED, PAYMENT_METHOD_CASH, PAYMENT_METHOD_CARD, PAYMENT_METHOD_QR, PAYMENT_METHOD_VOUCHER, PAYMENT_METHOD_GIFT_CARD, PAYMENT_METHOD_OTHER, or one a newer build sent, which is kept as it arrived"
+      },
+      "OpenPrice": {
+        "type": "object",
+        "description": "The bounds a cashier types an open-price item's price within, both inclusive and above zero.",
+        "required": [
+          "minimum",
+          "maximum"
+        ],
+        "properties": {
+          "maximum": {
+            "$ref": "#/components/schemas/Money",
+            "description": "The most the price may be."
+          },
+          "minimum": {
+            "$ref": "#/components/schemas/Money",
+            "description": "The least the price may be."
+          }
+        }
       },
       "OpenReactionTrigger_ReactionTrigger": {
         "type": "string",

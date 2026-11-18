@@ -109,6 +109,9 @@ fn catalog_item_record(row: CatalogItemRow) -> Result<Versioned<CatalogItem>, Ca
         .as_deref()
         .and_then(|text| text.parse::<Ulid>().ok())
         .map(MediaId::new);
+    // The codes are an object this crate wrote; one that does not parse degrades to no codes, as the
+    // names above do, rather than taking the store's menu away (ADR-0222).
+    let codes = serde_json::from_str(&row.codes).unwrap_or_default();
     let version = Version::new(row.version);
     Ok(Versioned::new(
         CatalogItem {
@@ -123,6 +126,7 @@ fn catalog_item_record(row: CatalogItemRow) -> Result<Versioned<CatalogItem>, Ca
             course_id,
             image_ref,
             status: EntityStatus::from_db(&row.status),
+            codes,
         },
         version,
     ))

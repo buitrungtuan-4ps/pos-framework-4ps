@@ -412,6 +412,9 @@ fn compiled_entry(
         course_id: item
             .course_id
             .filter(|course_id| course_by_id.contains_key(course_id)),
+        barcodes: item.codes.barcodes.clone(),
+        plu: item.codes.plu.clone(),
+        open_price: item.codes.open_price,
     }
 }
 

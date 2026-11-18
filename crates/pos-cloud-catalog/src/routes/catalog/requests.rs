@@ -27,6 +27,10 @@ pub(super) struct CreateItemRequest {
     /// The item's photo — a media id (ADR-0075), or absent/empty for none.
     #[serde(default)]
     pub(super) image_ref: Option<String>,
+    /// Its barcodes, PLU and open price (ADR-0222), each checked at the write. Absent keeps what the
+    /// item carries, so a console that predates them does not wipe them.
+    #[serde(default)]
+    pub(super) codes: Option<pos_proto::item_codes::ItemCodes>,
 }
 
 #[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
@@ -49,6 +53,10 @@ pub(super) struct UpdateItemRequest {
     /// The item's photo — a media id (ADR-0075), or absent/empty for none.
     #[serde(default)]
     pub(super) image_ref: Option<String>,
+    /// Its barcodes, PLU and open price (ADR-0222), each checked at the write. Absent keeps what the
+    /// item carries, so a console that predates them does not wipe them.
+    #[serde(default)]
+    pub(super) codes: Option<pos_proto::item_codes::ItemCodes>,
     pub(super) status: String,
 }
 
