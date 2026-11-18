@@ -75,14 +75,16 @@ fn session(billing: PublishedBilling) -> EdgeSession {
         goodwill(),
         ReasonCode::new("GOODWILL"),
         DisplayName::new("Goodwill"),
-        vec![ReasonAction::Discount],
+        vec![ReasonAction::Discount, ReasonAction::VoidBill],
     )]);
     let mut staff = StaffRoster::new();
     staff.insert(
         MANAGER_CODE,
         StaffAuth {
             employee_id: Some(EmployeeId::new(Ulid::from_u128(11))),
-            permissions: PermissionSet::EMPTY.with(Permission::OverrideDiscountCeiling),
+            permissions: PermissionSet::EMPTY
+                .with(Permission::OverrideDiscountCeiling)
+                .with(Permission::VoidBill),
             permissions_with_approval: PermissionSet::EMPTY,
             discount_ceiling: None,
             pin_phc: Some(hash_of(MANAGER_PIN)),
@@ -367,5 +369,61 @@ fn a_part_payment_is_rebuilt_from_the_log() {
             .await
             .expect("settles what remains");
         assert!(last.settled.is_some());
+    });
+}
+
+#[test]
+fn voiding_a_part_paid_bill_gives_each_payment_back_live_and_after_a_restart() {
+    run_ready(async {
+        let store = FakeStore::default();
+        let shift = {
+            let edge = edge_with(store.clone(), PublishedBilling::default());
+            let shift = edge
+                .open_shift(server(), vnd(0))
+                .await
+                .expect("opens a shift")
+                .shift_id;
+            let bill = a_bill(&edge).await;
+            edge.take_payment_at(
+                server(),
+                TillScope::default(),
+                bill,
+                cash(100_000),
+                None,
+                None,
+            )
+            .await
+            .expect("takes a part");
+            let approval = Approval {
+                code: MANAGER_CODE.to_owned(),
+                pin: MANAGER_PIN.to_owned(),
+            };
+            let voided = edge
+                .void_bill_at(
+                    server(),
+                    TillScope::default(),
+                    bill,
+                    goodwill(),
+                    Some(&approval),
+                )
+                .await
+                .expect("voids, giving the payment back");
+            assert_eq!(voided.cash_returned, Some(vnd(100_000)));
+            assert!(voided.open_drawer());
+            shift
+        };
+        // After a restart the drawer still expects nothing: the cash went in and came back out.
+        let restarted = edge_with(store, PublishedBilling::default());
+        restarted.rebuild().await.expect("replays the log");
+        restarted
+            .count_shift(server(), shift, 0)
+            .await
+            .expect("counts");
+        let closed = restarted
+            .close_shift(server(), shift)
+            .await
+            .expect("no part-paid bill holds the drawer open");
+        assert_eq!(closed.expected_amount, Some(vnd(0)), "{closed:?}");
+        assert_eq!(closed.variance, Some(vnd(0)), "{closed:?}");
     });
 }

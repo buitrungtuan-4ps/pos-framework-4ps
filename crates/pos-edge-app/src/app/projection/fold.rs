@@ -287,7 +287,9 @@ impl<S: EventStore> Edge<S> {
             let event: BillingBillVoided = envelope.data.decode().map_err(AppError::Encode)?;
             // A paid bill's void gives its cash back from the drawer the void was stamped with
             // (ADR-0184 decision 6); an unpaid one's moves no money.
-            if projection.is_settled(event.bill_id) {
+            // A bill voided before it settled with payments taken towards it gives them back too
+            // (ADR-0220 decision 4).
+            if projection.is_settled(event.bill_id) || projection.paid(event.bill_id).is_some() {
                 projection
                     .void_settled_record(event.bill_id, envelope.shift_id)
                     .map_err(AppError::Domain)?;

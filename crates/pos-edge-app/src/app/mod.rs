@@ -60,7 +60,7 @@ mod session;
 mod shifts;
 mod views;
 
-pub use bills::{CheckPrinted, PaymentTaken, TakenPayment};
+pub use bills::{CheckPrinted, PaymentTaken, TakenPayment, VoidedBill};
 pub use config_wake::{ConfigDelivery, ConfigWakeReport, ConfigWakeStanding, WAKE_SAMPLES_MAX};
 pub use custom_data::{CONSENT_FIELD_PREFIX, CustomDataView};
 pub use device_reads::{DEVICE_READS_MAX, DeviceRead, DeviceReads};

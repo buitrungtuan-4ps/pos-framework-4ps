@@ -92,7 +92,7 @@ use utoipa::{Modify, OpenApi};
         super::bills::reprint_receipt,
         super::bills::settle_bill,
         super::bills::split_bill,
-        super::bills::void_bill,
+        super::void_settled::void_bill,
         super::void_settled::void_settled_bill,
         super::menu::mark_sold_out,
         super::menu::restore_item,

@@ -23,7 +23,7 @@ From [`docs/openapi-edge.json`](../openapi-edge.json).
 | POST | `/api/bills/{id}/receipt/reprint` | `reprint_receipt` | `till_session` | `billing.receipt.reprint` | [`crates/pos-edge/src/http/bills.rs`](../../crates/pos-edge/src/http/bills.rs) |
 | POST | `/api/bills/{id}/settle` | `settle_bill` | `till_session` | `billing.payment.take`, `cash.drawer.override_assignment` | [`crates/pos-edge/src/http/bills.rs`](../../crates/pos-edge/src/http/bills.rs) |
 | POST | `/api/bills/{id}/split` | `split_bill` | `till_session` | `billing.bill.split` | [`crates/pos-edge/src/http/bills.rs`](../../crates/pos-edge/src/http/bills.rs) |
-| POST | `/api/bills/{id}/void` | `void_bill` | `till_session` | `billing.bill.void` | [`crates/pos-edge/src/http/bills.rs`](../../crates/pos-edge/src/http/bills.rs) |
+| POST | `/api/bills/{id}/void` | `void_bill` | `till_session` | `billing.bill.void` | [`crates/pos-edge/src/http/void_settled.rs`](../../crates/pos-edge/src/http/void_settled.rs) |
 | POST | `/api/bills/{id}/void_settled` | `void_settled_bill` | `till_session` | `billing.bill.void_settled`, `cash.drawer.override_assignment` | [`crates/pos-edge/src/http/void_settled.rs`](../../crates/pos-edge/src/http/void_settled.rs) |
 | GET | `/api/claim` | `claim_status` | public: nothing: only a box that belongs to no store yet serves it | — | [`crates/pos-edge/src/claim.rs`](../../crates/pos-edge/src/claim.rs) |
 | GET | `/api/custom-fields` | `object_custom_fields` | `till_session` | — | [`crates/pos-edge/src/http/custom_data.rs`](../../crates/pos-edge/src/http/custom_data.rs) |
