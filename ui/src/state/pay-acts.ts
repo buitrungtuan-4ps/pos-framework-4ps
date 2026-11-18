@@ -4,7 +4,7 @@
 
 import type { Accessor } from "solid-js";
 
-import type { BillResponse, BuyerRequest, PaymentRequest } from "../api/schemas";
+import type { BillResponse, BuyerRequest, CheckPrintedResponse, PaymentRequest } from "../api/schemas";
 import type { MoneyPhase } from "./money-act";
 import { useSettleAct } from "./settle-act";
 import { useVoidAct } from "./void-act";
@@ -52,11 +52,16 @@ export function usePayActs(options: {
         voiding.resume(id);
       }
     },
-    pay: (payments: PaymentRequest[], due: number, buyer: BuyerRequest | undefined) => {
+    pay: (
+      payments: PaymentRequest[],
+      due: number,
+      buyer: BuyerRequest | undefined,
+      printed?: CheckPrintedResponse,
+    ) => {
       const id = options.billId();
       if (id !== null) {
         paid = payments;
-        void settling.pay(id, payments, due, buyer);
+        void settling.pay(id, payments, due, buyer, printed);
       }
     },
     voidBill: voiding.voidWith,

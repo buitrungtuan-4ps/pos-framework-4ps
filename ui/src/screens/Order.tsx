@@ -57,6 +57,7 @@ import { createMenuSearch } from "../state/menu-search";
 import { createPrint } from "../state/print-writes";
 import { printOutcomeKey } from "../lib/print";
 import { SendFirst } from "../components/SendFirst";
+import { PrintedCheck } from "../components/PrintedCheck";
 import { createSendFirst, waitingByCourse } from "../state/unsent";
 import { DRAFT, draftChannel, eatenIn, keyToAddTo } from "../state/draft-walk-in";
 import { asksApprover, can } from "../state/permissions";
@@ -205,7 +206,7 @@ export function Order() {
   const printPreBill = () => {
     setPreBill(null);
     const send = () => (walkIn() ? api.printOrderCheck(params.id) : api.printTableCheck(params.id));
-    return print.run("billing.check.print", send, (printed) => setPreBill(printed.prints));
+    return print.run("billing.check.print", send, (printed) => (setPreBill(printed.prints), refetchCheck()));
   };
   // One sentence per distinct outcome: two parts that both printed say so once.
   const preBillOutcome = (prints: readonly string[]) =>
@@ -635,12 +636,9 @@ export function Order() {
         {(step) => <p class="mb-3 rounded-token border border-line px-3 py-2" role="status" data-outcome="flow-waits">{flowWaitSentence(step())}</p>}
       </Show>
       <Show when={preBill()}>
-        {(prints) => (
-          <p class="mb-3 text-sm text-ink-muted" role="status" data-outcome="pre-bill-print">
-            {preBillOutcome(prints())}
-          </p>
-        )}
+        {(prints) => <p class="mb-3 text-sm text-ink-muted" role="status" data-outcome="pre-bill-print">{preBillOutcome(prints())}</p>}
       </Show>
+      <PrintedCheck printed={check()?.check_printed} class="mb-3" />
 
       {/* The guests' new table says where they came from, once, on the screen they land on. */}
       <Show when={!walkIn() && search.moved_from}>

@@ -26,6 +26,7 @@ export type CourseResponse = Schemas["CourseResponse"];
 export type MenuItemResponse = Schemas["MenuItemResponse"];
 export type CheckResponse = Schemas["CheckResponse"];
 export type BillCheckResponse = Schemas["BillCheckResponse"];
+export type CheckPrintedResponse = Schemas["CheckPrintedResponse"];
 export type SplitRequest = Schemas["SplitRequest"];
 export type SplitResponse = Schemas["SplitResponse"];
 export type MergeRequest = Schemas["MergeRequest"];
