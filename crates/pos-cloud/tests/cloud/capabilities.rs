@@ -78,8 +78,8 @@ async fn capability_catalogue_serves_flags_presets_and_rules_to_any_admin() {
     assert!(rule_ids.contains(&"seats.requires.tables"));
 }
 
-/// The console offers a switch only where a release reads it (ADR-0160 decision 5): tabs, barcode
-/// entry and queue numbers stay in the catalogue, marked not offered, and the presets that
+/// The console offers a switch only where a release reads it (ADR-0160 decision 5): tabs and queue
+/// numbers stay in the catalogue, marked not offered, and the presets that
 /// turn them on still name them; every other flag is offered.
 #[tokio::test]
 async fn the_catalogue_offers_only_the_switches_a_release_reads() {
@@ -114,7 +114,7 @@ async fn the_catalogue_offers_only_the_switches_a_release_reads() {
             ("kds_enabled", true),
             ("courses_enabled", true),
             ("pay_first_enabled", true),
-            ("barcode_enabled", false),
+            ("barcode_enabled", true),
             ("queue_number_enabled", false),
             ("tips_enabled", true),
             ("qr_ordering_enabled", true),
