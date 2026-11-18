@@ -3247,11 +3247,7 @@ test("a bill split three ways settles with each guest's own tender, and the cash
     await page.locator('[data-step="payQr"]').click();
     await expect(page.locator('[data-outcome="share-taken"]')).toHaveCount(1);
     await expect(share).toHaveText("218,533₫");
-    await page.getByRole("button", { name: "Undo" }).click();
-    await expect(page.locator('[data-outcome="share-taken"]')).toHaveCount(0);
-    await expect(share).toHaveText("218,534₫");
 
-    await page.locator('[data-step="payQr"]').click();
     await page.locator('[data-step="payCard"]').click();
     await expect(page.locator('[data-outcome="share-taken"]')).toHaveCount(2);
     await expect(share).toHaveText("218,533₫");
@@ -3317,10 +3313,11 @@ test("the change to hand back is the largest figure once cash settles", async ({
   }
 });
 
-// An even split is kept for its bill (UX-5): a reload, or leaving and coming back, finds the share
-// already taken still taken, and only the rest owed. It used to be forgotten, and the reopened bill
-// was taken whole after a guest had paid their half. Leaving with a share taken asks first.
-test("an even split survives a reload and leaving the screen, and leaving asks first", async ({
+// An even split's shares are the edge's (ADR-0220, UX-5): each is recorded as it is taken, so a
+// reload, leaving and coming back, or another till finds the share already taken, what is paid and
+// only the rest owed. It used to live in the tab's storage, and before that only on the screen, and
+// a reopened bill was taken whole after a guest had paid their half.
+test("an even split's shares are recorded as they are taken, and a reload or another tab sees them", async ({
   page,
 }) => {
   const edge = await startEdge();
@@ -3336,17 +3333,25 @@ test("an even split survives a reload and leaving the screen, and leaving asks f
     await expect(share).toBeVisible();
     await page.locator('[data-step="payCard"]').click();
     await expect(page.locator('[data-outcome="share-taken"]')).toHaveCount(1);
+    await expect(page.locator('[data-outcome="paid-so-far"]')).toBeVisible();
     const rest = await share.textContent();
 
     await page.reload();
     await expect(page.locator('[data-outcome="share-taken"]')).toHaveCount(1);
     await expect(share).toHaveText(rest ?? "");
 
-    // Leaving asks; staying keeps the screen, leaving keeps the split for when the bill is back.
-    page.once("dialog", (dialog) => void dialog.dismiss());
-    await page.getByRole("link", { name: "← Order" }).click();
-    await expect(page).toHaveURL(/\/pay$/);
-    page.once("dialog", (dialog) => void dialog.accept());
+    // A tab with none of this one's storage reads the same bill from the edge: what is paid and
+    // the share left.
+    const other = await page.context().newPage();
+    try {
+      await other.goto(page.url());
+      await expect(other.locator('[data-outcome="share-taken"]')).toHaveCount(1);
+      await expect(other.locator('[data-outcome="share-due"]')).toHaveText(rest ?? "");
+    } finally {
+      await other.close();
+    }
+
+    // Leaving needs no warning now: nothing is held on this till.
     await page.getByRole("link", { name: "← Order" }).click();
     await expect(page.locator('[data-outcome="order-open"]')).toBeVisible();
     await page.locator('[data-step="takePayment"]').click();
@@ -3396,6 +3401,48 @@ test("a discounted bill shows its subtotal, the discount and the tax, and they a
     );
     expect(discount).toBe(10000);
     expect(subtotal - discount + tax).toBe(total);
+  } finally {
+    await edge.stop();
+  }
+});
+
+// A price changed before the bill opens, and a line given away on the bill (ADR-0219): each cites a
+// reason the store publishes for it, with a manager's badge and PIN where the store asks for one, and
+// the edge's figures replace the till's: the line's new total, then the bill with the comp off it.
+test("a line is repriced before the bill opens, and another is comped on the bill", async ({ page }) => {
+  const edge = await startEdge();
+  const approve = async (prefix) => {
+    const code = page.locator(`#${prefix}-approver-code`);
+    if ((await code.count()) > 0) {
+      await code.fill(edge.staffCode);
+      await page.locator(`#${prefix}-approver-pin`).fill(edge.staffPin);
+    }
+  };
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    await addItem(page);
+
+    await page.locator('[data-step="askReprice"]').first().click();
+    const keypad = page.locator('[data-step="repriceKeypad"]');
+    for (const digit of ["5", "0", "0", "0", "0"]) {
+      await keypad.getByRole("button", { name: digit, exact: true }).click();
+    }
+    await approve("reprice");
+    await page.locator('[data-step="repriceReason"]').first().click();
+    await expect(page.locator('[data-outcome="reprice-panel"]')).toHaveCount(0);
+    await expect(page.locator('[data-outcome="line-added"]').first()).toContainText("50,000₫");
+
+    await sendThenTakePayment(page);
+    await expect(page.locator('[data-step="askReprice"]')).toHaveCount(0);
+    await page.locator('[data-step="askComp"]').click();
+    await page.locator('[data-step="compLine"]').first().click();
+    await approve("comp");
+    await page.locator('[data-step="compReason"]').first().click();
+    await expect(page.locator('[data-outcome="line-comped"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="bill-subtotal"]')).toBeVisible();
   } finally {
     await edge.stop();
   }

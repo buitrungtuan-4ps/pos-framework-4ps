@@ -33,7 +33,9 @@ use pos_proto::ids::{BillId, OrderId, TableId};
 use pos_proto::money::Money;
 use pos_proto::time::Timestamp;
 
-use crate::app::{AppError, CheckPrinted, Edge, EdgeSession, PreBill, fee_records_in};
+use crate::app::{
+    AppError, CheckPrinted, Edge, EdgeSession, PreBill, TakenPayment, fee_records_in,
+};
 use crate::http::{bad_request, error_response, parse_ulid};
 use crate::printing::{PrintOutcome, Printers, TillPrinting, short_reference};
 
@@ -78,6 +80,26 @@ pub(crate) struct CheckResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(nullable = false))]
     remaining: Option<Money>,
+    /// Each payment taken towards it while it is open, in the order taken: how, how much and
+    /// when, naming nobody (ADR-0220 decision 3). Empty until a payment is taken.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    payments: Vec<CheckPayment>,
+}
+
+/// One payment taken towards an open bill, as the till lists it.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub(crate) struct CheckPayment {
+    /// The tender, a `PAYMENT_METHOD_*` value.
+    method: String,
+    /// What it applied to the bill, change and tip apart.
+    amount: Money,
+    /// When it was taken, in milliseconds since the epoch.
+    taken_time: Timestamp,
+    /// How many equal shares an even split asked for, when it was one of them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    split_ways: Option<u8>,
 }
 
 /// A printed check's marker, as the till shows it.
@@ -136,13 +158,34 @@ impl CheckResponse {
             check_printed: None,
             paid_total: None,
             remaining: None,
+            payments: Vec::new(),
         }
     }
 
-    /// The same, with what has been paid towards it and what remains (ADR-0220 decision 3).
-    fn with_paid(mut self, paid: Option<Money>) -> Self {
+    /// The same, with what has been paid towards `order_id`'s open bills, or `bill_id` alone where
+    /// one is named, what remains, and each payment (ADR-0220 decision 3).
+    fn with_paid<S: EventStore>(
+        mut self,
+        edge: &Edge<S>,
+        order_id: Option<OrderId>,
+        bill_id: Option<BillId>,
+    ) -> Self {
+        let Some(order_id) = order_id else {
+            return self;
+        };
+        let paid = edge.paid_towards(order_id, bill_id);
         self.remaining = paid.and_then(|paid| self.total_due.checked_sub(paid).ok());
         self.paid_total = paid;
+        self.payments = edge
+            .payments_towards(order_id, bill_id)
+            .into_iter()
+            .map(|payment: TakenPayment| CheckPayment {
+                method: payment.method.as_wire().to_owned(),
+                amount: payment.amount,
+                taken_time: payment.taken_time,
+                split_ways: payment.split_ways,
+            })
+            .collect();
         self
     }
 
@@ -206,14 +249,13 @@ where
     };
     let order_id = edge.order_for_table(table_id);
     let check = order_id.and_then(|order_id| edge.check_printed(order_id, None));
-    let paid = order_id.and_then(|order_id| edge.paid_towards(order_id, None));
     match edge.check_totals(table_id) {
         Ok(totals) => (
             StatusCode::OK,
             Json(
                 CheckResponse::of(&totals, &edge.session())
                     .with_check(check)
-                    .with_paid(paid),
+                    .with_paid(&edge, order_id, None),
             ),
         )
             .into_response(),
@@ -265,7 +307,7 @@ where
             Json(
                 CheckResponse::of(&totals, &edge.session())
                     .with_check(edge.check_printed(order_id, None))
-                    .with_paid(edge.paid_towards(order_id, None)),
+                    .with_paid(&edge, Some(order_id), None),
             ),
         )
             .into_response(),
@@ -322,10 +364,7 @@ where
                         edge.order_for_bill(bill_id)
                             .and_then(|order_id| edge.check_for_bill(order_id, bill_id)),
                     )
-                    .with_paid(
-                        edge.order_for_bill(bill_id)
-                            .and_then(|order_id| edge.paid_towards(order_id, Some(bill_id))),
-                    ),
+                    .with_paid(&edge, edge.order_for_bill(bill_id), Some(bill_id)),
             }),
         )
             .into_response(),
