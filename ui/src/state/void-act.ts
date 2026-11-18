@@ -2,7 +2,7 @@
 // till learns what came of a void the edge did not answer.
 
 import { api } from "../api/client";
-import type { ApproverRequest } from "../api/schemas";
+import type { ApproverRequest, VoidBillResponse } from "../api/schemas";
 import { t } from "../i18n";
 import { reasonMessage } from "../lib/errors";
 import { PRECHECKED, WRITES_PENDING } from "../package/prechecks";
@@ -29,33 +29,34 @@ export function voidRefusal(asksApprover: boolean, approval: ApproverRequest | u
 }
 
 /** What the edge says now about a bill whose void went unanswered. */
-export async function recheckVoid(billId: string): Promise<Recheck<true>> {
+export async function recheckVoid(billId: string): Promise<Recheck<VoidBillResponse>> {
   const bill = await api.billCheck(billId);
   if (bill.state === "BILL_STATE_VOIDED") {
     applyVoided(billId);
-    return { committed: true };
+    // What was given back is not on the read; the screen says the void, not the amounts.
+    return { committed: { state: bill.state } };
   }
   return bill.state === "BILL_STATE_OPEN" ? { refused: t("pay.void_not_made") } : { refused: t("pay.ended_unconfirmed") };
 }
 
-export interface VoidAct extends MoneyAct<true> {
+export interface VoidAct extends MoneyAct<VoidBillResponse> {
   /** Sends the void of the bill on screen, unless the till can tell it would be refused. */
   readonly voidWith: (reasonCodeId: string, asks: boolean, approval: ApproverRequest | undefined) => void;
 }
 
-/** A screen's bill void as a money act: `onVoided` runs once the edge commits it. */
-export function useVoidAct(billId: Accessor<string | null>, onVoided: () => void): VoidAct {
-  const act = useMoneyAct<true>({ act: "void", recheck: recheckVoid, committed: onVoided });
+/**
+ * A screen's bill void as a money act: `onVoided` runs once the edge commits it, with what it gave
+ * back of a part-paid bill's payments (ADR-0220 decision 4).
+ */
+export function useVoidAct(billId: Accessor<string | null>, onVoided: (voided: VoidBillResponse) => void): VoidAct {
+  const act = useMoneyAct<VoidBillResponse>({ act: "void", recheck: recheckVoid, committed: onVoided });
   const voidWith = (reasonCodeId: string, asks: boolean, approval: ApproverRequest | undefined) => {
     const id = billId();
     if (id !== null) {
       void act.run(
         id,
         () => voidRefusal(asks, approval),
-        async () => {
-          await voidBill(id, reasonCodeId, approval);
-          return true as const;
-        },
+        () => voidBill(id, reasonCodeId, approval),
       );
     }
   };
