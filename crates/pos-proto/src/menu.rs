@@ -98,8 +98,11 @@ pub struct MenuEntry {
     /// item on the menu is sellable unless something says otherwise.
     #[serde(default = "available_by_default")]
     pub available: bool,
-    /// Its `barcodes`, `plu` and `open_price`, each absent when it has none (ADR-0222).
-    #[serde(flatten)]
+    /// Its `barcodes`, `plu` and `open_price`; absent when it has none (ADR-0222).
+    #[serde(
+        default,
+        skip_serializing_if = "crate::item_codes::ItemCodes::is_empty"
+    )]
     pub codes: crate::item_codes::ItemCodes,
 }
 

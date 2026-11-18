@@ -70,6 +70,12 @@ pub struct ItemCodes {
 }
 
 impl ItemCodes {
+    /// Whether the item has no code and no open price, as every item had before them.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.barcodes.is_empty() && self.plu.is_none() && self.open_price.is_none()
+    }
+
     /// The first thing wrong with these codes, or `None` (see [`codes_fault`]).
     #[must_use]
     pub fn fault(&self) -> Option<String> {
