@@ -164,6 +164,10 @@ pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
         RouteGate::Person(&[Permission::FireLines]),
     ),
     (
+        "POST /api/lines/{id}/price",
+        RouteGate::Person(&[Permission::OverridePrice]),
+    ),
+    (
         "POST /api/lines/{id}/quantity",
         RouteGate::Person(&[Permission::AddLine]),
     ),
@@ -344,10 +348,6 @@ pub const NOT_ON_A_ROUTE: &[(Permission, &str)] = &[
     (
         Permission::AddOpenItem,
         "the till cannot ring an open item yet",
-    ),
-    (
-        Permission::OverridePrice,
-        "the till cannot override a price yet",
     ),
     (
         Permission::IssueRefund,

@@ -55,6 +55,7 @@ POST /api/drawer/open
 POST /api/gateway/calls
 POST /api/kds/bump
 POST /api/lines/{id}/fire
+POST /api/lines/{id}/price
 POST /api/lines/{id}/quantity
 POST /api/lines/{id}/void
 POST /api/menu/{id}/restore

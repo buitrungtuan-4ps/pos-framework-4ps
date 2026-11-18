@@ -86,6 +86,11 @@ pub(in crate::app) struct LineRecord {
     /// never re-reads the live menu (§14.2), and that holds when it changes as much as when it is
     /// printed. Modifier prices are already inside it.
     pub(in crate::app) unit_price: Money,
+    /// The per-unit price the line was added at, which a price override never moves: the ceiling
+    /// of an override is a multiple of it
+    /// ([ADR-0219](../../../../../docs/adr/0219-a-comp-and-a-price-override-each-need-a-reason-and-an-approver.md)),
+    /// so two overrides cannot climb past it between them.
+    pub(in crate::app) added_unit_price: Money,
     /// The extended total the device captured at add time — the base a bill sums per tax class. A
     /// line never re-reads the live menu (§14.2), so this is authoritative.
     pub(in crate::app) line_total: Money,
@@ -133,6 +138,7 @@ impl From<SalesOrderLineAdded> for LineRecord {
             seat: event.seat,
             course_id: event.course_id,
             unit_price: event.unit_price,
+            added_unit_price: event.unit_price,
             line_total: event.line_total,
             tax_class_id: event.tax_class_id,
             modifier_menu_item_ids: event.modifier_menu_item_ids,

@@ -119,22 +119,7 @@ pub(super) async fn sell(till: &Till) -> Result<Sale, Failed> {
 /// Gives the bill's first line away with the store's comp reason, a manager approving (ADR-0219):
 /// the comp comes off what the bill owes and something is still owed for the second line.
 async fn comp(till: &Till, bill_id: &str, order_line_id: &str) -> Result<(), Failed> {
-    let reasons = till
-        .send("GET", "/api/reason-codes", None)
-        .await
-        .map_err(|detail| ("comp a line", detail))?;
-    let reason_code_id = reasons["reasons"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|reason| {
-            reason["applies_to"]
-                .as_array()
-                .is_some_and(|actions| actions.iter().any(|action| action == "REASON_ACTION_COMP"))
-        })
-        .and_then(|reason| reason["reason_code_id"].as_str())
-        .ok_or_else(|| ("comp a line", format!("no comp reason: {reasons}")))?
-        .to_owned();
+    let reason_code_id = reason_for(till, "REASON_ACTION_COMP", "comp a line").await?;
     let (code, pin) = Till::approver();
     let comped = till
         .send(
@@ -161,6 +146,55 @@ async fn comp(till: &Till, bill_id: &str, order_line_id: &str) -> Result<(), Fai
     Ok(())
 }
 
+/// The first reason the store publishes for `action`, as the till's picker offers it.
+async fn reason_for(till: &Till, action: &str, step: &'static str) -> Result<String, Failed> {
+    let reasons = till
+        .send("GET", "/api/reason-codes", None)
+        .await
+        .map_err(|detail| (step, detail))?;
+    reasons["reasons"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|reason| {
+            reason["applies_to"]
+                .as_array()
+                .is_some_and(|actions| actions.iter().any(|tagged| tagged == action))
+        })
+        .and_then(|reason| reason["reason_code_id"].as_str())
+        .map(str::to_owned)
+        .ok_or_else(|| (step, format!("no reason for {action}: {reasons}")))
+}
+
+/// Overrides the line's price to twice the menu's, before the bill opens, with the store's
+/// override reason and a manager approving (ADR-0219): the edge answers with the new total.
+async fn reprice(till: &Till, order_line_id: &str, unit: &Value) -> Result<(), Failed> {
+    let reason_code_id =
+        reason_for(till, "REASON_ACTION_PRICE_OVERRIDE", "override a price").await?;
+    let doubled = json!({
+        "currency_code": unit["currency_code"],
+        "amount_minor": unit["amount_minor"].as_i64().unwrap_or_default() * 2,
+    });
+    let (code, pin) = Till::approver();
+    let repriced = till
+        .send(
+            "POST",
+            &format!("/api/lines/{order_line_id}/price"),
+            Some(json!({
+                "unit_price": doubled,
+                "reason_code_id": reason_code_id,
+                "approver_code": code,
+                "approver_pin": pin,
+            })),
+        )
+        .await
+        .map_err(|detail| ("override a price", detail))?;
+    if repriced["unit_price"] != doubled {
+        return Err(("override a price", format!("not repriced: {repriced}")));
+    }
+    Ok(())
+}
+
 /// Seats the first table on the floor, adds two lines priced from the menu as the till prices
 /// them, sends them to the kitchen and opens the bill; the bill's id and its first line's.
 async fn at_a_table(till: &Till, items: &[Value]) -> Result<(String, String), Failed> {
@@ -180,6 +214,7 @@ async fn at_a_table(till: &Till, items: &[Value]) -> Result<(String, String), Fa
         .map_err(|detail| ("seat the table", detail))?;
     let mut order_id = String::new();
     let mut first_line = String::new();
+    let mut last_line = String::new();
     for (item, quantity) in items.iter().zip([1_i64, 2]) {
         let unit = &item["unit_price"];
         let total = json!({
@@ -204,10 +239,12 @@ async fn at_a_table(till: &Till, items: &[Value]) -> Result<(String, String), Fa
             .await
             .map_err(|detail| ("add a line", detail))?;
         order_id = text(&line, "order_id").map_err(|detail| ("add a line", detail))?;
+        last_line = text(&line, "order_line_id").map_err(|detail| ("add a line", detail))?;
         if first_line.is_empty() {
-            first_line = text(&line, "order_line_id").map_err(|detail| ("add a line", detail))?;
+            first_line.clone_from(&last_line);
         }
     }
+    reprice(till, &last_line, &items[1]["unit_price"]).await?;
     if till.kitchen {
         fire(till, &order_id).await?;
     }
@@ -239,6 +276,7 @@ async fn at_the_counter(till: &Till, items: &[Value]) -> Result<(String, String)
         .map_err(|detail| ("open a counter order", detail))?;
     let order_id = text(&opened, "order_id").map_err(|detail| ("open a counter order", detail))?;
     let mut first_line = String::new();
+    let mut last_line = String::new();
     for (item, quantity) in items.iter().zip([1_i64, 2]) {
         let line = till
             .send(
@@ -251,10 +289,12 @@ async fn at_the_counter(till: &Till, items: &[Value]) -> Result<(String, String)
             )
             .await
             .map_err(|detail| ("add a line", detail))?;
+        last_line = text(&line, "order_line_id").map_err(|detail| ("add a line", detail))?;
         if first_line.is_empty() {
-            first_line = text(&line, "order_line_id").map_err(|detail| ("add a line", detail))?;
+            first_line.clone_from(&last_line);
         }
     }
+    reprice(till, &last_line, &items[1]["unit_price"]).await?;
     if till.kitchen {
         fire(till, &order_id).await?;
     }

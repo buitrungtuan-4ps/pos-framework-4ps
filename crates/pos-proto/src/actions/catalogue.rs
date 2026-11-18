@@ -112,6 +112,26 @@ pub const CATALOGUE: &[Action] = &[
         ..BASE
     },
     Action {
+        action_id: "sales.line.reprice",
+        effect: Money,
+        frequency: Rare,
+        params: &[
+            required("order_line_id", Id),
+            required("unit_price", Amount),
+            required("reason_code_id", Id),
+        ],
+        routes: &["POST /api/lines/{id}/price"],
+        permissions: &["billing.price.override"],
+        refusals: &[
+            "REASON_CODE_NOT_VALID",
+            "APPROVAL_REQUIRED",
+            "BILL_ALREADY_OPEN",
+            "PRICE_OUT_OF_RANGE",
+        ],
+        summary: "Override a line's price before its bill opens, with a reason",
+        ..BASE
+    },
+    Action {
         action_id: "sales.line.void",
         effect: EdgeWrite,
         frequency: Rare,

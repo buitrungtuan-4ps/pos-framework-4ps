@@ -169,6 +169,23 @@ event_catalogue! {
         /// New extended total.
         line_total: Money,
     },
+    /// A line's price was overridden before its bill opened, for a reason and with whoever approved
+    /// it ([ADR-0219](../../../docs/adr/0219-a-comp-and-a-price-override-each-need-a-reason-and-an-approver.md)
+    /// decision 2). Tax and promotions follow the new price as from any price.
+    SalesOrderLineRepriced => "sales.order_line.repriced", version = 1 {
+        /// The order.
+        order_id: OrderId,
+        /// The line.
+        order_line_id: OrderLineId,
+        /// The new price of one, above zero.
+        unit_price: Money,
+        /// The price of one before the override.
+        previous_unit_price: Money,
+        /// The new extended total: the new price times the line's quantity.
+        line_total: Money,
+        /// Why.
+        reason_code_id: ReasonCodeId,
+    },
     /// A line was cancelled.
     SalesOrderLineVoided => "sales.order_line.voided", version = 1 {
         /// The order.
