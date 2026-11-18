@@ -21,6 +21,7 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 - [ADR-0220](../adr/0220-a-bill-takes-its-payments-one-at-a-time.md) A bill takes its payments one at a time, and every till sees what is paid
 - [ADR-0221](../adr/0221-a-bar-tab-is-an-order-without-a-table-that-stays-open.md) A bar tab is an order without a table that stays open, named by a number
 - [ADR-0222](../adr/0222-items-carry-barcodes-and-plus-and-a-counter-can-pay-first.md) Items carry barcodes and PLUs, a quick sale scans them, and a counter can pay first
+- [ADR-0223](../adr/0223-a-weighed-item-is-priced-by-its-weight.md) A weighed item is priced by its weight, read from a label, a scale or a hand
 
 ## Citations of ADRs that do not exist
 
