@@ -41,6 +41,9 @@ impl Projection {
         } else {
             self.live.remove(&order_id);
         }
+        if settled || refused || closed {
+            self.tabs.remove(&order_id);
+        }
         // Paid, and served at no table: its food is still coming while a line waits for a bump.
         // "At a table" is where the order opened as well as where a table points now: a table
         // seated again points at its new guests, and the old order is still a table's order.

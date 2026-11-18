@@ -102,6 +102,21 @@ pub struct CounterOrderOpened {
     pub business_date: BusinessDate,
 }
 
+/// An open bar tab, as every till lists it (ADR-0221 decision 3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TabView {
+    /// The tab's order.
+    pub order_id: OrderId,
+    /// The business day's number the tab was given when it opened.
+    pub tab_number: u64,
+    /// What the tab owes so far.
+    pub total_due: Money,
+    /// When its last round went to the kitchen, if one has.
+    pub last_round_time: Option<Timestamp>,
+    /// A bill already open on it, which the till settles rather than opening a second.
+    pub bill_id: Option<BillId>,
+}
+
 /// What a line looks like to a caller after a command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LineView {

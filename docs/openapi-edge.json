@@ -2137,7 +2137,7 @@
         "description": "The channel the till names wins. A till that names none gets the store's walk-in channel, which\nis takeaway under `WALK_IN_CHANNEL_ASK` too: there the till names the guest's answer, so only a\ntill from before the setting names none, and it gets the takeaway order it always opened.",
         "operationId": "open_order",
         "requestBody": {
-          "description": "Optional `channel`, a `SALES_CHANNEL_*` token. Without one the order takes the store's walk-in channel. The body may be left out",
+          "description": "Optional `channel`, a `SALES_CHANNEL_*` token. Without one the order takes the store's walk-in channel. `tab: true` opens a bar tab, whose queue number is its tab number. The body may be left out",
           "content": {
             "application/json": {
               "schema": {
@@ -2168,7 +2168,7 @@
             "description": "Nobody is signed in on this device, or the sign-in lapsed; or this box was superseded by a replacement that holds the store's lease (`SUPERSEDED`)"
           },
           "409": {
-            "description": "Refused: the person lacks the permission, or the record is not in a state the command applies to. `pos-error-reason` names which"
+            "description": "Refused: the person lacks the permission, the store does not keep tabs (`CAPABILITY_DISABLED`), or the record is not in a state the command applies to. `pos-error-reason` names which"
           },
           "500": {
             "description": "The edge could not apply the command"
@@ -4867,6 +4867,44 @@
         ]
       }
     },
+    "/api/tabs": {
+      "get": {
+        "tags": [
+          "orders"
+        ],
+        "summary": "`GET /api/tabs` — every open tab.",
+        "operationId": "open_tabs",
+        "responses": {
+          "200": {
+            "description": "Every open tab not moved to a table, by number: its order, `tab_number`, `total_due`, its last round's time and any bill open on it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TabResponse"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          },
+          "409": {
+            "description": "The figures cannot be assembled, for instance a line whose tax class the store has published no rate for. `pos-error-reason` names why"
+          }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
+      }
+    },
     "/healthz": {
       "get": {
         "tags": [
@@ -7473,6 +7511,10 @@
                 "type": "null"
               }
             ]
+          },
+          "tab": {
+            "type": "boolean",
+            "description": "A bar tab (ADR-0221): the order stays open across rounds and its `queue_number` is its tab\nnumber. Refused on a store without `tabs_enabled`."
           }
         }
       },
@@ -9205,6 +9247,37 @@
             "format": "int64",
             "description": "The depth the warnings are graded against. Not a limit: the store sells past it.",
             "minimum": 0
+          }
+        }
+      },
+      "TabResponse": {
+        "type": "object",
+        "description": "One open tab.",
+        "required": [
+          "order_id",
+          "tab_number",
+          "total_due"
+        ],
+        "properties": {
+          "bill_id": {
+            "$ref": "#/components/schemas/BillId",
+            "description": "A bill already open on it, which the till settles rather than opening a second."
+          },
+          "last_round_time": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "When its last round went to the kitchen. Absent before its first."
+          },
+          "order_id": {
+            "$ref": "#/components/schemas/OrderId"
+          },
+          "tab_number": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The business day's number it opened with.",
+            "minimum": 0
+          },
+          "total_due": {
+            "$ref": "#/components/schemas/Money"
           }
         }
       },

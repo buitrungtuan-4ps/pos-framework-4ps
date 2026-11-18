@@ -14,7 +14,8 @@ pub use bills::{
 };
 pub use orders::{
     BumpView, CounterOrderLine, CounterOrderOpened, CounterOrderView, FiredLine, LineDraft,
-    LineView, LiveOrderLine, LiveOrderView, OrderLineChoice, TableView, TransferView, WaitingLine,
+    LineView, LiveOrderLine, LiveOrderView, OrderLineChoice, TabView, TableView, TransferView,
+    WaitingLine,
 };
 pub use shifts::{
     CashMovement, ClosedDrawers, CombinedReport, DrawerFigures, DrawerView, DrawersView,

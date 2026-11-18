@@ -229,6 +229,10 @@ where
 pub(super) struct OpenOrderRequest {
     #[serde(default)]
     channel: Option<Open<SalesChannel>>,
+    /// A bar tab (ADR-0221): the order stays open across rounds and its `queue_number` is its tab
+    /// number. Refused on a store without `tabs_enabled`.
+    #[serde(default)]
+    tab: bool,
 }
 
 /// A walk-in order the counter has just opened, with the number the guest will be called by.
@@ -247,7 +251,8 @@ struct OpenedOrderResponse {
     extensions(("x-permission" = json!("sales.line.add"))),
     request_body(
         content = OpenOrderRequest, description = "Optional `channel`, a `SALES_CHANNEL_*` token. Without one the order takes the \
-                       store's walk-in channel. The body may be left out",
+                       store's walk-in channel. `tab: true` opens a bar tab, whose queue number is its \
+                       tab number. The body may be left out",
         content_type = "application/json",
     ),
     responses(
@@ -258,8 +263,9 @@ struct OpenedOrderResponse {
         (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \
                                       was superseded by a replacement that holds the store's lease \
                                       (`SUPERSEDED`)"),
-        (status = 409, description = "Refused: the person lacks the permission, or the record is not in a \
-                                      state the command applies to. `pos-error-reason` names which"),
+        (status = 409, description = "Refused: the person lacks the permission, the store does not keep tabs \
+                                      (`CAPABILITY_DISABLED`), or the record is not in a state the command \
+                                      applies to. `pos-error-reason` names which"),
         (status = 503, description = "The store is unavailable, and nothing was recorded"),
         (status = 500, description = "The edge could not apply the command"),
     ),
@@ -288,7 +294,12 @@ where
         // A token this build does not know: refused, never guessed, since the channel sets the tax.
         Some(Err(_)) => return bad_request("channel is not a sales channel this edge knows"),
     };
-    let opened = match deps.edge.open_counter_order(actor, channel).await {
+    let opened = if request.tab {
+        deps.edge.open_tab(actor, channel, &deps.queue).await
+    } else {
+        deps.edge.open_counter_order(actor, channel).await
+    };
+    let opened = match opened {
         Ok(opened) => opened,
         Err(error) => return error_response(&error),
     };
@@ -410,6 +421,7 @@ where
         .route("/api/orders/open", get(open_orders::<S, Q>))
         .route("/api/bills/settled", get(settled_bills::<S, Q>))
         .route("/api/orders", post(open_order::<S, Q>))
+        .route("/api/tabs", get(super::tabs::open_tabs::<S, Q>))
         .route("/api/orders/{id}/lines", post(add_order_line::<S, Q>))
         .with_state(Arc::new(CounterDeps { edge, queue }))
 }
