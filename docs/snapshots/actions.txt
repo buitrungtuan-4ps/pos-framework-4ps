@@ -417,6 +417,19 @@ sales.line.fire	param=station_id:ACTION_PARAM_KIND_ID:optional
 sales.line.fire	permission=sales.line.fire
 sales.line.fire	route=POST /api/lines/{id}/fire
 sales.line.fire	since=0.14.1
+sales.line.reprice
+sales.line.reprice	effect=ACTION_EFFECT_MONEY
+sales.line.reprice	frequency=ACTION_FREQUENCY_RARE
+sales.line.reprice	param=order_line_id:ACTION_PARAM_KIND_ID:required
+sales.line.reprice	param=reason_code_id:ACTION_PARAM_KIND_ID:required
+sales.line.reprice	param=unit_price:ACTION_PARAM_KIND_AMOUNT:required
+sales.line.reprice	permission=billing.price.override
+sales.line.reprice	refusal=APPROVAL_REQUIRED
+sales.line.reprice	refusal=BILL_ALREADY_OPEN
+sales.line.reprice	refusal=PRICE_OUT_OF_RANGE
+sales.line.reprice	refusal=REASON_CODE_NOT_VALID
+sales.line.reprice	route=POST /api/lines/{id}/price
+sales.line.reprice	since=0.14.1
 sales.line.set_quantity
 sales.line.set_quantity	effect=ACTION_EFFECT_EDGE_WRITE
 sales.line.set_quantity	frequency=ACTION_FREQUENCY_COMMON

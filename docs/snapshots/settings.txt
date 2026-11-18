@@ -38,6 +38,17 @@ billing.part_payments	scope=SETTING_SCOPE_TENANT
 billing.part_payments	since=0.14.1
 billing.part_payments	value=false
 billing.part_payments	value=true
+billing.price_override_max_multiple
+billing.price_override_max_multiple	default=100
+billing.price_override_max_multiple	kind=SETTING_KIND_INT
+billing.price_override_max_multiple	max=100
+billing.price_override_max_multiple	min=1
+billing.price_override_max_multiple	scope=SETTING_SCOPE_BRAND
+billing.price_override_max_multiple	scope=SETTING_SCOPE_STORE
+billing.price_override_max_multiple	scope=SETTING_SCOPE_STORE_GROUP
+billing.price_override_max_multiple	scope=SETTING_SCOPE_TENANT
+billing.price_override_max_multiple	since=0.14.1
+billing.price_override_max_multiple	unit=SETTING_UNIT_COUNT
 billing.settled_void_window
 billing.settled_void_window	default=SETTLED_VOID_WINDOW_BUSINESS_DATE
 billing.settled_void_window	kind=SETTING_KIND_CHOICE

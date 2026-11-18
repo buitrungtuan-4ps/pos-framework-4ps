@@ -5,7 +5,7 @@
 //! [`register`](super::register) lists in turn.
 
 use crate::backup::{self, PublishedBackup};
-use crate::billing::{PublishedBilling, SettledVoidWindow};
+use crate::billing::{self, PublishedBilling, SettledVoidWindow};
 use crate::counter::{PublishedCounter, WalkInChannel};
 use crate::locale::{LocaleSettings, TaxRounding};
 use crate::package::{ALLOWED_VERSIONS_MAX, PackageMode, PublishedPackage};
@@ -701,6 +701,26 @@ pub(super) fn billing_settings() -> Vec<Setting> {
                       is taken and seen on every till, the last one settling the bill. On, the \
                       default, the pay screen offers it, for an even split or guests paying their \
                       own share. Off, a bill is paid in one go, as a counter usually is.",
+        },
+        Setting {
+            node: PublishedBilling::NODE,
+            field: "price_override_max_multiple",
+            shape: SettingShape::Int {
+                min: *billing::PRICE_OVERRIDE_MAX_MULTIPLE.start(),
+                max: *billing::PRICE_OVERRIDE_MAX_MULTIPLE.end(),
+                unit: SettingUnit::Count,
+                default: PublishedBilling::default().price_override_max_multiple(),
+                // ADR-0219, accepted by the owner on 2026-11-18: a hundred times, and every template
+                // keeps it.
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            confirm: None,
+            summary: "The most a line's price may be overridden to, as a multiple of the price it was \
+                      added at: `3` lets a manager charge up to three times the price. `100`, the \
+                      default, bounds only a slip of the keypad. An override is always above zero, \
+                      and only before the bill opens; giving an item away is a comp.",
         },
     ]
 }

@@ -210,6 +210,12 @@ where
         // PIN with the request, which is the first thing in the tree to read the permission
         // registry's `pin: true`.
         .route("/api/lines/{id}/void", post(lines::void_line::<S>))
+        // Overriding a line's price before its bill opens (ADR-0219 decision 2):
+        // `billing.price.override`, PIN-flagged, so the approver rides with the request.
+        .route(
+            "/api/lines/{id}/price",
+            post(super::reprice::reprice_line::<S>),
+        )
         .route("/api/bills/{id}/void", post(bills::void_bill::<S>))
         // A paid bill voided whole (ADR-0184): its own permission, and the cash back out of this
         // till's drawer.

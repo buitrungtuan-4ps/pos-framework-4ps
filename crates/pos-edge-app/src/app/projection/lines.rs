@@ -375,4 +375,18 @@ impl Projection {
             record.line_total = line_total;
         }
     }
+
+    /// Records a line's price overridden (ADR-0219 decision 2): its price of one and its total
+    /// move, and the price it was added at stays.
+    pub(in crate::app) fn reprice_line(
+        &mut self,
+        order_line_id: OrderLineId,
+        unit_price: Money,
+        line_total: Money,
+    ) {
+        if let Some(record) = self.lines.get_mut(&order_line_id) {
+            record.unit_price = unit_price;
+            record.line_total = line_total;
+        }
+    }
 }

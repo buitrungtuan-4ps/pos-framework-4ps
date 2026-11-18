@@ -46,6 +46,7 @@ mod printers;
 pub mod qr;
 pub mod reason_codes;
 mod reports;
+mod reprice;
 mod revalidate;
 pub mod route_permissions;
 mod shift_x;
@@ -551,6 +552,8 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
             // A waive the bill cannot take (ADR-0159 decision 5).
             DomainError::FeeNotOnBill => "FEE_NOT_ON_BILL",
             DomainError::FeeNotWaivable => "FEE_NOT_WAIVABLE",
+            // An override outside its bounds (ADR-0219 decision 2).
+            DomainError::PriceOutOfRange { .. } => "PRICE_OUT_OF_RANGE",
             // A void after payment the till may not make (ADR-0184 decisions 7 and 8).
             DomainError::SettledVoidWindowClosed { .. } => "SETTLED_VOID_WINDOW_CLOSED",
             DomainError::EInvoiceIssued => "E_INVOICE_ISSUED",

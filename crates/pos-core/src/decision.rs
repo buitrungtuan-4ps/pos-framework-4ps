@@ -45,6 +45,7 @@ use crate::machines::{Bill, BillTrigger, LineTrigger, OrderLine, Shift, ShiftTri
 use crate::permission::{Grant, Permission, PermissionSet, require};
 use crate::state_machine::StateMachine;
 
+pub mod reprice;
 mod settled_void;
 pub use settled_void::{SettledVoid, within_settled_void_window};
 

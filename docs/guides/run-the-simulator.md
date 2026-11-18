@@ -52,7 +52,8 @@ publish (the pack's locale and tax table, the template's capability preset and r
 settings, its demo menu priced in the pack's currency, its floor and kitchen stations, and the till
 approved as a terminal). A till paired to it and signed in as a fake member of staff then drives
 the edge's own HTTP routes: it opens a shift, sells two items the store can ring up (at the first
-table where the template serves at tables, as a takeaway at the counter otherwise), sends them to
+table where the template serves at tables, as a takeaway at the counter otherwise), overrides the
+second's price to twice the menu's with the store's override reason (ADR-0219), sends them to
 the kitchen where there is one, opens the bill, comps the first line with the store's comp reason and
 the member of staff approving it (ADR-0219), prints its check (which every check read must then
 show, fresh, ADR-0218), pays the check's total in cash (in two halves where the template takes a
