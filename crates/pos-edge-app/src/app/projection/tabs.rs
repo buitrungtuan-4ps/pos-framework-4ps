@@ -18,6 +18,11 @@ impl Projection {
         }
     }
 
+    /// Whether `order_id` is a tab still open: one that has not settled, closed or been refused.
+    pub(in crate::app) fn is_open_tab(&self, order_id: OrderId) -> bool {
+        self.tabs.contains_key(&order_id)
+    }
+
     /// Every open tab not moved to a table, by number: its order, number, the newest fire among
     /// its lines (its last round) and any bill open on it.
     pub(in crate::app) fn open_tabs(

@@ -580,6 +580,10 @@ fn read_back(node: &str, field: &str, value: Option<&Value>) -> Option<Value> {
                 _ => None,
             }
         }
+        crate::tabs::PublishedTabs::NODE => {
+            let tabs: crate::tabs::PublishedTabs = serde_json::from_value(document).ok()?;
+            (field == "guest_label").then(|| json!(tabs.guest_label().as_wire()))
+        }
         crate::scan::PublishedScan::NODE => {
             let scan: crate::scan::PublishedScan = serde_json::from_value(document).ok()?;
             match field {

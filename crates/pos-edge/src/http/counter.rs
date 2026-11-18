@@ -420,7 +420,7 @@ where
 /// The counter's sub-router, to be merged behind the same gates as the rest of the domain surface.
 pub(crate) fn router<S, Q>(edge: Arc<Edge<S>>, queue: Q) -> Router
 where
-    S: EventStore + Send + Sync + 'static,
+    S: EventStore + pos_ports::subject_store::SubjectStore + Send + Sync + 'static,
     Q: QueueNumberAuthority + 'static,
 {
     Router::new()
@@ -428,6 +428,7 @@ where
         .route("/api/bills/settled", get(settled_bills::<S, Q>))
         .route("/api/orders", post(open_order::<S, Q>))
         .route("/api/tabs", get(super::tabs::open_tabs::<S, Q>))
+        .route("/api/tabs/{id}/label", post(super::tabs::label_tab::<S, Q>))
         .route("/api/orders/{id}/lines", post(add_order_line::<S, Q>))
         .route(
             "/api/orders/{id}/scan",

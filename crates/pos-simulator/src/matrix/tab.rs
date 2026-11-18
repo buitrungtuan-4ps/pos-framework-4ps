@@ -28,6 +28,24 @@ pub(super) async fn tab(till: &Till) -> Result<(), (&'static str, String)> {
         .send("GET", "/api/tabs", None)
         .await
         .map_err(|detail| ("list the tabs", detail))?;
+    // No template turns a guest's label on (ADR-0221): it waits for the store's confirmation.
+    let order_id = opened["order_id"].as_str().unwrap_or_default();
+    match till
+        .send(
+            "POST",
+            &format!("/api/tabs/{order_id}/label"),
+            Some(json!({ "label": "Fake Guest" })),
+        )
+        .await
+    {
+        Err(refused) if refused.contains("GUEST_LABEL_OFF") => {}
+        other => {
+            return Err((
+                "label a tab",
+                format!("a store that keeps numbers only took a label: {other:?}"),
+            ));
+        }
+    }
     let listed: Vec<&Value> = tabs.as_array().into_iter().flatten().collect();
     match listed.as_slice() {
         [tab]

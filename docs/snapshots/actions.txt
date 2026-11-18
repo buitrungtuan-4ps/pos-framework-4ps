@@ -502,6 +502,17 @@ sales.order.transfer	permission=sales.order.transfer
 sales.order.transfer	permission=sales.table.manage
 sales.order.transfer	route=POST /api/tables/{id}/transfer
 sales.order.transfer	since=0.14.1
+sales.tab.label
+sales.tab.label	effect=ACTION_EFFECT_EDGE_WRITE
+sales.tab.label	frequency=ACTION_FREQUENCY_COMMON
+sales.tab.label	param=label:ACTION_PARAM_KIND_TEXT:optional
+sales.tab.label	param=order_id:ACTION_PARAM_KIND_ID:required
+sales.tab.label	permission=sales.line.add
+sales.tab.label	refusal=CAPABILITY_DISABLED
+sales.tab.label	refusal=GUEST_LABEL_OFF
+sales.tab.label	refusal=UNKNOWN_ORDER
+sales.tab.label	route=POST /api/tabs/{id}/label
+sales.tab.label	since=0.14.1
 sales.tab.open
 sales.tab.open	effect=ACTION_EFFECT_EDGE_WRITE
 sales.tab.open	frequency=ACTION_FREQUENCY_COMMON

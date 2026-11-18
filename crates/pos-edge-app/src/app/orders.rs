@@ -13,4 +13,7 @@ mod open_price;
 mod reprice;
 mod scan;
 mod sold_out;
+mod tab_label;
 mod tabs;
+
+pub use tab_label::TabLabel;

@@ -96,3 +96,4 @@ POST /api/tables/{id}/lines
 POST /api/tables/{id}/release
 POST /api/tables/{id}/seat
 POST /api/tables/{id}/transfer
+POST /api/tabs/{id}/label

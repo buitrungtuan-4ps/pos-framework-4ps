@@ -296,6 +296,10 @@ pub struct EdgeSession {
     /// ([ADR-0222](../../../../docs/adr/0222-items-carry-barcodes-and-plus-and-a-counter-can-pay-first.md)
     /// decision 2): 50 ms in the bootstrap and wherever the node sets none.
     pub scan: pos_proto::scan::PublishedScan,
+    /// Whether a bar tab may carry a guest's label, from the `tabs` node
+    /// ([ADR-0221](../../../../docs/adr/0221-a-bar-tab-is-an-order-without-a-table-that-stays-open.md)):
+    /// off in the bootstrap and wherever the node sets none.
+    pub tabs: pos_proto::tabs::PublishedTabs,
     /// How long after it was paid a bill may still be voided, from the `billing` node
     /// ([ADR-0184](../../../../docs/adr/0184-a-settled-bill-is-voided-whole-not-refunded.md)
     /// decision 7). The bill's business date in the bootstrap and wherever the node sets none.

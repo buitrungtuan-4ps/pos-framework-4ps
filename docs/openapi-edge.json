@@ -4943,7 +4943,7 @@
         "operationId": "open_tabs",
         "responses": {
           "200": {
-            "description": "Every open tab not moved to a table, by number: its order, `tab_number`, `total_due`, its last round's time and any bill open on it",
+            "description": "Every open tab not moved to a table, by number: its order, `tab_number`, any `label`, `total_due`, its last round's time and any bill open on it",
             "content": {
               "application/json": {
                 "schema": {
@@ -4970,6 +4970,73 @@
             "till_session": []
           }
         ]
+      }
+    },
+    "/api/tabs/{id}/label": {
+      "post": {
+        "tags": [
+          "orders"
+        ],
+        "summary": "`POST /api/tabs/{id}/label` — write or clear a guest's label on an open tab, where the store\nkeeps labels (ADR-0221 decision 2).",
+        "operationId": "label_tab",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The tab's order id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`label`, up to 32 characters with no control character; empty or absent clears it. Kept on the store only, never in an event, a log or the cloud",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TabLabelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Written, or cleared: the tab's `order_id`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabelledTabResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The id is not a ULID, or the label is longer than 32 characters or has a control character"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; or this box was superseded by a replacement that holds the store's lease (`SUPERSEDED`)"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, the store keeps no tabs (`CAPABILITY_DISABLED`) or no labels (`GUEST_LABEL_OFF`), or the order is no open tab (`UNKNOWN_ORDER`)"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "sales.line.add"
       }
     },
     "/healthz": {
@@ -6674,6 +6741,18 @@
           }
         }
       },
+      "LabelledTabResponse": {
+        "type": "object",
+        "description": "The tab labelled.",
+        "required": [
+          "order_id"
+        ],
+        "properties": {
+          "order_id": {
+            "$ref": "#/components/schemas/OrderId"
+          }
+        }
+      },
       "LayoutResponse": {
         "type": "object",
         "description": "The store's presentation plan for this channel, as the in-store UI reads it.",
@@ -7203,6 +7282,8 @@
           "check_before_payment",
           "scan_keystroke_window_ms",
           "barcode_enabled",
+          "tabs_enabled",
+          "tab_guest_label",
           "part_payments",
           "modifier_groups",
           "courses_enabled",
@@ -7279,9 +7360,17 @@
             "description": "The most guests the pay screen's even split offers, from the store's `tender_keys` node\n(ADR-0160 decision 2): it offers every number from two up to this one. `6` until a store sets\nits own, at most `12`. A till reading an edge older than the field offers two to six.",
             "minimum": 0
           },
+          "tab_guest_label": {
+            "type": "boolean",
+            "description": "Whether staff may type a guest's label on a tab: tabs on and the store's `tabs.guest_label`\non, which the cloud writes only with a recorded confirmation (ADR-0221 decision 2)."
+          },
           "tables_enabled": {
             "type": "boolean",
             "description": "Whether this store runs table service (§10 `Capability::Tables`, **on** by default).\n\nThe one flag that decides what the till's home screen is. A counter cafe has no floor plan,\nand `Capability::PayFirst` is declared incompatible with this one in the capability model's\nown validity rules — so a store with it off being shown a room full of tables it does not\nhave is not a cosmetic problem, it is the till describing a different shop."
+          },
+          "tabs_enabled": {
+            "type": "boolean",
+            "description": "Whether the store keeps bar tabs (`tabs_enabled`), which shows the till's tabs list\n([ADR-0221](../../../../docs/adr/0221-a-bar-tab-is-an-order-without-a-table-that-stays-open.md))."
           },
           "tip_percents": {
             "type": "array",
@@ -9385,6 +9474,19 @@
           }
         }
       },
+      "TabLabelRequest": {
+        "type": "object",
+        "description": "The label staff typed on a tab.",
+        "properties": {
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Up to 32 characters; empty or absent clears the label."
+          }
+        }
+      },
       "TabResponse": {
         "type": "object",
         "description": "One open tab.",
@@ -9397,6 +9499,10 @@
           "bill_id": {
             "$ref": "#/components/schemas/BillId",
             "description": "A bill already open on it, which the till settles rather than opening a second."
+          },
+          "label": {
+            "type": "string",
+            "description": "The guest's label staff typed, where the store keeps labels (`tabs.guest_label`). Kept on\nthe store only. Absent without one."
           },
           "last_round_time": {
             "$ref": "#/components/schemas/Timestamp",
