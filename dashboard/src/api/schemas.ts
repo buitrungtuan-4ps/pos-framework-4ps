@@ -109,6 +109,8 @@ export type GridPosition = Schemas["GridPosition"];
 export type LayoutButton = Schemas["Versioned_LayoutButton"];
 export type ModifierGroup = Schemas["Versioned_ModifierGroup"];
 export type CatalogItem = Schemas["Versioned_CatalogItem"];
+/** An item's barcodes, PLU and open price (ADR-0222). */
+export type ItemCodesBody = Schemas["ItemCodes"];
 export type Menu = Schemas["Versioned_Menu"];
 export type MenuSection = Schemas["Versioned_MenuSection"];
 export type ChannelPrice = Schemas["ChannelPrice"];
