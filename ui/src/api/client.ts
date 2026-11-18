@@ -27,6 +27,9 @@ import type {
   CounterOrder,
   CountShiftRequest,
   DiscountRequest,
+  CompRequest,
+  RepriceRequest,
+  RepriceResponse,
   DiscountResponse,
   DrawersResponse,
   FireRequest,
@@ -445,6 +448,11 @@ export const api = {
   // acknowledgement, so the screen never subtracts a discount itself and arrives at a different tax.
   discountBill: (billId: string, request_: DiscountRequest) =>
     request<DiscountResponse>("POST", `/api/bills/${billId}/discount`, request_),
+  // A whole line given away on an open bill, and a line's price changed before its bill opens, each
+  // with a reason and, where the person may not, an approver (ADR-0219).
+  compLine: (billId: string, comp: CompRequest) => request<CheckResponse>("POST", `/api/bills/${billId}/comp`, comp),
+  repriceLine: (lineId: string, reprice: RepriceRequest) =>
+    request<RepriceResponse>("POST", `/api/lines/${lineId}/price`, reprice),
 
   // One fee off one bill (ADR-0159 decision 5). The answer is the bill as it now stands, as the
   // discount's is, so the screen never takes the fee off itself and misses its tax.
