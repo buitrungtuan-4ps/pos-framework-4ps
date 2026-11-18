@@ -63,9 +63,11 @@ pub struct ItemCodes {
     pub barcodes: Vec<String>,
     /// One to five digits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub plu: Option<String>,
     /// The bounds of a price the cashier types, for an open-price item.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub open_price: Option<OpenPrice>,
 }
 

@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::enums::SalesChannel;
 use crate::ids::{CourseId, MenuItemId, ModifierGroupId, TaxClassId};
+use crate::item_codes::ItemCodes;
 use crate::money::Money;
 use crate::text::DisplayName;
 use crate::wire_enum::Open;
@@ -93,17 +94,13 @@ pub struct MenuEntry {
     /// that omits it loads unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub course_id: Option<CourseId>,
-    /// Whether the item can be sold right now. An item present but 86'd (out of stock, or an operator
-    /// has paused it) is refused rather than promised. Absent in the document means available: an
-    /// item on the menu is sellable unless something says otherwise.
+    /// Whether the item can be sold right now: one 86'd (out of stock, or paused) is refused rather
+    /// than promised. Absent in the document means available, as an item on the menu is.
     #[serde(default = "available_by_default")]
     pub available: bool,
     /// Its `barcodes`, `plu` and `open_price`; absent when it has none (ADR-0222).
-    #[serde(
-        default,
-        skip_serializing_if = "crate::item_codes::ItemCodes::is_empty"
-    )]
-    pub codes: crate::item_codes::ItemCodes,
+    #[serde(default, skip_serializing_if = "ItemCodes::is_empty")]
+    pub codes: ItemCodes,
 }
 
 /// The default for [`MenuEntry::available`] when a document omits it: an item on the menu is for sale.
@@ -129,7 +126,7 @@ impl MenuEntry {
             modifier_group_ids: Vec::new(),
             course_id: None,
             available: true,
-            codes: crate::item_codes::ItemCodes::default(),
+            codes: ItemCodes::default(),
         }
     }
 
