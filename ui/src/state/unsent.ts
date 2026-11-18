@@ -6,11 +6,15 @@
 // either screen opens a bill, it asks whether to send the unsent lines first (`SendFirst`).
 //
 // Keyed like every other helper on the order screen: a table id, or a counter order's walk-in key.
+//
+// A store that pays first (ADR-0222 decision 6) is not asked about a counter order: its settle sends
+// the unsent lines itself, in the same transaction, so the kitchen sees the order once it is paid.
 
 import { createSignal } from "solid-js";
 
 import { fireOrder } from "./order-writes";
-import { type OrderLine, holdWalkIn, linesForTable, walkInKey } from "./store";
+import { paysFirst } from "./pay-first";
+import { type OrderLine, holdWalkIn, linesForTable, walkInKey, walkInOrder } from "./store";
 
 /** The question a screen asks before it takes payment for an order with unsent lines. */
 export interface SendFirstGate {
@@ -40,7 +44,7 @@ export function createSendFirst(): SendFirstGate {
     asking,
     unsent,
     ask: (key, pay) => {
-      const asks = unsent(key) > 0;
+      const asks = unsent(key) > 0 && !(paysFirst() && walkInOrder(key) !== undefined);
       then = pay;
       setAsking(asks ? key : null);
       return asks;

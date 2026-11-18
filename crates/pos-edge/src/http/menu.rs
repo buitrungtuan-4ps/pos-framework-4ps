@@ -185,6 +185,11 @@ pub(crate) struct MenuResponse {
     /// Whether the store sells by barcode (`barcode_enabled`), which turns on the till's scan
     /// listener and its code index (decision 7).
     barcode_enabled: bool,
+    /// Whether the store pays first (`pay_first_enabled`): settling an order with no table sends
+    /// its unsent lines to the kitchen
+    /// ([ADR-0222](../../../../docs/adr/0222-items-carry-barcodes-and-plus-and-a-counter-can-pay-first.md)
+    /// decision 6), so the till does not ask to send them before payment.
+    pay_first_enabled: bool,
     /// Whether the store keeps bar tabs (`tabs_enabled`), which shows the till's tabs list
     /// ([ADR-0221](../../../../docs/adr/0221-a-bar-tab-is-an-order-without-a-table-that-stays-open.md)).
     tabs_enabled: bool,
@@ -450,6 +455,7 @@ where
             check_before_payment: session.billing.check_before_payment(),
             scan_keystroke_window_ms: session.scan.keystroke_window_ms(),
             barcode_enabled: session.capabilities.enabled(Capability::Barcode),
+            pay_first_enabled: session.capabilities.enabled(Capability::PayFirst),
             tabs_enabled: session.capabilities.enabled(Capability::Tabs),
             tab_guest_label: session.capabilities.enabled(Capability::Tabs)
                 && session.tabs.guest_label() == pos_proto::tabs::GuestLabel::On,
