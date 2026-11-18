@@ -231,7 +231,11 @@ impl<S: EventStore> Edge<S> {
     /// The payments taken towards the bills of `order_id` that are still open, or towards `bill_id`
     /// alone where one is named, in the order they were taken (ADR-0220 decision 3).
     #[must_use]
-    pub fn payments_towards(&self, order_id: OrderId, bill_id: Option<BillId>) -> Vec<TakenPayment> {
+    pub fn payments_towards(
+        &self,
+        order_id: OrderId,
+        bill_id: Option<BillId>,
+    ) -> Vec<TakenPayment> {
         let projection = self.lock_projection();
         let bills =
             bill_id.map_or_else(|| projection.open_bills_for_order(order_id), |id| vec![id]);

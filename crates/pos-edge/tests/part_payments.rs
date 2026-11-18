@@ -194,7 +194,11 @@ fn each_payment_is_recorded_as_it_is_taken_and_the_last_settles() {
             let payments = reader.payments_towards(order, Some(bill));
             assert_eq!(payments.len(), 1, "{payments:?}");
             assert_eq!(
-                (payments[0].method, payments[0].amount, payments[0].split_ways),
+                (
+                    payments[0].method,
+                    payments[0].amount,
+                    payments[0].split_ways
+                ),
                 (PaymentMethod::Cash, vnd(100_000), Some(2))
             );
         }

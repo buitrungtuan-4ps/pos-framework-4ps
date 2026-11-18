@@ -194,10 +194,8 @@ impl<S: EventStore> Edge<S> {
                 // A part payment's drawer is held open until its bill settles (ADR-0220); a
                 // payment whose settle follows in the same transaction is dropped again at once.
                 projection.record_part_payment(event.bill_id, shift);
-                projection.record_taken(
-                    event.bill_id,
-                    TakenPayment::of(&event, envelope.event_time),
-                );
+                projection
+                    .record_taken(event.bill_id, TakenPayment::of(&event, envelope.event_time));
             }
             EventType::BillingBillSettled => {
                 let event: BillingBillSettled = envelope.data.decode().map_err(AppError::Encode)?;
