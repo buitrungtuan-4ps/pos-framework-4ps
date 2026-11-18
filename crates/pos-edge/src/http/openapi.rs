@@ -71,6 +71,7 @@ use utoipa::{Modify, OpenApi};
         super::qr::reject_order,
         super::lines::set_quantity,
         super::lines::void_line,
+        super::reprice::reprice_line,
         super::counter::settled_bills,
         super::tables::table_state,
         super::check::table_check,

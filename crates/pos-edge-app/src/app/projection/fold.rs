@@ -16,9 +16,9 @@ use pos_proto::events::{
     CashDrawerPaidOut, CashShiftClosed, CashShiftCounted, CashShiftOpened, DataCustomFieldSet,
     DataCustomRecordChanged, DataSubjectMasked, EventType, InventoryItemRestored,
     InventoryItemSoldOut, KitchenTicketBumped, SalesOrderClosed, SalesOrderConfirmedByStaff,
-    SalesOrderLineAdded, SalesOrderLineFired, SalesOrderLineUpdated, SalesOrderLineVoided,
-    SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed, SalesTableMerged,
-    SalesTableOpened, SalesTableTransferred,
+    SalesOrderLineAdded, SalesOrderLineFired, SalesOrderLineRepriced, SalesOrderLineUpdated,
+    SalesOrderLineVoided, SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed,
+    SalesTableMerged, SalesTableOpened, SalesTableTransferred,
 };
 use pos_proto::time::Timestamp;
 use pos_proto::{BillState, OrderLineState, PaymentMethod, ShiftState, TableState};
@@ -398,6 +398,11 @@ impl<S: EventStore> Edge<S> {
             | EventType::CashDrawerPaidOut
             | EventType::CashDrawerDropped => {
                 Self::fold_movement(projection, envelope, known)?;
+            }
+            EventType::SalesOrderLineRepriced => {
+                let event: SalesOrderLineRepriced =
+                    envelope.data.decode().map_err(AppError::Encode)?;
+                projection.reprice_line(event.order_line_id, event.unit_price, event.line_total);
             }
             EventType::BillingCompApplied => {
                 let event: BillingCompApplied = envelope.data.decode().map_err(AppError::Encode)?;

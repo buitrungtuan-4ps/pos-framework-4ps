@@ -39,6 +39,7 @@ From [`docs/openapi-edge.json`](../openapi-edge.json).
 | POST | `/api/kds/bump` | `bump_ticket` | `till_session` | `sales.ticket.bump` | [`crates/pos-edge/src/http/kds.rs`](../../crates/pos-edge/src/http/kds.rs) |
 | GET | `/api/layout` | `layout_plan` | `till_session` | — | [`crates/pos-edge/src/http/layout.rs`](../../crates/pos-edge/src/http/layout.rs) |
 | POST | `/api/lines/{id}/fire` | `fire_line` | `till_session` | `sales.line.fire` | [`crates/pos-edge/src/http/lines.rs`](../../crates/pos-edge/src/http/lines.rs) |
+| POST | `/api/lines/{id}/price` | `reprice_line` | `till_session` | `billing.price.override` | [`crates/pos-edge/src/http/reprice.rs`](../../crates/pos-edge/src/http/reprice.rs) |
 | POST | `/api/lines/{id}/quantity` | `set_quantity` | `till_session` | `sales.line.add` | [`crates/pos-edge/src/http/lines.rs`](../../crates/pos-edge/src/http/lines.rs) |
 | POST | `/api/lines/{id}/void` | `void_line` | `till_session` | `sales.line.add`, `sales.line.void_fired` | [`crates/pos-edge/src/http/lines.rs`](../../crates/pos-edge/src/http/lines.rs) |
 | GET | `/api/locale` | `locale_settings` | `till_session` | — | [`crates/pos-edge/src/http/locale.rs`](../../crates/pos-edge/src/http/locale.rs) |

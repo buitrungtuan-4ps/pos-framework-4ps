@@ -24,6 +24,7 @@ const MONEY_ROUTES: &[&str] = &[
     "POST /api/bills/{id}/void",
     "POST /api/bills/{id}/void_settled",
     "POST /api/drawer/open",
+    "POST /api/lines/{id}/price",
     "POST /api/shifts",
     "POST /api/shifts/{id}/close",
     "POST /api/shifts/{id}/count",

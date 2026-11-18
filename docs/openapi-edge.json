@@ -1629,6 +1629,73 @@
         "x-permission": "sales.line.fire"
       }
     },
+    "/api/lines/{id}/price": {
+      "post": {
+        "tags": [
+          "orders"
+        ],
+        "summary": "`POST /api/lines/{id}/price` — override a line's price before its bill opens (ADR-0219\ndecision 2).",
+        "operationId": "reprice_line",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The order line's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`unit_price`, in minor units and above zero, and `reason_code_id`, published for `REASON_ACTION_PRICE_OVERRIDE`, with `approver_code` and `approver_pin` of somebody who may override a price where the person acting may not. Both are secrets and are never logged",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RepriceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The line's new price of one and its total, from the edge's own arithmetic",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepriceResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The id is not a ULID, or the price is not above zero"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; the override needs an approval that was missing or refused, or the approver is locked out; or this box was superseded by a replacement"
+          },
+          "409": {
+            "description": "Refused: no such line or it was voided (`UNKNOWN_LINE`), its order has a bill (`BILL_ALREADY_OPEN`), the reason is not one published for an override (`REASON_CODE_NOT_VALID`), the price is above the store's published multiple of the price the line was added at (`PRICE_OUT_OF_RANGE`), or the person lacks the permission. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "billing.price.override"
+      }
+    },
     "/api/lines/{id}/quantity": {
       "post": {
         "tags": [
@@ -8190,6 +8257,63 @@
         "properties": {
           "reason_code_id": {
             "$ref": "#/components/schemas/ReasonCodeId"
+          }
+        }
+      },
+      "RepriceRequest": {
+        "type": "object",
+        "description": "A price override as a till asks for it: the new price of one, why, and the badge and PIN of\nsomebody who holds `billing.price.override` where the person acting needs one.",
+        "required": [
+          "unit_price",
+          "reason_code_id"
+        ],
+        "properties": {
+          "approver_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approver_pin": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason_code_id": {
+            "$ref": "#/components/schemas/ReasonCodeId"
+          },
+          "unit_price": {
+            "$ref": "#/components/schemas/Money",
+            "description": "The new price of one, in minor units, above zero."
+          }
+        }
+      },
+      "RepriceResponse": {
+        "type": "object",
+        "description": "The line as the override left it: its new price of one and the total the edge computed from it.",
+        "required": [
+          "order_id",
+          "order_line_id",
+          "unit_price",
+          "previous_unit_price",
+          "line_total"
+        ],
+        "properties": {
+          "line_total": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "order_id": {
+            "$ref": "#/components/schemas/OrderId"
+          },
+          "order_line_id": {
+            "$ref": "#/components/schemas/OrderLineId"
+          },
+          "previous_unit_price": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "unit_price": {
+            "$ref": "#/components/schemas/Money"
           }
         }
       },

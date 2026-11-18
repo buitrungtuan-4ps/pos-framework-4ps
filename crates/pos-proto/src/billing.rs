@@ -10,6 +10,8 @@
 //! store may narrow it to the shift that took the money. A document with no `billing` node, or a
 //! node without the field, runs the default.
 
+use std::ops::RangeInclusive;
+
 use serde::{Deserialize, Serialize};
 
 use crate::wire_enum;
@@ -47,7 +49,25 @@ pub struct PublishedBilling {
         skip_serializing_if = "Option::is_none"
     )]
     pub check_before_payment: Option<bool>,
+    /// The most a line's new unit price may be on a price override, as a multiple of the price it
+    /// was added at
+    /// ([ADR-0219](../../../docs/adr/0219-a-comp-and-a-price-override-each-need-a-reason-and-an-approver.md)).
+    /// Read it through [`PublishedBilling::price_override_max_multiple`]: absent, or not a whole
+    /// number within [`PRICE_OVERRIDE_MAX_MULTIPLE`], is [`DEFAULT_PRICE_OVERRIDE_MAX_MULTIPLE`].
+    #[serde(
+        default,
+        deserialize_with = "whole",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub price_override_max_multiple: Option<i64>,
 }
+
+/// The multiples a store may publish as its price override's ceiling (ADR-0219).
+pub const PRICE_OVERRIDE_MAX_MULTIPLE: RangeInclusive<i64> = 1..=100;
+
+/// The ceiling until a store publishes its own: a new unit price at most a hundred times the price
+/// the line was added at (ADR-0219, accepted by the owner on 2026-11-18).
+pub const DEFAULT_PRICE_OVERRIDE_MAX_MULTIPLE: i64 = 100;
 
 impl PublishedBilling {
     /// The node's key in a store's configuration document.
@@ -73,6 +93,25 @@ impl PublishedBilling {
     pub fn check_before_payment(&self) -> bool {
         self.check_before_payment.unwrap_or(false)
     }
+
+    /// The most a line's new unit price may be, as a multiple of the price it was added at
+    /// (ADR-0219): the node's number within [`PRICE_OVERRIDE_MAX_MULTIPLE`], and
+    /// [`DEFAULT_PRICE_OVERRIDE_MAX_MULTIPLE`] otherwise.
+    #[must_use]
+    pub fn price_override_max_multiple(&self) -> i64 {
+        self.price_override_max_multiple
+            .filter(|multiple| PRICE_OVERRIDE_MAX_MULTIPLE.contains(multiple))
+            .unwrap_or(DEFAULT_PRICE_OVERRIDE_MAX_MULTIPLE)
+    }
+}
+
+/// A whole number as the node carries it, or nothing for a value that is not one, so the field
+/// reads as its default rather than refusing the node.
+fn whole<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(serde_json::Value::deserialize(deserializer)?.as_i64())
 }
 
 /// An on-or-off value as the node carries it, or nothing for a value that is not one, so the field
@@ -145,6 +184,25 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&on).expect("serialise"),
             serde_json::json!({ "check_before_payment": true })
+        );
+    }
+
+    /// ADR-0219: a hundred times the price until a store says otherwise, and a value outside one to
+    /// a hundred, or not a whole number, reads as the default rather than refusing the node.
+    #[test]
+    fn a_price_override_is_bounded_at_a_hundred_times_until_a_store_narrows_it() {
+        for unset in [
+            "{}",
+            r#"{ "price_override_max_multiple": 0 }"#,
+            r#"{ "price_override_max_multiple": 101 }"#,
+            r#"{ "price_override_max_multiple": "3" }"#,
+            r#"{ "price_override_max_multiple": 2.5 }"#,
+        ] {
+            assert_eq!(node(unset).price_override_max_multiple(), 100, "{unset}");
+        }
+        assert_eq!(
+            node(r#"{ "price_override_max_multiple": 3 }"#).price_override_max_multiple(),
+            3
         );
     }
 

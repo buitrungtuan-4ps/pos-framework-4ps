@@ -113,6 +113,15 @@ pub enum DomainError {
     /// is the country module's to say, not the core's.
     EInvoiceIssued,
 
+    /// A price override is not above zero, or is above the store's published multiple of the price
+    /// the line was added at (`billing.price_override_max_multiple`,
+    /// [ADR-0219](../../../docs/adr/0219-a-comp-and-a-price-override-each-need-a-reason-and-an-approver.md)
+    /// decision 2). Giving an item away is a comp, not a price of zero.
+    PriceOutOfRange {
+        /// The most the new price of one may be, in minor units.
+        ceiling_minor: i64,
+    },
+
     /// The acting role's [`PermissionSet`](crate::permission::PermissionSet) does not grant the
     /// permission the action needs. Deny by default: every gated action fails this way unless the
     /// set explicitly carries the permission
@@ -168,6 +177,10 @@ impl core::fmt::Display for DomainError {
             }
             Self::FeeNotOnBill => f.write_str("the bill charges no such fee"),
             Self::FeeNotWaivable => f.write_str("the fee's rule does not let it be waived"),
+            Self::PriceOutOfRange { ceiling_minor } => write!(
+                f,
+                "a price override is above zero and at most {ceiling_minor} in minor units"
+            ),
             Self::SettledVoidWindowClosed { window } => {
                 write!(f, "the window to void a paid bill has closed ({window})")
             }
@@ -198,6 +211,7 @@ impl core::error::Error for DomainError {
             | Self::LinesDoNotMatchBases
             | Self::FeeNotOnBill
             | Self::FeeNotWaivable
+            | Self::PriceOutOfRange { .. }
             | Self::SettledVoidWindowClosed { .. }
             | Self::EInvoiceIssued
             | Self::PermissionDenied { .. }
