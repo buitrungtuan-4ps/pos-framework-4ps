@@ -78,6 +78,10 @@ pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
         RouteGate::Person(&[Permission::OpenBill]),
     ),
     (
+        "POST /api/bills/{id}/comp",
+        RouteGate::Person(&[Permission::ApplyComp]),
+    ),
+    (
         "POST /api/bills/{id}/discount",
         RouteGate::Person(&[
             Permission::ApplyDiscount,
@@ -344,10 +348,6 @@ pub const NOT_ON_A_ROUTE: &[(Permission, &str)] = &[
     (
         Permission::OverridePrice,
         "the till cannot override a price yet",
-    ),
-    (
-        Permission::ApplyComp,
-        "the till cannot comp a bill yet; the discount route only discounts",
     ),
     (
         Permission::IssueRefund,

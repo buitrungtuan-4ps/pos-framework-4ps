@@ -15,6 +15,7 @@ use super::{ROUTE_PERMISSIONS, RouteGate};
 /// or moves cash into, out of or through a drawer (ADR-0191 decision 2). An act calling one is a
 /// money act, and a money act calls only these.
 const MONEY_ROUTES: &[&str] = &[
+    "POST /api/bills/{id}/comp",
     "POST /api/bills/{id}/discount",
     "POST /api/bills/{id}/fees/{fee_id}/waive",
     "POST /api/bills/{id}/merge",
