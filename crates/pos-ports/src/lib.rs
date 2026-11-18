@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The twenty-two boundaries between the framework and the outside world.
+//! The twenty-three boundaries between the framework and the outside world.
 //!
 //! Every external system — database, broker, printer, terminal, marketplace, tax
 //! authority — is one implementation of one trait defined here. The list is fixed
@@ -14,8 +14,10 @@
 //! `docs/adr/0195-the-cloud-wakes-a-store-to-pull-its-config.md` the twenty-first, `StoreWake`, the
 //! receive-only wake that tells a store to pull its configuration, and
 //! `docs/adr/0217-secrets-are-sealed-under-versioned-tenant-keys.md` the twenty-second, `KeyKeeper`,
-//! the cloud's environment key, which wraps tenant keys and nothing else. A twenty-third needs an
-//! ADR merged first, and the count here is checkable against `PortName::ALL`.
+//! the cloud's environment key, which wraps tenant keys and nothing else, and
+//! `docs/adr/0223-a-weighed-item-is-priced-by-its-weight.md` the twenty-third, `Scale`, the scale
+//! beside a till, which reports one stable net weight in grams or why there is none. A
+//! twenty-fourth needs an ADR merged first, and the count here is checkable against `PortName::ALL`.
 //!
 //! # Shape
 //!
@@ -23,9 +25,9 @@
 //! `unimplemented!()` means the port is wrong, not the adapter
 //! (`docs/design-principles.md`, interface segregation).
 //!
-//! Two of the twenty-two are synchronous and are re-exported from `pos-proto`
+//! Two of the twenty-three are synchronous and are re-exported from `pos-proto`
 //! rather than defined here, so that there is exactly one definition of each:
-//! `ClockSource` and `IdGenerator`. The other twenty are asynchronous,
+//! `ClockSource` and `IdGenerator`. The other twenty-one are asynchronous,
 //! declared with native `async fn` in trait — no procedural macro, no boxing on
 //! the happy path. Where a family needs runtime selection between several
 //! compiled-in adapters, this crate also carries a hand-written object-safe
@@ -64,6 +66,7 @@ pub mod metrics_sink;
 pub mod order_in;
 pub mod payment;
 pub mod printer;
+pub mod scale;
 pub mod shipping;
 pub mod signer;
 pub mod store_wake;
@@ -100,6 +103,7 @@ pub use printer::{
     CodePage, PrintBlock, PrintDocument, PrintJob, PrinterCapabilities, PrinterConnection,
     PrinterDriver, PrinterStatus, TextStyle,
 };
+pub use scale::{Scale, ScaleReading};
 pub use shipping::{
     CourierJobRef, DeliveryContact, DeliveryRequest, Shipment, ShipmentUpdate, ShippingDispatch,
 };

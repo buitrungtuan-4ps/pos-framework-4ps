@@ -18,8 +18,8 @@ use pos_contract_tests::harness::{
     DeliveryVendorHarness, DeviceRegistryHarness, ErpSinkHarness, EventStoreHarness,
     FiscalizationHarness, HarnessError, IdGeneratorHarness, IntakeLedgerHarness, KeyKeeperHarness,
     KeyVaultHarness, MessageLinkHarness, MetricsSinkHarness, OrderInHarness,
-    PaymentTerminalHarness, PrinterDriverHarness, Setup, ShippingDispatchHarness, SignerHarness,
-    StoreWakeHarness, SubjectStoreHarness,
+    PaymentTerminalHarness, PrinterDriverHarness, ScaleHarness, Setup, ShippingDispatchHarness,
+    SignerHarness, StoreWakeHarness, SubjectStoreHarness,
 };
 use pos_ports::{
     AccountCode, BusyMode, CourierJobRef, MetricSample, PrinterCapabilities, PublicKey, Signature,
@@ -546,5 +546,42 @@ impl StoreWakeHarness for WakeHarness {
 
     fn patience(&self) -> core::time::Duration {
         core::time::Duration::ZERO
+    }
+}
+
+/// Harness for [`crate::FakeScale`]: a fresh scale per case, loaded through its handle.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ScaleFixture;
+
+impl ScaleHarness for ScaleFixture {
+    type Scale = crate::FakeScale;
+
+    async fn fresh(&self) -> Setup<Self::Scale> {
+        Ok(crate::FakeScale::new())
+    }
+
+    async fn settle(&self, scale: &Self::Scale, net_grams: u32) -> Setup<()> {
+        scale.settle(net_grams);
+        Ok(())
+    }
+
+    async fn disturb(&self, scale: &Self::Scale) -> Setup<()> {
+        scale.set(pos_ports::ScaleReading::Unstable);
+        Ok(())
+    }
+
+    async fn overload(&self, scale: &Self::Scale) -> Setup<()> {
+        scale.set(pos_ports::ScaleReading::Overloaded);
+        Ok(())
+    }
+
+    async fn below_zero(&self, scale: &Self::Scale) -> Setup<()> {
+        scale.set(pos_ports::ScaleReading::UnderZero);
+        Ok(())
+    }
+
+    async fn unplug(&self, scale: &Self::Scale) -> Setup<()> {
+        scale.unplug();
+        Ok(())
     }
 }
