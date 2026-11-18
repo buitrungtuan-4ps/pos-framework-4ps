@@ -61,6 +61,7 @@ pub(super) async fn sell(till: &Till) -> Result<Sale, Failed> {
         .await
         .map_err(|detail| ("open the shift", detail))?;
     let shift_id = text(&shift, "shift_id").map_err(|detail| ("open the shift", detail))?;
+    super::tab::tab(till).await?;
     if menu["barcode_enabled"] == json!(true) {
         super::labels::labels(till, &items[0]).await?;
     }

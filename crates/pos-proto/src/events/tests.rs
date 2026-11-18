@@ -207,6 +207,7 @@ fn an_envelope_round_trips_through_json() {
         package_version_id: None,
         vendor_id: None,
         subject_id: None,
+        tab_number: None,
     };
     let envelope = sample_envelope(EventType::SalesOrderOpened, payload.clone());
     let json = serde_json::to_string(&envelope).expect("serialise");
@@ -1027,4 +1028,22 @@ fn a_delivery_order_names_its_recipient_by_subject_id_only() {
     assert!(json.contains(r#""subject_id":"#), "{json}");
     let back: SalesOrderOpened = serde_json::from_str(&json).expect("deserialise");
     assert_eq!(back, delivered);
+}
+
+/// A bar tab carries its number and nothing about its guest (ADR-0221 decision 1): absent for any
+/// other order and left off the wire then, so every order opened before replays byte for byte.
+#[test]
+fn a_tab_carries_its_number_and_other_orders_stay_as_they_were() {
+    let before = r#"{"order_id":"01J00000000000000000000001","channel":"SALES_CHANNEL_DINE_IN","table_id":null,"guest_count":null}"#;
+    let opened: SalesOrderOpened = serde_json::from_str(before).expect("an old order replays");
+    assert_eq!(opened.tab_number, None);
+    assert_eq!(serde_json::to_string(&opened).expect("serialise"), before);
+    let tab = SalesOrderOpened {
+        tab_number: Some(7),
+        ..opened
+    };
+    let json = serde_json::to_string(&tab).expect("serialise");
+    assert!(json.ends_with(r#""tab_number":7}"#), "{json}");
+    let back: SalesOrderOpened = serde_json::from_str(&json).expect("deserialise");
+    assert_eq!(back, tab);
 }

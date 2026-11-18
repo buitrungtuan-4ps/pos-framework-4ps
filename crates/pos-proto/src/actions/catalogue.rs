@@ -85,6 +85,16 @@ pub const CATALOGUE: &[Action] = &[
         ..BASE
     },
     Action {
+        action_id: "sales.tab.open",
+        effect: EdgeWrite,
+        params: &[optional("channel", Token)],
+        routes: &["POST /api/orders"],
+        permissions: ADD_LINE,
+        refusals: &["CAPABILITY_DISABLED"],
+        summary: "Open a bar tab, numbered for the day, that stays open across rounds",
+        ..BASE
+    },
+    Action {
         action_id: "sales.line.add",
         effect: EdgeWrite,
         params: &[

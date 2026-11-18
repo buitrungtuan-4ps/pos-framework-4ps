@@ -54,6 +54,7 @@ mod shift_x;
 pub mod shifts;
 mod sync;
 pub mod tables;
+mod tabs;
 mod void_settled;
 pub mod ws;
 

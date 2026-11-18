@@ -102,6 +102,7 @@ From [`docs/openapi-edge.json`](../openapi-edge.json).
 | POST | `/api/tables/{id}/release` | `release_table` | `till_session` | `sales.table.manage` | [`crates/pos-edge/src/http/tables.rs`](../../crates/pos-edge/src/http/tables.rs) |
 | POST | `/api/tables/{id}/seat` | `seat_table` | `till_session` | `sales.table.manage` | [`crates/pos-edge/src/http/tables.rs`](../../crates/pos-edge/src/http/tables.rs) |
 | POST | `/api/tables/{id}/transfer` | `transfer_table` | `till_session` | `sales.order.transfer`, `sales.table.manage` | [`crates/pos-edge/src/http/tables.rs`](../../crates/pos-edge/src/http/tables.rs) |
+| GET | `/api/tabs` | `open_tabs` | `till_session` | — | [`crates/pos-edge/src/http/tabs.rs`](../../crates/pos-edge/src/http/tabs.rs) |
 | GET | `/healthz` | `healthz` | public: nothing: a liveness probe | — | [`crates/pos-edge/src/http/health.rs`](../../crates/pos-edge/src/http/health.rs) |
 | GET | `/ws` | `fan_out` | `till_session` | — | [`crates/pos-edge/src/http/ws.rs`](../../crates/pos-edge/src/http/ws.rs) |
 

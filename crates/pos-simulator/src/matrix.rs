@@ -22,6 +22,7 @@
 mod sale;
 mod labels;
 mod store;
+mod tab;
 
 use pos_business_types::Template;
 use pos_country::CountryModule;

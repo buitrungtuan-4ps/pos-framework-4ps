@@ -3,10 +3,11 @@
 
 //! The counter: opening a tableless order, and listing the counter orders still unpaid.
 
-use pos_core::decision::Actor;
+use pos_core::decision::{Actor, DecisionCtx};
 use pos_core::permission::Permission;
 use pos_ports::event_store::EventStore;
 use pos_proto::events::SalesOrderOpened;
+use pos_proto::ids::OrderId;
 use pos_proto::text::DisplayName;
 use pos_proto::{Open, SalesChannel};
 
@@ -33,6 +34,17 @@ impl<S: EventStore> Edge<S> {
         actor: Actor,
         channel: SalesChannel,
     ) -> Result<CounterOrderOpened, AppError> {
+        let (ctx, order_id) = self.begin_tableless(actor, channel)?;
+        self.finish_tableless(&ctx, order_id, channel, None).await
+    }
+
+    /// The checks every tableless open makes, and the new order's id: what
+    /// [`Self::open_counter_order`] and [`Self::open_tab`] share before the tab's number.
+    pub(in crate::app) fn begin_tableless(
+        &self,
+        actor: Actor,
+        channel: SalesChannel,
+    ) -> Result<(DecisionCtx, OrderId), AppError> {
         // A replaced machine starts nothing (ADR-0123), exactly as it seats nobody.
         self.refuse_if_superseded()?;
         self.refuse_without_open_shift()?;
@@ -42,7 +54,17 @@ impl<S: EventStore> Edge<S> {
         if !self.session().channel_enabled(channel) {
             return Err(AppError::ChannelNotAccepted);
         }
-        let order_id = self.next_order_id();
+        Ok((ctx, self.next_order_id()))
+    }
+
+    /// Records `sales.order.opened` for a tableless order, with a tab's number where it is one.
+    pub(in crate::app) async fn finish_tableless(
+        &self,
+        ctx: &DecisionCtx,
+        order_id: OrderId,
+        channel: SalesChannel,
+        tab_number: Option<u64>,
+    ) -> Result<CounterOrderOpened, AppError> {
         let package_version_id = self.opening_package_version();
         let opened = SalesOrderOpened {
             order_id,
@@ -52,12 +74,14 @@ impl<S: EventStore> Edge<S> {
             package_version_id,
             vendor_id: None,
             subject_id: None,
+            tab_number,
         };
-        self.commit_and_publish(&ctx, &opened).await?;
+        self.commit_and_publish(ctx, &opened).await?;
         {
             let mut projection = self.lock_projection();
             projection.open_order_origin(order_id, Some(channel), None);
             projection.record_opened(order_id, None, package_version_id);
+            projection.record_tab(order_id, tab_number);
         }
         Ok(CounterOrderOpened {
             order_id,
