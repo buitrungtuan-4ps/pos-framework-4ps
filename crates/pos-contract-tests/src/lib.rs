@@ -71,6 +71,7 @@ pub mod metrics_sink;
 pub mod order_in;
 pub mod payment;
 pub mod printer;
+pub mod scale;
 pub mod shipping;
 pub mod signer;
 pub mod store_wake;
@@ -117,6 +118,8 @@ pub const __PORT_ORDER_IN: PortName = PortName::OrderIn;
 pub const __PORT_PAYMENT_TERMINAL: PortName = PortName::PaymentTerminal;
 #[doc(hidden)]
 pub const __PORT_PRINTER_DRIVER: PortName = PortName::PrinterDriver;
+#[doc(hidden)]
+pub const __PORT_SCALE: PortName = PortName::Scale;
 #[doc(hidden)]
 pub const __PORT_SHIPPING_DISPATCH: PortName = PortName::ShippingDispatch;
 #[doc(hidden)]
@@ -385,7 +388,7 @@ pub fn report(port: PortName, case: &'static str, outcome: Result<(), CaseFailur
 /// `docs/roadmap.md` P2's exit criterion is *"every port has a contract suite"*, and a criterion
 /// nothing checks is a criterion that stops being true the first time somebody is in a hurry.
 ///
-/// Twenty-two entries, matching `PortName::ALL`.
+/// Twenty-three entries, matching `PortName::ALL`.
 pub const SUITES: &[(PortName, &str)] = &[
     (PortName::EventStore, "event_store_suite"),
     (PortName::ConfigStore, "config_store_suite"),
@@ -409,6 +412,7 @@ pub const SUITES: &[(PortName, &str)] = &[
     (PortName::SubjectStore, "subject_store_suite"),
     (PortName::StoreWake, "store_wake_suite"),
     (PortName::KeyKeeper, "key_keeper_suite"),
+    (PortName::Scale, "scale_suite"),
 ];
 
 /// Turns a list of *synchronous* case functions into `#[test]` functions.
