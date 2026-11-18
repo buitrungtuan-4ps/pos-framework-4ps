@@ -65,6 +65,8 @@ impl<S: EventStore> Edge<S> {
         let reducible = reducible_base(&order.class_bases, session.currency)?;
         let (discount, comp) = bill.reductions(session.currency);
         let applied = discount.checked_add(comp).map_err(DomainError::from)?;
+        let comped = comp.checked_add(amount).map_err(DomainError::from)?;
+        self.refuse_below_paid(bill_id, &bill, (discount, comped), &bill.waived_fee_ids)?;
 
         let approver = self.resolve_step_up(&mut ctx, Permission::ApplyComp, approval)?;
         let _decided = decide_bill(

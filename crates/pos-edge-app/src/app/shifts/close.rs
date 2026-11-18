@@ -73,6 +73,11 @@ impl<S: EventStore> Edge<S> {
         let approver = self.manage_other_till(&mut ctx, another_till(scope, &record), approval)?;
         let overrider = self.override_assignment(&mut ctx, Some(&record), approval)?;
         let decision = decide_shift(record.state, ShiftCommand::Close, &ctx)?;
+        // A drawer holding a payment towards a bill still open does not close under it (ADR-0220
+        // decision 5): the bill settles first.
+        if self.lock_projection().part_paid_in(shift_id) {
+            return Err(AppError::BillPartPaid);
+        }
         let (mut payload, mut report) = self.closing(shift_id, &record)?;
         if self.owes_variance_reason(report.variance) {
             let Some(reason) = reason else {
@@ -140,6 +145,9 @@ impl<S: EventStore> Edge<S> {
         let mut owing = Vec::new();
         for (shift_id, record) in &named {
             let decision = decide_shift(record.state, ShiftCommand::Close, &ctx)?;
+            if self.lock_projection().part_paid_in(*shift_id) {
+                return Err(AppError::BillPartPaid);
+            }
             let (mut payload, mut report) = self.closing(*shift_id, record)?;
             if self.owes_variance_reason(report.variance) {
                 let Some((_, reason)) = reasons.iter().find(|(shift, _)| shift == shift_id) else {

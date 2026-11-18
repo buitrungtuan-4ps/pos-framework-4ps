@@ -2,6 +2,7 @@
   "business_type": "BUSINESS_TYPE_FAST_FOOD",
   "recommended_settings": [
     { "setting_key": "counter.walk_in_channel", "value": "WALK_IN_CHANNEL_ASK" },
-    { "setting_key": "tender_keys.first_tip_percent", "value": 0 }
+    { "setting_key": "tender_keys.first_tip_percent", "value": 0 },
+    { "setting_key": "billing.part_payments", "value": false }
   ]
 }

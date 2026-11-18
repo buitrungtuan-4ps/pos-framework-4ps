@@ -39,6 +39,7 @@ mod openapi;
 mod openapi_required;
 pub mod package;
 pub mod pair;
+mod payments;
 mod print_agent;
 mod print_jobs;
 mod printers;
@@ -565,6 +566,9 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
         },
         AppError::NoOpenOrder => "NO_OPEN_ORDER",
         AppError::UnknownLine => "UNKNOWN_LINE",
+        AppError::PaymentExceedsRemaining => "PAYMENT_EXCEEDS_REMAINING",
+        AppError::PartPaymentsOff => "PART_PAYMENTS_OFF",
+        AppError::BillPartPaid => "BILL_PART_PAID",
         AppError::AlreadyComped => "ALREADY_COMPED",
         AppError::UnroutableLine => "UNROUTABLE_LINE",
         AppError::UnknownOrder => "UNKNOWN_ORDER",
@@ -636,6 +640,9 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         }
         AppError::NoOpenOrder
         | AppError::UnknownLine
+        | AppError::PaymentExceedsRemaining
+        | AppError::PartPaymentsOff
+        | AppError::BillPartPaid
         | AppError::AlreadyComped
         | AppError::UnroutableLine
         | AppError::UnknownOrder

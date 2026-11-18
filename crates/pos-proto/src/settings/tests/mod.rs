@@ -594,6 +594,7 @@ fn read_back_billing(field: &str, document: Value) -> Option<Value> {
     match field {
         "settled_void_window" => Some(json!(billing.settled_void_window().as_wire())),
         "check_before_payment" => Some(json!(billing.check_before_payment())),
+        "part_payments" => Some(json!(billing.part_payments())),
         "price_override_max_multiple" => Some(json!(billing.price_override_max_multiple())),
         _ => None,
     }

@@ -687,6 +687,23 @@ pub(super) fn billing_settings() -> Vec<Setting> {
         },
         Setting {
             node: PublishedBilling::NODE,
+            field: "part_payments",
+            shape: SettingShape::Bool {
+                default: PublishedBilling::default().part_payments(),
+                // ADR-0220, accepted by the owner on 2026-11-18: on; the counter templates
+                // recommend off.
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            confirm: None,
+            summary: "Whether a bill may be paid in parts, one payment at a time, each recorded as it \
+                      is taken and seen on every till, the last one settling the bill. On, the \
+                      default, the pay screen offers it, for an even split or guests paying their \
+                      own share. Off, a bill is paid in one go, as a counter usually is.",
+        },
+        Setting {
+            node: PublishedBilling::NODE,
             field: "price_override_max_multiple",
             shape: SettingShape::Int {
                 min: *billing::PRICE_OVERRIDE_MAX_MULTIPLE.start(),

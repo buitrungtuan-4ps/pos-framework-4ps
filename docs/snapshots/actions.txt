@@ -157,6 +157,24 @@ billing.line.comp	refusal=APPROVAL_REQUIRED
 billing.line.comp	refusal=REASON_CODE_NOT_VALID
 billing.line.comp	route=POST /api/bills/{id}/comp
 billing.line.comp	since=0.14.1
+billing.payment.take
+billing.payment.take	effect=ACTION_EFFECT_MONEY
+billing.payment.take	frequency=ACTION_FREQUENCY_RARE
+billing.payment.take	param=bill_id:ACTION_PARAM_KIND_ID:required
+billing.payment.take	param=payment:ACTION_PARAM_KIND_ENTERED:required
+billing.payment.take	param=split_ways:ACTION_PARAM_KIND_COUNT:optional
+billing.payment.take	permission=billing.payment.take
+billing.payment.take	permission=cash.drawer.override_assignment
+billing.payment.take	refusal=CHECK_REQUIRED
+billing.payment.take	refusal=DRAWER_ASSIGNED_TO_ANOTHER
+billing.payment.take	refusal=DRAWER_COUNTED
+billing.payment.take	refusal=DRAWER_DAY_ENDED
+billing.payment.take	refusal=NOT_A_TILL
+billing.payment.take	refusal=OPEN_SHIFT_REQUIRED
+billing.payment.take	refusal=PART_PAYMENTS_OFF
+billing.payment.take	refusal=PAYMENT_EXCEEDS_REMAINING
+billing.payment.take	route=POST /api/bills/{id}/payments
+billing.payment.take	since=0.14.1
 billing.receipt.reprint
 billing.receipt.reprint	effect=ACTION_EFFECT_EDGE_WRITE
 billing.receipt.reprint	frequency=ACTION_FREQUENCY_RARE

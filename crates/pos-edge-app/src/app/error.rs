@@ -33,6 +33,20 @@ pub enum AppError {
     /// A command named a line the edge does not know.
     #[error("no such order line")]
     UnknownLine,
+    /// A payment applied more than the bill still owes
+    /// ([ADR-0220](../../../../docs/adr/0220-a-bill-takes-its-payments-one-at-a-time.md) decision
+    /// 2): what is over is change on that tender, never on another.
+    #[error("the payment is more than the bill still owes")]
+    PaymentExceedsRemaining,
+    /// The store takes a bill in one payment (`billing.part_payments` is off, ADR-0220), and this
+    /// one does not cover it.
+    #[error("this store takes a bill in one payment")]
+    PartPaymentsOff,
+    /// A payment has been taken towards the bill, so it may not be split, merged or voided here,
+    /// reduced below what is paid, or its drawer's shift closed until it settles (ADR-0220
+    /// decisions 4 and 5).
+    #[error("a payment has been taken towards this bill")]
+    BillPartPaid,
     /// A comp named a line already given away: a line is comped at most once
     /// ([ADR-0219](../../../../docs/adr/0219-a-comp-and-a-price-override-each-need-a-reason-and-an-approver.md)).
     #[error("that line has already been comped")]

@@ -56,8 +56,9 @@ table where the template serves at tables, as a takeaway at the counter otherwis
 second's price to twice the menu's with the store's override reason (ADR-0219), sends them to
 the kitchen where there is one, opens the bill, comps the first line with the store's comp reason and
 the member of staff approving it (ADR-0219), prints its check (which every check read must then
-show, fresh, ADR-0218), pays the check's total in cash and counts and closes
-the shift. A cell passes when the bill settles with receipt number 1 and the drawer closes on the
+show, fresh, ADR-0218), pays the check's total in cash (in two halves where the template takes a
+bill in parts, the first leaving it open; in one where it does not, once the edge has refused a
+part, ADR-0220) and counts and closes the shift. A cell passes when the bill settles with receipt number 1 and the drawer closes on the
 amount paid with no variance; a failure names the step and the edge's answer, with its
 `pos-error-reason`. The command exits non-zero when a cell fails, and `2` when the filter names no
 shipped template or country. `cargo test -p pos-simulator` runs all 24 cells.

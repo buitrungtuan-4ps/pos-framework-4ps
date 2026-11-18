@@ -2085,6 +2085,8 @@
   "settings.item.backup.interval_hours.title": "Backup interval",
   "settings.item.billing.check_before_payment.help": "On, the till takes payment for a bill only once its check has been printed and the order has not changed since. Off, a check is printed only when somebody asks for one.",
   "settings.item.billing.check_before_payment.title": "Print the check before payment",
+  "settings.item.billing.part_payments.help": "On, the pay screen can take a bill one payment at a time: an even split, or each guest paying their own share. Every payment is recorded as it is taken and seen on every till, and the last one settles the bill. Off, a bill is paid in one go, as a counter usually is.",
+  "settings.item.billing.part_payments.title": "Take a bill in parts",
   "settings.item.billing.price_override_max_multiple.help": "The most a manager may override a line's price to, as a multiple of the price it was added at: 3 allows up to three times the price. 100, the default, only guards against a slip of the keypad. An override is always above zero and only before the bill opens; giving an item away is a comp.",
   "settings.item.billing.price_override_max_multiple.title": "Price override limit",
   "settings.item.billing.settled_void_window.help": "How long after it was paid a bill can still be voided at the till, by somebody allowed to void a paid bill. Business date allows it while the store trades on the bill's own day. Shift allows it only while the shift that took the money is open. Outside it, the till refuses, and the correction is made in the console.",
