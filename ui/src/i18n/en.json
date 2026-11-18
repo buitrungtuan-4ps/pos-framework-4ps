@@ -309,6 +309,7 @@
   "order.search": "Search the menu",
   "order.search_empty": "Nothing on the menu matches “{query}”.",
   "order.seat_for": "Seat",
+  "order.scan_unknown": "No item has the code {code}.",
   "order.seat_short": "Seat {seat}",
   "order.send": "Send to kitchen",
   "order.send_and_pay": "Send and pay",

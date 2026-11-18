@@ -177,6 +177,13 @@ pub(crate) struct MenuResponse {
     /// edge's own `CHECK_REQUIRED`; a till reading an edge older than the field takes it as `false`
     /// and the edge still refuses.
     check_before_payment: bool,
+    /// The most milliseconds between two keystrokes of one barcode scan, from the `scan` node
+    /// ([ADR-0222](../../../../docs/adr/0222-items-carry-barcodes-and-plus-and-a-counter-can-pay-first.md)
+    /// decision 2): 50 until a store sets it. A till reading an edge older than the field uses 50.
+    scan_keystroke_window_ms: i64,
+    /// Whether the store sells by barcode (`barcode_enabled`), which turns on the till's scan
+    /// listener and its code index (decision 7).
+    barcode_enabled: bool,
     /// Every modifier group any item above attaches, listed once
     /// ([ADR-0127](../../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).
     ///
@@ -429,6 +436,8 @@ where
             split_ways_max: session.tender_keys.split_ways_max(),
             walk_in_channel: session.counter.walk_in_channel().as_wire(),
             check_before_payment: session.billing.check_before_payment(),
+            scan_keystroke_window_ms: session.scan.keystroke_window_ms(),
+            barcode_enabled: session.capabilities.enabled(Capability::Barcode),
             // The same resolution the reason-code and QR routes use: the store's language, or the
             // empty string, which every `localized_name` treats as "no translation, use the base".
             modifier_groups: menu

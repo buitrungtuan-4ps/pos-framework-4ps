@@ -17,6 +17,7 @@ use pos_proto::BusinessType;
 use pos_proto::Open;
 use pos_proto::floor::{FloorArea, FloorPlan, FloorTable, KitchenStation, StationPlan};
 use pos_proto::ids::{AreaId, MenuItemId, StationId, TableId, TaxClassId};
+use pos_proto::item_codes::ItemCodes;
 use pos_proto::menu::{MenuBook, MenuCatalog, MenuEntry};
 use pos_proto::money::{CurrencyCode, Money};
 use pos_proto::text::DisplayName;
@@ -54,6 +55,23 @@ pub struct DemoItem {
     pub tax_class: DemoTaxClass,
     /// The price per ISO 4217 currency code, in that currency's minor unit, above zero.
     pub prices: BTreeMap<String, i64>,
+    /// Fake barcodes a till scans for it, for a template that sells by barcode (ADR-0222).
+    #[serde(default)]
+    pub barcodes: Vec<String>,
+    /// A PLU a cashier keys for it.
+    #[serde(default)]
+    pub plu: Option<String>,
+}
+
+impl DemoItem {
+    /// Its barcodes and PLU as the menu carries them.
+    fn codes(&self) -> ItemCodes {
+        ItemCodes {
+            barcodes: self.barcodes.clone(),
+            plu: self.plu.clone(),
+            open_price: None,
+        }
+    }
 }
 
 /// The tax class a demo item is sold under: one of `pos_country::tax_class`'s.
@@ -116,6 +134,8 @@ pub enum DemoFault {
     NotObviouslyFake,
     /// A price at or below zero, or a currency code that is not one.
     BadPrice,
+    /// A barcode or PLU that is malformed, or that two items share (ADR-0222).
+    BadCode,
 }
 
 impl Demo {
@@ -157,6 +177,16 @@ impl Demo {
             if !priced {
                 return Err(DemoFault::BadPrice);
             }
+            let codes = item.codes();
+            let shared = self.items.iter().take(index).any(|earlier| {
+                earlier
+                    .codes()
+                    .codes()
+                    .any(|code| codes.codes().any(|own| own == code))
+            });
+            if codes.fault().is_some() || shared {
+                return Err(DemoFault::BadCode);
+            }
         }
         let names = self
             .floor
@@ -177,12 +207,15 @@ impl Demo {
         let mut catalog = MenuCatalog::new();
         for item in &self.items {
             let minor = *item.prices.get(currency.as_str())?;
-            catalog = catalog.with(MenuEntry::new(
-                MenuItemId::new(derived_id(business_type, 1, item.key)),
-                DisplayName::new(item.display_name.as_str()),
-                Money::new(currency, minor),
-                item.tax_class.tax_class_id(),
-            ));
+            catalog = catalog.with(MenuEntry {
+                codes: item.codes(),
+                ..MenuEntry::new(
+                    MenuItemId::new(derived_id(business_type, 1, item.key)),
+                    DisplayName::new(item.display_name.as_str()),
+                    Money::new(currency, minor),
+                    item.tax_class.tax_class_id(),
+                )
+            });
         }
         Some(MenuBook::new().with_fallback(catalog))
     }

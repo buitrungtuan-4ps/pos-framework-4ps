@@ -49,6 +49,7 @@ pub(super) async fn sell(till: &Till) -> Result<Sale, Failed> {
             format!("{} item(s) the store can sell: {menu}", items.len()),
         ));
     }
+    scans(&menu, &items)?;
 
     let zero = Money::zero(till.currency);
     let shift = till
@@ -179,6 +180,36 @@ async fn pay(till: &Till, bill_id: &str, due: Money) -> Result<Value, Failed> {
     };
     let last = last.map_err(|detail| ("pay the bill", detail))?;
     Ok(last["settled"].clone())
+}
+
+/// Asserts that a store selling by barcode is told so, with its scan window, and that each item it
+/// sells is found by its barcode, as the till's code index finds it (ADR-0222 decision 2); and that
+/// any other store is told it does not sell by barcode.
+fn scans(menu: &Value, items: &[Value]) -> Result<(), Failed> {
+    let enabled = menu["barcode_enabled"] == json!(true);
+    let window = menu["scan_keystroke_window_ms"].as_i64() == Some(50);
+    let found = items.iter().all(|item| {
+        let code = item["barcodes"][0].as_str();
+        code.is_some_and(|code| {
+            menu["items"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|entry| {
+                    entry["barcodes"]
+                        .as_array()
+                        .is_some_and(|codes| codes.iter().any(|c| c == code))
+                })
+                == Some(item)
+        })
+    });
+    if !window || (enabled && !found) {
+        return Err((
+            "scan the items",
+            format!("not found by their barcodes: {menu}"),
+        ));
+    }
+    Ok(())
 }
 
 /// The first reason the store publishes for `action`, as the till's picker offers it.

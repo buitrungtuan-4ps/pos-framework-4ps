@@ -7060,6 +7060,8 @@
           "split_ways_max",
           "walk_in_channel",
           "check_before_payment",
+          "scan_keystroke_window_ms",
+          "barcode_enabled",
           "modifier_groups",
           "courses_enabled",
           "courses"
@@ -7074,6 +7076,10 @@
               "type": "string"
             },
             "description": "The payment methods this store accepts, as their wire names, or `None` when the store\nrestricts nothing and every method is on ([ADR-0080](../../../docs/adr/0080-channels-and-tender.md)).\n\n`None` rather than \"all seven listed\" so the till can tell \"no restriction published\" from \"a\nrestriction that happens to allow everything\" — and so a method added to the enum later is\naccepted by an unrestricted store without a config change."
+          },
+          "barcode_enabled": {
+            "type": "boolean",
+            "description": "Whether the store sells by barcode (`barcode_enabled`), which turns on the till's scan\nlistener and its code index (decision 7)."
           },
           "check_before_payment": {
             "type": "boolean",
@@ -7111,6 +7117,11 @@
               "$ref": "#/components/schemas/ModifierGroupResponse"
             },
             "description": "Every modifier group any item above attaches, listed once\n([ADR-0127](../../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).\n\nEmpty on a store that has published none, which is every store until the console attaches\none — and the till then asks nothing, exactly as it did before this field existed."
+          },
+          "scan_keystroke_window_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The most milliseconds between two keystrokes of one barcode scan, from the `scan` node\n([ADR-0222](../../../../docs/adr/0222-items-carry-barcodes-and-plus-and-a-counter-can-pay-first.md)\ndecision 2): 50 until a store sets it. A till reading an edge older than the field uses 50."
           },
           "seats_enabled": {
             "type": "boolean",

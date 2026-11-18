@@ -3013,6 +3013,36 @@ test("a store that sets nothing, and an edge too old to send the settings, offer
   }
 });
 
+// A barcode scan adds the item (ADR-0222 decisions 2 and 7). The edge here sells by no barcode, so
+// its menu read is given one, as a bakery's would carry: the scanner's digits and Enter, typed
+// faster than a person, add the item whose barcode it is, and a code the menu does not carry says so.
+test("a scan adds the item whose barcode it is, and an unknown code says so", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await page.route("**/api/menu*", async (route) => {
+      const response = await fetchWhole(route);
+      const book = await response.json();
+      book.barcode_enabled = true;
+      book.items[0].barcodes = ["40000015"];
+      await route.fulfill({ response, json: book });
+    });
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await expect(page.locator('[data-outcome="line-added"]')).toHaveCount(0);
+    await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
+    await page.keyboard.type("40000015");
+    await page.keyboard.press("Enter");
+    await expectLineAdded(page);
+
+    await page.keyboard.type("40000022");
+    await page.keyboard.press("Enter");
+    await expect(page.locator('[data-outcome="scan-unknown"]')).toContainText("40000022");
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A store that splits a bill more ways keeps the split in one row (ADR-0160 decision 2).
 //
 // `POS_DEMO_PROFILE=tender-keys` lets an even split go up to twelve guests, the most a store may
