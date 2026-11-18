@@ -91,6 +91,8 @@ pub struct OrderLineChoice {
     pub course_id: Option<CourseId>,
     /// Whether the line carries a free-text note (the note itself never enters an event).
     pub note_present: bool,
+    /// The price of one the cashier typed, for an open-price item (ADR-0222 decision 4).
+    pub typed_unit_price: Option<Money>,
 }
 
 /// A counter order the till has just opened (ADR-0146).

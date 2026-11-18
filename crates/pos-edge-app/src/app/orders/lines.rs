@@ -153,6 +153,7 @@ impl<S: EventStore> Edge<S> {
         }
         let session = self.session();
         Self::check_modifiers(&session.menu, &draft)?;
+        let draft = super::open_price::priced_open(&session, draft)?;
         // The device priced this line from the session's price book and sends the modifiers' ids,
         // never their names, so the names come from that book (ADR-0144).
         let modifier_display_names =
@@ -252,6 +253,7 @@ impl<S: EventStore> Edge<S> {
             quantity: choice.quantity,
             modifier_menu_item_ids: choice.modifier_menu_item_ids,
             quoted_unit_price: None,
+            typed_unit_price: choice.typed_unit_price,
         };
         let priced = reprice_line(menu, &session.tax_rates, channel, &requested)
             .map_err(AppError::from_reprice)?;
