@@ -201,9 +201,9 @@ fn an_items_codes_travel_onto_the_compiled_entry() {
         .get(item_id(500))
         .expect("priced dine-in")
         .clone();
-    assert_eq!(entry.barcodes, vec!["96385074".to_owned()]);
-    assert_eq!(entry.plu.as_deref(), Some("4011"));
-    assert_eq!(entry.open_price, None);
+    assert_eq!(entry.codes.barcodes, vec!["96385074".to_owned()]);
+    assert_eq!(entry.codes.plu.as_deref(), Some("4011"));
+    assert_eq!(entry.codes.open_price, None);
 }
 
 #[test]

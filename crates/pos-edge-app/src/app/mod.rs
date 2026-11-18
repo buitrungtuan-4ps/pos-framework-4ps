@@ -422,9 +422,7 @@ mod tests {
             modifier_group_ids: Vec::new(),
             course_id: None,
             available: true,
-            barcodes: Vec::new(),
-            plu: None,
-            open_price: None,
+            codes: pos_proto::item_codes::ItemCodes::default(),
         });
         Edge::new(
             FakeStore::default(),

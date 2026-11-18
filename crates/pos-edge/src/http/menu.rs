@@ -320,9 +320,9 @@ impl MenuItemResponse {
             available: entry.available && tax_rate.is_some() && !sold_out,
             sold_out,
             tax_rate,
-            barcodes: entry.barcodes.clone(),
-            plu: entry.plu.clone(),
-            open_price: entry.open_price,
+            barcodes: entry.codes.barcodes.clone(),
+            plu: entry.codes.plu.clone(),
+            open_price: entry.codes.open_price,
         }
     }
 }

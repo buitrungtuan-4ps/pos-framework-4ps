@@ -410,14 +410,8 @@ where
     let Ok(image_ref) = parse_optional_ulid(request.image_ref.as_deref(), MediaId::new) else {
         return ulid_refusal(&["image_ref"]);
     };
-    let codes = match checked_codes(
-        &state.catalog,
-        tenant_id,
-        (Some(menu_item_id), &request.name),
-        request.codes,
-    )
-    .await
-    {
+    let at = (Some(menu_item_id), request.name.as_str());
+    let codes = match checked_codes(&state.catalog, tenant_id, at, request.codes).await {
         Ok(codes) => codes,
         Err(refusal) => return refusal,
     };
