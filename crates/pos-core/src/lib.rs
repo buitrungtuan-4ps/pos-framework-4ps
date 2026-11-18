@@ -53,6 +53,7 @@ pub mod package;
 pub mod permission;
 pub mod reaction;
 pub mod state_machine;
+pub mod variable_measure;
 
 pub use business_date::{CutoffHour, StoreTimeZone, derive_business_date};
 pub use campaign::{AppliedCampaign, Campaign, CampaignKind, Timing, evaluate};
