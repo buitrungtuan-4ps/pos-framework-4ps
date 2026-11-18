@@ -370,6 +370,7 @@ fn a_line_the_edge_prices_names_its_modifiers_and_keeps_them_across_a_restart() 
                 seat: None,
                 course_id: None,
                 note_present: false,
+                typed_unit_price: None,
             };
             edge.add_line_to_order(server(), opened.order_id, choice)
                 .await

@@ -678,6 +678,7 @@ pub fn sample_bill(
                     quantity: line.quantity,
                     modifier_menu_item_ids: Vec::new(),
                     quoted_unit_price: None,
+                    typed_unit_price: None,
                 },
             )
         })

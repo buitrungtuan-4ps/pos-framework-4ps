@@ -44,6 +44,10 @@ pub struct RequestedLine {
     /// The unit price the caller believes applies. Advisory: compared against the store's price and
     /// reported, never honoured.
     pub quoted_unit_price: Option<Money>,
+    /// The price of one the cashier typed for an open-price item, within its published bounds
+    /// ([ADR-0222](../../../docs/adr/0222-items-carry-barcodes-and-plus-and-a-counter-can-pay-first.md)
+    /// decision 4). Ignored for any other item.
+    pub typed_unit_price: Option<Money>,
 }
 
 /// A line the store has priced from its own catalog — exactly the amounts a `sales.order_line.added`
@@ -109,6 +113,11 @@ pub enum RepriceError {
     /// Money arithmetic overflowed, or a modifier was priced in a different currency than the base
     /// item (a catalog a store should never publish). Wraps the primitive's own error.
     Money(MoneyError),
+    /// An open-price item with no typed price, or one outside its published bounds (ADR-0222).
+    OpenPriceOutOfRange {
+        /// The most the typed price may be, in minor units.
+        maximum_minor: i64,
+    },
 }
 
 impl core::fmt::Display for RepriceError {
@@ -125,6 +134,10 @@ impl core::fmt::Display for RepriceError {
                 sales_channel.as_wire()
             ),
             Self::Money(error) => write!(formatter, "the line could not be priced: {error}"),
+            Self::OpenPriceOutOfRange { maximum_minor } => write!(
+                formatter,
+                "an open price is typed within its bounds, at most {maximum_minor}"
+            ),
         }
     }
 }
@@ -163,7 +176,17 @@ pub fn reprice_line(
     // A modifier is a catalog item too: choosing it adds its price to the unit price, and an unknown
     // or 86'd modifier refuses the line exactly as an unknown base item does. `checked_add` also
     // rejects a modifier priced in another currency, which folds into `Money`.
-    let mut unit_price = base.unit_price;
+    // An open-price item is sold at the price the cashier typed, within its bounds; any other at the
+    // catalog's price (ADR-0222 decision 4).
+    let mut unit_price = match base.codes.open_price {
+        Some(bounds) => line
+            .typed_unit_price
+            .filter(|typed| bounds.admits(*typed))
+            .ok_or(RepriceError::OpenPriceOutOfRange {
+                maximum_minor: bounds.maximum.amount_minor,
+            })?,
+        None => base.unit_price,
+    };
     let mut modifier_display_names = Vec::with_capacity(line.modifier_menu_item_ids.len());
     for modifier_id in &line.modifier_menu_item_ids {
         let modifier = catalog
@@ -253,7 +276,60 @@ mod tests {
             quantity,
             modifier_menu_item_ids: Vec::new(),
             quoted_unit_price: None,
+            typed_unit_price: None,
         }
+    }
+
+    #[test]
+    fn an_open_price_item_sells_at_the_typed_price_within_its_bounds_and_no_other() {
+        let open = MenuEntry {
+            codes: pos_proto::item_codes::ItemCodes {
+                open_price: Some(pos_proto::item_codes::OpenPrice {
+                    minimum: vnd(10_000),
+                    maximum: vnd(90_000),
+                }),
+                ..Default::default()
+            },
+            ..MenuEntry::new(
+                item(700),
+                DisplayName::new("Cake by weight"),
+                vnd(1),
+                food(),
+            )
+        };
+        let catalog = catalog().with(open);
+        let typed = |price: Option<i64>| RequestedLine {
+            typed_unit_price: price.map(vnd),
+            ..line(item(700), Quantity::ONE)
+        };
+        let priced = reprice_line(
+            &catalog,
+            &rates(),
+            SalesChannel::DineIn,
+            &typed(Some(45_000)),
+        )
+        .expect("within its bounds");
+        assert_eq!(
+            (priced.unit_price, priced.line_total),
+            (vnd(45_000), vnd(45_000))
+        );
+        for refused in [None, Some(9_999), Some(90_001)] {
+            assert_eq!(
+                reprice_line(&catalog, &rates(), SalesChannel::DineIn, &typed(refused)).err(),
+                Some(RepriceError::OpenPriceOutOfRange {
+                    maximum_minor: 90_000
+                }),
+                "{refused:?}"
+            );
+        }
+        // Any other item ignores a typed price.
+        let menu_priced = RequestedLine {
+            typed_unit_price: Some(vnd(1)),
+            ..line(item(500), Quantity::ONE)
+        };
+        let priced =
+            reprice_line(&catalog, &rates(), SalesChannel::DineIn, &menu_priced).expect("prices");
+        assert_eq!(priced.unit_price, vnd(150_000));
     }
 
     #[test]
