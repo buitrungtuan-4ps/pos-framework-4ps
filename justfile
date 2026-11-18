@@ -70,6 +70,12 @@ run-cloud:
 simulate:
     POS_EDGE_RELEASE_VERSION={{dev_edge_release}} cargo run -q -p pos-simulator
 
+# The template-by-country matrix (ADR-0200 decision 6): each business-type template sold end to end
+# in each shipped country pack through an in-process edge. `--template <dir>` and `--country <cc>`
+# narrow it to a row, a column or one cell.
+matrix *args:
+    POS_EDGE_RELEASE_VERSION={{dev_edge_release}} cargo run -q -p pos-simulator -- matrix {{args}}
+
 # The till's 10 ms tap budget (ADR-0208): every act's tap to its frame ready to paint, p50 enforced
 # and p95 recorded, at a 2x CPU throttle, against a release edge and a production till; a failing act
 # is measured once more.

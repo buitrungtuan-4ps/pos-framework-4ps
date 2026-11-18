@@ -6,7 +6,8 @@
 //! `docs/pos-spec.md` §10 fixes the shape. A store profile is **not** three separate applications
 //! but a set of capability flags in the configuration tree — `tables_enabled`, `kds_enabled`,
 //! `pay_first_enabled`, and the rest. Full-service, cafe-counter and retail are three presets over
-//! the same flags, not three code paths.
+//! the same flags, not three code paths, and each of the six business-type templates
+//! ([`CapabilityContext::for_business_type`], ADR-0200) is one more.
 //!
 //! Two rules from §10 shape this module:
 //!
@@ -29,6 +30,8 @@
 //! disappear — the same removal gate the event and permission catalogues use. A flag's `default`
 //! may change (it is a tabbed, mutable line), because changing a default is a deliberate act that
 //! already owes an upgrade note.
+
+use pos_proto::BusinessType;
 
 use crate::error::DomainError;
 
@@ -245,6 +248,67 @@ impl CapabilityContext {
         Self::NONE.with(Capability::Barcode)
     }
 
+    /// The café and bubble-tea preset: the counter's (pay first, a queue number, tips) and a
+    /// kitchen display for the drinks station.
+    #[must_use]
+    pub fn cafe() -> Self {
+        Self::counter().with(Capability::Kds)
+    }
+
+    /// The fast-food preset: pay first, a queue number and a kitchen display; no tables, no tips.
+    #[must_use]
+    pub fn fast_food() -> Self {
+        Self::NONE
+            .with(Capability::PayFirst)
+            .with(Capability::QueueNumber)
+            .with(Capability::Kds)
+    }
+
+    /// The bar preset: tables and tabs held open across rounds, a kitchen display and tips; no
+    /// courses.
+    #[must_use]
+    pub fn bar() -> Self {
+        Self::NONE
+            .with(Capability::Tables)
+            .with(Capability::Tabs)
+            .with(Capability::Kds)
+            .with(Capability::Tips)
+    }
+
+    /// The bakery and retail preset: the retail preset's barcode entry, paid at once at the
+    /// counter.
+    #[must_use]
+    pub fn bakery_retail() -> Self {
+        Self::retail().with(Capability::PayFirst)
+    }
+
+    /// The self-order preset: guests order from a QR page at their table, which a kitchen display
+    /// receives; paid after service, so no pay-first (it would exclude the tables).
+    #[must_use]
+    pub fn self_order() -> Self {
+        Self::NONE
+            .with(Capability::Tables)
+            .with(Capability::QrOrdering)
+            .with(Capability::Kds)
+            .with(Capability::Tips)
+    }
+
+    /// The preset of a business-type template
+    /// ([ADR-0200](../../../docs/adr/0200-six-business-type-templates-ship-with-the-framework.md)
+    /// decision 1), or `None` for `BUSINESS_TYPE_UNSPECIFIED`, which names no template.
+    #[must_use]
+    pub fn for_business_type(business_type: BusinessType) -> Option<Self> {
+        match business_type {
+            BusinessType::FullService => Some(Self::full_service()),
+            BusinessType::Cafe => Some(Self::cafe()),
+            BusinessType::FastFood => Some(Self::fast_food()),
+            BusinessType::Bar => Some(Self::bar()),
+            BusinessType::BakeryRetail => Some(Self::bakery_retail()),
+            BusinessType::SelfOrder => Some(Self::self_order()),
+            BusinessType::Unspecified => None,
+        }
+    }
+
     /// Rebuilds a context from a source of flag values: `is_on(key)` answers whether the capability
     /// with that `key` is set (`Some(true)`/`Some(false)`), or `None` when the source does not mention
     /// it — in which case the flag falls back to its declared [`default_on`](CapabilityMeta::default_on).
@@ -361,6 +425,9 @@ pub fn render_snapshot() -> String {
 
 #[cfg(test)]
 mod tests {
+    use pos_proto::BusinessType;
+    use pos_proto::wire_enum::WireEnum;
+
     use super::{Capability, CapabilityContext, RULES, conflicts, render_snapshot};
     use crate::error::DomainError;
 
@@ -393,6 +460,48 @@ mod tests {
                 "a shipped preset must satisfy every inter-flag rule: {context:?}"
             );
         }
+    }
+
+    #[test]
+    fn every_business_type_has_a_valid_preset_of_its_own() {
+        let mut seen = Vec::new();
+        for business_type in BusinessType::ALL.iter().copied() {
+            let preset = CapabilityContext::for_business_type(business_type);
+            if business_type == BusinessType::Unspecified {
+                assert_eq!(preset, None, "no template, no preset");
+                continue;
+            }
+            assert!(preset.is_some(), "{business_type:?} has no preset");
+            let preset = preset.unwrap_or(CapabilityContext::NONE);
+            assert!(
+                conflicts(preset).is_empty(),
+                "a template's preset must satisfy every inter-flag rule: {business_type:?}"
+            );
+            assert!(
+                !seen.contains(&preset),
+                "{business_type:?} repeats another template's preset"
+            );
+            seen.push(preset);
+        }
+        assert_eq!(seen.len(), 6, "ADR-0200 decision 2 names six templates");
+    }
+
+    #[test]
+    fn each_template_turns_on_what_its_way_of_working_needs() {
+        let preset = |business_type| {
+            CapabilityContext::for_business_type(business_type).unwrap_or(CapabilityContext::NONE)
+        };
+        assert_eq!(
+            preset(BusinessType::FullService),
+            CapabilityContext::full_service()
+        );
+        assert!(preset(BusinessType::Cafe).enabled(Capability::PayFirst));
+        assert!(preset(BusinessType::FastFood).enabled(Capability::QueueNumber));
+        assert!(!preset(BusinessType::FastFood).enabled(Capability::Tables));
+        assert!(preset(BusinessType::Bar).enabled(Capability::Tabs));
+        assert!(preset(BusinessType::BakeryRetail).enabled(Capability::Barcode));
+        assert!(!preset(BusinessType::BakeryRetail).enabled(Capability::Kds));
+        assert!(preset(BusinessType::SelfOrder).enabled(Capability::QrOrdering));
     }
 
     #[test]

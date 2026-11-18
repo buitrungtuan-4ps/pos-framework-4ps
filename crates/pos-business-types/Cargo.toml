@@ -1,0 +1,38 @@
+[package]
+name        = "pos-business-types"
+version     = "0.0.0"
+description = "The business-type templates shipped in business-types/, read and checked against the register and the country packs."
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+publish.workspace      = true
+repository.workspace   = true
+
+[dependencies]
+# The preset each template starts from (`CapabilityContext::for_business_type`).
+pos-core  = { path = "../pos-core" }
+# The tax classes every country pack prices, which a demo item is sold under.
+pos-country = { path = "../pos-country" }
+# `BusinessType`, and the settings register a template's recommended settings are checked against.
+pos-proto = { path = "../pos-proto" }
+
+serde      = { workspace = true }
+serde_json = { workspace = true }
+thiserror  = { workspace = true }
+
+[dev-dependencies]
+# Every shipped country pack, so a test can refuse a template that sets a key a pack sets
+# (ADR-0200 decision 4).
+pos-country-in = { path = "../../countries/in" }
+pos-country-jp = { path = "../../countries/jp" }
+pos-country-vn = { path = "../../countries/vn" }
+pos-country-zz = { path = "../../countries/zz" }
+
+[lints]
+workspace = true
+
+[package.metadata.pos]
+layer = "app"
+purpose = "The business-type templates shipped in business-types/, read and checked against the register and the country packs."
+adrs = [200]
+owners = ["@maintainers-architecture"]

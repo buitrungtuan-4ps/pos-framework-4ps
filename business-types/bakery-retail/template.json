@@ -1,0 +1,7 @@
+{
+  "business_type": "BUSINESS_TYPE_BAKERY_RETAIL",
+  "recommended_settings": [
+    { "setting_key": "counter.walk_in_channel", "value": "WALK_IN_CHANNEL_TAKEAWAY" },
+    { "setting_key": "tender_keys.first_tip_percent", "value": 0 }
+  ]
+}

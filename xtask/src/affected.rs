@@ -12,7 +12,7 @@
 //! | Class | Files |
 //! |---|---|
 //! | `rust_all` | `crates/pos-proto`, `pos-core`, `pos-ports`, `Cargo.lock`, the root `Cargo.toml`, `rust-toolchain.toml`, `rustfmt.toml`, `clippy.toml`, `deny.toml`, `.cargo/`, `.config/` (nextest), `.github/`, `xtask/`, `tools/` |
-//! | `rust` | any other file under `crates/`, `countries/`, `examples/` or `apps/`, any `*.rs` or `Cargo.toml`, the `justfile`; and `rust_all` |
+//! | `rust` | any other file under `crates/`, `countries/`, `examples/`, `apps/` or `business-types/`, any `*.rs` or `Cargo.toml`, the `justfile`; and `rust_all` |
 //! | `ui`, `dashboard`, `shared` | `ui/`, `dashboard/`, and `packages/shared/` or `packages/package-renderer/` (both front ends build from each) |
 //! | `deploy` | `deploy/`, `k8s/`, `.dockerignore` |
 //! | `workflows` | `.github/` |
@@ -77,7 +77,7 @@ const DOCS: [&str; 10] = [
 /// to one is a change to the crate: it sets `rust` beside its own class, and puts the crate in the
 /// affected set. A test in this module scans the crates for such reads and fails on one missing
 /// here.
-pub const READ_BY: [(&str, &str); 21] = [
+pub const READ_BY: [(&str, &str); 22] = [
     ("docs/snapshots/events.txt", "pos-proto"),
     ("docs/snapshots/actions.txt", "pos-proto"),
     ("packages/package-renderer/src/actions.ts", "pos-proto"),
@@ -99,6 +99,9 @@ pub const READ_BY: [(&str, &str); 21] = [
     ("docs/openapi-device.json", "pos-cloud"),
     ("dashboard/src/i18n/", "pos-cloud"),
     ("dashboard/tests/rule-conditions.txt", "pos-rules"),
+    // The business-type templates (ADR-0200), compiled in whole; the matrix that sells them is
+    // `pos-simulator`, a dependent, so a template's change runs it.
+    ("business-types/", "pos-business-types"),
 ];
 
 /// The crates in [`READ_BY`] that read `path`.
@@ -140,9 +143,15 @@ pub fn classify<S: AsRef<str>>(paths: &[S]) -> BTreeSet<&'static str> {
             || (path.ends_with(".md") && !path.starts_with(".github/"))
         {
             continue; // documentation: the only branch that leaves `only_docs` alone
-        } else if ["crates/", "countries/", "examples/", "apps/"]
-            .iter()
-            .any(|prefix| path.starts_with(prefix))
+        } else if [
+            "crates/",
+            "countries/",
+            "examples/",
+            "apps/",
+            "business-types/",
+        ]
+        .iter()
+        .any(|prefix| path.starts_with(prefix))
             || path.ends_with(".rs")
             || path.ends_with("/Cargo.toml")
             || path == "justfile"
@@ -436,6 +445,11 @@ mod tests {
     fn a_file_a_crate_reads_is_rust_too() {
         assert_eq!(classes(&["docs/snapshots/routes.txt"]), ["rust"]);
         assert_eq!(
+            classes(&["business-types/cafe/demo.json"]),
+            ["rust"],
+            "a template is pos-business-types' to compile in, not an unknown file"
+        );
+        assert_eq!(
             classes(&["dashboard/src/i18n/vi.json"]),
             ["dashboard", "rust"]
         );
@@ -507,6 +521,33 @@ mod tests {
                 &ws
             )),
             ["minimal-edge"]
+        );
+    }
+
+    #[test]
+    fn a_template_change_affects_its_crate_and_the_matrix_that_sells_it() {
+        let ws = vec![
+            krate("pos-proto", "crates/pos-proto", &[], &[]),
+            krate(
+                "pos-business-types",
+                "crates/pos-business-types",
+                &["pos-proto"],
+                &[],
+            ),
+            krate(
+                "pos-simulator",
+                "crates/pos-simulator",
+                &["pos-business-types"],
+                &[],
+            ),
+            krate("pos-cloud", "crates/pos-cloud", &["pos-proto"], &[]),
+        ];
+        assert_eq!(
+            names(affected_packages(
+                &["business-types/bar/template.json"],
+                &ws
+            )),
+            ["pos-business-types", "pos-simulator"]
         );
     }
 

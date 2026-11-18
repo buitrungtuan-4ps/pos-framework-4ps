@@ -23,6 +23,7 @@
 /crates/adapters/store-sqlite/         @maintainers-architecture
 /crates/adapters/updater-minisign/     @maintainers-architecture
 /crates/adapters/windows-protect/      @maintainers-architecture
+/crates/pos-business-types/            @maintainers-architecture
 /crates/pos-cloud/                     @maintainers-cloud
 /crates/pos-cloud-api/                 @maintainers-cloud
 /crates/pos-cloud-catalog/             @maintainers-cloud

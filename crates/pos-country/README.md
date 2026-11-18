@@ -15,7 +15,7 @@ The shape of a country module: the `CountryModule` trait a crate under `countrie
 ## Depends on / used by
 
 - **Depends on** (workspace crates): `pos-ports`, `pos-proto`.
-- **Used by** (workspace crates): `pos-cloud`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-edge`.
+- **Used by** (workspace crates): `pos-business-types`, `pos-cloud`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-edge`, `pos-simulator`.
 
 ## Entry points
 

@@ -23,13 +23,16 @@
 //! - [`stress`] makes the §4 behavioural stress tests executable: the offline-drain time model, the
 //!   webhook-cursor backpressure (a dead endpoint falls behind without growing in memory), and the
 //!   nightly reconciliation missing-id diff.
+//! - [`matrix`] is the **template-by-country matrix** (ADR-0200 decision 6): every business-type
+//!   template sold end to end in every shipped country pack, through an in-process edge.
 //! - The **real sustained soak on the target hardware** — 222 events/s against a live PostgreSQL with
 //!   `NVMe` `fsync` the deciding factor, run for hours without leaking — is *not* here and is not faked:
 //!   it needs the VPS and the wall-clock time, so it is an operations/P13 handoff, the same way the
 //!   WAL-on-Windows spike (roadmap A4) and the hardware matrix (A5) are. This crate is the harness that
 //!   soak plugs into; it does not pretend to be the measurement.
 //!
-//! Everything here is deterministic: time, rates, and counts are inputs, never read from a clock
+//! Everything here but the matrix is deterministic: the matrix's edge and its pairing read the system
+//! clock as a store does, and nothing a cell asserts depends on the time. Elsewhere time, rates, and counts are inputs, never read from a clock
 //! (`clippy.toml` disallows `SystemTime::now`/`Instant::now`), and every quantity is integer — there is
 //! no floating point on a capacity number, exactly as there is none on a money amount.
 
@@ -37,5 +40,6 @@
 
 pub mod capacity;
 pub mod fleet;
+pub mod matrix;
 pub mod report;
 pub mod stress;
