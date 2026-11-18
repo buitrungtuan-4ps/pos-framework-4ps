@@ -11,6 +11,7 @@ pub use checks::CheckPrinted;
 pub use payments::PaymentTaken;
 pub use void::VoidedBill;
 mod open;
+mod pay_first;
 mod payments;
 mod reads;
 mod receipts;
