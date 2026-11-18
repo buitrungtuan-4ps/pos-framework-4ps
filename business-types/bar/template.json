@@ -1,0 +1,7 @@
+{
+  "business_type": "BUSINESS_TYPE_BAR",
+  "recommended_settings": [
+    { "setting_key": "shift.drawer_model", "value": "DRAWER_MODEL_PER_TERMINAL" },
+    { "setting_key": "tender_keys.first_tip_percent", "value": 10 }
+  ]
+}
