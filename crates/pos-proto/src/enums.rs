@@ -292,12 +292,37 @@ wire_enum! {
     HostedByPlatform = "HOSTED_BY_PLATFORM",
 }
 
+wire_enum! {
+    /// The way of working a business-type template is built for
+    /// ([ADR-0200](../../../docs/adr/0200-six-business-type-templates-ship-with-the-framework.md)
+    /// decision 2).
+    ///
+    /// A closed set the framework owns: each value names one template shipped in
+    /// `business-types/`, with its package, capability preset, recommended settings and fake
+    /// demo data. `BUSINESS_TYPE_UNSPECIFIED` means none: a brand or store made without a
+    /// template. Choosing a template copies it (decision 3), so nothing a store runs reads this
+    /// value to decide how it sells; it says only where its starting point came from.
+    BusinessType, prefix = "BUSINESS_TYPE";
+    /// A full-service chain restaurant: tables, courses, the kitchen display, tips.
+    FullService = "FULL_SERVICE",
+    /// A café or bubble-tea shop: ordered and paid at the counter, called by a queue number.
+    Cafe = "CAFE",
+    /// Fast food: paid first at the counter, cooked to a queue number.
+    FastFood = "FAST_FOOD",
+    /// A bar that keeps tabs open across rounds.
+    Bar = "BAR",
+    /// A bakery or retail shop: items scanned by barcode or weighed.
+    BakeryRetail = "BAKERY_RETAIL",
+    /// Self-order: guests order from a QR page at their table or from a kiosk.
+    SelfOrder = "SELF_ORDER",
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        BillState, EdgePlacement, OrderLineState, OrderState, PaymentMethod, PaymentOutcome,
-        ReductionKind, SalesChannel, ShiftState, ShipmentStatus, StockLedgerEntryKind, TableState,
-        UnitOfMeasure, VendorAvailability,
+        BillState, BusinessType, EdgePlacement, OrderLineState, OrderState, PaymentMethod,
+        PaymentOutcome, ReductionKind, SalesChannel, ShiftState, ShipmentStatus,
+        StockLedgerEntryKind, TableState, UnitOfMeasure, VendorAvailability,
     };
     use crate::wire_enum::{Open, WireEnum};
 
@@ -355,6 +380,7 @@ mod tests {
         check::<UnitOfMeasure>("UNIT_OF_MEASURE");
         check::<VendorAvailability>("VENDOR_AVAILABILITY");
         check::<EdgePlacement>("EDGE_PLACEMENT");
+        check::<BusinessType>("BUSINESS_TYPE");
     }
 
     #[test]

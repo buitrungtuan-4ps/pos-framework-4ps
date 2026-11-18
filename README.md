@@ -77,6 +77,7 @@ pos-framework/
 ├── countries/                 One directory per country. Add or remove yours here.
 │   ├── zz/                    Reference module — copy this to start a country.
 │   └── vn/, jp/, in/          Vietnam, Japan, India
+├── business-types/          The six business-type templates (ADR-0200), checked by pos-business-types
 ├── ui/                        The till: SolidJS + Tailwind, embedded into pos_edge
 ├── dashboard/                 The cloud console: SolidJS + Tailwind, embedded into pos_cloud
 ├── deploy/                    compose.yml, Caddyfile.d/, bootstrap.sh

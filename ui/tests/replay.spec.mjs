@@ -325,6 +325,19 @@ async function sendThenTakePayment(page) {
     await sendOrder(page);
   }
   await page.locator('[data-step="takePayment"]').click();
+  // The check above reads the lines at one instant, and a link that drops after it leaves a line the
+  // till has not yet heard committed in neither state: the send is skipped, and Take payment asks
+  // "send it first?" over a line still unsent. That question is the product's own guard, and a
+  // cashier answers it with **Send and pay**, which sends the lines and goes on to the pay screen.
+  // So the pay screen is reached either way and asserted, and the lines are sent either way.
+  const sendFirst = page.locator('[data-outcome="send-first"]');
+  await expect
+    .poll(async () => (await sendFirst.isVisible()) || new URL(page.url()).pathname.endsWith("/pay"))
+    .toBe(true);
+  if (await sendFirst.isVisible()) {
+    await page.locator('[data-step="sendAndPay"]').click();
+  }
+  await expect(page).toHaveURL(/\/pay$/);
 }
 
 /**

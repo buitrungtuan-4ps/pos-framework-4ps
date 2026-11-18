@@ -1,0 +1,6 @@
+{
+  "business_type": "BUSINESS_TYPE_SELF_ORDER",
+  "recommended_settings": [
+    { "setting_key": "qr.table_order", "value": "TABLE_ORDER_JOIN" }
+  ]
+}
