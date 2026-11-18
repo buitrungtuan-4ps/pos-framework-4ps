@@ -4,7 +4,7 @@
 · Needed by [ADR-0200](0200-six-business-type-templates-ship-with-the-framework.md) decision 5 ·
 Adds a port (AGENTS.md §7) · Relates to [ADR-0021](0021-corrected-port-list.md),
 [ADR-0105](0105-a-country-pack-is-values.md), [ADR-0153](0153-a-vendor-is-a-provider-the-cloud-chooses.md),
-[ADR-0222](0222-items-carry-barcodes-and-plus-and-a-counter-can-pay-first.md)
+ADR-0222
 
 Waits on the owner: whether a real scale driver ships now or in phase 8, and whether a weight may be
 typed by hand.
