@@ -1,7 +1,8 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! One cell's sale, over the edge's routes as the till makes it: open a shift, order, pay, close.
+//! One cell's sale, over the edge's routes as the till makes it: open a shift, order, comp a line,
+//! pay, close.
 
 use pos_proto::money::Money;
 use serde_json::{Value, json};
@@ -18,7 +19,7 @@ pub(super) struct Sale {
 /// A step that failed, and why.
 type Failed = (&'static str, String);
 
-/// Opens a shift, sells two lines, pays the bill in cash and closes the shift.
+/// Opens a shift, sells two lines, comps the first, pays the bill in cash and closes the shift.
 pub(super) async fn sell(till: &Till) -> Result<Sale, Failed> {
     let menu = till
         .send("GET", "/api/menu", None)
@@ -60,11 +61,12 @@ pub(super) async fn sell(till: &Till) -> Result<Sale, Failed> {
         .map_err(|detail| ("open the shift", detail))?;
     let shift_id = text(&shift, "shift_id").map_err(|detail| ("open the shift", detail))?;
 
-    let bill_id = if till.tables {
+    let (bill_id, first_line) = if till.tables {
         at_a_table(till, &items).await?
     } else {
         at_the_counter(till, &items).await?
     };
+    comp(till, &bill_id, &first_line).await?;
 
     // The guest is shown the check first (ADR-0218): the print is recorded whether or not a
     // printer answers, and the check read then carries it, fresh.
@@ -114,9 +116,54 @@ pub(super) async fn sell(till: &Till) -> Result<Sale, Failed> {
     })
 }
 
+/// Gives the bill's first line away with the store's comp reason, a manager approving (ADR-0219):
+/// the comp comes off what the bill owes and something is still owed for the second line.
+async fn comp(till: &Till, bill_id: &str, order_line_id: &str) -> Result<(), Failed> {
+    let reasons = till
+        .send("GET", "/api/reason-codes", None)
+        .await
+        .map_err(|detail| ("comp a line", detail))?;
+    let reason_code_id = reasons["reasons"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|reason| {
+            reason["applies_to"]
+                .as_array()
+                .is_some_and(|actions| actions.iter().any(|action| action == "REASON_ACTION_COMP"))
+        })
+        .and_then(|reason| reason["reason_code_id"].as_str())
+        .ok_or_else(|| ("comp a line", format!("no comp reason: {reasons}")))?
+        .to_owned();
+    let (code, pin) = Till::approver();
+    let comped = till
+        .send(
+            "POST",
+            &format!("/api/bills/{bill_id}/comp"),
+            Some(json!({
+                "order_line_id": order_line_id,
+                "reason_code_id": reason_code_id,
+                "approver_code": code,
+                "approver_pin": pin,
+            })),
+        )
+        .await
+        .map_err(|detail| ("comp a line", detail))?;
+    let comp_total = comped["comp_total"]["amount_minor"]
+        .as_i64()
+        .unwrap_or_default();
+    let total_due = comped["total_due"]["amount_minor"]
+        .as_i64()
+        .unwrap_or_default();
+    if comp_total <= 0 || total_due <= 0 {
+        return Err(("comp a line", format!("the comp did not land: {comped}")));
+    }
+    Ok(())
+}
+
 /// Seats the first table on the floor, adds two lines priced from the menu as the till prices
-/// them, sends them to the kitchen and opens the bill; the bill's id.
-async fn at_a_table(till: &Till, items: &[Value]) -> Result<String, Failed> {
+/// them, sends them to the kitchen and opens the bill; the bill's id and its first line's.
+async fn at_a_table(till: &Till, items: &[Value]) -> Result<(String, String), Failed> {
     let floor = till
         .send("GET", "/api/floor", None)
         .await
@@ -132,6 +179,7 @@ async fn at_a_table(till: &Till, items: &[Value]) -> Result<String, Failed> {
         .await
         .map_err(|detail| ("seat the table", detail))?;
     let mut order_id = String::new();
+    let mut first_line = String::new();
     for (item, quantity) in items.iter().zip([1_i64, 2]) {
         let unit = &item["unit_price"];
         let total = json!({
@@ -156,6 +204,9 @@ async fn at_a_table(till: &Till, items: &[Value]) -> Result<String, Failed> {
             .await
             .map_err(|detail| ("add a line", detail))?;
         order_id = text(&line, "order_id").map_err(|detail| ("add a line", detail))?;
+        if first_line.is_empty() {
+            first_line = text(&line, "order_line_id").map_err(|detail| ("add a line", detail))?;
+        }
     }
     if till.kitchen {
         fire(till, &order_id).await?;
@@ -172,12 +223,12 @@ async fn at_a_table(till: &Till, items: &[Value]) -> Result<String, Failed> {
             format!("table not awaiting payment: {bill}"),
         ));
     }
-    Ok(bill_id)
+    Ok((bill_id, first_line))
 }
 
 /// Opens a takeaway order at the counter, adds two lines the edge prices, sends them to the
-/// kitchen where there is one and opens the bill; the bill's id.
-async fn at_the_counter(till: &Till, items: &[Value]) -> Result<String, Failed> {
+/// kitchen where there is one and opens the bill; the bill's id and its first line's.
+async fn at_the_counter(till: &Till, items: &[Value]) -> Result<(String, String), Failed> {
     let opened = till
         .send(
             "POST",
@@ -187,17 +238,22 @@ async fn at_the_counter(till: &Till, items: &[Value]) -> Result<String, Failed> 
         .await
         .map_err(|detail| ("open a counter order", detail))?;
     let order_id = text(&opened, "order_id").map_err(|detail| ("open a counter order", detail))?;
+    let mut first_line = String::new();
     for (item, quantity) in items.iter().zip([1_i64, 2]) {
-        till.send(
-            "POST",
-            &format!("/api/orders/{order_id}/lines"),
-            Some(json!({
-                "menu_item_id": item["menu_item_id"],
-                "quantity": { "milli": quantity * 1_000 },
-            })),
-        )
-        .await
-        .map_err(|detail| ("add a line", detail))?;
+        let line = till
+            .send(
+                "POST",
+                &format!("/api/orders/{order_id}/lines"),
+                Some(json!({
+                    "menu_item_id": item["menu_item_id"],
+                    "quantity": { "milli": quantity * 1_000 },
+                })),
+            )
+            .await
+            .map_err(|detail| ("add a line", detail))?;
+        if first_line.is_empty() {
+            first_line = text(&line, "order_line_id").map_err(|detail| ("add a line", detail))?;
+        }
     }
     if till.kitchen {
         fire(till, &order_id).await?;
@@ -206,7 +262,8 @@ async fn at_the_counter(till: &Till, items: &[Value]) -> Result<String, Failed> 
         .send("POST", &format!("/api/orders/{order_id}/bill"), None)
         .await
         .map_err(|detail| ("open the bill", detail))?;
-    text(&bill, "bill_id").map_err(|detail| ("open the bill", detail))
+    let bill_id = text(&bill, "bill_id").map_err(|detail| ("open the bill", detail))?;
+    Ok((bill_id, first_line))
 }
 
 /// Sends every unsent line of the order to the kitchen.

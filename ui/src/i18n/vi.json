@@ -134,6 +134,7 @@
   "error.activation_unavailable": "Chưa kích hoạt được: máy chủ cửa hàng không kết nối được cloud, hoặc không lưu được thông tin xác thực. Kiểm tra internet của máy rồi thử lại.",
   "error.activation_wrong_state": "Cloud báo mã hoặc thiết bị này không ở trạng thái phù hợp. Hãy tạo mã mới trong console rồi thử lại.",
   "error.already_activated": "Máy chủ cửa hàng này đã được kích hoạt.",
+  "error.already_comped": "Món này đã được miễn phí rồi.",
   "error.already_fired": "Đã gửi bếp — không thể từ chối nữa.",
   "error.approval_refused": "Mã PIN quản lý này không đủ quyền cho thao tác.",
   "error.approver_locked_out": "Quản lý này đã nhập sai PIN quá nhiều lần. Vui lòng thử lại sau vài phút.",

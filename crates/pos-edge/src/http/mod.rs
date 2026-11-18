@@ -19,6 +19,7 @@ pub mod auth;
 pub mod bills;
 mod cash_movements;
 pub mod check;
+mod comp;
 mod counter;
 mod custom_data;
 pub mod floor;
@@ -561,6 +562,7 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
         },
         AppError::NoOpenOrder => "NO_OPEN_ORDER",
         AppError::UnknownLine => "UNKNOWN_LINE",
+        AppError::AlreadyComped => "ALREADY_COMPED",
         AppError::UnroutableLine => "UNROUTABLE_LINE",
         AppError::UnknownOrder => "UNKNOWN_ORDER",
         AppError::BillAlreadyOpen => "BILL_ALREADY_OPEN",
@@ -631,6 +633,7 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         }
         AppError::NoOpenOrder
         | AppError::UnknownLine
+        | AppError::AlreadyComped
         | AppError::UnroutableLine
         | AppError::UnknownOrder
         | AppError::BillAlreadyOpen

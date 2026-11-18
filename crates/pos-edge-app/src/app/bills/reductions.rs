@@ -299,7 +299,10 @@ fn discount_reason_accepted(
 
 /// What a discount can reduce: the pre-tax base, every class of it. Tax follows from it, so
 /// reducing past it would make the tax negative before the total was.
-fn reducible_base(class_bases: &[ClassBase], currency: CurrencyCode) -> Result<Money, AppError> {
+pub(super) fn reducible_base(
+    class_bases: &[ClassBase],
+    currency: CurrencyCode,
+) -> Result<Money, AppError> {
     let mut reducible = Money::zero(currency);
     for base in class_bases {
         reducible = reducible
