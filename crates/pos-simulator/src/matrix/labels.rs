@@ -15,7 +15,11 @@ pub(super) async fn labels(till: &Till, item: &Value) -> Result<(), (&'static st
         return Err(("scan a price label", format!("the item has no PLU: {item}")));
     };
     let opened = till
-        .send("POST", "/api/orders", Some(json!({ "channel": "SALES_CHANNEL_TAKEAWAY" })))
+        .send(
+            "POST",
+            "/api/orders",
+            Some(json!({ "channel": "SALES_CHANNEL_TAKEAWAY" })),
+        )
         .await
         .map_err(|detail| ("scan a price label", detail))?;
     let order_id = opened["order_id"].as_str().unwrap_or_default().to_owned();

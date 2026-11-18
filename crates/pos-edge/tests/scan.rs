@@ -123,14 +123,24 @@ fn a_price_label_sells_an_open_price_item_within_its_bounds_and_nothing_else() {
             vnd(45_000)
         );
         // 95,000 is above the cheese's most.
-        let above = edge.add_scanned_line(actor(), order_id, "2000007950009").await;
+        let above = edge
+            .add_scanned_line(actor(), order_id, "2000007950009")
+            .await;
         assert!(
-            matches!(above, Err(AppError::Domain(DomainError::PriceOutOfRange { .. }))),
+            matches!(
+                above,
+                Err(AppError::Domain(DomainError::PriceOutOfRange { .. }))
+            ),
             "{above:?}"
         );
         // A label for the loaf, a fixed-price item.
-        let fixed = edge.add_scanned_line(actor(), order_id, "2000101450009").await;
-        assert!(matches!(fixed, Err(AppError::PriceLabelNotOpenPrice)), "{fixed:?}");
+        let fixed = edge
+            .add_scanned_line(actor(), order_id, "2000101450009")
+            .await;
+        assert!(
+            matches!(fixed, Err(AppError::PriceLabelNotOpenPrice)),
+            "{fixed:?}"
+        );
         let unknown = edge.add_scanned_line(actor(), order_id, "123").await;
         assert!(matches!(unknown, Err(AppError::UnknownCode)), "{unknown:?}");
     });
@@ -144,7 +154,10 @@ fn a_weight_label_waits_and_a_store_without_a_layout_reads_a_label_as_a_plain_co
         let refused = weighed
             .add_scanned_line(actor(), order_id, "2000007450004")
             .await;
-        assert!(matches!(refused, Err(AppError::WeightLabelNotSold)), "{refused:?}");
+        assert!(
+            matches!(refused, Err(AppError::WeightLabelNotSold)),
+            "{refused:?}"
+        );
 
         let plain = edge(VariableMeasureLayout::None);
         let order_id = order(&plain).await;

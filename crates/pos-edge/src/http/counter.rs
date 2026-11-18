@@ -429,7 +429,10 @@ where
         .route("/api/orders", post(open_order::<S, Q>))
         .route("/api/tabs", get(super::tabs::open_tabs::<S, Q>))
         .route("/api/orders/{id}/lines", post(add_order_line::<S, Q>))
-        .route("/api/orders/{id}/scan", post(super::scan::scan_line::<S, Q>))
+        .route(
+            "/api/orders/{id}/scan",
+            post(super::scan::scan_line::<S, Q>),
+        )
         .with_state(Arc::new(CounterDeps { edge, queue }))
 }
 

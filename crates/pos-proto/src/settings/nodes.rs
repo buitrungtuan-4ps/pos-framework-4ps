@@ -626,21 +626,21 @@ pub(super) fn counter_settings() -> Vec<Setting> {
 pub(super) fn scan_settings() -> Vec<Setting> {
     vec![
         Setting {
-        node: PublishedScan::NODE,
-        field: "keystroke_window_ms",
-        shape: SettingShape::Int {
-            min: *scan::KEYSTROKE_WINDOW_MS.start(),
-            max: *scan::KEYSTROKE_WINDOW_MS.end(),
-            unit: SettingUnit::Milliseconds,
-            default: scan::DEFAULT_KEYSTROKE_WINDOW_MS,
-            // ADR-0222, accepted by the owner on 2026-11-18: 50 ms suits the keyboard-wedge
-            // scanners phase 6 supports, and no template changes it.
-            preset: None,
-        },
-        scopes: STORE_WIDE,
-        since: NEXT_RELEASE,
-        confirm: None,
-        summary: "How many milliseconds may pass between two keystrokes of one barcode scan. A \
+            node: PublishedScan::NODE,
+            field: "keystroke_window_ms",
+            shape: SettingShape::Int {
+                min: *scan::KEYSTROKE_WINDOW_MS.start(),
+                max: *scan::KEYSTROKE_WINDOW_MS.end(),
+                unit: SettingUnit::Milliseconds,
+                default: scan::DEFAULT_KEYSTROKE_WINDOW_MS,
+                // ADR-0222, accepted by the owner on 2026-11-18: 50 ms suits the keyboard-wedge
+                // scanners phase 6 supports, and no template changes it.
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            confirm: None,
+            summary: "How many milliseconds may pass between two keystrokes of one barcode scan. A \
                       scanner types a code's digits and Enter faster than a person, so digits \
                       ending in Enter within this window are a scan on a screen that listens for \
                       one. `50`, the default, suits most keyboard-wedge scanners; raise it for a \

@@ -30,8 +30,8 @@
 #![forbid(unsafe_code)]
 #![doc(test(attr(deny(warnings))))]
 
-use pos_country::{CountryModule, SettingDefault, SettingDefaultValue};
 use pos_country::offline::OfflineFiscalization;
+use pos_country::{CountryModule, SettingDefault, SettingDefaultValue};
 use pos_ports::PortError;
 use pos_ports::fiscalization::{
     Fiscalization, InvoiceNumber, InvoiceRange, InvoiceRequest, IssuedInvoice, ReconciliationReport,

@@ -19,8 +19,8 @@
 //! `pos-simulator matrix [--template <dir>] [--country <cc>]` runs one row, one column or all of
 //! it, so a pull request that touches one template or one pack runs only its own cells.
 
-mod sale;
 mod labels;
+mod sale;
 mod store;
 mod tab;
 
