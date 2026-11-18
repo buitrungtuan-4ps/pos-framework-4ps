@@ -179,6 +179,7 @@ impl Projection {
     /// cannot settle.
     pub(in crate::app) fn void_bill_record(&mut self, bill_id: BillId) {
         self.set_bill_state(bill_id, BillState::Voided);
+        self.part_paid.remove(&bill_id);
         let Some((order_id, Some(table_id))) = self
             .bills
             .get(&bill_id)
@@ -455,6 +456,7 @@ impl Projection {
         settle_time: Timestamp,
     ) -> Result<(), DomainError> {
         self.settle_bill_record(settled.bill_id);
+        self.part_paid.remove(&settled.bill_id);
         self.record_settle_shift(settled.bill_id, shift);
         self.record_shift_sale(shift, settled)?;
         self.record_settled(

@@ -519,6 +519,12 @@ event_catalogue! {
         change_given: Money,
         /// Tip, held apart from the sale amount and outside `total_due`.
         tip_amount: Money,
+        /// How many equal shares the bill was split into, when this payment is one of them
+        /// ([ADR-0220](../../../docs/adr/0220-a-bill-takes-its-payments-one-at-a-time.md)
+        /// decision 3), 2 to 20. Absent for any other payment. Additive, so left off the wire
+        /// while absent and read as absent from a payment written before it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        split_ways: Option<u8>,
     },
     /// A tip was adjusted after the card was captured.
     BillingTipAdjusted => "billing.tip.adjusted", version = 1 {

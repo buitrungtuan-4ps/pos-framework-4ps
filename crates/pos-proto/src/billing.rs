@@ -47,6 +47,15 @@ pub struct PublishedBilling {
         skip_serializing_if = "Option::is_none"
     )]
     pub check_before_payment: Option<bool>,
+    /// Whether the till offers taking a bill in parts, one payment at a time
+    /// ([ADR-0220](../../../docs/adr/0220-a-bill-takes-its-payments-one-at-a-time.md)). Read it
+    /// through [`PublishedBilling::part_payments`]: absent, or not `true` or `false`, is on.
+    #[serde(
+        default,
+        deserialize_with = "flag",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub part_payments: Option<bool>,
 }
 
 impl PublishedBilling {
@@ -72,6 +81,13 @@ impl PublishedBilling {
     #[must_use]
     pub fn check_before_payment(&self) -> bool {
         self.check_before_payment.unwrap_or(false)
+    }
+
+    /// Whether a bill may be paid in parts, one payment at a time (ADR-0220): on unless the store
+    /// turns it off, as a counter that is paid at once may.
+    #[must_use]
+    pub fn part_payments(&self) -> bool {
+        self.part_payments.unwrap_or(true)
     }
 }
 
@@ -146,6 +162,19 @@ mod tests {
             serde_json::to_value(&on).expect("serialise"),
             serde_json::json!({ "check_before_payment": true })
         );
+    }
+
+    /// ADR-0220: a bill may be paid in parts until a store says otherwise.
+    #[test]
+    fn part_payments_are_on_until_a_store_turns_them_off() {
+        for on in [
+            "{}",
+            r#"{ "part_payments": true }"#,
+            r#"{ "part_payments": 1 }"#,
+        ] {
+            assert!(node(on).part_payments(), "{on}");
+        }
+        assert!(!node(r#"{ "part_payments": false }"#).part_payments());
     }
 
     #[test]

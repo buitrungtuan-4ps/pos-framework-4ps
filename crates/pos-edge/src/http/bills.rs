@@ -57,7 +57,7 @@ pub(crate) struct PaymentRequest {
 impl PaymentRequest {
     /// Resolves the wire payment into a domain [`Payment`], refusing an unspecified or unrecognised
     /// method — the wire tolerates `UNSPECIFIED`, a real payment does not.
-    fn into_payment(self) -> Result<Payment, UnknownEnumValue> {
+    pub(crate) fn into_payment(self) -> Result<Payment, UnknownEnumValue> {
         Ok(Payment {
             method: self.method.require()?,
             tendered: self.tendered,
@@ -161,13 +161,13 @@ pub(crate) struct BillResponse {
     /// rendered "Printing receipt…" over a store with no printer wired at all.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(nullable = false))]
-    receipt_print: Option<String>,
+    pub(crate) receipt_print: Option<String>,
     /// What came of opening the cash drawer on a settle that took cash: `OPENED`, `NO_DRAWER` or
     /// `DRAWER_UNAVAILABLE` ([ADR-0165](../../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)). Absent when no cash was taken, because nothing
     /// was asked of the drawer.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(nullable = false, value_type = Option<cash_movements::DrawerOutcomeSchema>))]
-    drawer_open: Option<String>,
+    pub(crate) drawer_open: Option<String>,
 }
 
 impl From<BillView> for BillResponse {
@@ -499,7 +499,7 @@ fn tax_code_is_well_formed(tax_code: &str) -> bool {
 ///
 /// A composition with no dispatcher layered in — the fakes-backed example, a route test that does not
 /// care — reports `NO_PRINTER`, which is the truth for it: there is nothing to print on.
-async fn print_receipt_for<S>(
+pub(crate) async fn print_receipt_for<S>(
     printers: Option<&Arc<Printers>>,
     edge: &Arc<Edge<S>>,
     device: DeviceId,

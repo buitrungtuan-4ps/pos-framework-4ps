@@ -582,15 +582,19 @@ fn read_back(node: &str, field: &str, value: Option<&Value>) -> Option<Value> {
         }
         PublishedPackage::NODE => read_back_package(field, document),
         PublishedReceipt::NODE => read_back_receipt(field, document),
-        PublishedBilling::NODE if field == "settled_void_window" => {
-            let billing: PublishedBilling = serde_json::from_value(document).ok()?;
-            Some(json!(billing.settled_void_window().as_wire()))
-        }
-        PublishedBilling::NODE if field == "check_before_payment" => {
-            let billing: PublishedBilling = serde_json::from_value(document).ok()?;
-            Some(json!(billing.check_before_payment()))
-        }
+        PublishedBilling::NODE => read_back_billing(field, document),
         PublishedBackup::NODE => read_back_backup(field, document),
+        _ => None,
+    }
+}
+
+/// [`read_back`] for the `billing` node: each field through its accessor, defaults applied.
+fn read_back_billing(field: &str, document: Value) -> Option<Value> {
+    let billing: PublishedBilling = serde_json::from_value(document).ok()?;
+    match field {
+        "settled_void_window" => Some(json!(billing.settled_void_window().as_wire())),
+        "check_before_payment" => Some(json!(billing.check_before_payment())),
+        "part_payments" => Some(json!(billing.part_payments())),
         _ => None,
     }
 }

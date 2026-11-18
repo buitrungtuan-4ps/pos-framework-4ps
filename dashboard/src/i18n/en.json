@@ -2084,6 +2084,8 @@
   "settings.item.backup.interval_hours.title": "Backup interval",
   "settings.item.billing.check_before_payment.help": "On, the till takes payment for a bill only once its check has been printed and the order has not changed since. Off, a check is printed only when somebody asks for one.",
   "settings.item.billing.check_before_payment.title": "Print the check before payment",
+  "settings.item.billing.part_payments.help": "On, the pay screen can take a bill one payment at a time: an even split, or each guest paying their own share. Every payment is recorded as it is taken and seen on every till, and the last one settles the bill. Off, a bill is paid in one go, as a counter usually is.",
+  "settings.item.billing.part_payments.title": "Take a bill in parts",
   "settings.item.billing.settled_void_window.help": "How long after it was paid a bill can still be voided at the till, by somebody allowed to void a paid bill. Business date allows it while the store trades on the bill's own day. Shift allows it only while the shift that took the money is open. Outside it, the till refuses, and the correction is made in the console.",
   "settings.item.billing.settled_void_window.title": "Voiding a paid bill",
   "settings.item.counter.walk_in_channel.help": "Whether an order the counter starts for a walk-in guest is taken away, eaten in, or asked each time. The channel decides the order's prices and its tax. Takeaway is as before. With Ask, the counter shows Eat in and Take away when an order is started. Where the store limits the channels it accepts, it must accept this one, or the counter's orders are refused.",

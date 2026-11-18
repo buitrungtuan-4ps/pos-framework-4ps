@@ -187,6 +187,12 @@ impl<S: EventStore> Edge<S> {
             self.prove_table_settles(table_id, ctx)?;
         }
         let cash_taken = self.cash_tendered(payments)?;
+        // Payments already taken towards the bill count (ADR-0220 decision 2): these settle what
+        // remains of it.
+        let remaining = totals
+            .total_due
+            .checked_sub(self.paid_total(bill_id, session.currency)?)
+            .map_err(DomainError::from)?;
 
         // Prove the settlement invariant against the assembled total, and that the bill can settle.
         // Done before allocating a number, so a refused settle consumes none. The payments are cloned
@@ -194,7 +200,7 @@ impl<S: EventStore> Edge<S> {
         let bill_decision = decide_bill(
             bill.state,
             BillCommand::Settle {
-                total_due: totals.total_due,
+                total_due: remaining,
                 payments: payments.to_vec(),
             },
             ctx,
@@ -396,6 +402,7 @@ impl<S: EventStore> Edge<S> {
                 applied_to_bill: payment.applied_to_bill,
                 change_given: if change.is_negative() { zero } else { change },
                 tip_amount: payment.tip,
+                split_ways: None,
             };
             let (envelope, message) = self.prepare_on(ctx, &captured, shift)?;
             envelopes.push(envelope);

@@ -67,6 +67,8 @@ impl<S: EventStore> Edge<S> {
         let reducible = reducible_base(&order.class_bases, session.currency)?;
         let (discount, comp) = bill.reductions(session.currency);
         let applied = discount.checked_add(comp).map_err(DomainError::from)?;
+        let discounted = discount.checked_add(amount).map_err(DomainError::from)?;
+        self.refuse_below_paid(bill_id, &bill, (discounted, comp), &bill.waived_fee_ids)?;
 
         // What this person may discount on their own, read from the roster the cloud published. Read
         // *before* the step-up, because it is what decides whether a step-up was needed at all.
@@ -251,6 +253,8 @@ impl<S: EventStore> Edge<S> {
         }
         Bill::step(bill.state, BillTrigger::Reduce).map_err(DomainError::from)?;
         billing::waivable_fee(&bill.fee_rules, &bill.waived_fee_ids, fee_id)?;
+        let waived = [&bill.waived_fee_ids[..], &[fee_id]].concat();
+        self.refuse_below_paid(bill_id, &bill, bill.reductions(session.currency), &waived)?;
         let approver = self.resolve_step_up(&mut ctx, Permission::WaiveFee, approval)?;
         let _decided = decide_bill(
             bill.state,

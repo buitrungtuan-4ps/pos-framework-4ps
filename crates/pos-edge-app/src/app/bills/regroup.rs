@@ -51,6 +51,8 @@ impl<S: EventStore> Edge<S> {
             .bill(bill_id)
             .ok_or(AppError::UnknownBill)?;
 
+        // A payment taken towards the bill is the bill's (ADR-0220 decision 4).
+        self.refuse_part_paid(&[bill_id])?;
         // What the bill covers, resolved the one way the projection resolves it — so a bill opened
         // before the line set was recorded splits on the same lines it would have been settled on.
         let covers = self.covered_lines(&bill);
@@ -170,6 +172,8 @@ impl<S: EventStore> Edge<S> {
         // absorbed bills go through, so the two cannot drift apart, and the answer is **discarded**:
         // the target survives a merge rather than moving, so there is no state to write.
         let _open = decide_bill(target.state, BillCommand::Merge, &ctx)?;
+        // What was paid towards any of them is that bill's (ADR-0220 decision 4).
+        self.refuse_part_paid(&[&[bill_id][..], &absorbed].concat())?;
 
         let mut folded = Vec::new();
         for absorbed_id in &absorbed {

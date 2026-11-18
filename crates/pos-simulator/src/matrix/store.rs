@@ -43,6 +43,8 @@ pub(super) struct Till {
     pub(super) tables: bool,
     /// Whether the store sends lines to a kitchen display.
     pub(super) kitchen: bool,
+    /// Whether the store takes a bill in parts, as the template recommends (ADR-0220).
+    pub(super) part_payments: bool,
 }
 
 impl Till {
@@ -73,6 +75,9 @@ impl Till {
             .ok_or_else(|| "the paired device has no id".to_owned())?;
         let token = token.as_str().to_owned();
         let document = document(template, pack, preset, device_id)?;
+        let part_payments = document["billing"]["part_payments"]
+            .as_bool()
+            .unwrap_or(true);
         let session =
             pos_edge::config_client::session_from_config(&EdgeSession::bootstrap(), &document)
                 .with_staff(roster()?);
@@ -99,6 +104,7 @@ impl Till {
             currency,
             tables: preset.enabled(Capability::Tables),
             kitchen: preset.enabled(Capability::Kds),
+            part_payments,
         };
         till.send(
             "POST",

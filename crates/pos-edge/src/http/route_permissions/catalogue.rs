@@ -19,6 +19,7 @@ const MONEY_ROUTES: &[&str] = &[
     "POST /api/bills/{id}/discount",
     "POST /api/bills/{id}/fees/{fee_id}/waive",
     "POST /api/bills/{id}/merge",
+    "POST /api/bills/{id}/payments",
     "POST /api/bills/{id}/settle",
     "POST /api/bills/{id}/split",
     "POST /api/bills/{id}/void",

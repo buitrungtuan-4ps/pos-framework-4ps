@@ -81,18 +81,7 @@ pub(super) async fn sell(till: &Till) -> Result<Sale, Failed> {
     if paid.currency_code != till.currency || paid.amount_minor <= 0 {
         return Err(("read the check", format!("total due {check}")));
     }
-    let settled = till
-        .send(
-            "POST",
-            &format!("/api/bills/{bill_id}/settle"),
-            Some(json!({ "payments": [{
-                "method": "PAYMENT_METHOD_CASH",
-                "tendered": paid,
-                "applied_to_bill": paid,
-            }] })),
-        )
-        .await
-        .map_err(|detail| ("pay the bill", detail))?;
+    let settled = pay(till, &bill_id, paid).await?;
     if settled["state"] != "BILL_STATE_SETTLED" {
         return Err(("pay the bill", format!("not settled: {settled}")));
     }
@@ -152,6 +141,49 @@ async fn comp(till: &Till, bill_id: &str, order_line_id: &str) -> Result<(), Fai
         return Err(("comp a line", format!("the comp did not land: {comped}")));
     }
     Ok(())
+}
+
+/// Pays the bill in cash (ADR-0220): in two halves where the store takes a bill in parts, the first
+/// recorded with the bill still open and the second settling it; in one where it does not, once
+/// the edge has refused a part. The settled bill.
+async fn pay(till: &Till, bill_id: &str, due: Money) -> Result<Value, Failed> {
+    let route = format!("/api/bills/{bill_id}/payments");
+    let cash = |minor: i64| {
+        let applied = Money::new(due.currency_code, minor);
+        json!({
+            "payment": {
+                "method": "PAYMENT_METHOD_CASH",
+                "tendered": applied,
+                "applied_to_bill": applied,
+            },
+            "split_ways": 2,
+        })
+    };
+    let half = due.amount_minor / 2;
+    let first = till.send("POST", &route, Some(cash(half))).await;
+    let last = if till.part_payments {
+        let first = first.map_err(|detail| ("pay a part", detail))?;
+        let rest = due.amount_minor - half;
+        if first["remaining"]["amount_minor"].as_i64() != Some(rest) || !first["settled"].is_null()
+        {
+            return Err((
+                "pay a part",
+                format!("not left open owing the rest: {first}"),
+            ));
+        }
+        till.send("POST", &route, Some(cash(rest))).await
+    } else {
+        if !first
+            .as_ref()
+            .is_err_and(|detail| detail.contains("PART_PAYMENTS_OFF"))
+        {
+            return Err(("pay the bill", format!("a part was not refused: {first:?}")));
+        }
+        till.send("POST", &route, Some(cash(due.amount_minor)))
+            .await
+    };
+    let last = last.map_err(|detail| ("pay the bill", detail))?;
+    Ok(last["settled"].clone())
 }
 
 /// Seats the first table on the floor, adds two lines priced from the menu as the till prices

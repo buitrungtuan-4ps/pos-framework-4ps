@@ -97,6 +97,13 @@ pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
         RouteGate::Person(&[Permission::SplitBill]),
     ),
     (
+        "POST /api/bills/{id}/payments",
+        RouteGate::Person(&[
+            Permission::TakePayment,
+            Permission::OverrideDrawerAssignment,
+        ]),
+    ),
+    (
         "POST /api/bills/{id}/receipt/reprint",
         RouteGate::Person(&[Permission::ReprintReceipt]),
     ),

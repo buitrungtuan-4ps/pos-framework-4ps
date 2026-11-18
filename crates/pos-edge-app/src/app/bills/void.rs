@@ -52,6 +52,9 @@ impl<S: EventStore> Edge<S> {
         {
             return Err(AppError::VoidReasonNotValid);
         }
+        // Until a void gives each part payment back, a bill holding one is not voided here
+        // (ADR-0220 decision 4).
+        self.refuse_part_paid(&[bill_id])?;
         let approver = self.resolve_step_up(&mut ctx, Permission::VoidBill, approval)?;
         ctx.require(Permission::VoidBill)?;
         // The machine owns whether this bill may be voided at all: `Settled` and `Voided` are both

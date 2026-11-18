@@ -512,6 +512,76 @@
         "x-permission": "billing.bill.split"
       }
     },
+    "/api/bills/{id}/payments": {
+      "post": {
+        "tags": [
+          "bills"
+        ],
+        "summary": "`POST /api/bills/{id}/payments` — take one payment towards a bill (ADR-0220).",
+        "operationId": "take_payment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The bill's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`payment`, with its `method`, `tendered`, `applied_to_bill` and optional `tip`; `split_ways` where it is one of an even split's shares; and `approver_code` and `approver_pin` where cash goes into a drawer assigned to somebody else. Both are secrets and are never logged",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TakePaymentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Taken: what the bill's payments now come to and what remains, what came of opening the drawer, and the settled bill when this payment covered what remained",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TakePaymentResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The id is not a ULID, the method is unknown or not accepted as tender here, nothing is applied, or `split_ways` is not 2 to 20"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; cash into somebody else's drawer needs an approval that was missing or refused, or the approver is locked out; or this box was superseded by a replacement"
+          },
+          "409": {
+            "description": "Refused: more than the bill still owes (`PAYMENT_EXCEEDS_REMAINING`), a part payment at a store that takes a bill in one (`PART_PAYMENTS_OFF`), the drawer or shift refusals a settle makes, or the bill is not open. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": [
+          "billing.payment.take",
+          "cash.drawer.override_assignment"
+        ]
+      }
+    },
     "/api/bills/{id}/receipt/reprint": {
       "post": {
         "tags": [
@@ -5315,6 +5385,14 @@
             },
             "description": "Each fee charged ([ADR-0159](../../../../docs/adr/0159-a-fee-is-configuration.md) decision 4),\nin rule order: the rule, its code and its name, what it charged and the tax on it, as the\nsettle records them, except that the name is the store's display language where the\ncurrent rule translates it. Part by part for a table whose bill is split, as each part\ncomputes its own. Empty where no fee applies, which is every bill at a store with no\n`fees` node. The till shows each line, and its total is still `total_due`. A fee waived on\nthe bill charges nothing and is not listed (decision 5)."
           },
+          "paid_total": {
+            "$ref": "#/components/schemas/Money",
+            "description": "What has been paid towards it so far, one payment at a time\n([ADR-0220](../../../../docs/adr/0220-a-bill-takes-its-payments-one-at-a-time.md) decision\n3), on every till. Absent until a payment is taken."
+          },
+          "remaining": {
+            "$ref": "#/components/schemas/Money",
+            "description": "What it still owes: `total_due` less `paid_total`. Absent until a payment is taken."
+          },
           "subtotal": {
             "$ref": "#/components/schemas/Money",
             "description": "The sum of the order's live line totals, before tax."
@@ -8980,6 +9058,67 @@
           "table_id": {
             "type": "string",
             "description": "The table id, as a ULID string."
+          }
+        }
+      },
+      "TakePaymentRequest": {
+        "type": "object",
+        "description": "One payment towards a bill, as a till takes it.",
+        "required": [
+          "payment"
+        ],
+        "properties": {
+          "approver_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approver_pin": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentRequest"
+          },
+          "split_ways": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How many equal shares an even split divided the bill into, 2 to 20, when this payment is\none of them.",
+            "minimum": 0
+          }
+        }
+      },
+      "TakePaymentResponse": {
+        "type": "object",
+        "description": "What a payment came to: what is paid and what remains, and the settle when it was the last.",
+        "required": [
+          "bill_id",
+          "paid_total",
+          "remaining"
+        ],
+        "properties": {
+          "bill_id": {
+            "$ref": "#/components/schemas/BillId"
+          },
+          "drawer_open": {
+            "type": "string",
+            "description": "What came of opening the drawer, where cash was taken."
+          },
+          "paid_total": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "remaining": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "settled": {
+            "$ref": "#/components/schemas/BillResponse",
+            "description": "The settled bill, as `POST /api/bills/{id}/settle` answers, when this payment was the last."
           }
         }
       },
