@@ -312,6 +312,7 @@ impl<S: EventStore> Edge<S> {
         projection.record_opened(event.order_id, event.guest_count, event.package_version_id);
         projection.record_recipient(event.order_id, event.subject_id);
         projection.record_vendor(event.order_id, event.vendor_id);
+        projection.record_tab(event.order_id, event.tab_number);
         // A waiter's order already sat down on its `sales.table.opened`; a guest's has no
         // other record of its table (`seat_guest_order`). Seating either twice is a no-op.
         if let Some(table_id) = event.table_id {

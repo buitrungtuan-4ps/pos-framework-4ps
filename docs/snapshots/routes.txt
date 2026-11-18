@@ -36,6 +36,7 @@ GET /api/subjects/{subject_id}
 GET /api/sync
 GET /api/tables/{id}
 GET /api/tables/{id}/check
+GET /api/tabs
 POST /api/activate
 POST /api/bills/{id}/check/print
 POST /api/bills/{id}/comp

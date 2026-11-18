@@ -14,6 +14,7 @@ mod orders;
 mod paid;
 mod shifts;
 mod snapshots;
+mod tabs;
 
 pub(in crate::app) use checks::CheckMark;
 pub(in crate::app) use custom::{CustomData, HeldValues};
