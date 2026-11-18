@@ -5392,6 +5392,35 @@
         ],
         "description": "One fee as the till shows it: the line the settle records, and whether staff may waive it."
       },
+      "CheckPayment": {
+        "type": "object",
+        "description": "One payment taken towards an open bill, as the till lists it.",
+        "required": [
+          "method",
+          "amount",
+          "taken_time"
+        ],
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Money",
+            "description": "What it applied to the bill, change and tip apart."
+          },
+          "method": {
+            "type": "string",
+            "description": "The tender, a `PAYMENT_METHOD_*` value."
+          },
+          "split_ways": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many equal shares an even split asked for, when it was one of them.",
+            "minimum": 0
+          },
+          "taken_time": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "When it was taken, in milliseconds since the epoch."
+          }
+        }
+      },
       "CheckPrintedResponse": {
         "type": "object",
         "description": "A printed check's marker, as the till shows it.",
@@ -5455,6 +5484,13 @@
           "paid_total": {
             "$ref": "#/components/schemas/Money",
             "description": "What has been paid towards it so far, one payment at a time\n([ADR-0220](../../../../docs/adr/0220-a-bill-takes-its-payments-one-at-a-time.md) decision\n3), on every till. Absent until a payment is taken."
+          },
+          "payments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CheckPayment"
+            },
+            "description": "Each payment taken towards it while it is open, in the order taken: how, how much and\nwhen, naming nobody (ADR-0220 decision 3). Empty until a payment is taken."
           },
           "remaining": {
             "$ref": "#/components/schemas/Money",
@@ -7062,6 +7098,7 @@
           "check_before_payment",
           "scan_keystroke_window_ms",
           "barcode_enabled",
+          "part_payments",
           "modifier_groups",
           "courses_enabled",
           "courses"
@@ -7117,6 +7154,10 @@
               "$ref": "#/components/schemas/ModifierGroupResponse"
             },
             "description": "Every modifier group any item above attaches, listed once\n([ADR-0127](../../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).\n\nEmpty on a store that has published none, which is every store until the console attaches\none — and the till then asks nothing, exactly as it did before this field existed."
+          },
+          "part_payments": {
+            "type": "boolean",
+            "description": "Whether the store takes a bill in parts, one payment at a time, from its `billing` node\n([ADR-0220](../../../../docs/adr/0220-a-bill-takes-its-payments-one-at-a-time.md)): `true`\nuntil a store turns it off. The pay screen offers its even split only where it is on; a till\nreading an edge older than the field offers none, since that edge takes no part payment."
           },
           "scan_keystroke_window_ms": {
             "type": "integer",

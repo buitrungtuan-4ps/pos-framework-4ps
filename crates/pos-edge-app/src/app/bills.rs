@@ -8,7 +8,7 @@ mod checks;
 mod comp;
 
 pub use checks::CheckPrinted;
-pub use payments::PaymentTaken;
+pub use payments::{PaymentTaken, TakenPayment};
 pub use void::VoidedBill;
 mod open;
 mod pay_first;

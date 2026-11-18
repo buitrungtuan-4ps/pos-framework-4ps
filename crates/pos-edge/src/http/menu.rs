@@ -55,7 +55,8 @@
 //! the same rule: the pay screen's tip row and its even split read them in the changes that added them
 //! ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
 //! So did `walk_in_channel`, which the counter reads to know which book a walk-in is sold from, and
-//! `check_before_payment`, which the pay screen reads to refuse a payment the edge would refuse.
+//! `check_before_payment`, which the pay screen reads to refuse a payment the edge would refuse,
+//! and `part_payments`, which it reads to offer taking a bill in parts.
 //!
 //! Empty until the cloud publishes a menu — a store never guesses a price (ADR-0063).
 //!
@@ -184,6 +185,11 @@ pub(crate) struct MenuResponse {
     /// Whether the store sells by barcode (`barcode_enabled`), which turns on the till's scan
     /// listener and its code index (decision 7).
     barcode_enabled: bool,
+    /// Whether the store takes a bill in parts, one payment at a time, from its `billing` node
+    /// ([ADR-0220](../../../../docs/adr/0220-a-bill-takes-its-payments-one-at-a-time.md)): `true`
+    /// until a store turns it off. The pay screen offers its even split only where it is on; a till
+    /// reading an edge older than the field offers none, since that edge takes no part payment.
+    part_payments: bool,
     /// Every modifier group any item above attaches, listed once
     /// ([ADR-0127](../../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).
     ///
@@ -438,6 +444,7 @@ where
             check_before_payment: session.billing.check_before_payment(),
             scan_keystroke_window_ms: session.scan.keystroke_window_ms(),
             barcode_enabled: session.capabilities.enabled(Capability::Barcode),
+            part_payments: session.billing.part_payments(),
             // The same resolution the reason-code and QR routes use: the store's language, or the
             // empty string, which every `localized_name` treats as "no translation, use the base".
             modifier_groups: menu
