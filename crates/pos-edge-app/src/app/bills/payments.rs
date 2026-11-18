@@ -9,14 +9,14 @@ use pos_core::StateMachine;
 use pos_core::billing;
 use pos_core::billing::{BillTotals, Payment};
 use pos_core::capability::Capability;
-use pos_core::decision::Actor;
+use pos_core::decision::{Actor, DecisionCtx};
 use pos_core::error::DomainError;
 use pos_core::machines::{Bill, BillTrigger};
 use pos_core::permission::Permission;
 use pos_ports::event_store::EventStore;
 use pos_ports::subject_store::SubjectStore;
 use pos_proto::events::BillingPaymentCaptured;
-use pos_proto::ids::{BillId, DeviceId, FeeId, OrderId, PaymentId};
+use pos_proto::ids::{BillId, DeviceId, EmployeeId, FeeId, OrderId, PaymentId, ShiftId};
 use pos_proto::money::{CurrencyCode, Money};
 use pos_proto::{Open, PaymentMethod, PaymentOutcome};
 
@@ -136,36 +136,50 @@ impl<S: EventStore> Edge<S> {
             tip_amount: payment.tip,
             split_ways,
         };
-        let (envelope, message) = self.prepare_on(&ctx, &captured, shift)?;
+        self.commit_part_payment(&ctx, &captured, shift, overrider)
+            .await?;
+        let paid_total = paid.checked_add(applied).map_err(DomainError::from)?;
+        Ok(PaymentTaken {
+            paid_total,
+            remaining: owed(&totals, paid_total)?,
+            open_drawer: payment.method == PaymentMethod::Cash,
+            drawer_till: drawer,
+            settled: None,
+        })
+    }
+
+    /// Commits a payment that does not settle its bill, with the override somebody else's drawer
+    /// took when it did, in one transaction stamped with the drawer's `shift`, then folds it as the
+    /// replay folds it: onto its bill, the shift's tenders and, for cash, the drawer.
+    async fn commit_part_payment(
+        &self,
+        ctx: &DecisionCtx,
+        captured: &BillingPaymentCaptured,
+        shift: Option<ShiftId>,
+        overrider: Option<EmployeeId>,
+    ) -> Result<(), AppError> {
+        let (envelope, message) = self.prepare_on(ctx, captured, shift)?;
         let mut envelopes = vec![envelope];
         let mut messages = vec![message];
         if let Some(approver) = overrider {
             let record =
                 Self::override_record(Permission::OverrideDrawerAssignment, approver, None);
-            let (envelope, message) = self.prepare_on(&ctx, &record, shift)?;
+            let (envelope, message) = self.prepare_on(ctx, &record, shift)?;
             envelopes.push(envelope);
             messages.push(message);
         }
         self.append_and_publish(envelopes, messages).await?;
 
-        let cash = payment.method == PaymentMethod::Cash;
-        {
-            let mut projection = self.lock_projection();
-            projection.record_payment(bill_id, payment.method, applied)?;
-            projection.collect_tender(shift, payment.method, applied)?;
-            if cash {
-                projection.collect_cash(shift, applied)?;
-            }
-            projection.record_part_payment(bill_id, shift);
+        let method = captured.method.known();
+        let applied = captured.applied_to_bill;
+        let mut projection = self.lock_projection();
+        projection.record_payment(captured.bill_id, method, applied)?;
+        projection.collect_tender(shift, method, applied)?;
+        if method == PaymentMethod::Cash {
+            projection.collect_cash(shift, applied)?;
         }
-        let paid_total = paid.checked_add(applied).map_err(DomainError::from)?;
-        Ok(PaymentTaken {
-            paid_total,
-            remaining: owed(&totals, paid_total)?,
-            open_drawer: cash,
-            drawer_till: drawer,
-            settled: None,
-        })
+        projection.record_part_payment(captured.bill_id, shift);
+        Ok(())
     }
 
     /// What has been paid towards the bills of `order_id` that are still open, or towards `bill_id`
