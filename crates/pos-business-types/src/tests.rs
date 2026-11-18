@@ -240,6 +240,25 @@ fn a_demo_with_a_real_looking_name_a_shared_key_or_no_price_is_refused() {
         check(format!("[{}]", item(1, "Demo A", 0))).ok(),
         Some(Err(DemoFault::BadPrice))
     );
+    // A code with a wrong check digit, or one two items share, is refused (ADR-0222).
+    let coded = |key: u16, codes: &str| {
+        format!(
+            r#"{{"key": {key}, "display_name": "Demo {key}", "tax_class": "food", "prices": {{"VND": 10}}, {codes}}}"#
+        )
+    };
+    assert_eq!(
+        check(format!("[{}]", coded(1, r#""barcodes": ["40000016"]"#))).ok(),
+        Some(Err(DemoFault::BadCode))
+    );
+    assert_eq!(
+        check(format!(
+            "[{}, {}]",
+            coded(1, r#""plu": "101""#),
+            coded(2, r#""plu": "101""#)
+        ))
+        .ok(),
+        Some(Err(DemoFault::BadCode))
+    );
 }
 
 #[test]

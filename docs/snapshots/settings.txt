@@ -207,6 +207,17 @@ receipt.templates	scope=SETTING_SCOPE_STORE
 receipt.templates	scope=SETTING_SCOPE_STORE_GROUP
 receipt.templates	scope=SETTING_SCOPE_TENANT
 receipt.templates	since=0.14.1
+scan.keystroke_window_ms
+scan.keystroke_window_ms	default=50
+scan.keystroke_window_ms	kind=SETTING_KIND_INT
+scan.keystroke_window_ms	max=200
+scan.keystroke_window_ms	min=20
+scan.keystroke_window_ms	scope=SETTING_SCOPE_BRAND
+scan.keystroke_window_ms	scope=SETTING_SCOPE_STORE
+scan.keystroke_window_ms	scope=SETTING_SCOPE_STORE_GROUP
+scan.keystroke_window_ms	scope=SETTING_SCOPE_TENANT
+scan.keystroke_window_ms	since=0.14.1
+scan.keystroke_window_ms	unit=SETTING_UNIT_MILLISECONDS
 session.idle_lock_seconds
 session.idle_lock_seconds	default=0
 session.idle_lock_seconds	kind=SETTING_KIND_INT

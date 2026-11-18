@@ -137,6 +137,7 @@ impl EdgeSession {
             accepted_tender: None,
             tender_keys: PublishedTenderKeys::default(),
             counter: PublishedCounter::default(),
+            scan: pos_proto::scan::PublishedScan::default(),
             billing: PublishedBilling::default(),
             backup: PublishedBackup::default(),
             package: None,
