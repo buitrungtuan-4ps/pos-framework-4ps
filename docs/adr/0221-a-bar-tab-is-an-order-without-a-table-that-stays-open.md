@@ -1,14 +1,16 @@
 # ADR-0221 — A bar tab is an order without a table that stays open, named by a number
 
-**Status** Proposed · **Owner** @maintainers-architecture · **Date** 2026-11-18
+**Status** Accepted 2026-11-18 (owner) · **Owner** @maintainers-architecture · **Date** 2026-11-18
 · Needed by [ADR-0200](0200-six-business-type-templates-ship-with-the-framework.md) decision 5 ·
 Relates to [ADR-0146](0146-a-counter-store-starts-its-own-orders.md),
 [ADR-0194](0194-custom-data-is-declared-and-personal-fields-are-kept-apart.md),
 [ADR-0206](0206-a-personal-custom-value-stays-on-its-store-and-expires-on-its-own-clock.md),
 ADR-0220
 
-Waits on the owner: whether a tab may carry a guest's name, and whether holding a card on a tab
-waits for the card terminal (phase 8).
+Accepted by the owner on 2026-11-18 as recommended: a tab may carry a guest-name label, optional
+and off unless a store turns it on, kept on the store only, never in an event, a log or the cloud,
+and masked when its retention ends; a store owes its lawful basis under Decree 13/2023 and a DPIA
+entry before it turns the label on. Holding a card on a tab waits for the card terminal (phase 8).
 
 ## Context
 
@@ -29,7 +31,8 @@ not ride an event or a log.
 1. **Opening a tab** is `POST /api/orders` with `tab: true` on a store with `tabs_enabled`
    (refused otherwise). The edge gives it the next **tab number** of the business day, as it gives a
    queue number, and records it on `sales.order.opened` as an additive optional `tab_number`.
-2. **An optional label** (at most 32 characters, typed by staff) is personal data: the edge keeps it
+2. **An optional label** (at most 32 characters, typed by staff), offered only where the store has
+   turned it on, is personal data: the edge keeps it
    in its subject store (ADR-0107) under the order, never in an event, a log or the cloud, and
    masks it when the business day ends plus the store's `default_retention_days` (ADR-0206's own
    clock). The till shows it beside the number; it is never printed on a kitchen ticket.
@@ -42,6 +45,17 @@ not ride an event or a log.
 6. **Shift and day.** Closing a shift lists the open tabs as a warning; a tab open when the business
    day ends stays open and is listed on the next day's first shift.
 7. **Catalogue:** `sales.tab.open` (`ACTION_EFFECT_EDGE_WRITE`) and a `tabs_list` component.
+
+## Configuration
+
+- **The capability** `tabs_enabled` (§10), which the bar template's preset turns on.
+- **A setting** (ADR-0160): `tabs.guest_label`, on or off, **default off**. Turning it on records
+  something about a person, so it is written only with a recorded confirmation of its notice
+  (ADR-0169), which names the lawful basis and the DPIA entry the store owes. No template turns it on.
+- **How long a label is kept** is the store's existing `default_retention_days` (its locale).
+- **Fixed rules:** a label never reaches an event, a log, a ticket or the cloud, and is masked on its
+  own clock (law: Decree 13/2023, GDPR); at most 32 characters (a bound, so the store's subject store
+  stays small); the daily tab number on the event (it carries nothing personal).
 
 ## Consequences accepted
 
