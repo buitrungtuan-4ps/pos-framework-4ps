@@ -34,16 +34,18 @@ impl CatalogStore for PostgresCatalog {
             .map_err(|error| CatalogStoreError::new(error.to_string()))?;
         let course = item.course_id.map(|id| id.to_string());
         let image_ref = item.image_ref.map(|id| id.to_string());
+        let codes = serde_json::to_string(&item.codes)
+            .map_err(|error| CatalogStoreError::new(error.to_string()))?;
         self.insert_item(
             &item.menu_item_id.to_string(),
             &item.tenant_id.to_string(),
             &item.name,
             &name_translations,
             &item.tax_class_id.to_string(),
-            category.as_deref(),
-            subcategory.as_deref(),
+            (category.as_deref(), subcategory.as_deref()),
             course.as_deref(),
             image_ref.as_deref(),
+            &codes,
         )
         .await
         .map(Version::new)
@@ -104,17 +106,19 @@ impl CatalogStore for PostgresCatalog {
             .map_err(|error| CatalogStoreError::new(error.to_string()))?;
         let course = item.course_id.map(|id| id.to_string());
         let image_ref = item.image_ref.map(|id| id.to_string());
+        let codes = serde_json::to_string(&item.codes)
+            .map_err(|error| CatalogStoreError::new(error.to_string()))?;
         self.set_item(
             &item.tenant_id.to_string(),
             &item.menu_item_id.to_string(),
             &item.name,
             &name_translations,
             &item.tax_class_id.to_string(),
-            category.as_deref(),
-            subcategory.as_deref(),
+            (category.as_deref(), subcategory.as_deref()),
             course.as_deref(),
             image_ref.as_deref(),
             item.status.as_str(),
+            &codes,
             expected.as_str(),
         )
         .await

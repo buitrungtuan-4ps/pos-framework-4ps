@@ -412,6 +412,7 @@ fn compiled_entry(
         course_id: item
             .course_id
             .filter(|course_id| course_by_id.contains_key(course_id)),
+        codes: item.codes.clone(),
     }
 }
 

@@ -51,6 +51,7 @@ use crate::catalog::{CatalogStore, CatalogStoreError};
 mod courses;
 mod display_categories;
 mod item_categories;
+mod item_codes;
 mod item_files;
 mod items;
 mod layout_buttons;

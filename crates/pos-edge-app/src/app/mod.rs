@@ -425,6 +425,7 @@ mod tests {
             modifier_group_ids: Vec::new(),
             course_id: None,
             available: true,
+            codes: pos_proto::item_codes::ItemCodes::default(),
         });
         Edge::new(
             FakeStore::default(),

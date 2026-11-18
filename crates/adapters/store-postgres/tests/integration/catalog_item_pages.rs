@@ -20,10 +20,10 @@ async fn stock(catalog: &PostgresCatalog, tenant: &str, count: u32) {
                 &format!("Item {index:04}"),
                 "{}",
                 "tax-standard",
+                (None, None),
                 None,
                 None,
-                None,
-                None,
+                "{}",
             )
             .await
             .expect("insert an item");
@@ -55,10 +55,10 @@ fn an_items_per_locale_names_round_trip_through_a_create_and_an_update() {
                 "Margherita",
                 r#"{"vi":"Bánh Margherita"}"#,
                 "tax-standard",
+                (None, None),
                 None,
                 None,
-                None,
-                None,
+                r#"{"plu":"4011"}"#,
             )
             .await
             .expect("a create must reach the database, not fail at the driver");
@@ -71,6 +71,10 @@ fn an_items_per_locale_names_round_trip_through_a_create_and_an_update() {
             "the per-locale name round-trips through the jsonb column; got {:?}",
             row.name_translations,
         );
+        assert!(
+            row.codes.contains("4011"),
+            "the codes round-trip too (ADR-0222)"
+        );
 
         let outcome = catalog
             .set_item(
@@ -79,11 +83,11 @@ fn an_items_per_locale_names_round_trip_through_a_create_and_an_update() {
                 "Margherita Classic",
                 r#"{"vi":"Bánh Margherita cổ điển"}"#,
                 "tax-standard",
-                None,
-                None,
+                (None, None),
                 None,
                 None,
                 "active",
+                "{}",
                 &version,
             )
             .await
@@ -269,10 +273,10 @@ fn a_search_narrows_the_page_and_its_total_including_per_locale_names() {
                     name,
                     &format!("{{\"vi\":\"{vi}\"}}"),
                     "tax-standard",
+                    (None, None),
                     None,
                     None,
-                    None,
-                    None,
+                    "{}",
                 )
                 .await
                 .expect("insert an item");
@@ -337,10 +341,10 @@ fn every_offered_order_partitions_the_master_in_both_directions() {
                     "Margherita",
                     "{}",
                     "tax-standard",
+                    (None, None),
                     None,
                     None,
-                    None,
-                    None,
+                    "{}",
                 )
                 .await
                 .expect("insert an item");

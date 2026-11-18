@@ -677,6 +677,7 @@ mod round_trip_tests {
                 course_id: None,
                 image_ref: None,
                 status: EntityStatus::Active,
+                codes: pos_proto::item_codes::ItemCodes::default(),
             })
             .collect();
         let stored: Vec<Versioned<CatalogItem>> = items
