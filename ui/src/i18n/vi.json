@@ -309,6 +309,7 @@
   "order.search": "Tìm món",
   "order.search_empty": "Không có món nào khớp với “{query}”.",
   "order.seat_for": "Ghế",
+  "order.scan_unknown": "Không có món nào mang mã {code}.",
   "order.seat_short": "Ghế {seat}",
   "order.send": "Gửi bếp",
   "order.send_and_pay": "Gửi bếp và thanh toán",

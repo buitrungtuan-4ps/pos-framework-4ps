@@ -19,6 +19,7 @@ use super::{
 use crate::origins::Origins;
 use pos_proto::billing::PublishedBilling;
 use pos_proto::receipt::PublishedReceipt;
+use pos_proto::scan::PublishedScan;
 use pos_proto::vendors::PublishedVendors;
 
 /// The store's display language from the `locale` node, and the `menu` node in it (ADR-0066,
@@ -417,7 +418,7 @@ pub(super) fn apply_bill_rules(session: &mut EdgeSession, document: &serde_json:
     }
 }
 
-/// The `tender_keys`, `counter` and `backup` nodes of settings (ADR-0160).
+/// The `tender_keys`, `counter`, `scan` and `backup` nodes of settings (ADR-0160).
 pub(super) fn apply_till_settings(session: &mut EdgeSession, document: &serde_json::Value) {
     // The `tender_keys` node (ADR-0160 decision 2): the keys the pay screen offers. A node of
     // settings like `shift`, so absent puts the defaults back and a node that is not an object keeps
@@ -446,6 +447,17 @@ pub(super) fn apply_till_settings(session: &mut EdgeSession, document: &serde_js
                 .and_then(|text| serde_json::from_str::<PublishedCounter>(&text).ok())
             {
                 session.counter = counter;
+            }
+        }
+    }
+    // The `scan` node (ADR-0222 decision 2): how quickly a scanner's keystrokes arrive. A node of
+    // settings like `counter`: absent puts the default back, a node that is not an object keeps the
+    // last ([`PublishedScan`]).
+    match document.get(PublishedScan::NODE) {
+        None => session.scan = PublishedScan::default(),
+        Some(value) => {
+            if let Ok(scan) = serde_json::from_value::<PublishedScan>(value.clone()) {
+                session.scan = scan;
             }
         }
     }
