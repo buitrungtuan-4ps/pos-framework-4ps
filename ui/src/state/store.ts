@@ -13,6 +13,7 @@ import { ownOverride } from "./drawer-access";
 import { recordAllGuests, recordGuests } from "./flows";
 import { keptShift, shiftInfo } from "./shift-info";
 import { afterLastVoid, closeBill, forgetLines, settleBill, voidBillClosed } from "./closing";
+import { applyPayFirst } from "./pay-first";
 import { noteWalkInOpened, walkInsOpenedSince, type LiveOrdersRead } from "./live-orders-read";
 import type { LinkStatus, ServerEvent } from "../api/live";
 import type {
@@ -1447,6 +1448,7 @@ export function applyMenu(response: MenuResponse): void {
   setState("walkInChannel", readWalkInChannel(response.walk_in_channel));
   setState("checkBeforePayment", response.check_before_payment === true);
   setState("partPayments", response.part_payments === true);
+  applyPayFirst(response);
   setState("coursesEnabled", response.courses_enabled);
   setState("courses", response.courses);
 }

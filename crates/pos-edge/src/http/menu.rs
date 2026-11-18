@@ -185,6 +185,11 @@ pub(crate) struct MenuResponse {
     /// Whether the store sells by barcode (`barcode_enabled`), which turns on the till's scan
     /// listener and its code index (decision 7).
     barcode_enabled: bool,
+    /// Whether the store pays first (`pay_first_enabled`): settling an order with no table sends
+    /// its unsent lines to the kitchen
+    /// ([ADR-0222](../../../../docs/adr/0222-items-carry-barcodes-and-plus-and-a-counter-can-pay-first.md)
+    /// decision 6), so the till does not ask to send them before payment.
+    pay_first_enabled: bool,
     /// Whether the store takes a bill in parts, one payment at a time, from its `billing` node
     /// ([ADR-0220](../../../../docs/adr/0220-a-bill-takes-its-payments-one-at-a-time.md)): `true`
     /// until a store turns it off. The pay screen offers its even split only where it is on; a till
@@ -444,6 +449,7 @@ where
             check_before_payment: session.billing.check_before_payment(),
             scan_keystroke_window_ms: session.scan.keystroke_window_ms(),
             barcode_enabled: session.capabilities.enabled(Capability::Barcode),
+            pay_first_enabled: session.capabilities.enabled(Capability::PayFirst),
             part_payments: session.billing.part_payments(),
             // The same resolution the reason-code and QR routes use: the store's language, or the
             // empty string, which every `localized_name` treats as "no translation, use the base".

@@ -7203,6 +7203,7 @@
           "check_before_payment",
           "scan_keystroke_window_ms",
           "barcode_enabled",
+          "pay_first_enabled",
           "part_payments",
           "modifier_groups",
           "courses_enabled",
@@ -7263,6 +7264,10 @@
           "part_payments": {
             "type": "boolean",
             "description": "Whether the store takes a bill in parts, one payment at a time, from its `billing` node\n([ADR-0220](../../../../docs/adr/0220-a-bill-takes-its-payments-one-at-a-time.md)): `true`\nuntil a store turns it off. The pay screen offers its even split only where it is on; a till\nreading an edge older than the field offers none, since that edge takes no part payment."
+          },
+          "pay_first_enabled": {
+            "type": "boolean",
+            "description": "Whether the store pays first (`pay_first_enabled`): settling an order with no table sends\nits unsent lines to the kitchen\n([ADR-0222](../../../../docs/adr/0222-items-carry-barcodes-and-plus-and-a-counter-can-pay-first.md)\ndecision 6), so the till does not ask to send them before payment."
           },
           "scan_keystroke_window_ms": {
             "type": "integer",
