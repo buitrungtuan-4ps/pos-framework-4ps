@@ -78,6 +78,10 @@ pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
         RouteGate::Person(&[Permission::OpenBill]),
     ),
     (
+        "POST /api/bills/{id}/comp",
+        RouteGate::Person(&[Permission::ApplyComp]),
+    ),
+    (
         "POST /api/bills/{id}/discount",
         RouteGate::Person(&[
             Permission::ApplyDiscount,

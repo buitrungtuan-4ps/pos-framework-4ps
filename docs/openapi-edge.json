@@ -229,6 +229,74 @@
         "x-permission": "billing.bill.open"
       }
     },
+    "/api/bills/{id}/comp": {
+      "post": {
+        "tags": [
+          "bills"
+        ],
+        "summary": "`POST /api/bills/{id}/comp` — give one line of an open bill away (ADR-0219 decision 1).",
+        "description": "Records `billing.comp.applied` for the line's whole total and, where somebody approved it,\n`security.permission.overridden`, then answers with the bill as it now stands, so the till\nredraws it from the edge's arithmetic: the comp lowers the taxable base as a discount does.",
+        "operationId": "comp_line",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The bill's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`order_line_id`, a line the bill covers, and `reason_code_id`, published for `REASON_ACTION_COMP`, with `approver_code` and `approver_pin` of somebody who may comp where the person acting may not. Both are secrets and are never logged",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "What the bill now owes, in the shape `GET /api/orders/{id}/check` answers with, from the edge's own arithmetic",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; the comp needs an approval that was missing or refused, or the approver is locked out; or this box was superseded by a replacement"
+          },
+          "409": {
+            "description": "Refused: the bill does not cover the line or it was voided (`UNKNOWN_LINE`), the line is already comped (`ALREADY_COMPED`), the reason is not one published for a comp (`REASON_CODE_NOT_VALID`), the bill is not open, or the person lacks the permission. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "billing.comp.apply"
+      }
+    },
     "/api/bills/{id}/discount": {
       "post": {
         "tags": [
@@ -5360,6 +5428,34 @@
           "Japanese932",
           "Unsupported"
         ]
+      },
+      "CompRequest": {
+        "type": "object",
+        "description": "A comp as a till asks for it: which line, why, and the badge and PIN of somebody who holds\n`billing.comp.apply` where the person acting needs one. No amount: what a comp takes off is the\nline's whole total, and that is the edge's to say.",
+        "required": [
+          "order_line_id",
+          "reason_code_id"
+        ],
+        "properties": {
+          "approver_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approver_pin": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "order_line_id": {
+            "$ref": "#/components/schemas/OrderLineId"
+          },
+          "reason_code_id": {
+            "$ref": "#/components/schemas/ReasonCodeId"
+          }
+        }
       },
       "CountRequest": {
         "type": "object",

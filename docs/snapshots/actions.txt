@@ -144,6 +144,18 @@ billing.fee.waive	refusal=FEE_NOT_WAIVABLE
 billing.fee.waive	refusal=REASON_CODE_NOT_VALID
 billing.fee.waive	route=POST /api/bills/{id}/fees/{fee_id}/waive
 billing.fee.waive	since=0.14.1
+billing.line.comp
+billing.line.comp	effect=ACTION_EFFECT_MONEY
+billing.line.comp	frequency=ACTION_FREQUENCY_RARE
+billing.line.comp	param=bill_id:ACTION_PARAM_KIND_ID:required
+billing.line.comp	param=order_line_id:ACTION_PARAM_KIND_ID:required
+billing.line.comp	param=reason_code_id:ACTION_PARAM_KIND_ID:required
+billing.line.comp	permission=billing.comp.apply
+billing.line.comp	refusal=ALREADY_COMPED
+billing.line.comp	refusal=APPROVAL_REQUIRED
+billing.line.comp	refusal=REASON_CODE_NOT_VALID
+billing.line.comp	route=POST /api/bills/{id}/comp
+billing.line.comp	since=0.14.1
 billing.receipt.reprint
 billing.receipt.reprint	effect=ACTION_EFFECT_EDGE_WRITE
 billing.receipt.reprint	frequency=ACTION_FREQUENCY_RARE

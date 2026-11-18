@@ -11,13 +11,14 @@ use pos_ports::event_store::{EventQuery, EventStore};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::events::{
     BillingBillMerged, BillingBillOpened, BillingBillSettled, BillingBillSplit, BillingBillVoided,
-    BillingDiscountApplied, BillingFeeWaived, BillingPaymentCaptured, BillingReceiptReprinted,
-    CashDrawerDropped, CashDrawerPaidIn, CashDrawerPaidOut, CashShiftClosed, CashShiftCounted,
-    CashShiftOpened, DataCustomFieldSet, DataCustomRecordChanged, DataSubjectMasked, EventType,
-    InventoryItemRestored, InventoryItemSoldOut, KitchenTicketBumped, SalesOrderClosed,
-    SalesOrderConfirmedByStaff, SalesOrderLineAdded, SalesOrderLineFired, SalesOrderLineUpdated,
-    SalesOrderLineVoided, SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed,
-    SalesTableMerged, SalesTableOpened, SalesTableTransferred,
+    BillingCompApplied, BillingDiscountApplied, BillingFeeWaived, BillingPaymentCaptured,
+    BillingReceiptReprinted, CashDrawerDropped, CashDrawerPaidIn, CashDrawerPaidOut,
+    CashShiftClosed, CashShiftCounted, CashShiftOpened, DataCustomFieldSet,
+    DataCustomRecordChanged, DataSubjectMasked, EventType, InventoryItemRestored,
+    InventoryItemSoldOut, KitchenTicketBumped, SalesOrderClosed, SalesOrderConfirmedByStaff,
+    SalesOrderLineAdded, SalesOrderLineFired, SalesOrderLineUpdated, SalesOrderLineVoided,
+    SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed, SalesTableMerged,
+    SalesTableOpened, SalesTableTransferred,
 };
 use pos_proto::time::Timestamp;
 use pos_proto::{BillState, OrderLineState, PaymentMethod, ShiftState, TableState};
@@ -385,6 +386,10 @@ impl<S: EventStore> Edge<S> {
             | EventType::CashDrawerPaidOut
             | EventType::CashDrawerDropped => {
                 Self::fold_movement(projection, envelope, known)?;
+            }
+            EventType::BillingCompApplied => {
+                let event: BillingCompApplied = envelope.data.decode().map_err(AppError::Encode)?;
+                projection.apply_comp(&event).map_err(AppError::Domain)?;
             }
             EventType::KitchenTicketBumped => {
                 let event: KitchenTicketBumped =

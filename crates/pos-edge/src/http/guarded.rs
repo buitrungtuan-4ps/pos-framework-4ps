@@ -212,6 +212,9 @@ where
             post(super::void_settled::void_settled_bill::<S>),
         )
         .route("/api/bills/{id}/discount", post(bills::discount_bill::<S>))
+        // Giving a line away (ADR-0219 decision 1): `billing.comp.apply`, PIN-flagged, so the
+        // approver rides with the request as it does for a waive.
+        .route("/api/bills/{id}/comp", post(super::comp::comp_line::<S>))
         // Waiving one of the bill's fees (ADR-0159 decision 5): `billing.fee.waive`, PIN-flagged,
         // so the approver rides with the request as it does for a void.
         .route(

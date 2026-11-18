@@ -33,6 +33,10 @@ pub enum AppError {
     /// A command named a line the edge does not know.
     #[error("no such order line")]
     UnknownLine,
+    /// A comp named a line already given away: a line is comped at most once
+    /// ([ADR-0219](../../../../docs/adr/0219-a-comp-and-a-price-override-each-need-a-reason-and-an-approver.md)).
+    #[error("that line has already been comped")]
+    AlreadyComped,
     /// A line was fired but no station could be resolved — the store has no station plan (no rule
     /// matched and none is the default) and the caller named no station either (ADR-0072).
     #[error("the line routes to no station")]

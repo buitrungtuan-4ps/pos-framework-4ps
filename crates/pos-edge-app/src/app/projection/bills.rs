@@ -7,7 +7,7 @@
 use pos_core::billing;
 use pos_core::billing::{MergedFees, MergingBill, TaxComponentLine};
 use pos_core::error::DomainError;
-use pos_proto::events::BillingBillSettled;
+use pos_proto::events::{BillingBillSettled, BillingCompApplied};
 use pos_proto::ids::{BillId, FeeId, OrderId, OrderLineId, ShiftId};
 use pos_proto::money::{CurrencyCode, Money};
 use pos_proto::time::{BusinessDate, Timestamp};
@@ -243,6 +243,23 @@ impl Projection {
                 Some(running) => running.checked_add(amount)?,
                 None => amount,
             });
+        }
+        Ok(())
+    }
+
+    /// Folds a comp (ADR-0219 decision 1): the bill's comp grows by the amount and the line is
+    /// marked given away, live and on replay alike, so a restart refuses a second comp of it too.
+    ///
+    /// # Errors
+    ///
+    /// [`DomainError::Money`] if the bill's comps overflow.
+    pub(in crate::app) fn apply_comp(
+        &mut self,
+        event: &BillingCompApplied,
+    ) -> Result<(), DomainError> {
+        self.add_reduction(event.bill_id, ReductionKind::Comp, event.amount)?;
+        if let Some(line) = self.lines.get_mut(&event.order_line_id) {
+            line.comped = true;
         }
         Ok(())
     }
