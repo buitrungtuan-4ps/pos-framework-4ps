@@ -195,7 +195,10 @@ impl<S: EventStore> Edge<S> {
             order_id,
             reason_code_id,
         };
-        let closed = SalesOrderClosed { order_id };
+        let closed = SalesOrderClosed {
+            order_id,
+            reason_code_id: None,
+        };
         let (rejected_envelope, rejected_message) = self.prepare(&ctx, &rejected)?;
         let (closed_envelope, closed_message) = self.prepare(&ctx, &closed)?;
         self.append_and_publish(

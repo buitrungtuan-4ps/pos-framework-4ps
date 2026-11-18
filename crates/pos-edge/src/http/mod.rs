@@ -594,6 +594,7 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
         AppError::ReasonCodeNotValid => "REASON_CODE_NOT_VALID",
         AppError::VoidReasonNotValid => "VOID_REASON_NOT_VALID",
         AppError::CashReasonNotValid => "CASH_REASON_NOT_VALID",
+        AppError::CloseReasonNotValid => "CLOSE_REASON_NOT_VALID",
         AppError::ShiftNotOpen => "SHIFT_NOT_OPEN",
         AppError::DrawerDayEnded => "DRAWER_DAY_ENDED",
         AppError::DrawerCounted => "DRAWER_COUNTED",
@@ -671,6 +672,7 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::ReasonCodeNotValid
         | AppError::VoidReasonNotValid
         | AppError::CashReasonNotValid
+        | AppError::CloseReasonNotValid
         | AppError::ShiftNotOpen
         | AppError::DrawerDayEnded
         | AppError::DrawerCounted

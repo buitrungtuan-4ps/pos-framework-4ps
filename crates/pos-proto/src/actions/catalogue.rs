@@ -95,6 +95,17 @@ pub const CATALOGUE: &[Action] = &[
         ..BASE
     },
     Action {
+        action_id: "sales.order.close",
+        effect: EdgeWrite,
+        frequency: Rare,
+        params: &[required("order_id", Id), optional("reason_code_id", Id)],
+        routes: &["POST /api/orders/{id}/close"],
+        permissions: ADD_LINE,
+        refusals: &["UNKNOWN_ORDER", "ORDER_NOT_EMPTY", "CLOSE_REASON_NOT_VALID"],
+        summary: "Close a tableless order nothing was sold on, such as a tab opened by mistake",
+        ..BASE
+    },
+    Action {
         action_id: "sales.line.add",
         effect: EdgeWrite,
         params: &[
