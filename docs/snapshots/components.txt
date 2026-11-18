@@ -278,6 +278,15 @@ pay_flow	device_class=DEVICE_CLASS_TABLET
 pay_flow	device_class=DEVICE_CLASS_TERMINAL
 pay_flow	reads=bill
 pay_flow	since=0.14.1
+plu_keypad
+plu_keypad	children=false
+plu_keypad	device_class=DEVICE_CLASS_KIOSK
+plu_keypad	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+plu_keypad	device_class=DEVICE_CLASS_PHONE
+plu_keypad	device_class=DEVICE_CLASS_TABLET
+plu_keypad	device_class=DEVICE_CLASS_TERMINAL
+plu_keypad	reads=order
+plu_keypad	since=0.14.1
 records_body
 records_body	children=false
 records_body	device_class=DEVICE_CLASS_KIOSK
@@ -287,6 +296,15 @@ records_body	device_class=DEVICE_CLASS_TABLET
 records_body	device_class=DEVICE_CLASS_TERMINAL
 records_body	reads=custom_records
 records_body	since=0.14.1
+scan_field
+scan_field	children=false
+scan_field	device_class=DEVICE_CLASS_KIOSK
+scan_field	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+scan_field	device_class=DEVICE_CLASS_PHONE
+scan_field	device_class=DEVICE_CLASS_TABLET
+scan_field	device_class=DEVICE_CLASS_TERMINAL
+scan_field	reads=order
+scan_field	since=0.14.1
 screen_frame
 screen_frame	children=true
 screen_frame	device_class=DEVICE_CLASS_KIOSK

@@ -470,6 +470,8 @@ export const api = {
   // (ADR-0160 decision 2).
   openOrder: (channel?: string) =>
     request<OpenedOrder>("POST", "/api/orders", channel === undefined ? {} : { channel }),
+  // The line a scanned code names, priced by the edge, which reads a scale's label (ADR-0222).
+  scanLine: (orderId: string, code: string) => request<LineResponse>("POST", `/api/orders/${orderId}/scan`, { code }),
   addOrderLine: (orderId: string, line: OrderLineRequest) =>
     request<LineResponse>("POST", `/api/orders/${orderId}/lines`, line),
 

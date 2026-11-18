@@ -291,6 +291,18 @@ pub static CATALOGUE: &[Component] = &[
         ..BASE
     },
     Component {
+        component_id: "scan_field",
+        reads: "order",
+        summary: "The quick sale's code field: a scanned or typed barcode or PLU sells its item; a scale's label goes to the store server, which prices it (ADR-0222). Drawn where the store sells by barcode.",
+        ..BASE
+    },
+    Component {
+        component_id: "plu_keypad",
+        reads: "order",
+        summary: "The quick sale's PLU pad: a keyed PLU of one to five digits sells its item (ADR-0222). Drawn where the store sells by barcode.",
+        ..BASE
+    },
+    Component {
         component_id: "records_body",
         reads: "custom_records",
         summary: "A package's custom records: its object types, each one's records, and the form that enters or changes one (ADR-0194).",
