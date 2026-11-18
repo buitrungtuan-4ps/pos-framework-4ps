@@ -431,6 +431,23 @@ event_catalogue! {
         /// Which copy this is, counting from 1 for the first reprint.
         copy_number: u32,
     },
+    /// A check (pre-bill) was printed: what an order, or one part of its split bill, came to when
+    /// it was shown to the guest
+    /// ([ADR-0218](../../../docs/adr/0218-a-printed-check-is-an-event-every-till-sees.md)).
+    ///
+    /// One event per piece of paper, so a check printed many times is a count. It opens no bill and
+    /// takes no receipt number, and carries nothing personal.
+    BillingCheckPrinted => "billing.check.printed", version = 1 {
+        /// The order the check is for.
+        order_id: OrderId,
+        /// The part of a split bill the check is for, where it is one; absent for a check of the
+        /// whole order, before or after its bill opens.
+        bill_id: Option<BillId>,
+        /// What the check printed as owed.
+        total_due: Money,
+        /// Which check of the order (or of the part) this is, counting from 1.
+        copy: u32,
+    },
     /// A price reduction was applied.
     BillingDiscountApplied => "billing.discount.applied", version = 1 {
         /// The bill.

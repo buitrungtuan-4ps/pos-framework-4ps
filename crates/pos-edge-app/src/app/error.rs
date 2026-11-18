@@ -71,6 +71,12 @@ pub enum AppError {
     /// its receipt, not a pre-bill.
     #[error("nothing is open to print a pre-bill for")]
     NothingToPrint,
+    /// The store takes payment only once a check showing what the bill now comes to has been
+    /// printed (`billing.check_before_payment`,
+    /// [ADR-0218](../../../../docs/adr/0218-a-printed-check-is-an-event-every-till-sees.md)), and
+    /// this bill's was never printed or the order has changed since.
+    #[error("print the check first: the bill has none that shows what it now comes to")]
+    CheckRequired,
     /// A merge named bills that do not sit on the same table, or named the target as its own
     /// absorbed bill ([ADR-0128](../../../../docs/adr/0128-a-bill-splits-and-merges.md) decision 5).
     ///

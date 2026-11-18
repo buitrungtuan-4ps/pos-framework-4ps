@@ -304,6 +304,7 @@ impl Projection {
         self.package_versions.remove(&order_id);
         self.recipients.remove(&order_id);
         self.order_vendors.remove(&order_id);
+        self.forget_checks(order_id);
         if let Some(table_id) = self.table_for_order(order_id) {
             self.table_orders.remove(&table_id);
         }

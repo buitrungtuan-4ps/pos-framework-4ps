@@ -570,6 +570,7 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
         AppError::ReceiptFromAnotherDay => "RECEIPT_FROM_ANOTHER_DAY",
         AppError::UnknownBill => "UNKNOWN_BILL",
         AppError::NothingToPrint => "NOTHING_TO_PRINT",
+        AppError::CheckRequired => "CHECK_REQUIRED",
         AppError::BillsOnDifferentTables => "BILLS_ON_DIFFERENT_TABLES",
         AppError::BillsOnDifferentOrders => "BILLS_ON_DIFFERENT_ORDERS",
         AppError::UnknownShift => "UNKNOWN_SHIFT",
@@ -639,6 +640,7 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::ReceiptFromAnotherDay
         | AppError::UnknownBill
         | AppError::NothingToPrint
+        | AppError::CheckRequired
         | AppError::BillsOnDifferentTables
         | AppError::BillsOnDifferentOrders
         | AppError::UnknownShift

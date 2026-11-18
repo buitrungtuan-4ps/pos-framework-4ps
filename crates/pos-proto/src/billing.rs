@@ -38,6 +38,15 @@ pub struct PublishedBilling {
     /// that is not a token at all reads as absent. Left off the wire while absent.
     #[serde(default, deserialize_with = "token", skip_serializing_if = "is_absent")]
     pub settled_void_window: Open<SettledVoidWindow>,
+    /// Whether a bill is paid only once a check showing what it now comes to has been printed
+    /// ([ADR-0218](../../../docs/adr/0218-a-printed-check-is-an-event-every-till-sees.md)). Read it
+    /// through [`PublishedBilling::check_before_payment`]: absent, or not `true` or `false`, is off.
+    #[serde(
+        default,
+        deserialize_with = "flag",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub check_before_payment: Option<bool>,
 }
 
 impl PublishedBilling {
@@ -57,6 +66,22 @@ impl PublishedBilling {
             SettledVoidWindow::Shift => SettledVoidWindow::Shift,
         }
     }
+
+    /// Whether a bill is paid only once a fresh check has been printed for it (ADR-0218): off
+    /// unless the store turns it on, which is what every store did before the setting existed.
+    #[must_use]
+    pub fn check_before_payment(&self) -> bool {
+        self.check_before_payment.unwrap_or(false)
+    }
+}
+
+/// An on-or-off value as the node carries it, or nothing for a value that is not one, so the field
+/// reads as its default rather than refusing the node.
+fn flag<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(serde_json::Value::deserialize(deserializer)?.as_bool())
 }
 
 /// A window as the node carries it: a token, kept as it came where this release does not know it,
@@ -100,6 +125,26 @@ mod tests {
             serde_json::to_string(&PublishedBilling::default()).expect("serialise"),
             "{}",
             "a node that sets nothing is written as nothing"
+        );
+    }
+
+    /// ADR-0218: no store must print a check before payment until it says so, and a value that is
+    /// not on or off reads as off rather than refusing the node.
+    #[test]
+    fn a_check_before_payment_is_off_until_a_store_turns_it_on() {
+        for off in [
+            "{}",
+            r#"{ "check_before_payment": false }"#,
+            r#"{ "check_before_payment": "yes" }"#,
+            r#"{ "check_before_payment": null }"#,
+        ] {
+            assert!(!node(off).check_before_payment(), "{off}");
+        }
+        let on = node(r#"{ "check_before_payment": true }"#);
+        assert!(on.check_before_payment());
+        assert_eq!(
+            serde_json::to_value(&on).expect("serialise"),
+            serde_json::json!({ "check_before_payment": true })
         );
     }
 

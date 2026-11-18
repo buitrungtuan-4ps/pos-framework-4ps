@@ -148,6 +148,15 @@ impl Projection {
     /// tills settling the last two parts at once cannot each see the other still open.
     fn settle_bill_record(&mut self, bill_id: BillId) {
         self.set_bill_state(bill_id, BillState::Settled);
+        // A paid part's check is done with, and once nothing is owed so are the order's
+        // (ADR-0218 decision 2).
+        if let Some(order_id) = self.bills.get(&bill_id).map(|bill| bill.order_id) {
+            if self.latest_bill_in(order_id, BillState::Open).is_none() {
+                self.forget_checks(order_id);
+            } else {
+                self.checks.remove(&(order_id, Some(bill_id)));
+            }
+        }
         let Some((order_id, Some(table_id))) = self
             .bills
             .get(&bill_id)

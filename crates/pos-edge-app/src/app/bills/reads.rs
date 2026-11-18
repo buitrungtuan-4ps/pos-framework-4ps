@@ -152,7 +152,14 @@ impl<S: EventStore> Edge<S> {
         }
         let order = self.bill_snapshot(&bill, &session)?;
         let totals = self.bill_totals(bill_id)?;
+        // A part of a split bill is its own check; the order's one bill is the order's.
+        let split = self
+            .lock_projection()
+            .open_bills_for_order(bill.order_id)
+            .len()
+            > 1;
         Ok(PreBill {
+            bill_id: split.then_some(bill_id),
             lines: Self::receipt_lines(&order.lines),
             totals,
         })
@@ -186,6 +193,7 @@ impl<S: EventStore> Edge<S> {
             return Ok(Vec::new());
         }
         Ok(vec![PreBill {
+            bill_id: None,
             lines: Self::receipt_lines(&order.lines),
             totals: self.order_totals(order_id)?,
         }])

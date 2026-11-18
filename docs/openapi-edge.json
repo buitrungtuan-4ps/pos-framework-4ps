@@ -5187,6 +5187,36 @@
         ],
         "description": "One fee as the till shows it: the line the settle records, and whether staff may waive it."
       },
+      "CheckPrintedResponse": {
+        "type": "object",
+        "description": "A printed check's marker, as the till shows it.",
+        "required": [
+          "printed_time",
+          "total_due",
+          "copy",
+          "stale"
+        ],
+        "properties": {
+          "copy": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Which check of the order or part it was, from 1.",
+            "minimum": 0
+          },
+          "printed_time": {
+            "$ref": "#/components/schemas/Timestamp",
+            "description": "When it printed, in milliseconds since the epoch."
+          },
+          "stale": {
+            "type": "boolean",
+            "description": "Whether the order has changed since it printed, so the paper no longer shows what is owed."
+          },
+          "total_due": {
+            "$ref": "#/components/schemas/Money",
+            "description": "What it showed as owed."
+          }
+        }
+      },
       "CheckResponse": {
         "type": "object",
         "description": "What a table owes, as the till shows it.",
@@ -5199,6 +5229,10 @@
           "fee_lines"
         ],
         "properties": {
+          "check_printed": {
+            "$ref": "#/components/schemas/CheckPrintedResponse",
+            "description": "The last check printed for this order, or for this part of its split bill\n([ADR-0218](../../../../docs/adr/0218-a-printed-check-is-an-event-every-till-sees.md)), on\nevery till: when, what it showed, which copy, and whether the order has changed since\n(`stale`). Absent until one is printed, and once the order is paid."
+          },
           "comp_total": {
             "$ref": "#/components/schemas/Money"
           },

@@ -60,6 +60,7 @@ mod session;
 mod shifts;
 mod views;
 
+pub use bills::CheckPrinted;
 pub use config_wake::{ConfigDelivery, ConfigWakeReport, ConfigWakeStanding, WAKE_SAMPLES_MAX};
 pub use custom_data::{CONSENT_FIELD_PREFIX, CustomDataView};
 pub use device_reads::{DEVICE_READS_MAX, DeviceRead, DeviceReads};
@@ -179,6 +180,10 @@ struct Projection {
     /// sibling part still owed. That stranded a table whose bill was voided, refused every split
     /// part's settle after the first, and kept a paid order on the live list after a merge.
     order_bill_ids: HashMap<OrderId, Vec<BillId>>,
+    /// The last check printed for each order that still owes, and for each part of a split bill
+    /// (ADR-0218 decision 2), folded from `billing.check.printed`. Dropped when the order closes or
+    /// is paid in full, so it holds at most one entry per open order and part.
+    checks: HashMap<(OrderId, Option<BillId>), projection::CheckMark>,
     shifts: HashMap<ShiftId, ShiftRecord>,
     /// The shift each drawer has trading or counted: the store's one drawer under `None`, a till's
     /// under its `TERMINAL` entry's id (ADR-0167 decision 2). Cash lands on a drawer's shift, and
