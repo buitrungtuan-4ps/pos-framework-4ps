@@ -112,6 +112,12 @@ fn table_service() -> bool {
     !std::env::var("POS_DEMO_PROFILE").is_ok_and(|profile| profile.eq_ignore_ascii_case("counter"))
 }
 
+/// Whether this demo store keeps bar tabs, with a guest's label on — `POS_DEMO_PROFILE=bar`
+/// ([ADR-0221](../../../docs/adr/0221-a-bar-tab-is-an-order-without-a-table-that-stays-open.md)).
+fn bar() -> bool {
+    std::env::var("POS_DEMO_PROFILE").is_ok_and(|profile| profile.eq_ignore_ascii_case("bar"))
+}
+
 /// Whether this demo store's country rounds its cash — `POS_DEMO_PROFILE=cash-rounding`.
 ///
 /// A property of the *country*, not of the shop: Vietnam rounds to the thousand đồng because that is
@@ -575,6 +581,18 @@ pub fn config_document() -> Option<serde_json::Value> {
     {
         object.insert("devices".to_owned(), demo_tills(Some(DEMO_BAR_FLOAT)));
         object.insert("shift".to_owned(), demo_drawers());
+    }
+    // Published only on its own profile, so every other flow runs on a store without tabs. The label
+    // is on here, which a real store sets only with its notice confirmed (ADR-0169); a fixture has
+    // nobody to confirm it.
+    if bar()
+        && let Some(object) = document.as_object_mut()
+    {
+        object.insert("tabs_enabled".to_owned(), serde_json::json!(true));
+        object.insert(
+            "tabs".to_owned(),
+            serde_json::json!({ "guest_label": "GUEST_LABEL_ON" }),
+        );
     }
     package::publish_on_its_profile(&mut document);
     // Removed rather than built empty: an absent node is what an unstaffed store is published, and
