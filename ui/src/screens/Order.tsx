@@ -58,6 +58,7 @@ import { createPrint } from "../state/print-writes";
 import { printOutcomeKey } from "../lib/print";
 import { SendFirst } from "../components/SendFirst";
 import { PrintedCheck } from "../components/PrintedCheck";
+import { ScanListener } from "../components/ScanListener";
 import { RepriceLine } from "../components/RepriceLine";
 import { createSendFirst, waitingByCourse } from "../state/unsent";
 import { DRAFT, draftChannel, eatenIn, keyToAddTo } from "../state/draft-walk-in";
@@ -592,6 +593,7 @@ export function Order() {
         >
           {walkIn() ? t("common.back_counter") : t("common.back_floor")}
         </a>
+        <ScanListener disabled={billed() || !can("sales.line.add") || flowWait() !== null} onItem={onItem} />
         {/* Seating a table, or starting a walk-in, ends here (ADR-0109, ADR-0146). */}
         <h1 class="text-lg font-semibold" data-outcome="order-open">
           {walkIn() ? t("order.walk_in") : t("common.table", { label: label() })}
@@ -800,9 +802,7 @@ export function Order() {
                       class="min-h-touch w-11 rounded-token border border-line text-lg text-ink"
                       aria-label={t("order.more", { item: line.name })}
                       data-step="setQuantity"
-                      onClick={() =>
-                        void guard(() => setQuantity(line.orderLineId, line.quantityMilli + 1000))
-                      }
+                      onClick={() => void guard(() => setQuantity(line.orderLineId, line.quantityMilli + 1000))}
                     >
                       {"+"}
                     </button>

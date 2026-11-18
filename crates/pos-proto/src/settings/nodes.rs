@@ -13,6 +13,8 @@ use crate::people::PublishedPermissions;
 use crate::printing::{self, PublishedPrinting, ReceiptLanguage, ReceiptSecondLanguage};
 use crate::qr::{PublishedQr, TableOrder};
 use crate::receipt::PublishedReceipt;
+use crate::scan;
+use crate::scan::PublishedScan;
 use crate::session::{self, PublishedSession};
 use crate::shift::{
     self, CloseReport, DrawerAccess, DrawerDayEnd, DrawerModel, NoShiftSelling, PublishedShift,
@@ -617,6 +619,31 @@ pub(super) fn counter_settings() -> Vec<Setting> {
                       has the cashier choose Eat in or Take away for each walk-in. A store that \
                       publishes the channels it accepts must accept the one a walk-in takes, or \
                       the order is refused.",
+    }]
+}
+
+/// The settings on the `scan` node, in the register's order.
+pub(super) fn scan_settings() -> Vec<Setting> {
+    vec![Setting {
+        node: PublishedScan::NODE,
+        field: "keystroke_window_ms",
+        shape: SettingShape::Int {
+            min: *scan::KEYSTROKE_WINDOW_MS.start(),
+            max: *scan::KEYSTROKE_WINDOW_MS.end(),
+            unit: SettingUnit::Milliseconds,
+            default: scan::DEFAULT_KEYSTROKE_WINDOW_MS,
+            // ADR-0222, accepted by the owner on 2026-11-18: 50 ms suits the keyboard-wedge
+            // scanners phase 6 supports, and no template changes it.
+            preset: None,
+        },
+        scopes: STORE_WIDE,
+        since: NEXT_RELEASE,
+        confirm: None,
+        summary: "How many milliseconds may pass between two keystrokes of one barcode scan. A \
+                      scanner types a code's digits and Enter faster than a person, so digits \
+                      ending in Enter within this window are a scan on a screen that listens for \
+                      one. `50`, the default, suits most keyboard-wedge scanners; raise it for a \
+                      slower one. Read only where barcode entry is on.",
     }]
 }
 
