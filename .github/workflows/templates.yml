@@ -1,0 +1,69 @@
+name: templates
+
+# The template-by-country matrix (ADR-0200 decision 6; `pos-simulator matrix`,
+# docs/guides/run-the-simulator.md): each business-type template in business-types/
+# sold end to end in each shipped country pack through an in-process edge.
+#
+# A pull request that touches a template runs its row (that template in every
+# country), and one that touches a country pack runs its column (every template in
+# that country); `.github/scripts/matrix-cells.sh` turns the changed paths into
+# those filters. The schedule and a manual run take all 24 cells. The `pr` workflow's
+# tests also run every cell wherever `pos-simulator` is affected; this job is the
+# report a person reads, one line a cell.
+
+on:
+  pull_request:
+    branches: [main, "release/**"]
+    paths:
+      - "business-types/**"
+      - "countries/**"
+  schedule:
+    # 19:30 UTC, beside the nightly workflow's run, after the day has closed everywhere
+    # the fleet runs.
+    - cron: "30 19 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: templates-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# The same build environment as pr.yml and main.yml (ADR-0171 decision 1).
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_PROFILE_TEST_DEBUG: 0
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
+
+jobs:
+  matrix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The merge base with the base branch, to diff against.
+          fetch-depth: 0
+      - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: templates
+      - name: build the simulator
+        run: cargo build -q -p pos-simulator --locked
+      - name: sell each template in each country it touches
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "pull_request" ]; then
+            mapfile -t runs < <(git diff --name-only "origin/$BASE"...HEAD | .github/scripts/matrix-cells.sh)
+          else
+            runs=("")
+          fi
+          for filter in "${runs[@]}"; do
+            read -ra args <<<"$filter"
+            cargo run -q -p pos-simulator --locked -- matrix "${args[@]}"
+          done

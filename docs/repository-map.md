@@ -220,7 +220,7 @@ Guide: [add a country module](guides/add-a-country-module.md). Law-specific beha
 |---|---|---|
 | Template | `business-types/<id>/template.json` ([ADR-0200](adr/0200-six-business-type-templates-ship-with-the-framework.md)): the `BUSINESS_TYPE_*` it is for and its recommended settings, each a register key and a value the setting takes, never a `package.*` key nor a key a country pack sets. One directory per `pos_proto::BusinessType`; the package joins it as the capabilities it uses land | `test` (`crates/pos-business-types`) |
 | Demo | `business-types/<id>/demo.json`: obviously fake items (`Demo …`) priced in every shipped pack's currency, the floor where the preset serves at tables, the kitchen stations where it has a kitchen display (`crates/pos-business-types/src/demo.rs`) | `test` |
-| Matrix | the template sold in every country pack through an in-process edge, `crates/pos-simulator/src/matrix.rs` ([guide](guides/run-the-simulator.md#the-template-by-country-matrix)) | `test` (`pos-simulator`); `just matrix --template <id>` |
+| Matrix | the template sold in every country pack through an in-process edge, `crates/pos-simulator/src/matrix.rs` ([guide](guides/run-the-simulator.md#the-template-by-country-matrix)) | `test` (`pos-simulator`); the `templates` workflow (`.github/workflows/templates.yml`): a pull request's row or column, all 24 nightly; `just matrix --template <id>` |
 | Compiled in | `SOURCES` in `crates/pos-business-types/src/lib.rs`, one `include_str!` per file; a test refuses a directory that is not compiled in | `test` |
 | Capability preset | `CapabilityContext::for_business_type` in `crates/pos-core/src/capability.rs`, held to every inter-flag rule | `test` |
 
