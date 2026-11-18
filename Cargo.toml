@@ -42,6 +42,7 @@ members = [
     "crates/pos-cloud-reports",
     "crates/pos-cloud",
     "crates/pos-simulator",
+    "crates/pos-business-types",
     "examples/minimal-edge",
     "xtask",
 ]
