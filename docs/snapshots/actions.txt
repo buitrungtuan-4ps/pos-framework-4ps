@@ -489,6 +489,14 @@ sales.order.transfer	permission=sales.order.transfer
 sales.order.transfer	permission=sales.table.manage
 sales.order.transfer	route=POST /api/tables/{id}/transfer
 sales.order.transfer	since=0.14.1
+sales.tab.open
+sales.tab.open	effect=ACTION_EFFECT_EDGE_WRITE
+sales.tab.open	frequency=ACTION_FREQUENCY_COMMON
+sales.tab.open	param=channel:ACTION_PARAM_KIND_TOKEN:optional
+sales.tab.open	permission=sales.line.add
+sales.tab.open	refusal=CAPABILITY_DISABLED
+sales.tab.open	route=POST /api/orders
+sales.tab.open	since=0.14.1
 sales.table.clean
 sales.table.clean	effect=ACTION_EFFECT_EDGE_WRITE
 sales.table.clean	frequency=ACTION_FREQUENCY_COMMON

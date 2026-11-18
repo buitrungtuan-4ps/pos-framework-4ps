@@ -61,6 +61,11 @@ impl Till {
         self.capabilities.enabled(Capability::PayFirst)
     }
 
+    /// Whether the store keeps bar tabs (ADR-0221).
+    pub(super) fn tabs(&self) -> bool {
+        self.capabilities.enabled(Capability::Tabs)
+    }
+
     /// Builds the cell's edge from `template` in `pack`'s country, pairs a till and signs it in.
     pub(super) async fn open(
         template: &Template,

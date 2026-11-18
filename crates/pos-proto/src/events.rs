@@ -82,6 +82,12 @@ event_catalogue! {
         /// on every order opened before this field; left off the wire while absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         subject_id: Option<SubjectId>,
+        /// The tab number of a bar tab, the business day's next number as a queue number is
+        /// ([ADR-0221](../../../docs/adr/0221-a-bar-tab-is-an-order-without-a-table-that-stays-open.md)
+        /// decision 1). Never a name: a guest's label stays on the store. Absent for any other
+        /// order and on every order opened before this field; left off the wire while absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tab_number: Option<u64>,
     },
     /// An order reached a terminal state.
     ///

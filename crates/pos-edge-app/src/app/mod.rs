@@ -81,7 +81,7 @@ pub use views::{
     CounterOrderLine, CounterOrderOpened, CounterOrderView, DrawerFigures, DrawerView, DrawersView,
     FiredLine, HandoverSlip, LineDraft, LineView, LiveOrderLine, LiveOrderView, MAX_SETTLED_LISTED,
     OrderLineChoice, PreBill, ReceiptCopy, ReceiptLine, SettledBillView, SettledVoidView,
-    ShiftHeader, ShiftReport, ShiftView, ShiftX, StoreX, TableView, Takings, TenderTotals,
+    ShiftHeader, ShiftReport, ShiftView, ShiftX, StoreX, TabView, TableView, Takings, TenderTotals,
     TillScope, TransferView, WaitingLine, XFigures,
 };
 
@@ -137,6 +137,11 @@ struct Projection {
     /// against the `vendors` node, whether it waits for staff and which vendor is answered.
     /// Dropped when the order closes.
     order_vendors: HashMap<OrderId, pos_proto::ids::VendorId>,
+    /// The number of each open bar tab
+    /// ([ADR-0221](../../../../docs/adr/0221-a-bar-tab-is-an-order-without-a-table-that-stays-open.md)),
+    /// folded from `sales.order.opened`. Dropped when the tab settles, closes or is refused, so it
+    /// holds no more than the store's open orders.
+    tabs: HashMap<OrderId, u64>,
     /// The orders a member of staff has confirmed or refused
     /// ([ADR-0116](../../../../docs/adr/0116-the-qr-hold-is-derived-and-it-gates-firing.md)), folded
     /// from `sales.order.confirmed_by_staff` and `sales.order.rejected_by_staff`.
