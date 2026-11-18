@@ -78,6 +78,7 @@ pub(super) fn fee_catalog() -> FakeCatalog {
                 course_id: None,
                 image_ref: None,
                 status: EntityStatus::Active,
+                codes: pos_proto::item_codes::ItemCodes::default(),
             },
             Version::new("1"),
         ));

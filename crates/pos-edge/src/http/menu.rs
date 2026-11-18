@@ -250,6 +250,19 @@ pub(crate) struct MenuItemResponse {
     /// Carried apart so a till can offer to restore it: an item the console published as
     /// unavailable is not the till's to bring back.
     sold_out: bool,
+    /// The barcodes a till indexes to resolve a scan without asking the edge
+    /// ([ADR-0222](../../../../docs/adr/0222-items-carry-barcodes-and-plus-and-a-counter-can-pay-first.md)
+    /// decision 2). Absent where the item has none; the edge still prices the line.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    barcodes: Vec<String>,
+    /// The PLU a cashier keys for it, one to five digits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    plu: Option<String>,
+    /// The bounds of the price a cashier types for an open-price item (decision 4).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    open_price: Option<pos_proto::item_codes::OpenPrice>,
 }
 
 /// One course, as the till offers it.
@@ -313,6 +326,9 @@ impl MenuItemResponse {
             available: entry.available && tax_rate.is_some() && !sold_out,
             sold_out,
             tax_rate,
+            barcodes: entry.codes.barcodes.clone(),
+            plu: entry.codes.plu.clone(),
+            open_price: entry.codes.open_price,
         }
     }
 }
@@ -561,14 +577,13 @@ mod tests {
 
     fn entry(available: bool) -> MenuEntry {
         MenuEntry {
-            menu_item_id: MenuItemId::new(Ulid::from_u128(500)),
-            display_name: DisplayName::new("Margherita"),
-            display_name_translations: std::collections::BTreeMap::new(),
-            unit_price: Money::new(CurrencyCode::VND, 150_000),
-            tax_class_id: class(),
-            modifier_group_ids: Vec::new(),
-            course_id: None,
             available,
+            ..MenuEntry::new(
+                MenuItemId::new(Ulid::from_u128(500)),
+                DisplayName::new("Margherita"),
+                Money::new(CurrencyCode::VND, 150_000),
+                class(),
+            )
         }
     }
 

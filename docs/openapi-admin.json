@@ -27927,96 +27927,104 @@
         }
       },
       "CatalogItem": {
-        "type": "object",
-        "description": "An item in the catalog — the product master.\n\nIts id is a [`MenuItemId`], the same identifier the compiled [`pos_proto::MenuEntry`] names and an\ninbound order references: the item authored here is the item priced downstream. This slice carries\nthe fields a `MenuEntry` needs (name, tax class); its operational category, recipe/BOM link and\nthe rest arrive with later slices.",
-        "required": [
-          "menu_item_id",
-          "tenant_id",
-          "name",
-          "name_translations",
-          "tax_class_id",
-          "item_category_id",
-          "item_subcategory_id",
-          "course_id",
-          "image_ref",
-          "status"
-        ],
-        "properties": {
-          "course_id": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/CourseId",
-                "description": "The course this item goes out on, or `None` for an item on no course\n([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md) decision 3).\n\nCarried on the item exactly as [`tax_class_id`](Self::tax_class_id) is, and for the same\nreason: a pizza is a main, and making a server say so on every tap would be a tap per dish\nfor a fact the catalog already knows. `None` is every item in every store today and stays\ncorrect.\n\nA **per-line override** is deliberately not modelled. The request it would serve — *\"bring my\nmain with the starters\"* — is about when the food goes, and firing already answers that;\nrelabelling a line's course to mean \"sooner\" would put a timing decision inside a taxonomy."
-              },
-              {
-                "type": "null"
-              }
-            ]
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ItemCodes",
+            "description": "Its barcodes, PLU and open price\n([ADR-0222](../../../docs/adr/0222-items-carry-barcodes-and-plus-and-a-counter-can-pay-first.md)\ndecision 1): `barcodes`, `plu` and `open_price` beside the other fields, each absent when the\nitem has none. The compiler carries them onto the [`pos_proto::MenuEntry`]."
           },
-          "image_ref": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/MediaId",
-                "description": "The item's photo — a [`MediaId`] into the media library (ADR-0075), or `None`. Authoring/display\nonly; it does not cross to the edge. A dangling ref (the asset was deleted) shows a placeholder."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "item_category_id": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/ItemCategoryId",
-                "description": "The operational category this item reports under, or `None` if unclassified (entity 2)."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "item_subcategory_id": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/ItemSubcategoryId",
-                "description": "The operational sub-category, refining the category, or `None` (entity 3)."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "menu_item_id": {
-            "$ref": "#/components/schemas/MenuItemId",
-            "description": "The item's id — shared with the compiled menu entry and any inbound order that names it."
-          },
-          "name": {
-            "type": "string",
-            "description": "The human name (the default caption, before a layout overrides it per channel). Always\npresent, and the fallback for a locale [`name_translations`](Self::name_translations) omits."
-          },
-          "name_translations": {
+          {
             "type": "object",
-            "description": "The item's name in each locale it is translated into, keyed by locale code (`\"vi\"`, `\"en\"`, …)\n([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), Track M4). The compiler carries\nthese onto the [`pos_proto::MenuEntry`]; the store's display language selects one at the edge,\nfalling back to [`name`](Self::name). Additive — an item with none behaves as before.",
-            "additionalProperties": {
-              "type": "string"
-            },
-            "propertyNames": {
-              "type": "string"
+            "required": [
+              "menu_item_id",
+              "tenant_id",
+              "name",
+              "name_translations",
+              "tax_class_id",
+              "item_category_id",
+              "item_subcategory_id",
+              "course_id",
+              "image_ref",
+              "status"
+            ],
+            "properties": {
+              "course_id": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/CourseId",
+                    "description": "The course this item goes out on, or `None` for an item on no course\n([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md) decision 3).\n\nCarried on the item exactly as [`tax_class_id`](Self::tax_class_id) is, and for the same\nreason: a pizza is a main, and making a server say so on every tap would be a tap per dish\nfor a fact the catalog already knows. `None` is every item in every store today and stays\ncorrect.\n\nA **per-line override** is deliberately not modelled. The request it would serve — *\"bring my\nmain with the starters\"* — is about when the food goes, and firing already answers that;\nrelabelling a line's course to mean \"sooner\" would put a timing decision inside a taxonomy."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "image_ref": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/MediaId",
+                    "description": "The item's photo — a [`MediaId`] into the media library (ADR-0075), or `None`. Authoring/display\nonly; it does not cross to the edge. A dangling ref (the asset was deleted) shows a placeholder."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "item_category_id": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ItemCategoryId",
+                    "description": "The operational category this item reports under, or `None` if unclassified (entity 2)."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "item_subcategory_id": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ItemSubcategoryId",
+                    "description": "The operational sub-category, refining the category, or `None` (entity 3)."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "menu_item_id": {
+                "$ref": "#/components/schemas/MenuItemId",
+                "description": "The item's id — shared with the compiled menu entry and any inbound order that names it."
+              },
+              "name": {
+                "type": "string",
+                "description": "The human name (the default caption, before a layout overrides it per channel). Always\npresent, and the fallback for a locale [`name_translations`](Self::name_translations) omits."
+              },
+              "name_translations": {
+                "type": "object",
+                "description": "The item's name in each locale it is translated into, keyed by locale code (`\"vi\"`, `\"en\"`, …)\n([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), Track M4). The compiler carries\nthese onto the [`pos_proto::MenuEntry`]; the store's display language selects one at the edge,\nfalling back to [`name`](Self::name). Additive — an item with none behaves as before.",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "status": {
+                "$ref": "#/components/schemas/EntityStatus",
+                "description": "Active or archived."
+              },
+              "tax_class_id": {
+                "$ref": "#/components/schemas/TaxClassId",
+                "description": "The tax class, which the store's channel-keyed rate table turns into a rate at reprice time."
+              },
+              "tenant_id": {
+                "$ref": "#/components/schemas/TenantId",
+                "description": "The owning tenant."
+              }
             }
-          },
-          "status": {
-            "$ref": "#/components/schemas/EntityStatus",
-            "description": "Active or archived."
-          },
-          "tax_class_id": {
-            "$ref": "#/components/schemas/TaxClassId",
-            "description": "The tax class, which the store's channel-keyed rate table turns into a rate at reprice time."
-          },
-          "tenant_id": {
-            "$ref": "#/components/schemas/TenantId",
-            "description": "The owning tenant."
           }
-        }
+        ],
+        "description": "An item in the catalog — the product master.\n\nIts id is a [`MenuItemId`], the same identifier the compiled [`pos_proto::MenuEntry`] names and an\ninbound order references: the item authored here is the item priced downstream. This slice carries\nthe fields a `MenuEntry` needs (name, tax class); its operational category, recipe/BOM link and\nthe rest arrive with later slices."
       },
       "CatalogueConfirm": {
         "type": "object",
@@ -28926,6 +28934,17 @@
           "tax_class_id"
         ],
         "properties": {
+          "codes": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ItemCodes",
+                "description": "Its barcodes, PLU and open price (ADR-0222), each checked at the write. Absent keeps what the\nitem carries, so a console that predates them does not wipe them."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "course_id": {
             "type": [
               "string",
@@ -31755,6 +31774,27 @@
         "type": "string",
         "description": "An item category's identifier — a ULID minted at creation. The operational taxonomy is a\ncloud-authoring concept (reporting/tax-default/kitchen grouping); like [`MenuId`], its id is\ndefined beside the seam rather than in [`pos_proto::ids`]."
       },
+      "ItemCodes": {
+        "type": "object",
+        "description": "One item's codes and open price as the catalogue authors and keeps them: the three fields a\n[`crate::menu::MenuEntry`] carries, together.",
+        "properties": {
+          "barcodes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Up to [`BARCODES_MAX`] GTINs with valid check digits."
+          },
+          "open_price": {
+            "$ref": "#/components/schemas/OpenPrice",
+            "description": "The bounds of a price the cashier types, for an open-price item."
+          },
+          "plu": {
+            "type": "string",
+            "description": "One to five digits."
+          }
+        }
+      },
       "ItemMix": {
         "type": "object",
         "description": "One menu item's gross ordered contribution on a trading day (part of [`DailyRevenue`]).",
@@ -32044,96 +32084,104 @@
             "items": {
               "allOf": [
                 {
-                  "type": "object",
-                  "description": "An item in the catalog — the product master.\n\nIts id is a [`MenuItemId`], the same identifier the compiled [`pos_proto::MenuEntry`] names and an\ninbound order references: the item authored here is the item priced downstream. This slice carries\nthe fields a `MenuEntry` needs (name, tax class); its operational category, recipe/BOM link and\nthe rest arrive with later slices.",
-                  "required": [
-                    "menu_item_id",
-                    "tenant_id",
-                    "name",
-                    "name_translations",
-                    "tax_class_id",
-                    "item_category_id",
-                    "item_subcategory_id",
-                    "course_id",
-                    "image_ref",
-                    "status"
-                  ],
-                  "properties": {
-                    "course_id": {
-                      "oneOf": [
-                        {
-                          "$ref": "#/components/schemas/CourseId",
-                          "description": "The course this item goes out on, or `None` for an item on no course\n([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md) decision 3).\n\nCarried on the item exactly as [`tax_class_id`](Self::tax_class_id) is, and for the same\nreason: a pizza is a main, and making a server say so on every tap would be a tap per dish\nfor a fact the catalog already knows. `None` is every item in every store today and stays\ncorrect.\n\nA **per-line override** is deliberately not modelled. The request it would serve — *\"bring my\nmain with the starters\"* — is about when the food goes, and firing already answers that;\nrelabelling a line's course to mean \"sooner\" would put a timing decision inside a taxonomy."
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ItemCodes",
+                      "description": "Its barcodes, PLU and open price\n([ADR-0222](../../../docs/adr/0222-items-carry-barcodes-and-plus-and-a-counter-can-pay-first.md)\ndecision 1): `barcodes`, `plu` and `open_price` beside the other fields, each absent when the\nitem has none. The compiler carries them onto the [`pos_proto::MenuEntry`]."
                     },
-                    "image_ref": {
-                      "oneOf": [
-                        {
-                          "$ref": "#/components/schemas/MediaId",
-                          "description": "The item's photo — a [`MediaId`] into the media library (ADR-0075), or `None`. Authoring/display\nonly; it does not cross to the edge. A dangling ref (the asset was deleted) shows a placeholder."
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "item_category_id": {
-                      "oneOf": [
-                        {
-                          "$ref": "#/components/schemas/ItemCategoryId",
-                          "description": "The operational category this item reports under, or `None` if unclassified (entity 2)."
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "item_subcategory_id": {
-                      "oneOf": [
-                        {
-                          "$ref": "#/components/schemas/ItemSubcategoryId",
-                          "description": "The operational sub-category, refining the category, or `None` (entity 3)."
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "menu_item_id": {
-                      "$ref": "#/components/schemas/MenuItemId",
-                      "description": "The item's id — shared with the compiled menu entry and any inbound order that names it."
-                    },
-                    "name": {
-                      "type": "string",
-                      "description": "The human name (the default caption, before a layout overrides it per channel). Always\npresent, and the fallback for a locale [`name_translations`](Self::name_translations) omits."
-                    },
-                    "name_translations": {
+                    {
                       "type": "object",
-                      "description": "The item's name in each locale it is translated into, keyed by locale code (`\"vi\"`, `\"en\"`, …)\n([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), Track M4). The compiler carries\nthese onto the [`pos_proto::MenuEntry`]; the store's display language selects one at the edge,\nfalling back to [`name`](Self::name). Additive — an item with none behaves as before.",
-                      "additionalProperties": {
-                        "type": "string"
-                      },
-                      "propertyNames": {
-                        "type": "string"
+                      "required": [
+                        "menu_item_id",
+                        "tenant_id",
+                        "name",
+                        "name_translations",
+                        "tax_class_id",
+                        "item_category_id",
+                        "item_subcategory_id",
+                        "course_id",
+                        "image_ref",
+                        "status"
+                      ],
+                      "properties": {
+                        "course_id": {
+                          "oneOf": [
+                            {
+                              "$ref": "#/components/schemas/CourseId",
+                              "description": "The course this item goes out on, or `None` for an item on no course\n([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md) decision 3).\n\nCarried on the item exactly as [`tax_class_id`](Self::tax_class_id) is, and for the same\nreason: a pizza is a main, and making a server say so on every tap would be a tap per dish\nfor a fact the catalog already knows. `None` is every item in every store today and stays\ncorrect.\n\nA **per-line override** is deliberately not modelled. The request it would serve — *\"bring my\nmain with the starters\"* — is about when the food goes, and firing already answers that;\nrelabelling a line's course to mean \"sooner\" would put a timing decision inside a taxonomy."
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "image_ref": {
+                          "oneOf": [
+                            {
+                              "$ref": "#/components/schemas/MediaId",
+                              "description": "The item's photo — a [`MediaId`] into the media library (ADR-0075), or `None`. Authoring/display\nonly; it does not cross to the edge. A dangling ref (the asset was deleted) shows a placeholder."
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "item_category_id": {
+                          "oneOf": [
+                            {
+                              "$ref": "#/components/schemas/ItemCategoryId",
+                              "description": "The operational category this item reports under, or `None` if unclassified (entity 2)."
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "item_subcategory_id": {
+                          "oneOf": [
+                            {
+                              "$ref": "#/components/schemas/ItemSubcategoryId",
+                              "description": "The operational sub-category, refining the category, or `None` (entity 3)."
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "menu_item_id": {
+                          "$ref": "#/components/schemas/MenuItemId",
+                          "description": "The item's id — shared with the compiled menu entry and any inbound order that names it."
+                        },
+                        "name": {
+                          "type": "string",
+                          "description": "The human name (the default caption, before a layout overrides it per channel). Always\npresent, and the fallback for a locale [`name_translations`](Self::name_translations) omits."
+                        },
+                        "name_translations": {
+                          "type": "object",
+                          "description": "The item's name in each locale it is translated into, keyed by locale code (`\"vi\"`, `\"en\"`, …)\n([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), Track M4). The compiler carries\nthese onto the [`pos_proto::MenuEntry`]; the store's display language selects one at the edge,\nfalling back to [`name`](Self::name). Additive — an item with none behaves as before.",
+                          "additionalProperties": {
+                            "type": "string"
+                          },
+                          "propertyNames": {
+                            "type": "string"
+                          }
+                        },
+                        "status": {
+                          "$ref": "#/components/schemas/EntityStatus",
+                          "description": "Active or archived."
+                        },
+                        "tax_class_id": {
+                          "$ref": "#/components/schemas/TaxClassId",
+                          "description": "The tax class, which the store's channel-keyed rate table turns into a rate at reprice time."
+                        },
+                        "tenant_id": {
+                          "$ref": "#/components/schemas/TenantId",
+                          "description": "The owning tenant."
+                        }
                       }
-                    },
-                    "status": {
-                      "$ref": "#/components/schemas/EntityStatus",
-                      "description": "Active or archived."
-                    },
-                    "tax_class_id": {
-                      "$ref": "#/components/schemas/TaxClassId",
-                      "description": "The tax class, which the store's channel-keyed rate table turns into a rate at reprice time."
-                    },
-                    "tenant_id": {
-                      "$ref": "#/components/schemas/TenantId",
-                      "description": "The owning tenant."
                     }
-                  }
+                  ],
+                  "description": "An item in the catalog — the product master.\n\nIts id is a [`MenuItemId`], the same identifier the compiled [`pos_proto::MenuEntry`] names and an\ninbound order references: the item authored here is the item priced downstream. This slice carries\nthe fields a `MenuEntry` needs (name, tax class); its operational category, recipe/BOM link and\nthe rest arrive with later slices."
                 },
                 {
                   "type": "object",
@@ -32651,6 +32699,24 @@
       "OpenPaymentMethod_PaymentMethod": {
         "type": "string",
         "description": "A `PaymentMethod` token: PAYMENT_METHOD_UNSPECIFIED, PAYMENT_METHOD_CASH, PAYMENT_METHOD_CARD, PAYMENT_METHOD_QR, PAYMENT_METHOD_VOUCHER, PAYMENT_METHOD_GIFT_CARD, PAYMENT_METHOD_OTHER, or one a newer build sent, which is kept as it arrived"
+      },
+      "OpenPrice": {
+        "type": "object",
+        "description": "The bounds a cashier types an open-price item's price within, both inclusive and above zero.",
+        "required": [
+          "minimum",
+          "maximum"
+        ],
+        "properties": {
+          "maximum": {
+            "$ref": "#/components/schemas/Money",
+            "description": "The most the price may be."
+          },
+          "minimum": {
+            "$ref": "#/components/schemas/Money",
+            "description": "The least the price may be."
+          }
+        }
       },
       "OpenReactionTrigger_ReactionTrigger": {
         "type": "string",
@@ -37641,6 +37707,17 @@
           "status"
         ],
         "properties": {
+          "codes": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ItemCodes",
+                "description": "Its barcodes, PLU and open price (ADR-0222), each checked at the write. Absent keeps what the\nitem carries, so a console that predates them does not wipe them."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "course_id": {
             "type": [
               "string",
@@ -38462,96 +38539,104 @@
       "Versioned_CatalogItem": {
         "allOf": [
           {
-            "type": "object",
-            "description": "An item in the catalog — the product master.\n\nIts id is a [`MenuItemId`], the same identifier the compiled [`pos_proto::MenuEntry`] names and an\ninbound order references: the item authored here is the item priced downstream. This slice carries\nthe fields a `MenuEntry` needs (name, tax class); its operational category, recipe/BOM link and\nthe rest arrive with later slices.",
-            "required": [
-              "menu_item_id",
-              "tenant_id",
-              "name",
-              "name_translations",
-              "tax_class_id",
-              "item_category_id",
-              "item_subcategory_id",
-              "course_id",
-              "image_ref",
-              "status"
-            ],
-            "properties": {
-              "course_id": {
-                "oneOf": [
-                  {
-                    "$ref": "#/components/schemas/CourseId",
-                    "description": "The course this item goes out on, or `None` for an item on no course\n([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md) decision 3).\n\nCarried on the item exactly as [`tax_class_id`](Self::tax_class_id) is, and for the same\nreason: a pizza is a main, and making a server say so on every tap would be a tap per dish\nfor a fact the catalog already knows. `None` is every item in every store today and stays\ncorrect.\n\nA **per-line override** is deliberately not modelled. The request it would serve — *\"bring my\nmain with the starters\"* — is about when the food goes, and firing already answers that;\nrelabelling a line's course to mean \"sooner\" would put a timing decision inside a taxonomy."
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ItemCodes",
+                "description": "Its barcodes, PLU and open price\n([ADR-0222](../../../docs/adr/0222-items-carry-barcodes-and-plus-and-a-counter-can-pay-first.md)\ndecision 1): `barcodes`, `plu` and `open_price` beside the other fields, each absent when the\nitem has none. The compiler carries them onto the [`pos_proto::MenuEntry`]."
               },
-              "image_ref": {
-                "oneOf": [
-                  {
-                    "$ref": "#/components/schemas/MediaId",
-                    "description": "The item's photo — a [`MediaId`] into the media library (ADR-0075), or `None`. Authoring/display\nonly; it does not cross to the edge. A dangling ref (the asset was deleted) shows a placeholder."
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "item_category_id": {
-                "oneOf": [
-                  {
-                    "$ref": "#/components/schemas/ItemCategoryId",
-                    "description": "The operational category this item reports under, or `None` if unclassified (entity 2)."
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "item_subcategory_id": {
-                "oneOf": [
-                  {
-                    "$ref": "#/components/schemas/ItemSubcategoryId",
-                    "description": "The operational sub-category, refining the category, or `None` (entity 3)."
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "menu_item_id": {
-                "$ref": "#/components/schemas/MenuItemId",
-                "description": "The item's id — shared with the compiled menu entry and any inbound order that names it."
-              },
-              "name": {
-                "type": "string",
-                "description": "The human name (the default caption, before a layout overrides it per channel). Always\npresent, and the fallback for a locale [`name_translations`](Self::name_translations) omits."
-              },
-              "name_translations": {
+              {
                 "type": "object",
-                "description": "The item's name in each locale it is translated into, keyed by locale code (`\"vi\"`, `\"en\"`, …)\n([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), Track M4). The compiler carries\nthese onto the [`pos_proto::MenuEntry`]; the store's display language selects one at the edge,\nfalling back to [`name`](Self::name). Additive — an item with none behaves as before.",
-                "additionalProperties": {
-                  "type": "string"
-                },
-                "propertyNames": {
-                  "type": "string"
+                "required": [
+                  "menu_item_id",
+                  "tenant_id",
+                  "name",
+                  "name_translations",
+                  "tax_class_id",
+                  "item_category_id",
+                  "item_subcategory_id",
+                  "course_id",
+                  "image_ref",
+                  "status"
+                ],
+                "properties": {
+                  "course_id": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/CourseId",
+                        "description": "The course this item goes out on, or `None` for an item on no course\n([ADR-0130](../../../docs/adr/0130-a-course-is-something-the-catalog-names.md) decision 3).\n\nCarried on the item exactly as [`tax_class_id`](Self::tax_class_id) is, and for the same\nreason: a pizza is a main, and making a server say so on every tap would be a tap per dish\nfor a fact the catalog already knows. `None` is every item in every store today and stays\ncorrect.\n\nA **per-line override** is deliberately not modelled. The request it would serve — *\"bring my\nmain with the starters\"* — is about when the food goes, and firing already answers that;\nrelabelling a line's course to mean \"sooner\" would put a timing decision inside a taxonomy."
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "image_ref": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/MediaId",
+                        "description": "The item's photo — a [`MediaId`] into the media library (ADR-0075), or `None`. Authoring/display\nonly; it does not cross to the edge. A dangling ref (the asset was deleted) shows a placeholder."
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "item_category_id": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/ItemCategoryId",
+                        "description": "The operational category this item reports under, or `None` if unclassified (entity 2)."
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "item_subcategory_id": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/components/schemas/ItemSubcategoryId",
+                        "description": "The operational sub-category, refining the category, or `None` (entity 3)."
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "menu_item_id": {
+                    "$ref": "#/components/schemas/MenuItemId",
+                    "description": "The item's id — shared with the compiled menu entry and any inbound order that names it."
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "The human name (the default caption, before a layout overrides it per channel). Always\npresent, and the fallback for a locale [`name_translations`](Self::name_translations) omits."
+                  },
+                  "name_translations": {
+                    "type": "object",
+                    "description": "The item's name in each locale it is translated into, keyed by locale code (`\"vi\"`, `\"en\"`, …)\n([ADR-0074](../../../docs/adr/0074-localization-and-tax.md), Track M4). The compiler carries\nthese onto the [`pos_proto::MenuEntry`]; the store's display language selects one at the edge,\nfalling back to [`name`](Self::name). Additive — an item with none behaves as before.",
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "propertyNames": {
+                      "type": "string"
+                    }
+                  },
+                  "status": {
+                    "$ref": "#/components/schemas/EntityStatus",
+                    "description": "Active or archived."
+                  },
+                  "tax_class_id": {
+                    "$ref": "#/components/schemas/TaxClassId",
+                    "description": "The tax class, which the store's channel-keyed rate table turns into a rate at reprice time."
+                  },
+                  "tenant_id": {
+                    "$ref": "#/components/schemas/TenantId",
+                    "description": "The owning tenant."
+                  }
                 }
-              },
-              "status": {
-                "$ref": "#/components/schemas/EntityStatus",
-                "description": "Active or archived."
-              },
-              "tax_class_id": {
-                "$ref": "#/components/schemas/TaxClassId",
-                "description": "The tax class, which the store's channel-keyed rate table turns into a rate at reprice time."
-              },
-              "tenant_id": {
-                "$ref": "#/components/schemas/TenantId",
-                "description": "The owning tenant."
               }
-            }
+            ],
+            "description": "An item in the catalog — the product master.\n\nIts id is a [`MenuItemId`], the same identifier the compiled [`pos_proto::MenuEntry`] names and an\ninbound order references: the item authored here is the item priced downstream. This slice carries\nthe fields a `MenuEntry` needs (name, tax class); its operational category, recipe/BOM link and\nthe rest arrive with later slices."
           },
           {
             "type": "object",

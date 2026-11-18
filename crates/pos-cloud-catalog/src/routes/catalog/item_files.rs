@@ -190,6 +190,8 @@ where
                 course_id: None,
                 image_ref: new_item.image_ref,
                 status: new_item.status,
+                // Nor codes (ADR-0222): they are authored on the item, where they are checked.
+                codes: pos_proto::item_codes::ItemCodes::default(),
             };
             Ok(match catalog.create_item(&record).await {
                 Ok(_) => None,

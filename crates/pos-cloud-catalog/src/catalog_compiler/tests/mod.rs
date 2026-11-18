@@ -45,6 +45,7 @@ fn item(id: u128, name: &str) -> CatalogItem {
         course_id: None,
         image_ref: None,
         status: EntityStatus::Active,
+        codes: pos_proto::item_codes::ItemCodes::default(),
     }
 }
 
@@ -172,6 +173,37 @@ fn per_locale_item_names_travel_onto_the_compiled_entry() {
         "Margherita",
         "an untranslated locale falls back to the default name"
     );
+}
+
+#[test]
+fn an_items_codes_travel_onto_the_compiled_entry() {
+    // The till indexes these to resolve a scan (ADR-0222): they reach the entry unchanged.
+    let mut coded = item(500, "Sourdough");
+    coded.codes.barcodes = vec!["96385074".to_owned()];
+    coded.codes.plu = Some("4011".to_owned());
+    let placements = [placement(
+        10,
+        500,
+        vec![price(SalesChannel::DineIn, 50_000)],
+        true,
+    )];
+    let book = compile_menu(
+        &[coded],
+        &[menu(10, None)],
+        &placements,
+        &[],
+        &[],
+        menu_id(10),
+    )
+    .expect("compile");
+    let entry = book
+        .catalog_for(SalesChannel::DineIn)
+        .get(item_id(500))
+        .expect("priced dine-in")
+        .clone();
+    assert_eq!(entry.codes.barcodes, vec!["96385074".to_owned()]);
+    assert_eq!(entry.codes.plu.as_deref(), Some("4011"));
+    assert_eq!(entry.codes.open_price, None);
 }
 
 #[test]
