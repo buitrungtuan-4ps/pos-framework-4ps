@@ -1,0 +1,40 @@
+{
+  "items": [
+    {
+      "key": 1,
+      "display_name": "Demo Burger A",
+      "tax_class": "food",
+      "prices": {
+        "VND": 69000,
+        "JPY": 650,
+        "INR": 19900,
+        "USD": 699
+      }
+    },
+    {
+      "key": 2,
+      "display_name": "Demo Fries B",
+      "tax_class": "food",
+      "prices": {
+        "VND": 29000,
+        "JPY": 300,
+        "INR": 9900,
+        "USD": 299
+      }
+    },
+    {
+      "key": 3,
+      "display_name": "Demo Cola C",
+      "tax_class": "food",
+      "prices": {
+        "VND": 19000,
+        "JPY": 200,
+        "INR": 6000,
+        "USD": 199
+      }
+    }
+  ],
+  "stations": [
+    "Demo grill"
+  ]
+}

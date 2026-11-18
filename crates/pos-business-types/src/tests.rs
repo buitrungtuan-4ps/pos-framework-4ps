@@ -156,3 +156,104 @@ fn a_key_named_twice_is_refused() {
     ]"#;
     assert!(matches!(cafe(twice), Err(TemplateError::Duplicate { .. })));
 }
+
+#[test]
+fn every_demo_sells_in_every_shipped_country_s_currency() {
+    for template in templates().unwrap_or_default() {
+        for pack in packs() {
+            let currency = pack.locale_pack().currency_code;
+            let menu = template.demo.menu(template.business_type, currency);
+            assert!(
+                menu.is_some(),
+                "business-types/{} has an item with no {} price",
+                template.directory,
+                currency.as_str()
+            );
+        }
+    }
+}
+
+#[test]
+fn a_template_that_serves_at_tables_has_a_floor_and_a_counter_has_none() {
+    use pos_core::capability::Capability;
+    for template in templates().unwrap_or_default() {
+        let tables = template
+            .capabilities()
+            .is_some_and(|preset| preset.enabled(Capability::Tables));
+        let floor = template.demo.floor_plan(template.business_type);
+        assert_eq!(
+            floor.is_some_and(|plan| plan.areas().iter().any(|area| !area.tables.is_empty())),
+            tables,
+            "business-types/{}",
+            template.directory
+        );
+    }
+}
+
+#[test]
+fn no_two_templates_publish_the_same_item_id() {
+    let mut ids = Vec::new();
+    for template in templates().unwrap_or_default() {
+        let menu = template
+            .demo
+            .menu(template.business_type, pos_proto::money::CurrencyCode::VND);
+        for entry in menu
+            .iter()
+            .flat_map(|book| book.catalog_for(pos_proto::SalesChannel::DineIn).items())
+        {
+            assert!(!ids.contains(&entry.menu_item_id), "{}", template.directory);
+            ids.push(entry.menu_item_id);
+        }
+    }
+    assert!(!ids.is_empty());
+}
+
+#[test]
+fn a_demo_with_a_real_looking_name_a_shared_key_or_no_price_is_refused() {
+    use super::demo::{Demo, DemoFault};
+    let demo = |items: &str| serde_json::from_str::<Demo>(&format!(r#"{{"items": {items}}}"#));
+    let item = |key: u16, name: &str, price: i64| {
+        format!(
+            r#"{{"key": {key}, "display_name": "{name}", "tax_class": "food", "prices": {{"VND": {price}}}}}"#
+        )
+    };
+    let check = |items: String| demo(&items).map(|demo| demo.check());
+    assert_eq!(
+        check(format!("[{}]", item(1, "Demo A", 10))).ok(),
+        Some(Ok(()))
+    );
+    assert_eq!(check("[]".to_owned()).ok(), Some(Err(DemoFault::Size)));
+    assert_eq!(
+        check(format!("[{}]", item(1, "Margherita", 10))).ok(),
+        Some(Err(DemoFault::NotObviouslyFake))
+    );
+    assert_eq!(
+        check(format!(
+            "[{}, {}]",
+            item(1, "Demo A", 10),
+            item(1, "Demo B", 10)
+        ))
+        .ok(),
+        Some(Err(DemoFault::DuplicateKey))
+    );
+    assert_eq!(
+        check(format!("[{}]", item(1, "Demo A", 0))).ok(),
+        Some(Err(DemoFault::BadPrice))
+    );
+}
+
+#[test]
+fn a_template_with_a_kitchen_display_has_a_station_and_one_without_has_none() {
+    use pos_core::capability::Capability;
+    for template in templates().unwrap_or_default() {
+        let kitchen = template
+            .capabilities()
+            .is_some_and(|preset| preset.enabled(Capability::Kds));
+        assert_eq!(
+            template.demo.station_plan(template.business_type).is_some(),
+            kitchen,
+            "business-types/{}",
+            template.directory
+        );
+    }
+}

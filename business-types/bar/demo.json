@@ -1,0 +1,76 @@
+{
+  "items": [
+    {
+      "key": 1,
+      "display_name": "Demo Beer A",
+      "tax_class": "alcohol",
+      "prices": {
+        "VND": 45000,
+        "JPY": 600,
+        "INR": 30000,
+        "USD": 700
+      }
+    },
+    {
+      "key": 2,
+      "display_name": "Demo Cocktail B",
+      "tax_class": "alcohol",
+      "prices": {
+        "VND": 120000,
+        "JPY": 1200,
+        "INR": 65000,
+        "USD": 1200
+      }
+    },
+    {
+      "key": 3,
+      "display_name": "Demo Nachos C",
+      "tax_class": "food",
+      "prices": {
+        "VND": 79000,
+        "JPY": 800,
+        "INR": 35000,
+        "USD": 850
+      }
+    },
+    {
+      "key": 4,
+      "display_name": "Demo Fries D",
+      "tax_class": "food",
+      "prices": {
+        "VND": 49000,
+        "JPY": 450,
+        "INR": 15000,
+        "USD": 550
+      }
+    }
+  ],
+  "floor": {
+    "areas": [
+      {
+        "name": "Demo bar",
+        "tables": [
+          {
+            "label": "B1",
+            "seats": 4
+          },
+          {
+            "label": "B2",
+            "seats": 4
+          },
+          {
+            "label": "B3",
+            "seats": 4
+          },
+          {
+            "label": "B4",
+            "seats": 4
+          }
+        ]
+      }
+    ]
+  },
+  "stations": [
+    "Demo bar"
+  ]
+}

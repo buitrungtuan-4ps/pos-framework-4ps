@@ -1,0 +1,37 @@
+{
+  "items": [
+    {
+      "key": 1,
+      "display_name": "Demo Baguette A",
+      "tax_class": "food",
+      "prices": {
+        "VND": 25000,
+        "JPY": 300,
+        "INR": 8000,
+        "USD": 350
+      }
+    },
+    {
+      "key": 2,
+      "display_name": "Demo Cake Slice B",
+      "tax_class": "food",
+      "prices": {
+        "VND": 45000,
+        "JPY": 450,
+        "INR": 15000,
+        "USD": 525
+      }
+    },
+    {
+      "key": 3,
+      "display_name": "Demo Cookie Box C",
+      "tax_class": "food",
+      "prices": {
+        "VND": 99000,
+        "JPY": 1000,
+        "INR": 40000,
+        "USD": 1299
+      }
+    }
+  ]
+}

@@ -55,4 +55,4 @@ bills in [`tests/conformance.rs`](tests/conformance.rs) that exercise them.
 ## Depends on / used by
 
 - **Depends on** (workspace crates): `pos-country`, `pos-ports`, `pos-proto`; in tests, `pos-contract-tests`, `pos-fakes`.
-- **Used by** (workspace crates): `pos-cloud`, `pos-edge`; in tests, `pos-business-types`.
+- **Used by** (workspace crates): `pos-cloud`, `pos-edge`, `pos-simulator`; in tests, `pos-business-types`.
