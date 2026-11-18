@@ -78,9 +78,9 @@ async fn capability_catalogue_serves_flags_presets_and_rules_to_any_admin() {
     assert!(rule_ids.contains(&"seats.requires.tables"));
 }
 
-/// The console offers a switch only where a release reads it (ADR-0160 decision 5): tabs and queue
-/// numbers stay in the catalogue, marked not offered, and the presets that
-/// turn them on still name them; every other flag is offered.
+/// The console offers a switch only where a release reads it (ADR-0160 decision 5): queue numbers
+/// stay in the catalogue, marked not offered, and the presets that turn them on still name them;
+/// every other flag is offered.
 #[tokio::test]
 async fn the_catalogue_offers_only_the_switches_a_release_reads() {
     let admin = provisioned_admin();
@@ -109,7 +109,7 @@ async fn the_catalogue_offers_only_the_switches_a_release_reads() {
         offered,
         vec![
             ("tables_enabled", true),
-            ("tabs_enabled", false),
+            ("tabs_enabled", true),
             ("seats_enabled", true),
             ("kds_enabled", true),
             ("courses_enabled", true),
