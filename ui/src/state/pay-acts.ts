@@ -5,7 +5,14 @@
 
 import type { Accessor } from "solid-js";
 
-import type { BillResponse, BuyerRequest, CheckPrintedResponse, PaymentRequest, TakePaymentResponse } from "../api/schemas";
+import type {
+  BillResponse,
+  BuyerRequest,
+  CheckPrintedResponse,
+  PaymentRequest,
+  TakePaymentResponse,
+  VoidBillResponse,
+} from "../api/schemas";
 import type { MoneyPhase } from "./money-act";
 import { useSettleAct } from "./settle-act";
 import { applySettled } from "./store";
@@ -15,7 +22,7 @@ import { useVoidAct } from "./void-act";
 export function usePayActs(options: {
   readonly billId: Accessor<string | null>;
   readonly onSettled: (bill: BillResponse, change: number) => void;
-  readonly onVoided: () => void;
+  readonly onVoided: (voided: VoidBillResponse) => void;
   /** A share taken that left the bill open, with the change it was owed. */
   readonly onTaken: (answer: TakePaymentResponse, change: number) => void;
 }) {
@@ -35,7 +42,7 @@ export function usePayActs(options: {
       options.onTaken(answer, change());
     }
   });
-  const voiding = useVoidAct(options.billId, () => options.onVoided());
+  const voiding = useVoidAct(options.billId, (voided) => options.onVoided(voided));
   const pending = (): { phase: MoneyPhase; act: "settle" | "take" | "void" } | null =>
     settling.phase() !== "idle"
       ? { phase: settling.phase(), act: "settle" }
