@@ -255,3 +255,20 @@ async fn a_store_that_requires_a_check_refuses_payment_without_a_fresh_one() {
     assert_eq!(status, StatusCode::OK, "{settled}");
     assert_eq!(settled["receipt_number"], 1);
 }
+
+/// The till refuses a payment the edge would refuse only if it knows the store asks for a check
+/// first: the menu read carries the setting, off until the store turns it on.
+#[tokio::test]
+async fn the_menu_read_tells_the_till_whether_a_check_comes_before_payment() {
+    let (app, token) = till(PublishedBilling::default()).await;
+    let (_, _, menu) = send(&app, &token, "GET", "/api/menu", None).await;
+    assert_eq!(menu["check_before_payment"], false, "{menu}");
+
+    let (app, token) = till(PublishedBilling {
+        check_before_payment: Some(true),
+        ..PublishedBilling::default()
+    })
+    .await;
+    let (_, _, menu) = send(&app, &token, "GET", "/api/menu", None).await;
+    assert_eq!(menu["check_before_payment"], true, "{menu}");
+}

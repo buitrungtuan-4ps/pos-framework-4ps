@@ -8,6 +8,7 @@ import { VOID_BILL, VoidBillPanel, useVoidBill } from "../components/VoidBillPan
 import { BillEnded } from "../components/BillEnded";
 import { PendingSettle } from "../components/PendingSettle";
 import { RefusalPanel } from "../components/RefusalPanel";
+import { PrintedCheck } from "../components/PrintedCheck";
 import { receiptLine } from "../state/settle-act";
 import { usePayActs } from "../state/pay-acts";
 import { useWaiveAct, waiveRefusal } from "../state/reduction-acts";
@@ -196,9 +197,11 @@ export function Pay() {
       return;
     }
     setPreBill(null);
-    await print.run("billing.check.print", () => api.printBillCheck(id), (printed) =>
-      setPreBill(printed.prints[0] ?? null),
-    );
+    await print.run("billing.check.print", () => api.printBillCheck(id), (printed) => {
+      setPreBill(printed.prints[0] ?? null);
+      // The check read now carries it, fresh (ADR-0218), and the pay pad reads it before it pays.
+      void showBill(id);
+    });
   };
 
   // What the bill on screen owes, read by its own id. Once a table is split, the table's check is
@@ -395,7 +398,7 @@ export function Pay() {
   });
   // The bill on screen settled or voided on another till; not asked while this till's own act is out.
   const ended = () => (done() === null && !voided() && paying.busy() === null ? endedElsewhere(params.id, billId()) : null);
-  const pay = (payments: PaymentRequest[]) => acts.pay(payments, total(), buyer());
+  const pay = (payments: PaymentRequest[]) => acts.pay(payments, total(), buyer(), check()?.check_printed);
 
   // Records one payment. Outside a split, or on a split's last share, that settles the bill with
   // every payment taken; before the last share it keeps this one and clears the pad for the next
@@ -863,6 +866,7 @@ export function Pay() {
               </p>
             )}
           </Show>
+          <PrintedCheck printed={check()?.check_printed} class="mt-1" />
 
           <RefusalPanel message={acts.refusal()} onDismiss={acts.dismiss} />
           <Show when={shape.pending()}>

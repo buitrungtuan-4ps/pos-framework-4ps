@@ -2586,6 +2586,24 @@ test("a pre-bill says it is printing at once, holds no payment, a refusal says w
   }
 });
 
+// A printed check is the edge's record (ADR-0218): the order screen shows when it printed, and once
+// the order changes, that the paper is out of date.
+test("a printed check shows on the order screen and turns out of date when a line is added", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    await page.locator('[data-step="printPreBill"]').click();
+    await expect(page.locator('[data-outcome="check-printed"]')).toContainText("copy 1");
+    await addItem(page);
+    await expect(page.locator('[data-outcome="check-printed-stale"]')).toContainText("out of date");
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A copy of a receipt whose answer is lost is said not confirmed and not sent again; the edge, which
 // made it, counts it, and Today shows the edge's count.
 test("a receipt copy whose answer is lost is said not confirmed, and the edge's count shows it made once", async ({
