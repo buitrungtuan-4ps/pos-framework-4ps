@@ -179,7 +179,13 @@ impl<S: EventStore> Edge<S> {
         let mut envelopes = Vec::with_capacity(2);
         let mut messages = Vec::with_capacity(2);
         if let Some(order_id) = order_id {
-            let (envelope, message) = self.prepare(&ctx, &SalesOrderClosed { order_id })?;
+            let (envelope, message) = self.prepare(
+                &ctx,
+                &SalesOrderClosed {
+                    order_id,
+                    reason_code_id: None,
+                },
+            )?;
             envelopes.push(envelope);
             messages.push(message);
         }
