@@ -430,6 +430,19 @@ sales.line.reprice	refusal=PRICE_OUT_OF_RANGE
 sales.line.reprice	refusal=REASON_CODE_NOT_VALID
 sales.line.reprice	route=POST /api/lines/{id}/price
 sales.line.reprice	since=0.14.1
+sales.line.scan
+sales.line.scan	effect=ACTION_EFFECT_EDGE_WRITE
+sales.line.scan	frequency=ACTION_FREQUENCY_COMMON
+sales.line.scan	param=code:ACTION_PARAM_KIND_TEXT:required
+sales.line.scan	param=order_id:ACTION_PARAM_KIND_ID:required
+sales.line.scan	permission=sales.line.add
+sales.line.scan	refusal=ITEM_NOT_SELLABLE
+sales.line.scan	refusal=PRICE_LABEL_NOT_OPEN_PRICE
+sales.line.scan	refusal=PRICE_OUT_OF_RANGE
+sales.line.scan	refusal=UNKNOWN_CODE
+sales.line.scan	refusal=WEIGHT_LABEL_NOT_SOLD
+sales.line.scan	route=POST /api/orders/{id}/scan
+sales.line.scan	since=0.14.1
 sales.line.set_quantity
 sales.line.set_quantity	effect=ACTION_EFFECT_EDGE_WRITE
 sales.line.set_quantity	frequency=ACTION_FREQUENCY_COMMON

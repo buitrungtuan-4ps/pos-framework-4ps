@@ -433,6 +433,10 @@ where
             post(super::tabs::close_order::<S, Q>),
         )
         .route("/api/orders/{id}/lines", post(add_order_line::<S, Q>))
+        .route(
+            "/api/orders/{id}/scan",
+            post(super::scan::scan_line::<S, Q>),
+        )
         .with_state(Arc::new(CounterDeps { edge, queue }))
 }
 

@@ -124,6 +124,22 @@ pub const CATALOGUE: &[Action] = &[
         ..BASE
     },
     Action {
+        action_id: "sales.line.scan",
+        effect: EdgeWrite,
+        params: &[required("order_id", Id), required("code", Text)],
+        routes: &["POST /api/orders/{id}/scan"],
+        permissions: ADD_LINE,
+        refusals: &[
+            "UNKNOWN_CODE",
+            "PRICE_LABEL_NOT_OPEN_PRICE",
+            "WEIGHT_LABEL_NOT_SOLD",
+            "PRICE_OUT_OF_RANGE",
+            "ITEM_NOT_SELLABLE",
+        ],
+        summary: "Add the item a scanned barcode, PLU or price label names, priced by the edge",
+        ..BASE
+    },
+    Action {
         action_id: "sales.line.set_quantity",
         effect: EdgeWrite,
         params: &[required("order_line_id", Id), required("quantity", Count)],

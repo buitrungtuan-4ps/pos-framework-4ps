@@ -30,8 +30,8 @@
 #![forbid(unsafe_code)]
 #![doc(test(attr(deny(warnings))))]
 
-use pos_country::CountryModule;
 use pos_country::offline::OfflineFiscalization;
+use pos_country::{CountryModule, SettingDefault, SettingDefaultValue};
 use pos_ports::PortError;
 use pos_ports::fiscalization::{
     Fiscalization, InvoiceNumber, InvoiceRange, InvoiceRequest, IssuedInvoice, ReconciliationReport,
@@ -136,6 +136,17 @@ impl CountryModule for Zz {
     /// receipt number, the lines, the totals, the tax lines and a captured buyer always print.
     fn receipt_required_sections(&self) -> Vec<pos_proto::receipt::ReceiptSection> {
         Vec::new()
+    }
+
+    /// The variable-measure layout a new `ZZ` store reads labels by (ADR-0222 decision 3): a price
+    /// inside, the commonest labelling-scale layout. A real country seeds what its national GS1
+    /// body assigns to prefixes 20 to 29, or nothing until that is confirmed, and its stores read
+    /// such codes as plain ones.
+    fn setting_defaults(&self) -> Vec<SettingDefault> {
+        vec![SettingDefault {
+            setting_key: "scan.variable_measure_layout",
+            value: SettingDefaultValue::Choice("VARIABLE_MEASURE_LAYOUT_PRICE_5"),
+        }]
     }
 }
 

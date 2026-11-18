@@ -227,6 +227,10 @@ pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
         RouteGate::Person(&[Permission::ConfirmQrOrder]),
     ),
     (
+        "POST /api/orders/{id}/scan",
+        RouteGate::Person(&[Permission::AddLine]),
+    ),
+    (
         "POST /api/pair",
         RouteGate::NoPerson("a pairing code a manager minted, spent once (ADR-0030)"),
     ),

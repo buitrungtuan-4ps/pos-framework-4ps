@@ -12,5 +12,6 @@ mod inbound;
 mod lines;
 mod open_price;
 mod reprice;
+mod scan;
 mod sold_out;
 mod tabs;

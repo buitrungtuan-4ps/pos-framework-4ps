@@ -14,6 +14,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::money::Money;
+use crate::wire_enum;
 
 /// The most barcodes one item carries.
 pub const BARCODES_MAX: usize = 8;
@@ -156,6 +157,23 @@ pub fn codes_fault(
         );
     }
     None
+}
+
+wire_enum! {
+    /// How a store reads a variable-measure code: an EAN-13 whose GS1 prefix is 20 to 29 and which
+    /// carries an item's reference and a price or a weight inside
+    /// ([ADR-0222](../../../docs/adr/0222-items-carry-barcodes-and-plus-and-a-counter-can-pay-first.md)
+    /// decision 3). Each national GS1 body assigns these prefixes, so a country pack seeds the
+    /// layout and a store may change it.
+    VariableMeasureLayout, prefix = "VARIABLE_MEASURE_LAYOUT";
+    /// Such a code is a plain code, looked up as it is.
+    None = "NONE",
+    /// `2d IIIII PPPPP C`: a five-digit item reference, then the price in the currency's minor
+    /// unit, then the code's check digit.
+    Price5 = "PRICE_5",
+    /// `2d IIIII WWWWW C`: a five-digit item reference, then the net weight in grams, then the
+    /// code's check digit.
+    Weight5 = "WEIGHT_5",
 }
 
 #[cfg(test)]

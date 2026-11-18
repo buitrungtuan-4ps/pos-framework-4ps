@@ -49,6 +49,7 @@ mod reports;
 mod reprice;
 mod revalidate;
 pub mod route_permissions;
+mod scan;
 mod shift_x;
 pub mod shifts;
 mod sync;
@@ -605,6 +606,9 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
         AppError::ModifierSelectionInvalid => "MODIFIER_SELECTION_INVALID",
         AppError::ChannelNotAccepted => "CHANNEL_NOT_ACCEPTED",
         AppError::ItemNotSellable => "ITEM_NOT_SELLABLE",
+        AppError::UnknownCode => "UNKNOWN_CODE",
+        AppError::PriceLabelNotOpenPrice => "PRICE_LABEL_NOT_OPEN_PRICE",
+        AppError::WeightLabelNotSold => "WEIGHT_LABEL_NOT_SOLD",
         AppError::CustomEntryRefused(_) => "CUSTOM_ENTRY_REFUSED",
         AppError::UnknownObject => "UNKNOWN_OBJECT",
         AppError::UnknownCustomRecord => "UNKNOWN_CUSTOM_RECORD",
@@ -678,6 +682,9 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::ModifierSelectionInvalid
         | AppError::ChannelNotAccepted
         | AppError::ItemNotSellable
+        | AppError::UnknownCode
+        | AppError::PriceLabelNotOpenPrice
+        | AppError::WeightLabelNotSold
         | AppError::UnknownObject
         | AppError::UnknownCustomRecord
         | AppError::UnknownSubject
