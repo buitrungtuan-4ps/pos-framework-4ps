@@ -166,6 +166,7 @@ async fn pay(till: &Till, bill_id: &str, due: Money) -> Result<Value, Failed> {
                 format!("not left open owing the rest: {first}"),
             ));
         }
+        listed_on_the_check(till, bill_id, half).await?;
         till.send("POST", &route, Some(cash(rest))).await
     } else {
         if !first
@@ -179,6 +180,31 @@ async fn pay(till: &Till, bill_id: &str, due: Money) -> Result<Value, Failed> {
     };
     let last = last.map_err(|detail| ("pay the bill", detail))?;
     Ok(last["settled"].clone())
+}
+
+/// Asserts that every till's read of the bill lists the one part taken, and that the menu offers
+/// the even split the till takes it with (ADR-0220 decision 3).
+async fn listed_on_the_check(till: &Till, bill_id: &str, half: i64) -> Result<(), Failed> {
+    let check = till
+        .send("GET", &format!("/api/bills/{bill_id}/check"), None)
+        .await
+        .map_err(|detail| ("read the part paid", detail))?;
+    let listed = check["payments"].as_array().is_some_and(|payments| {
+        payments.len() == 1
+            && payments[0]["amount"]["amount_minor"].as_i64() == Some(half)
+            && payments[0]["split_ways"].as_u64() == Some(2)
+    });
+    let menu = till
+        .send("GET", "/api/menu", None)
+        .await
+        .map_err(|detail| ("read the part paid", detail))?;
+    if !listed || menu["part_payments"] != json!(true) {
+        return Err((
+            "read the part paid",
+            format!("the check does not list it: {check}"),
+        ));
+    }
+    Ok(())
 }
 
 /// The first reason the store publishes for `action`, as the till's picker offers it.

@@ -53,7 +53,7 @@ import {
 import { errorMessage } from "../lib/errors";
 import { endedElsewhere } from "../state/closing";
 import { openForPay } from "../state/open-for-pay";
-import { useSplitPlan } from "../state/split-plan";
+import { PartPayments } from "../components/PartPayments";
 import { useSplitActs } from "../state/split-acts";
 import { printOutcomeKey } from "../lib/print";
 import { RegionsContext, type Regions } from "../../../packages/package-renderer/src/regions";
@@ -74,18 +74,6 @@ const SPLIT_COLUMNS = 5;
 // Whether the bill was reduced — a discount or a comp — when the screen spells out its arithmetic.
 function reduced(totals: CheckResponse): boolean {
   return totals.discount_total.amount_minor > 0 || totals.comp_total.amount_minor > 0;
-}
-
-// The label for a payment method in a split's list of shares.
-function methodKey(method: string): MessageKey {
-  switch (method) {
-    case "PAYMENT_METHOD_CARD":
-      return "pay.method_card";
-    case "PAYMENT_METHOD_QR":
-      return "pay.method_qr";
-    default:
-      return "pay.method_cash";
-  }
 }
 
 // Whether a set of tip keys is still worth offering: every key positive, and no two the same.
@@ -137,12 +125,12 @@ export function Pay() {
   // only read while the pad is open, so tapping a quick key again puts that key back in charge.
   const [typing, setTyping] = createSignal(false);
   const [typedText, setTypedText] = createSignal("");
-  // Splitting the bill evenly between guests who each pay their own share. `ways` is how many shares
-  // and `taken` the shares already paid. They are held here until the last share lands and then
-  // sent in one settle, because the edge settles a bill in one step: its payments must add up to the
-  // total exactly (`pos_core::billing::settle`), and a half-paid bill is not a state it has. The
-  // plan is kept per bill for the tab (`../state/split-plan`), so leaving or reloading keeps it.
-  const { ways, setWays, taken, setTaken } = useSplitPlan(billId, () => done() !== null || voided());
+  // Splitting the bill evenly between guests who each pay their own share (ADR-0220). `ways` is how
+  // many shares; each share but the last is a payment the edge records as it is taken, and the last
+  // settles, so what is paid is the bill's read on every till, after a reload too, never this tab's.
+  const [ways, setWays] = createSignal<number | null>(null);
+  // The change owed on the share just taken, shown with the shares until the next.
+  const [shareChange, setShareChange] = createSignal(0);
   // The change handed back on the settle that closed the bill, summed over its payments, for the
   // settled panel: one payment's change, or what a split's cash shares were owed between them.
   const [givenChange, setGivenChange] = createSignal(0);
@@ -217,6 +205,8 @@ export function Pay() {
       if (billId() === id) {
         setCheck(bill);
         setCovered(bill.order_line_ids);
+        // A split begun on another till, or before a reload, carries on where it got to.
+        setWays(bill.payments?.at(-1)?.split_ways ?? ways());
       }
     } catch (caught) {
       const olderEdge =
@@ -260,10 +250,9 @@ export function Pay() {
   // The store's currency, taken from the edge's own figure rather than assumed — a store on any other
   // currency then renders and tenders correctly with no change here.
   const currency = () => check()?.total_due.currency_code ?? "";
-  // What a split has put against the bill so far, and what is left of it.
-  const takenApplied = () =>
-    taken().reduce((sum, payment) => sum + payment.applied_to_bill.amount_minor, 0);
-  const remaining = () => total() - takenApplied();
+  // The payments the edge has recorded against the bill so far, and what is left of it.
+  const taken = () => check()?.payments ?? [];
+  const remaining = () => check()?.remaining?.amount_minor ?? total();
   // What this payment is for: the whole bill, or in a split the next guest's share. A share is what
   // is left divided by the shares still to pay, rounded up, and the last share is whatever remains,
   // so the shares add up to the total exactly (the edge refuses anything else) and none is more than
@@ -390,6 +379,16 @@ export function Pay() {
       voiding.closeVoid();
       setVoided(true);
     },
+    onTaken: (_answer, change) => {
+      setShareChange(change);
+      setTender(null);
+      setTyping(false);
+      setTypedText("");
+      const id = billId();
+      if (id !== null) {
+        void showBill(id);
+      }
+    },
   });
   const paying = { busy: acts.busy };
   onMount(() => {
@@ -398,21 +397,17 @@ export function Pay() {
   });
   // The bill on screen settled or voided on another till; not asked while this till's own act is out.
   const ended = () => (done() === null && !voided() && paying.busy() === null ? endedElsewhere(params.id, billId()) : null);
-  const pay = (payments: PaymentRequest[]) => acts.pay(payments, total(), buyer(), check()?.check_printed);
-
-  // Records one payment. Outside a split, or on a split's last share, that settles the bill with
-  // every payment taken; before the last share it keeps this one and clears the pad for the next
-  // guest.
+  // Records one payment. Outside a split, or on a split's last share, that settles the bill, which
+  // counts the shares already taken; before the last share the edge takes this one on its own and
+  // the pad is cleared for the next guest.
   const record = (payment: PaymentRequest) => {
     const n = ways();
+    setShareChange(0);
     if (n !== null && taken().length + 1 < n) {
-      setTaken([...taken(), payment]);
-      setTender(null);
-      setTyping(false);
-      setTypedText("");
+      acts.take({ payment, ways: n, remaining: remaining(), before: taken().length }, check()?.check_printed);
       return;
     }
-    void pay([...taken(), payment]);
+    acts.pay([payment], remaining(), buyer(), check()?.check_printed);
   };
 
   // Starts an even split. The tip row goes with it and the tip is cleared: a tip is taken on a
@@ -425,15 +420,7 @@ export function Pay() {
     setTypedText("");
   };
 
-  const cancelSplit = () => {
-    setWays(null);
-    setTaken([]);
-  };
-
-  // Gives a taken share back: that guest has not paid it after all. The shares still to pay are
-  // worked out again from what is left.
-  const untake = (index: number) =>
-    setTaken(taken().filter((_, position) => position !== index));
+  const cancelSplit = () => setWays(null);
 
   const payCash = () => {
     // No note chosen means "exact", and exact now means the sale plus the tip — otherwise adding a
@@ -484,7 +471,7 @@ export function Pay() {
     setTypedText("");
     setTip(0);
     setWays(null);
-    setTaken([]);
+    setShareChange(0);
     setGivenChange(0);
     setBuyerName("");
     setBuyerTaxCode("");
@@ -887,7 +874,7 @@ export function Pay() {
             screen that asked "split?" first would make every split a tap longer and every other
             settle no shorter.
           */}
-          <Show when={can("billing.payment.take")}>
+          <Show when={can("billing.payment.take") && splitWays().length > 0}>
           <h2 class="mt-6 mb-2 text-sm font-semibold text-ink-muted">{t("pay.split")}</h2>
           <div
             class={
@@ -917,58 +904,7 @@ export function Pay() {
             </For>
           </div>
           </Show>
-          <Show when={ways()}>
-            {(n) => (
-              <div class="mt-3 rounded-token border border-line bg-surface p-3">
-                <p class="text-sm text-ink-muted">
-                  {t("pay.share_of", { part: taken().length + 1, count: n() })}
-                </p>
-                <p class="text-2xl font-semibold tabular-nums" data-outcome="share-due">
-                  {formatAmount(money(currency(), due()))}
-                </p>
-                <Show when={taken().length > 0}>
-                  <ul class="mt-2 flex list-none flex-col gap-1 p-0">
-                    <For each={taken()}>
-                      {(payment, index) => (
-                        <li
-                          class="flex items-center justify-between gap-2 text-sm"
-                          data-outcome="share-taken"
-                        >
-                          <span>
-                            {t("pay.share_taken", {
-                              part: index() + 1,
-                              method: t(methodKey(payment.method)),
-                            })}
-                          </span>
-                          <span class="flex items-center gap-2">
-                            <span class="tabular-nums">{formatAmount(payment.applied_to_bill)}</span>
-                            <button
-                              type="button"
-                              class="min-h-touch rounded-token border border-line px-3"
-                              onClick={() => untake(index())}
-                            >
-                              {t("pay.share_untake")}
-                            </button>
-                          </span>
-                        </li>
-                      )}
-                    </For>
-                  </ul>
-                  <p class="mt-2 text-sm text-ink-muted">
-                    {t("pay.remaining")}:{" "}
-                    <span class="tabular-nums">{formatAmount(money(currency(), remaining()))}</span>
-                  </p>
-                </Show>
-                <button
-                  type="button"
-                  class="mt-2 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted"
-                  onClick={() => cancelSplit()}
-                >
-                  {t("pay.split_cancel")}
-                </button>
-              </div>
-            )}
-          </Show>
+          <PartPayments check={check()} ways={ways()} due={due()} change={shareChange()} onCancel={cancelSplit} />
 
           {/*
             Splitting by item (ADR-0128): pick the lines one guest is paying for and split them off

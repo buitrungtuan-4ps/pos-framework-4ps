@@ -184,6 +184,18 @@ fn each_payment_is_recorded_as_it_is_taken_and_the_last_settles() {
             Some("billing.payment.captured"),
             "recorded at once, the bill still open"
         );
+        // Every till reads it, from the log as well as live: how, how much, and the split.
+        let order = edge.order_for_bill(bill).expect("the bill's order");
+        let replayed = edge_with(store.clone(), PublishedBilling::default());
+        replayed.rebuild().await.expect("replays");
+        for reader in [&edge, &replayed] {
+            let payments = reader.payments_towards(order, Some(bill));
+            assert_eq!(payments.len(), 1, "{payments:?}");
+            assert_eq!(
+                (payments[0].method, payments[0].amount, payments[0].split_ways),
+                (PaymentMethod::Cash, vnd(100_000), Some(2))
+            );
+        }
 
         let over = edge
             .take_payment_at(
@@ -214,6 +226,10 @@ fn each_payment_is_recorded_as_it_is_taken_and_the_last_settles() {
         let settled = last.settled.expect("settled");
         assert_eq!(settled.receipt_number, Some(1));
         assert_eq!(last.remaining, vnd(0));
+        assert!(
+            edge.payments_towards(order, Some(bill)).is_empty(),
+            "a settled bill lists nothing to collect against"
+        );
     });
 }
 

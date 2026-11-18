@@ -17,7 +17,7 @@ use pos_proto::ids::{BillId, OrderId, ShiftId};
 use pos_proto::money::Money;
 use pos_proto::{BillState, PaymentMethod};
 
-use crate::app::{PaidBill, Projection};
+use crate::app::{PaidBill, Projection, TakenPayment};
 
 impl Projection {
     /// Adds one tender's `applied` to its bill: to its cash where `method` is cash, and to what
@@ -96,6 +96,16 @@ impl Projection {
         if !shifts.contains(&shift) {
             shifts.push(shift);
         }
+    }
+
+    /// Adds `payment` to what `bill_id`, still open, has taken (ADR-0220 decision 3).
+    pub(in crate::app) fn record_taken(&mut self, bill_id: BillId, payment: TakenPayment) {
+        self.taken.entry(bill_id).or_default().push(payment);
+    }
+
+    /// The payments `bill_id` has taken while open, in the order taken: none once it closed.
+    pub(in crate::app) fn taken(&self, bill_id: BillId) -> &[TakenPayment] {
+        self.taken.get(&bill_id).map_or(&[], Vec::as_slice)
     }
 
     /// Whether a bill that is still open holds a payment taken into the drawer whose shift is

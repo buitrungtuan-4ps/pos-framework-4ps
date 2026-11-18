@@ -60,7 +60,7 @@ mod session;
 mod shifts;
 mod views;
 
-pub use bills::{CheckPrinted, PaymentTaken};
+pub use bills::{CheckPrinted, PaymentTaken, TakenPayment};
 pub use config_wake::{ConfigDelivery, ConfigWakeReport, ConfigWakeStanding, WAKE_SAMPLES_MAX};
 pub use custom_data::{CONSENT_FIELD_PREFIX, CustomDataView};
 pub use device_reads::{DEVICE_READS_MAX, DeviceRead, DeviceReads};
@@ -162,6 +162,9 @@ struct Projection {
     /// ([ADR-0220](../../../../docs/adr/0220-a-bill-takes-its-payments-one-at-a-time.md) decision
     /// 5), so none of them closes under it. Dropped when the bill settles or is voided.
     part_paid: HashMap<BillId, Vec<ShiftId>>,
+    /// The payments each bill that is still open has taken, for every till's read (ADR-0220
+    /// decision 3). Dropped with `part_paid`, so it holds no more bills than are open.
+    taken: HashMap<BillId, Vec<TakenPayment>>,
     /// What firing has consumed, folded from each fire's `stock_movements` (§8).
     ///
     /// Until roadmap B1.1 those movements were computed by `decide_line` and **thrown away**, so

@@ -18,6 +18,7 @@ use pos_ports::subject_store::SubjectStore;
 use pos_proto::events::BillingPaymentCaptured;
 use pos_proto::ids::{BillId, DeviceId, EmployeeId, FeeId, OrderId, PaymentId, ShiftId};
 use pos_proto::money::{CurrencyCode, Money};
+use pos_proto::time::Timestamp;
 use pos_proto::{Open, PaymentMethod, PaymentOutcome};
 
 use crate::app::{AppError, Approval, BillRecord, BillView, Edge, TillScope};
@@ -35,6 +36,32 @@ pub struct PaymentTaken {
     pub drawer_till: Option<DeviceId>,
     /// The settle, when this payment was the last.
     pub settled: Option<BillView>,
+}
+
+/// One payment taken towards a bill that is still open, as every till reads it (ADR-0220 decision
+/// 3): how, how much, and when. No person.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TakenPayment {
+    /// The tender.
+    pub method: PaymentMethod,
+    /// What it applied to the bill, change and tip apart.
+    pub amount: Money,
+    /// When it was taken.
+    pub taken_time: Timestamp,
+    /// How many equal shares an even split asked for, when it was one of them.
+    pub split_ways: Option<u8>,
+}
+
+impl TakenPayment {
+    /// `captured`, taken at `taken_time`.
+    pub(in crate::app) fn of(captured: &BillingPaymentCaptured, taken_time: Timestamp) -> Self {
+        Self {
+            method: captured.method.known(),
+            amount: captured.applied_to_bill,
+            taken_time,
+            split_ways: captured.split_ways,
+        }
+    }
 }
 
 impl<S: EventStore> Edge<S> {
@@ -179,6 +206,7 @@ impl<S: EventStore> Edge<S> {
             projection.collect_cash(shift, applied)?;
         }
         projection.record_part_payment(captured.bill_id, shift);
+        projection.record_taken(captured.bill_id, TakenPayment::of(captured, ctx.now));
         Ok(())
     }
 
@@ -198,6 +226,21 @@ impl<S: EventStore> Edge<S> {
             });
         }
         paid
+    }
+
+    /// The payments taken towards the bills of `order_id` that are still open, or towards `bill_id`
+    /// alone where one is named, in the order they were taken (ADR-0220 decision 3).
+    #[must_use]
+    pub fn payments_towards(&self, order_id: OrderId, bill_id: Option<BillId>) -> Vec<TakenPayment> {
+        let projection = self.lock_projection();
+        let bills =
+            bill_id.map_or_else(|| projection.open_bills_for_order(order_id), |id| vec![id]);
+        let mut taken: Vec<TakenPayment> = bills
+            .iter()
+            .flat_map(|id| projection.taken(*id).iter().copied())
+            .collect();
+        taken.sort_by_key(|payment| payment.taken_time);
+        taken
     }
 
     /// What `bill_id`'s payments have come to so far, in `currency`: zero for a bill nobody paid.
