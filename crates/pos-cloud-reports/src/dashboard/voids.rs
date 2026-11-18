@@ -56,8 +56,11 @@ pub struct KeptBills {
     /// Each trading day's settled bills, keyed by day and then by bill id.
     #[serde(default)]
     pub days: BTreeMap<String, BTreeMap<String, KeptBill>>,
-    /// Cash applied to a bill whose settle has not been folded yet. The payments and the settle are
-    /// one transaction, so an entry lives until the next event.
+    /// Cash applied to a bill whose settle has not been folded yet. A bill taken one payment at a
+    /// time records each as it is taken
+    /// ([ADR-0220](../../../../docs/adr/0220-a-bill-takes-its-payments-one-at-a-time.md)), so an
+    /// entry holds every payment so far until the bill's settle lands, minutes later or more; a
+    /// bill that holds a payment is not voided before it settles.
     #[serde(default)]
     pub pending_cash: BTreeMap<String, i64>,
     /// The drawer each open shift counts, its till's id or [`STORE_DRAWER`], from

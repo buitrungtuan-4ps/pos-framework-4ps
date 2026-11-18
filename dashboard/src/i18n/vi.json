@@ -2085,6 +2085,8 @@
   "settings.item.backup.interval_hours.title": "Khoảng cách giữa các lần sao lưu",
   "settings.item.billing.check_before_payment.help": "Bật: máy chỉ nhận thanh toán cho hóa đơn khi phiếu tạm tính đã được in và đơn hàng chưa thay đổi kể từ đó. Tắt: phiếu tạm tính chỉ được in khi có người yêu cầu.",
   "settings.item.billing.check_before_payment.title": "In phiếu tạm tính trước khi thanh toán",
+  "settings.item.billing.part_payments.help": "Bật, màn hình thanh toán có thể nhận hóa đơn từng phần: chia đều, hoặc mỗi khách tự trả phần của mình. Mỗi lần trả được ghi ngay và mọi máy đều thấy; lần cuối cùng chốt hóa đơn. Tắt, hóa đơn được trả một lần, như ở quầy.",
+  "settings.item.billing.part_payments.title": "Thanh toán hóa đơn nhiều lần",
   "settings.item.billing.price_override_max_multiple.help": "Mức giá cao nhất quản lý được ghi đè cho một dòng, tính theo bội số của giá lúc thêm món: 3 cho phép tới ba lần giá. 100, mặc định, chỉ chặn bấm nhầm. Giá ghi đè luôn lớn hơn 0 và chỉ trước khi mở hóa đơn; tặng món là miễn phí món.",
   "settings.item.billing.price_override_max_multiple.title": "Giới hạn ghi đè giá",
   "settings.item.billing.settled_void_window.help": "Sau khi thanh toán bao lâu thì hóa đơn vẫn có thể bị hủy tại máy bán hàng, bởi người được phép hủy hóa đơn đã thanh toán. Ngày kinh doanh cho phép trong khi cửa hàng còn bán hàng trong ngày của hóa đơn. Ca chỉ cho phép khi ca đã nhận tiền vẫn còn mở. Ngoài khoảng đó, máy từ chối, và việc điều chỉnh được làm trên trang quản trị.",

@@ -46,6 +46,9 @@ impl<S: EventStore> Edge<S> {
             .lock_projection()
             .bill(bill_id)
             .ok_or(AppError::UnknownBill)?;
+        // Until a void gives each part payment back, a bill holding one is not voided here
+        // (ADR-0220 decision 4).
+        self.refuse_part_paid(&[bill_id])?;
         if !session
             .reason_codes
             .accepts(reason_code_id, ReasonAction::VoidBill)

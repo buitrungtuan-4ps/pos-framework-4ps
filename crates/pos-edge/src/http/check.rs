@@ -68,6 +68,16 @@ pub(crate) struct CheckResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(nullable = false))]
     check_printed: Option<CheckPrintedResponse>,
+    /// What has been paid towards it so far, one payment at a time
+    /// ([ADR-0220](../../../../docs/adr/0220-a-bill-takes-its-payments-one-at-a-time.md) decision
+    /// 3), on every till. Absent until a payment is taken.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    paid_total: Option<Money>,
+    /// What it still owes: `total_due` less `paid_total`. Absent until a payment is taken.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    remaining: Option<Money>,
 }
 
 /// A printed check's marker, as the till shows it.
@@ -124,7 +134,16 @@ impl CheckResponse {
             total_due: totals.total_due,
             fee_lines: check_fee_lines(totals, session),
             check_printed: None,
+            paid_total: None,
+            remaining: None,
         }
+    }
+
+    /// The same, with what has been paid towards it and what remains (ADR-0220 decision 3).
+    fn with_paid(mut self, paid: Option<Money>) -> Self {
+        self.remaining = paid.and_then(|paid| self.total_due.checked_sub(paid).ok());
+        self.paid_total = paid;
+        self
     }
 
     /// The same, with the marker of the last check printed for it.
@@ -185,13 +204,17 @@ where
     let Some(table_id) = parse_ulid(&table_id).map(TableId::new) else {
         return bad_request("a table id is a ULID");
     };
-    let check = edge
-        .order_for_table(table_id)
-        .and_then(|order_id| edge.check_printed(order_id, None));
+    let order_id = edge.order_for_table(table_id);
+    let check = order_id.and_then(|order_id| edge.check_printed(order_id, None));
+    let paid = order_id.and_then(|order_id| edge.paid_towards(order_id, None));
     match edge.check_totals(table_id) {
         Ok(totals) => (
             StatusCode::OK,
-            Json(CheckResponse::of(&totals, &edge.session()).with_check(check)),
+            Json(
+                CheckResponse::of(&totals, &edge.session())
+                    .with_check(check)
+                    .with_paid(paid),
+            ),
         )
             .into_response(),
         // The one real failure is a line whose tax class the store has published no rate for. That is
@@ -241,7 +264,8 @@ where
             StatusCode::OK,
             Json(
                 CheckResponse::of(&totals, &edge.session())
-                    .with_check(edge.check_printed(order_id, None)),
+                    .with_check(edge.check_printed(order_id, None))
+                    .with_paid(edge.paid_towards(order_id, None)),
             ),
         )
             .into_response(),
@@ -293,10 +317,15 @@ where
                     .iter()
                     .map(ToString::to_string)
                     .collect(),
-                totals: CheckResponse::of(&check.totals, &edge.session()).with_check(
-                    edge.order_for_bill(bill_id)
-                        .and_then(|order_id| edge.check_for_bill(order_id, bill_id)),
-                ),
+                totals: CheckResponse::of(&check.totals, &edge.session())
+                    .with_check(
+                        edge.order_for_bill(bill_id)
+                            .and_then(|order_id| edge.check_for_bill(order_id, bill_id)),
+                    )
+                    .with_paid(
+                        edge.order_for_bill(bill_id)
+                            .and_then(|order_id| edge.paid_towards(order_id, Some(bill_id))),
+                    ),
             }),
         )
             .into_response(),

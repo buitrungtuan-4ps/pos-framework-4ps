@@ -82,6 +82,11 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
   // one no longer on this one, waived already on another till.
   FEE_NOT_WAIVABLE: "error.fee_not_waivable",
   FEE_NOT_ON_BILL: "error.fee_not_on_bill",
+  // A bill taken one payment at a time (ADR-0220): more than it owes, a part at a store that takes
+  // a bill in one, or an act a part-paid bill cannot take.
+  PAYMENT_EXCEEDS_REMAINING: "error.payment_exceeds_remaining",
+  PART_PAYMENTS_OFF: "error.part_payments_off",
+  BILL_PART_PAID: "error.bill_part_paid",
   // A comp of a line already given away (ADR-0219): a line is comped at most once.
   ALREADY_COMPED: "error.already_comped",
   // A price override outside its bounds (ADR-0219): above zero, at most the store's multiple.

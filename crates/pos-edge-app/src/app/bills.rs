@@ -8,8 +8,10 @@ mod checks;
 mod comp;
 
 pub use checks::CheckPrinted;
+pub use payments::PaymentTaken;
 mod open;
 mod pay_first;
+mod payments;
 mod reads;
 mod receipts;
 mod reductions;

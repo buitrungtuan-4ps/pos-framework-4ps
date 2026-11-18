@@ -329,6 +329,30 @@ pub const CATALOGUE: &[Action] = &[
         ..BASE
     },
     Action {
+        action_id: "billing.payment.take",
+        effect: Money,
+        frequency: Rare,
+        params: &[
+            required("bill_id", Id),
+            required("payment", Entered),
+            optional("split_ways", Count),
+        ],
+        routes: &["POST /api/bills/{id}/payments"],
+        permissions: &["billing.payment.take", "cash.drawer.override_assignment"],
+        refusals: &[
+            "OPEN_SHIFT_REQUIRED",
+            "DRAWER_COUNTED",
+            "DRAWER_ASSIGNED_TO_ANOTHER",
+            "NOT_A_TILL",
+            "DRAWER_DAY_ENDED",
+            "CHECK_REQUIRED",
+            "PAYMENT_EXCEEDS_REMAINING",
+            "PART_PAYMENTS_OFF",
+        ],
+        summary: "Take one payment towards a bill; the last one settles it",
+        ..BASE
+    },
+    Action {
         action_id: "billing.bill.discount",
         effect: Money,
         frequency: Rare,

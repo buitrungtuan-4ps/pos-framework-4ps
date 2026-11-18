@@ -28,6 +28,16 @@ billing.check_before_payment	scope=SETTING_SCOPE_TENANT
 billing.check_before_payment	since=0.14.1
 billing.check_before_payment	value=false
 billing.check_before_payment	value=true
+billing.part_payments
+billing.part_payments	default=true
+billing.part_payments	kind=SETTING_KIND_BOOL
+billing.part_payments	scope=SETTING_SCOPE_BRAND
+billing.part_payments	scope=SETTING_SCOPE_STORE
+billing.part_payments	scope=SETTING_SCOPE_STORE_GROUP
+billing.part_payments	scope=SETTING_SCOPE_TENANT
+billing.part_payments	since=0.14.1
+billing.part_payments	value=false
+billing.part_payments	value=true
 billing.price_override_max_multiple
 billing.price_override_max_multiple	default=100
 billing.price_override_max_multiple	kind=SETTING_KIND_INT

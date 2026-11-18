@@ -189,6 +189,12 @@ where
         .route("/api/tables/{id}/bill", post(bills::open_table_bill::<S>))
         .route("/api/orders/{id}/bill", post(bills::open_for_order::<S>))
         .route("/api/bills/{id}/settle", post(bills::settle_bill::<S>))
+        // One payment at a time, the last settling (ADR-0220): the same subject store and the
+        // same drawer as a settle.
+        .route(
+            "/api/bills/{id}/payments",
+            post(super::payments::take_payment::<S>),
+        )
         .route(
             "/api/bills/{id}/receipt/reprint",
             post(bills::reprint_receipt::<S>),

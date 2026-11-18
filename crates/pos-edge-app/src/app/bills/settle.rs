@@ -105,6 +105,25 @@ impl<S: EventStore> Edge<S> {
     where
         S: SubjectStore,
     {
+        self.settle_shares(actor, scope, bill_id, (payments, None), buyer, approval)
+            .await
+    }
+
+    /// [`Self::settle_bill_at`], each payment recorded as one of `split_ways` equal shares where an
+    /// even split asked for it (ADR-0220 decision 3): the last share of a bill taken one payment at
+    /// a time settles it so.
+    pub(in crate::app) async fn settle_shares(
+        &self,
+        actor: Actor,
+        scope: TillScope,
+        bill_id: BillId,
+        (payments, split_ways): (Vec<Payment>, Option<u8>),
+        buyer: Option<&BuyerDetails>,
+        approval: Option<&Approval>,
+    ) -> Result<BillView, AppError>
+    where
+        S: SubjectStore,
+    {
         let mut ctx = self.decision_ctx(actor)?;
         // Before the bill is read: a store that refuses selling without a shift takes no money
         // outside one, so every payment's cash is in a shift's expected drawer (ADR-0160).
@@ -130,7 +149,7 @@ impl<S: EventStore> Edge<S> {
         // One `billing.payment.captured` per tender, then `billing.bill.settled`, all in one
         // transaction so a crash never leaves a receipt without its payments (or the reverse).
         let (captured, captured_messages) =
-            self.capture_payments(&ctx, bill_id, &payments, shift)?;
+            self.capture_payments(&ctx, bill_id, (&payments, split_ways), shift)?;
         envelopes.extend(captured);
         messages.extend(captured_messages);
         let settled = self.settled_event(
@@ -193,6 +212,12 @@ impl<S: EventStore> Edge<S> {
             self.prove_table_settles(table_id, ctx)?;
         }
         let cash_taken = self.cash_tendered(payments)?;
+        // Payments already taken towards the bill count (ADR-0220 decision 2): these settle what
+        // remains of it.
+        let remaining = totals
+            .total_due
+            .checked_sub(self.paid_total(bill_id, session.currency)?)
+            .map_err(DomainError::from)?;
 
         // Prove the settlement invariant against the assembled total, and that the bill can settle.
         // Done before allocating a number, so a refused settle consumes none. The payments are cloned
@@ -200,7 +225,7 @@ impl<S: EventStore> Edge<S> {
         let bill_decision = decide_bill(
             bill.state,
             BillCommand::Settle {
-                total_due: totals.total_due,
+                total_due: remaining,
                 payments: payments.to_vec(),
             },
             ctx,
@@ -381,7 +406,7 @@ impl<S: EventStore> Edge<S> {
         &self,
         ctx: &DecisionCtx,
         bill_id: BillId,
-        payments: &[Payment],
+        (payments, split_ways): (&[Payment], Option<u8>),
         shift: Option<ShiftId>,
     ) -> Result<(Vec<EventEnvelope<RawPayload>>, Vec<ServerMessage>), AppError> {
         let zero = Money::zero(self.session().currency);
@@ -402,6 +427,7 @@ impl<S: EventStore> Edge<S> {
                 applied_to_bill: payment.applied_to_bill,
                 change_given: if change.is_negative() { zero } else { change },
                 tip_amount: payment.tip,
+                split_ways,
             };
             let (envelope, message) = self.prepare_on(ctx, &captured, shift)?;
             envelopes.push(envelope);

@@ -88,6 +88,28 @@ impl Projection {
         Ok(())
     }
 
+    /// Remembers that a payment towards `bill_id` went into the drawer whose shift is `shift`, while
+    /// the bill is still open (ADR-0220 decision 5). A payment with no shift touched no drawer.
+    pub(in crate::app) fn record_part_payment(&mut self, bill_id: BillId, shift: Option<ShiftId>) {
+        let Some(shift) = shift else { return };
+        let shifts = self.part_paid.entry(bill_id).or_default();
+        if !shifts.contains(&shift) {
+            shifts.push(shift);
+        }
+    }
+
+    /// Whether a bill that is still open holds a payment taken into the drawer whose shift is
+    /// `shift`, which keeps that shift from closing (ADR-0220 decision 5).
+    pub(in crate::app) fn part_paid_in(&self, shift: ShiftId) -> bool {
+        self.part_paid.iter().any(|(bill_id, shifts)| {
+            shifts.contains(&shift)
+                && self
+                    .bills
+                    .get(bill_id)
+                    .is_some_and(|bill| bill.state == BillState::Open)
+        })
+    }
+
     /// What `bill_id`'s tenders put on it, or `None` for a bill nobody paid.
     pub(in crate::app) fn paid(&self, bill_id: BillId) -> Option<PaidBill> {
         self.paid.get(&bill_id).copied()
