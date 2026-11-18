@@ -1807,6 +1807,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "pos-business-types"
+version = "0.0.0"
+dependencies = [
+ "pos-core",
+ "pos-country",
+ "pos-country-in",
+ "pos-country-jp",
+ "pos-country-vn",
+ "pos-country-zz",
+ "pos-proto",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "pos-cloud"
 version = "0.0.0"
 dependencies = [
@@ -2284,7 +2300,22 @@ dependencies = [
 name = "pos-simulator"
 version = "0.0.0"
 dependencies = [
+ "argon2",
+ "axum",
+ "http-body-util",
+ "pos-business-types",
  "pos-core",
+ "pos-country",
+ "pos-country-in",
+ "pos-country-jp",
+ "pos-country-vn",
+ "pos-country-zz",
+ "pos-edge",
+ "pos-fakes",
+ "pos-proto",
+ "serde_json",
+ "tokio",
+ "tower",
 ]
 
 [[package]]

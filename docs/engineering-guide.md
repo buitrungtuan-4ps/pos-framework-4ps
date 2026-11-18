@@ -160,6 +160,7 @@ CI enforces the mechanical part: a pull request that changes `crates/**`, `ui/**
 | Port contract tests | every PR | tens of seconds | Every implementation of a port passes the same suite |
 | Integration | on main | minutes | Real PostgreSQL and NATS in containers |
 | Fleet simulator | on main and nightly | long | Virtual stores: order load, network loss, OTA rings, nightly reconciliation |
+| Template-by-country matrix | a pull request touching a template or a country pack (its row or column), and nightly (all) | minutes | Each business-type template sold end to end in each country pack through an in-process edge (ADR-0200; `templates.yml`) |
 | Hardware | manual, by matrix | — | Printer models, payment terminals, sudden power loss |
 
 Only the last layer needs a human. **Property-based tests target the data-correctness laws** in [pos-spec.md](pos-spec.md) §14 — business date, line snapshots, split rounding, exclusive settlement — because those are the invariants where a subtle break costs money.
