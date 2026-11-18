@@ -1807,6 +1807,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "pos-business-types"
+version = "0.0.0"
+dependencies = [
+ "pos-core",
+ "pos-country",
+ "pos-country-in",
+ "pos-country-jp",
+ "pos-country-vn",
+ "pos-country-zz",
+ "pos-proto",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "pos-cloud"
 version = "0.0.0"
 dependencies = [

@@ -214,6 +214,14 @@ Guide: [write an adapter](guides/write-an-adapter.md).
 
 Guide: [add a country module](guides/add-a-country-module.md). Law-specific behaviour never goes in `pos-core`.
 
+## Business-type template
+
+| Step | Files | Checked by |
+|---|---|---|
+| Template | `business-types/<id>/template.json` ([ADR-0200](adr/0200-six-business-type-templates-ship-with-the-framework.md)): the `BUSINESS_TYPE_*` it is for and its recommended settings, each a register key and a value the setting takes, never a `package.*` key nor a key a country pack sets. One directory per `pos_proto::BusinessType`; the package and the fake demo menu and floor join it as the capabilities they use land | `test` (`crates/pos-business-types`) |
+| Compiled in | `SOURCES` in `crates/pos-business-types/src/lib.rs`, one `include_str!` per directory; a test refuses a directory that is not compiled in | `test` |
+| Capability preset | `CapabilityContext::for_business_type` in `crates/pos-core/src/capability.rs`, held to every inter-flag rule | `test` |
+
 ## Migration
 
 | Step | Files | Checked by |
