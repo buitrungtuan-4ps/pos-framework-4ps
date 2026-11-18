@@ -27,7 +27,8 @@ import {
 import { toast } from "../../components/Toast";
 import { ImagePicker } from "../../components/ImagePicker";
 import { cleanTranslations, errorMessage, isStale, StatusCell } from "./shared";
-import type { CatalogItem } from "../../api/schemas";
+import type { CatalogItem, ItemCodesBody } from "../../api/schemas";
+import { ItemCodesFields, createCodesDraft } from "./ItemCodes";
 
 /**
  * How many items one page of the table carries.
@@ -37,6 +38,15 @@ import type { CatalogItem } from "../../api/schemas";
  * that searched only the visible twelve would fail to find most of them.
  */
 const PAGE_SIZE = 25;
+
+/** The facets one write of an item changes; every other field keeps the item's own. */
+interface ItemFacets {
+  name?: string;
+  nameTranslations?: Record<string, string>;
+  status?: "active" | "archived";
+  imageRef?: string | null;
+  codes?: ItemCodesBody;
+}
 
 export function CatalogItems() {
   // The window the operator is looking at. A view parameter, not load state: the read closure
@@ -100,6 +110,7 @@ export function CatalogItems() {
 
   // Edit drawer — the item being edited, its draft name, and its per-locale names (ADR-0074).
   const [editing, setEditing] = createSignal<CatalogItem | null>(null);
+  const codes = createCodesDraft(editing); // its barcodes, PLU and open price (ADR-0222)
   const [draftName, setDraftName] = createSignal("");
   const [draftTranslations, setDraftTranslations] = createSignal<Record<string, string>>({});
 
@@ -228,12 +239,7 @@ export function CatalogItems() {
   // the caller can toast the right message and close its drawer.
   const applyItem = async (
     item: CatalogItem,
-    fields: {
-      name?: string;
-      nameTranslations?: Record<string, string>;
-      status?: "active" | "archived";
-      imageRef?: string | null;
-    },
+    fields: ItemFacets,
   ): Promise<boolean> => {
     const name = (fields.name ?? item.name).trim();
     if (!name) {
@@ -249,7 +255,7 @@ export function CatalogItems() {
         itemCategoryId: item.item_category_id,
         itemSubcategoryId: item.item_subcategory_id,
         imageRef: fields.imageRef !== undefined ? fields.imageRef : item.image_ref,
-        status: fields.status ?? item.status,
+        status: fields.status ?? item.status, codes: fields.codes,
       }, item.etag);
       await show(offset());
       return true;
@@ -276,7 +282,7 @@ export function CatalogItems() {
     if (!item) {
       return;
     }
-    const ok = await applyItem(item, { name: draftName(), nameTranslations: draftTranslations() });
+    const ok = await applyItem(item, { name: draftName(), nameTranslations: draftTranslations(), codes: codes.value() });
     if (ok) {
       toast.ok(t("catalog.itemSaved"));
       setEditing(null);
@@ -615,6 +621,7 @@ export function CatalogItems() {
                 </For>
               </div>
             </div>
+            <ItemCodesFields draft={codes} />
           </div>
         </Show>
       </Drawer>
