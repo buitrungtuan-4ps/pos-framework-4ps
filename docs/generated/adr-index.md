@@ -19,6 +19,7 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 - [ADR-0218](../adr/0218-a-printed-check-is-an-event-every-till-sees.md) A printed check is an event every till sees
 - [ADR-0219](../adr/0219-a-comp-and-a-price-override-each-need-a-reason-and-an-approver.md) A comp and a price override each need a reason and an approver
 - [ADR-0220](../adr/0220-a-bill-takes-its-payments-one-at-a-time.md) A bill takes its payments one at a time, and every till sees what is paid
+- [ADR-0221](../adr/0221-a-bar-tab-is-an-order-without-a-table-that-stays-open.md) A bar tab is an order without a table that stays open, named by a number
 
 ## Citations of ADRs that do not exist
 
