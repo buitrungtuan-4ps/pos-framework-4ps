@@ -161,6 +161,28 @@
     },
     {
       "body": {
+        "screen_id": "tabs",
+        "root": {
+          "component_id": "screen_frame",
+          "properties": {
+            "width": "narrow"
+          },
+          "children": [
+            {
+              "component_id": "page_header",
+              "properties": {
+                "title_key": "tabs.title"
+              }
+            },
+            {
+              "component_id": "tabs_list"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "body": {
         "screen_id": "today",
         "root": {
           "component_id": "screen_frame",

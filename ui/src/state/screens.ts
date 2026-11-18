@@ -32,6 +32,8 @@ export const SCREENS = {
   counterOrder: { path: "/order/:id" },
   // The staff-confirmation queue (ADR-0116): the screen the QR hold had no way to reach.
   guests: { path: "/guests", key: "confirm.title" },
+  // A bar's open tabs (ADR-0221), where the store keeps them.
+  tabs: { path: "/tabs", key: "tabs.title" },
   today: { path: "/today", key: "today.title" },
   // A package's custom records (ADR-0194): drawn from the default package's `records` screen.
   records: { path: "/records", key: "records.title" },
