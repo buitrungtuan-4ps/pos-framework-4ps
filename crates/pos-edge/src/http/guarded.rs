@@ -216,7 +216,10 @@ where
             "/api/lines/{id}/price",
             post(super::reprice::reprice_line::<S>),
         )
-        .route("/api/bills/{id}/void", post(bills::void_bill::<S>))
+        .route(
+            "/api/bills/{id}/void",
+            post(super::void_settled::void_bill::<S>),
+        )
         // A paid bill voided whole (ADR-0184): its own permission, and the cash back out of this
         // till's drawer.
         .route(

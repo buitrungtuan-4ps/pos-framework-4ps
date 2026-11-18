@@ -240,3 +240,31 @@ fn a_day_with_no_void_writes_no_void_fields() {
         "a bill paid with no shift event makes no cash day"
     );
 }
+
+/// A bill voided before it settled, with a part payment taken towards it (ADR-0220): its cash is
+/// given back from the voiding till's drawer, and no sale is taken back, since none was counted.
+#[test]
+fn a_part_paid_bill_voided_before_it_settles_gives_its_cash_back() {
+    let mut events = vec![shift_opened(DAY, 7, Some(500))];
+    let mut payment = paid(DAY, 1, (60_000, 0));
+    payment.pop(); // the payment alone, no settle
+    events.extend(payment);
+    events.push(voided(DAY, 1, Some(7)));
+    let (revenue, cash, kept) = folded(&events);
+
+    let day = cash.get(DAY).expect("the day");
+    assert_eq!(day.voided_cash, 60_000);
+    assert_eq!(
+        day.by_drawer
+            .get(&ulid(500))
+            .map(|drawer| drawer.voided_cash),
+        Some(60_000)
+    );
+    assert!(kept.pending_cash.is_empty(), "nothing is left waiting");
+    assert_eq!(
+        revenue
+            .get(DAY)
+            .map_or(0, |day| day.voided_after_payment.bills),
+        0
+    );
+}

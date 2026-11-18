@@ -9,6 +9,7 @@ mod comp;
 
 pub use checks::CheckPrinted;
 pub use payments::PaymentTaken;
+pub use void::VoidedBill;
 mod open;
 mod payments;
 mod reads;
