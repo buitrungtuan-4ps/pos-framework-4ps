@@ -2814,6 +2814,73 @@
         "x-permission": "sales.order.confirm_qr"
       }
     },
+    "/api/orders/{id}/scan": {
+      "post": {
+        "tags": [
+          "orders"
+        ],
+        "summary": "`POST /api/orders/{id}/scan` — add the line a scanned code names.",
+        "operationId": "scan_line",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The order's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`code`: the digits a scanner read, a barcode, a PLU or a variable-measure label",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The line the code names, one of the item, priced by the edge: at the menu's price, or at a price label's within an open-price item's bounds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LineResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The id is not a ULID, or the code is not 1 to 14 digits"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          },
+          "409": {
+            "description": "Refused: no item carries the code (`UNKNOWN_CODE`), a price label names a fixed-price item (`PRICE_LABEL_NOT_OPEN_PRICE`), a weight label (`WEIGHT_LABEL_NOT_SOLD`), a price label outside the item's bounds (`PRICE_OUT_OF_RANGE`), or what adding a line refuses"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "sales.line.add"
+      }
+    },
     "/api/package": {
       "get": {
         "tags": [
@@ -8664,6 +8731,19 @@
           "version_label": {
             "type": "string",
             "description": "The version's name in the console."
+          }
+        }
+      },
+      "ScanRequest": {
+        "type": "object",
+        "description": "What the scanner read.",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The code's digits, as the scanner typed them."
           }
         }
       },

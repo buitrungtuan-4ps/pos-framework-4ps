@@ -14,6 +14,9 @@ use std::ops::RangeInclusive;
 
 use serde::{Deserialize, Serialize};
 
+use crate::item_codes::VariableMeasureLayout;
+use crate::wire_enum::{Open, is_absent};
+
 /// The values `keystroke_window_ms` may take, in milliseconds.
 pub const KEYSTROKE_WINDOW_MS: RangeInclusive<i64> = 20..=200;
 
@@ -33,6 +36,10 @@ pub struct PublishedScan {
         skip_serializing_if = "Option::is_none"
     )]
     pub keystroke_window_ms: Option<i64>,
+    /// How a variable-measure code reads (decision 3). Read it through
+    /// [`PublishedScan::variable_measure_layout`]; a value that is not a token reads as absent.
+    #[serde(default, deserialize_with = "token", skip_serializing_if = "is_absent")]
+    pub variable_measure_layout: Open<VariableMeasureLayout>,
 }
 
 impl PublishedScan {
@@ -47,6 +54,30 @@ impl PublishedScan {
             .filter(|window| KEYSTROKE_WINDOW_MS.contains(window))
             .unwrap_or(DEFAULT_KEYSTROKE_WINDOW_MS)
     }
+
+    /// How a variable-measure code reads: an absent or unknown layout reads every code as a plain
+    /// one, [`VariableMeasureLayout::None`], the default where a store's country pack seeds none.
+    #[must_use]
+    pub fn variable_measure_layout(&self) -> VariableMeasureLayout {
+        match self.variable_measure_layout.known() {
+            VariableMeasureLayout::Unspecified | VariableMeasureLayout::None => {
+                VariableMeasureLayout::None
+            }
+            VariableMeasureLayout::Price5 => VariableMeasureLayout::Price5,
+            VariableMeasureLayout::Weight5 => VariableMeasureLayout::Weight5,
+        }
+    }
+}
+
+/// A layout as the node carries it: a token, kept as it came where this release does not know it,
+/// and nothing for a value that is not a token.
+fn token<'de, D>(deserializer: D) -> Result<Open<VariableMeasureLayout>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(serde_json::Value::deserialize(deserializer)?
+        .as_str()
+        .map_or_else(Open::default, Open::parse))
 }
 
 fn whole<'de, D>(deserializer: D) -> Result<Option<i64>, D::Error>

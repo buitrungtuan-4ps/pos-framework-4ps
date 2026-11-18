@@ -70,6 +70,7 @@ POST /api/orders/{id}/fire
 POST /api/orders/{id}/fire/{course_id}
 POST /api/orders/{id}/lines
 POST /api/orders/{id}/reject
+POST /api/orders/{id}/scan
 POST /api/pair
 POST /api/pair/codes
 POST /api/pair/revoke

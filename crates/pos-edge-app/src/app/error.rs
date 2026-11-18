@@ -282,6 +282,17 @@ pub enum AppError {
     /// so the edge cannot price the line (ADR-0146). Refused, never substituted.
     #[error("that item cannot be sold right now")]
     ItemNotSellable,
+    /// A scanned code names no item on the menu, by barcode, PLU or a variable-measure label's
+    /// item reference (ADR-0222).
+    #[error("no item on the menu carries that code")]
+    UnknownCode,
+    /// A price label names an item that is not open-price: only an open-price item takes a price
+    /// from outside the edge, within its bounds (ADR-0222 decision 3).
+    #[error("a price label is accepted only for an open-price item")]
+    PriceLabelNotOpenPrice,
+    /// A weight label, refused until an item can be sold by weight (ADR-0223).
+    #[error("a weight label names no item sold by weight")]
+    WeightLabelNotSold,
     /// A custom-data entry does not fit the package the store runs
     /// ([ADR-0194](../../../../docs/adr/0194-custom-data-is-declared-and-personal-fields-are-kept-apart.md)).
     /// It names the field and the fault, never the value.
