@@ -86,7 +86,14 @@ impl<S: EventStore> Edge<S> {
         }
         if applied == remaining {
             let settled = self
-                .settle_bill_at(actor, scope, bill_id, vec![payment], None, approval)
+                .settle_shares(
+                    actor,
+                    scope,
+                    bill_id,
+                    (vec![payment], split_ways),
+                    None,
+                    approval,
+                )
                 .await?;
             return Ok(PaymentTaken {
                 paid_total: totals.total_due,
