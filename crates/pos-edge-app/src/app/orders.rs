@@ -9,5 +9,6 @@ mod confirmation;
 mod counter;
 mod inbound;
 mod lines;
+mod open_price;
 mod reprice;
 mod sold_out;

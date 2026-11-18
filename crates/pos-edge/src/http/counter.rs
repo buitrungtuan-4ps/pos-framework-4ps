@@ -332,6 +332,11 @@ pub(super) struct OrderLineRequest {
     /// The guest's note for the kitchen, held in memory and never logged (ADR-0157).
     #[serde(default)]
     note: Option<String>,
+    /// The price of one the cashier typed, for an open-price item, within its published bounds
+    /// ([ADR-0222](../../../../docs/adr/0222-items-carry-barcodes-and-plus-and-a-counter-can-pay-first.md)
+    /// decision 4). Required for such an item and ignored for any other.
+    #[serde(default)]
+    typed_unit_price: Option<Money>,
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(
@@ -389,6 +394,7 @@ where
         seat: request.seat,
         course_id: request.course_id,
         note_present: request.note_present,
+        typed_unit_price: request.typed_unit_price,
     };
     match deps
         .edge

@@ -311,6 +311,11 @@ impl AppError {
                 sales_channel: pos_proto::WireEnum::as_wire(sales_channel).to_owned(),
             }),
             RepriceError::Money(error) => Self::Domain(DomainError::Money(error)),
+            RepriceError::OpenPriceOutOfRange { maximum_minor } => {
+                Self::Domain(DomainError::PriceOutOfRange {
+                    ceiling_minor: maximum_minor,
+                })
+            }
             // An unknown or 86'd item, and — `RepriceError` being non-exhaustive — any reason this
             // build has not learned: the line cannot be priced, and a refusal is the safe answer.
             _ => Self::ItemNotSellable,

@@ -7702,6 +7702,17 @@
             ],
             "format": "int32",
             "minimum": 0
+          },
+          "typed_unit_price": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Money",
+                "description": "The price of one the cashier typed, for an open-price item, within its published bounds\n([ADR-0222](../../../../docs/adr/0222-items-carry-barcodes-and-plus-and-a-counter-can-pay-first.md)\ndecision 4). Required for such an item and ignored for any other."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
