@@ -14,50 +14,62 @@
 //!   store, as *(setting key, value)* pairs. [`templates`] refuses a key the register does not
 //!   have, a value the setting does not take, a key named twice, and any `package.*` key: choosing
 //!   a template pins its own copy (decision 3), so a template never chooses a version.
+//! - `demo.json`: its obviously fake demo menu, priced in every shipped country's currency, and
+//!   its floor where it serves at tables ([`demo`]), which the simulator's template-by-country
+//!   matrix sells from.
 //! - Its **capability preset** is `pos-core`'s, [`Template::capabilities`].
 //!
-//! The package and the fake demo menu and floor join each directory as the capabilities they use
-//! arrive (decision 5). Seeding order is the country pack, then the template, then the register's
+//! The package joins each directory as the capabilities it uses arrive (decision 5). Seeding order is the country pack, then the template, then the register's
 //! preset (decision 4); a test over every shipped pack refuses a template that sets a key a pack
 //! sets, so the two never compete.
 
+pub mod demo;
+
+pub use demo::{Demo, DemoFault};
 use pos_core::capability::CapabilityContext;
 use pos_proto::BusinessType;
 use pos_proto::settings::{Setting, ValueRefusal, register};
 use pos_proto::wire_enum::WireEnum;
 use serde::Deserialize;
 
-/// The directory under `business-types/` each template lives in, and its `template.json`.
-const SOURCES: [(BusinessType, &str, &str); 6] = [
+/// The directory under `business-types/` each template lives in, its `template.json` and its
+/// `demo.json`.
+const SOURCES: [(BusinessType, &str, &str, &str); 6] = [
     (
         BusinessType::FullService,
         "full-service",
         include_str!("../../../business-types/full-service/template.json"),
+        include_str!("../../../business-types/full-service/demo.json"),
     ),
     (
         BusinessType::Cafe,
         "cafe",
         include_str!("../../../business-types/cafe/template.json"),
+        include_str!("../../../business-types/cafe/demo.json"),
     ),
     (
         BusinessType::FastFood,
         "fast-food",
         include_str!("../../../business-types/fast-food/template.json"),
+        include_str!("../../../business-types/fast-food/demo.json"),
     ),
     (
         BusinessType::Bar,
         "bar",
         include_str!("../../../business-types/bar/template.json"),
+        include_str!("../../../business-types/bar/demo.json"),
     ),
     (
         BusinessType::BakeryRetail,
         "bakery-retail",
         include_str!("../../../business-types/bakery-retail/template.json"),
+        include_str!("../../../business-types/bakery-retail/demo.json"),
     ),
     (
         BusinessType::SelfOrder,
         "self-order",
         include_str!("../../../business-types/self-order/template.json"),
+        include_str!("../../../business-types/self-order/demo.json"),
     ),
 ];
 
@@ -74,6 +86,8 @@ pub struct Template {
     pub directory: &'static str,
     /// The settings a new store made from it starts with, in the file's order.
     pub recommended_settings: Vec<RecommendedSetting>,
+    /// Its fake demo menu and floor.
+    pub demo: Demo,
 }
 
 impl Template {
@@ -105,8 +119,8 @@ struct TemplateFile {
 /// Why a shipped template is refused. Each names the template's directory.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum TemplateError {
-    /// `template.json` is not the shape this crate reads.
-    #[error("business-types/{directory}/template.json is not a template: {reason}")]
+    /// `template.json` or `demo.json` is not the shape this crate reads.
+    #[error("a file in business-types/{directory} is not the shape it should be: {reason}")]
     Malformed {
         /// The template's directory.
         directory: &'static str,
@@ -151,6 +165,14 @@ pub enum TemplateError {
         /// The key.
         setting_key: String,
     },
+    /// `demo.json` is not a demo this crate accepts.
+    #[error("business-types/{directory}/demo.json is refused: {fault:?}")]
+    Demo {
+        /// The template's directory.
+        directory: &'static str,
+        /// What is wrong with it.
+        fault: DemoFault,
+    },
     /// A value the setting does not take.
     #[error("business-types/{directory} recommends a value for {setting_key} that {refusal}")]
     Refused {
@@ -169,8 +191,8 @@ pub enum TemplateError {
 pub fn directory(business_type: BusinessType) -> Option<&'static str> {
     SOURCES
         .iter()
-        .find(|(shipped, _, _)| *shipped == business_type)
-        .map(|(_, directory, _)| *directory)
+        .find(|(shipped, _, _, _)| *shipped == business_type)
+        .map(|(_, directory, _, _)| *directory)
 }
 
 /// Every shipped template, read and checked, in [`BusinessType`] order.
@@ -182,8 +204,9 @@ pub fn templates() -> Result<Vec<Template>, TemplateError> {
     let settings = register();
     SOURCES
         .iter()
-        .map(|(business_type, directory, source)| {
+        .map(|(business_type, directory, source, demo)| {
             read(*business_type, directory, source, &settings)
+                .and_then(|template| with_demo(template, demo))
         })
         .collect()
 }
@@ -197,8 +220,11 @@ pub fn template(business_type: BusinessType) -> Result<Option<Template>, Templat
     let settings = register();
     SOURCES
         .iter()
-        .find(|(shipped, _, _)| *shipped == business_type)
-        .map(|(shipped, directory, source)| read(*shipped, directory, source, &settings))
+        .find(|(shipped, _, _, _)| *shipped == business_type)
+        .map(|(shipped, directory, source, demo)| {
+            read(*shipped, directory, source, &settings)
+                .and_then(|template| with_demo(template, demo))
+        })
         .transpose()
 }
 
@@ -241,7 +267,25 @@ fn read(
         business_type,
         directory,
         recommended_settings: file.recommended_settings,
+        demo: Demo {
+            items: Vec::new(),
+            floor: None,
+            stations: Vec::new(),
+        },
     })
+}
+
+/// Reads a template's `demo.json` onto it and checks it.
+fn with_demo(mut template: Template, source: &str) -> Result<Template, TemplateError> {
+    let directory = template.directory;
+    let demo: Demo = serde_json::from_str(source).map_err(|error| TemplateError::Malformed {
+        directory,
+        reason: error.to_string(),
+    })?;
+    demo.check()
+        .map_err(|fault| TemplateError::Demo { directory, fault })?;
+    template.demo = demo;
+    Ok(template)
 }
 
 /// Checks one recommended setting: a register key, not a package key, a value it takes.

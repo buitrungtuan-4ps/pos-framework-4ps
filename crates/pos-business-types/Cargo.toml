@@ -11,6 +11,8 @@ repository.workspace   = true
 [dependencies]
 # The preset each template starts from (`CapabilityContext::for_business_type`).
 pos-core  = { path = "../pos-core" }
+# The tax classes every country pack prices, which a demo item is sold under.
+pos-country = { path = "../pos-country" }
 # `BusinessType`, and the settings register a template's recommended settings are checked against.
 pos-proto = { path = "../pos-proto" }
 
@@ -21,7 +23,6 @@ thiserror  = { workspace = true }
 [dev-dependencies]
 # Every shipped country pack, so a test can refuse a template that sets a key a pack sets
 # (ADR-0200 decision 4).
-pos-country    = { path = "../pos-country" }
 pos-country-in = { path = "../../countries/in" }
 pos-country-jp = { path = "../../countries/jp" }
 pos-country-vn = { path = "../../countries/vn" }

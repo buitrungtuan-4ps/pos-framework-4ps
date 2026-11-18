@@ -14,11 +14,13 @@ against the settings register and the country packs
   compiled in (`templates`, `template`, `directory`).
 - The checks on a template's recommended settings: a register key, a value the setting takes, no
   key twice, no `package.*` key, and (in its tests) no key any shipped country pack sets.
+- Each template's fake demo menu, floor and kitchen stations (`demo.json`, `src/demo.rs`): obviously
+  fake names, a price in every shipped pack's currency, and ids derived from the template.
 
 ## Depends on / used by
 
-- **Depends on** (workspace crates): `pos-core`, `pos-proto`; in tests, `pos-country`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`.
-- **Used by** (workspace crates): no workspace crate.
+- **Depends on** (workspace crates): `pos-core`, `pos-country`, `pos-proto`; in tests, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`.
+- **Used by** (workspace crates): `pos-simulator`.
 
 ## Entry points
 
