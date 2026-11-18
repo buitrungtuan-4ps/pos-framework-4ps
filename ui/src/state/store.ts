@@ -40,7 +40,7 @@ import type { DiscountResponse, FloorResponse, LayoutCategory, LayoutResponse } 
 import { applyAreaPlaces } from "./floor-tree";
 import { indexCodes } from "./codes";
 import type { MenuItemResponse, ModifierGroup, PaymentRequest } from "../api/schemas";
-import type { CountBreakdown, ReasonCodeEntry, ReasonCodesResponse } from "../api/schemas";
+import type { CountBreakdown, ReasonCodeEntry, ReasonCodesResponse, VoidBillResponse } from "../api/schemas";
 
 export interface OrderLine {
   // The edge's id, or a provisional one beginning `PENDING` while the edge has not answered.
@@ -1804,9 +1804,10 @@ export async function voidBill(
   billId: string,
   reasonCodeId: string,
   approval?: ApproverRequest,
-): Promise<void> {
-  await api.voidBill(billId, { reason_code_id: reasonCodeId, ...approval });
+): Promise<VoidBillResponse> {
+  const voided = await api.voidBill(billId, { reason_code_id: reasonCodeId, ...approval });
   applyVoided(billId);
+  return voided;
 }
 
 // A void the edge committed, whether it answered or a re-read found it later (ADR-0204).

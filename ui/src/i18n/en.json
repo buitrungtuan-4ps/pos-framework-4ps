@@ -431,6 +431,7 @@
   "pay.unreachable": "The store server cannot be reached. This payment is not confirmed — do not take it again.",
   "pay.void": "Void this bill",
   "pay.void_done": "Bill voided",
+  "pay.void_gave_back": "Each payment was given back: {cash} in cash from the drawer and {other} on other tenders. The order is still on the table.",
   "pay.void_done_hint": "No money was taken. The order is still on the table.",
   "pay.voided_elsewhere": "This bill was voided on another till",
   "pay.voided_elsewhere_hint": "No money was taken. The order is still on the table.",

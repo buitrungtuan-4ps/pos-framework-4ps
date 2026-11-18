@@ -3395,6 +3395,33 @@ test("an even split's shares are recorded as they are taken, and a reload or ano
   }
 });
 
+// A part-paid bill is voided whole and gives each payment back (ADR-0220 decision 4): a guest's
+// share taken by card, then the bill voided with the manager's PIN, and the screen says what was
+// given back rather than that no money was taken.
+test("a part-paid bill can be voided, and the screen says each payment was given back", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    await addItem(page);
+    await sendThenTakePayment(page);
+    await page.getByRole("button", { name: "Split between 2 guests" }).click();
+    await page.locator('[data-step="payCard"]').click();
+    await expect(page.locator('[data-outcome="share-taken"]')).toHaveCount(1);
+
+    await page.locator('[data-step="askVoidBill"]').click();
+    await page.locator("#void-bill-approver-code").fill(edge.staffCode);
+    await page.locator("#void-bill-approver-pin").fill(edge.staffPin);
+    await page.locator('[data-step="voidBillReason"]').first().click();
+    await expect(page.locator('[data-outcome="bill-voided"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="void-gave-back"]')).toContainText("given back");
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A discounted bill spells out its arithmetic (UX-11): the lines before tax, what came off, and the
 // edge's tax on what is left, so the rows add up to the total. It used to show the discount and a
 // total that was not the old one less the discount, with nothing to say the tax had changed.
