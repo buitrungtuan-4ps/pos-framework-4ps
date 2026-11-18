@@ -27,6 +27,9 @@ import type {
   CounterOrder,
   CountShiftRequest,
   DiscountRequest,
+  CompRequest,
+  RepriceRequest,
+  RepriceResponse,
   DiscountResponse,
   DrawersResponse,
   FireRequest,
@@ -61,6 +64,8 @@ import type {
   NewRecordRequest,
   SubjectResponse,
   SettleRequest,
+  TakePaymentRequest,
+  TakePaymentResponse,
   ShiftResponse,
   ShiftXResponse,
   StoreXResponse,
@@ -445,6 +450,11 @@ export const api = {
   // acknowledgement, so the screen never subtracts a discount itself and arrives at a different tax.
   discountBill: (billId: string, request_: DiscountRequest) =>
     request<DiscountResponse>("POST", `/api/bills/${billId}/discount`, request_),
+  // A whole line given away on an open bill, and a line's price changed before its bill opens, each
+  // with a reason and, where the person may not, an approver (ADR-0219).
+  compLine: (billId: string, comp: CompRequest) => request<CheckResponse>("POST", `/api/bills/${billId}/comp`, comp),
+  repriceLine: (lineId: string, reprice: RepriceRequest) =>
+    request<RepriceResponse>("POST", `/api/lines/${lineId}/price`, reprice),
 
   // One fee off one bill (ADR-0159 decision 5). The answer is the bill as it now stands, as the
   // discount's is, so the screen never takes the fee off itself and misses its tax.
@@ -484,6 +494,9 @@ export const api = {
     request<BillResponse>("POST", `/api/orders/${orderId}/bill`),
   settleBill: (billId: string, settle: SettleRequest) =>
     request<BillResponse>("POST", `/api/bills/${billId}/settle`, settle),
+  // One payment towards a bill, recorded as it is taken; the last one settles it (ADR-0220).
+  takePayment: (billId: string, take: TakePaymentRequest) =>
+    request<TakePaymentResponse>("POST", `/api/bills/${billId}/payments`, take),
   // Today's settled bills, newest first, and a copy of one's receipt: the original under the same
   // number, marked COPY, and counted (ADR-0164). A bill that has not settled has no receipt to copy.
   settledBills: () => request<SettledBill[]>("GET", "/api/bills/settled"),

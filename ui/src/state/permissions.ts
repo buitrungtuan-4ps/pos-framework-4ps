@@ -29,10 +29,12 @@ export type PermissionId =
   | "billing.bill.split"
   | "billing.bill.void"
   | "billing.bill.void_settled"
+  | "billing.comp.apply"
   | "billing.discount.apply"
   | "billing.discount.override_ceiling"
   | "billing.fee.waive"
   | "billing.payment.take"
+  | "billing.price.override"
   | "billing.receipt.reprint"
   | "cash.drawer.open_no_sale"
   | "cash.drawer.override_assignment"
@@ -55,7 +57,7 @@ export type PermissionId =
   | "sales.ticket.bump";
 
 // The acts that take another person's approval today: voiding a fired line or a bill, paid or not, a discount
-// above the ceiling, waiving a fee, opening the drawer without a sale, and starting, counting or
+// above the ceiling, a comp or a price override (ADR-0219), waiving a fee, opening the drawer without a sale, and starting, counting or
 // closing another till's drawer (`docs/pos-spec.md` §9, ADR-0167 decision 3), and acting on a drawer
 // assigned to another person (decision 9). Any other permission
 // the edge accepts only when held directly, so holding one of those with approval lets the person
@@ -65,6 +67,8 @@ const TAKES_APPROVER: ReadonlySet<PermissionId> = new Set<PermissionId>([
   "billing.bill.void",
   "billing.bill.void_settled",
   "billing.discount.override_ceiling",
+  "billing.comp.apply",
+  "billing.price.override",
   "billing.fee.waive",
   "cash.drawer.open_no_sale",
   "cash.drawer.override_assignment",

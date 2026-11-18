@@ -246,6 +246,8 @@ export interface StoreShape {
   // (ADR-0218): `false` until it lands, and from an edge older than the setting, whose own settle
   // still refuses.
   checkBeforePayment: boolean;
+  // Whether the store takes a bill in parts, one payment at a time (ADR-0220): the even split.
+  partPayments: boolean;
   // The sales channel of each walk-in whose channel the till knows: the one this till opened it on,
   // or the one the edge's live read names. A walk-in it has no channel for is on the store's.
   walkInChannels: Record<string, string>;
@@ -356,6 +358,7 @@ const [state, setState] = createStore<StoreShape>({
   splitWaysMax: null,
   walkInChannel: null,
   checkBeforePayment: false,
+  partPayments: false,
   walkInChannels: {},
   cashDenominations: null,
   cashRoundingIncrement: null,
@@ -760,6 +763,7 @@ export function fold(event: ServerEvent): void {
     // A quantity somebody changed — on this device or another one. Folded for the same reason a
     // void is: two servers on one table must not disagree about how many, and the running total on
     // the order screen is derived from these lines.
+    case "sales.order_line.repriced": // A new price (ADR-0219): the line's new total, as for a quantity.
     case "sales.order_line.updated": {
       const lineId = str(payload, "order_line_id");
       const quantity = record(payload["quantity"]);
@@ -1338,8 +1342,12 @@ const DEFAULT_SPLIT_WAYS_MAX = 6;
 const SPLIT_WAYS_LIMIT = 12;
 
 // The guest counts the pay screen's even split offers: every number from two up to the store's
-// most, or up to six where the edge sent none.
+// most, or up to six where the edge sent none. None where the store takes a bill in one payment
+// (ADR-0220), since every share but the last is a payment of its own.
 export function splitWays(): readonly number[] {
+  if (!state.partPayments) {
+    return [];
+  }
   const most = state.splitWaysMax ?? DEFAULT_SPLIT_WAYS_MAX;
   return Array.from({ length: most - 1 }, (_, index) => index + 2);
 }
@@ -1436,6 +1444,7 @@ export function applyMenu(response: MenuResponse): void {
   setState("splitWaysMax", readSplitWaysMax(response.split_ways_max));
   setState("walkInChannel", readWalkInChannel(response.walk_in_channel));
   setState("checkBeforePayment", response.check_before_payment === true);
+  setState("partPayments", response.part_payments === true);
   setState("coursesEnabled", response.courses_enabled);
   setState("courses", response.courses);
 }
@@ -1780,6 +1789,13 @@ export async function waiveFee(
   approval?: ApproverRequest,
 ): Promise<CheckResponse> {
   return api.waiveFee(billId, feeId, { reason_code_id: reasonCodeId, ...approval });
+}
+
+// A line's price the edge changed (ADR-0219): its new total, before the fan-out says so too.
+export function applyRepriced(orderLineId: string, lineTotal: Money): void {
+  if (state.lines[orderLineId] !== undefined) {
+    setState("lines", orderLineId, { pending: false, lineTotal });
+  }
 }
 
 export async function voidBill(
