@@ -624,7 +624,8 @@ pub(super) fn counter_settings() -> Vec<Setting> {
 
 /// The settings on the `scan` node, in the register's order.
 pub(super) fn scan_settings() -> Vec<Setting> {
-    vec![Setting {
+    vec![
+        Setting {
         node: PublishedScan::NODE,
         field: "keystroke_window_ms",
         shape: SettingShape::Int {
@@ -644,7 +645,29 @@ pub(super) fn scan_settings() -> Vec<Setting> {
                       ending in Enter within this window are a scan on a screen that listens for \
                       one. `50`, the default, suits most keyboard-wedge scanners; raise it for a \
                       slower one. Read only where barcode entry is on.",
-    }]
+        },
+        Setting {
+            node: PublishedScan::NODE,
+            field: "variable_measure_layout",
+            shape: SettingShape::Choice {
+                values: choices::<crate::item_codes::VariableMeasureLayout>(),
+                default: PublishedScan::default().variable_measure_layout().as_wire(),
+                // ADR-0222 decision 3: each national GS1 body assigns the prefixes, so a country
+                // pack seeds the layout (ADR-0183) and no template sets it.
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            confirm: None,
+            summary: "How a scanned EAN-13 whose GS1 prefix is 20 to 29 reads. \
+                          `VARIABLE_MEASURE_LAYOUT_NONE`, the default, looks every code up as it \
+                          is. `VARIABLE_MEASURE_LAYOUT_PRICE_5` reads a five-digit item reference, \
+                          the item's PLU, then the package's price in minor units; \
+                          `VARIABLE_MEASURE_LAYOUT_WEIGHT_5` the reference then its grams. Each \
+                          national GS1 body assigns these prefixes, so a store's country pack may \
+                          seed the layout.",
+        },
+    ]
 }
 
 /// The settings on the `backup` node, in the register's order.

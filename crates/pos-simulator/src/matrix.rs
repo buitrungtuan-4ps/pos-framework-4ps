@@ -20,6 +20,7 @@
 //! it, so a pull request that touches one template or one pack runs only its own cells.
 
 mod sale;
+mod labels;
 mod store;
 
 use pos_business_types::Template;

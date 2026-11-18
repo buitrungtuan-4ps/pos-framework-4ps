@@ -43,6 +43,8 @@ pub(super) struct Till {
     capabilities: CapabilityContext,
     /// Whether the store takes a bill in parts, as the template recommends (ADR-0220).
     pub(super) part_payments: bool,
+    /// Whether the store reads price labels, as its country pack seeds (ADR-0222 decision 3).
+    pub(super) price_labels: bool,
 }
 
 impl Till {
@@ -88,6 +90,8 @@ impl Till {
             .ok_or_else(|| "the paired device has no id".to_owned())?;
         let token = token.as_str().to_owned();
         let document = document(template, pack, preset, device_id)?;
+        let price_labels =
+            document["scan"]["variable_measure_layout"] == json!("VARIABLE_MEASURE_LAYOUT_PRICE_5");
         let part_payments = document["billing"]["part_payments"]
             .as_bool()
             .unwrap_or(true);
@@ -117,6 +121,7 @@ impl Till {
             currency,
             capabilities: preset,
             part_payments,
+            price_labels,
         };
         till.send(
             "POST",
@@ -243,14 +248,26 @@ fn document(
             serde_json::to_value(stations).map_err(|error| error.to_string())?,
         );
     }
-    for recommended in &template.recommended_settings {
-        let (node, field) = recommended
-            .setting_key
+    // What a new store starts with: its country pack's values (ADR-0183), then the template's.
+    let seeded = pack.setting_defaults().into_iter().map(|seeded| {
+        let value = match seeded.value {
+            pos_country::SettingDefaultValue::Choice(token) => json!(token),
+            pos_country::SettingDefaultValue::Int(number) => json!(number),
+            pos_country::SettingDefaultValue::Bool(on) => json!(on),
+        };
+        (seeded.setting_key.to_owned(), value)
+    });
+    let recommended = template
+        .recommended_settings
+        .iter()
+        .map(|recommended| (recommended.setting_key.clone(), recommended.value.clone()));
+    for (setting_key, value) in seeded.chain(recommended) {
+        let (node, field) = setting_key
             .split_once('.')
-            .ok_or_else(|| format!("{} is not node.field", recommended.setting_key))?;
+            .ok_or_else(|| format!("{setting_key} is not node.field"))?;
         let node = object.entry(node.to_owned()).or_insert_with(|| json!({}));
         if let Some(fields) = node.as_object_mut() {
-            fields.insert(field.to_owned(), recommended.value.clone());
+            fields.insert(field.to_owned(), value);
         }
     }
     Ok(document)
