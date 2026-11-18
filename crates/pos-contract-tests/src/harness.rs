@@ -44,8 +44,8 @@ use core::time::Duration;
 use pos_ports::{
     BlobStore, CloudSync, ConfigStore, DeliveryVendor, DeviceRegistry, ErpSink, EventStore,
     Fiscalization, IntakeLedger, KeyKeeper, KeyVault, MessageLink, MetricsSink, OrderIn,
-    PaymentTerminal, PrinterDriver, PublicKey, ShippingDispatch, Signature, Signer, StoreWake,
-    SubjectStore, UpdateReport,
+    PaymentTerminal, PrinterDriver, PublicKey, Scale, ShippingDispatch, Signature, Signer,
+    StoreWake, SubjectStore, UpdateReport,
 };
 use pos_proto::wake::ConfigWake;
 use pos_proto::{ClockSource, DeviceId, IdGenerator, ReleaseTag, StoreId};
@@ -278,6 +278,34 @@ pub trait SubjectStoreHarness: Send + Sync {
 
     /// A store identifier the cases may use.
     fn store_id(&self) -> StoreId;
+}
+
+/// Supplies a [`Scale`] and puts loads on it, as a person at the till would.
+///
+/// The loads are the harness's because the port only reads: what is on the scale is the world's,
+/// not the port's ([ADR-0223](../../../docs/adr/0223-a-weighed-item-is-priced-by-its-weight.md)).
+pub trait ScaleHarness: Send + Sync {
+    /// The implementation under test.
+    type Scale: Scale;
+
+    /// A scale with nothing on it, zeroed.
+    fn fresh(&self) -> impl Future<Output = Setup<Self::Scale>> + Send;
+
+    /// Settles a load of `net_grams` on `scale`.
+    fn settle(&self, scale: &Self::Scale, net_grams: u32)
+    -> impl Future<Output = Setup<()>> + Send;
+
+    /// Sets the load on `scale` moving.
+    fn disturb(&self, scale: &Self::Scale) -> impl Future<Output = Setup<()>> + Send;
+
+    /// Loads `scale` past its capacity.
+    fn overload(&self, scale: &Self::Scale) -> impl Future<Output = Setup<()>> + Send;
+
+    /// Takes `scale` below zero.
+    fn below_zero(&self, scale: &Self::Scale) -> impl Future<Output = Setup<()>> + Send;
+
+    /// Unplugs `scale`.
+    fn unplug(&self, scale: &Self::Scale) -> impl Future<Output = Setup<()>> + Send;
 }
 
 /// Subscribes a [`StoreWake`] for one store, and sends wakes as the cloud's publish does.
