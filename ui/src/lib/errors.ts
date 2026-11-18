@@ -82,6 +82,8 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
   // one no longer on this one, waived already on another till.
   FEE_NOT_WAIVABLE: "error.fee_not_waivable",
   FEE_NOT_ON_BILL: "error.fee_not_on_bill",
+  // A price override outside its bounds (ADR-0219): above zero, at most the store's multiple.
+  PRICE_OUT_OF_RANGE: "error.price_out_of_range",
   // A paid bill the till may not void (ADR-0184 decisions 7 and 8): past the store's window, or
   // invoiced. Neither changes on a second try, so each says where the correction is made.
   SETTLED_VOID_WINDOW_CLOSED: "error.settled_void_window_closed",

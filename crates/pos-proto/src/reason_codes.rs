@@ -106,6 +106,11 @@ wire_enum! {
     /// ([ADR-0186](../../../docs/adr/0186-a-drawer-is-counted-by-denomination.md) amendment). The
     /// reason is optional, and comes from this list, never the paid-out one.
     CashDropped = "CASH_DROPPED",
+    /// Overriding a line's price before its bill opens — `sales.order_line.repriced`, which needs
+    /// `billing.price.override`
+    /// ([ADR-0219](../../../docs/adr/0219-a-comp-and-a-price-override-each-need-a-reason-and-an-approver.md)
+    /// decision 2).
+    PriceOverride = "PRICE_OVERRIDE",
 }
 
 impl ReasonAction {
@@ -353,7 +358,7 @@ impl PublishedReasonCodes {
     pub fn framework_default() -> Self {
         use ReasonAction::{
             CashPaidIn, CashPaidOut, CashVariance, Comp, Discount, DrawerOpen, Refund, RejectOrder,
-            StockAdjustment, StockWaste, VoidBill, VoidLine, WaiveFee,
+            PriceOverride, StockAdjustment, StockWaste, VoidBill, VoidLine, WaiveFee,
         };
 
         let vi = |text: &str| BTreeMap::from([("vi".to_owned(), DisplayName::new(text))]);
@@ -400,7 +405,7 @@ impl PublishedReasonCodes {
                     framework_id(5),
                     ReasonCode::new("SERVICE_RECOVERY"),
                     DisplayName::new("Putting it right for a guest"),
-                    vec![Discount, Comp, Refund, WaiveFee],
+                    vec![Discount, Comp, Refund, WaiveFee, PriceOverride],
                 )
                 .with_name_translations(vi("Bù cho khách")),
                 PublishedReasonCode::new(

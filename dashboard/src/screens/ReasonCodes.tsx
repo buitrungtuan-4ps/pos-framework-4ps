@@ -64,6 +64,7 @@ const ACTION_LABEL: Record<ReasonAction, MessageKey> = {
   REASON_ACTION_WAIVE_FEE: "reasonCodes.action.waiveFee",
   REASON_ACTION_CASH_VARIANCE: "reasonCodes.action.cashVariance",
   REASON_ACTION_CASH_DROPPED: "reasonCodes.action.cashDropped",
+  REASON_ACTION_PRICE_OVERRIDE: "reasonCodes.action.priceOverride",
 };
 
 export function ReasonCodes() {

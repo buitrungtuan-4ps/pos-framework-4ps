@@ -171,6 +171,7 @@
   "error.order_rejected": "Đơn này đã bị nhân viên từ chối.",
   "error.payments_do_not_sum_to_total": "Tổng thanh toán chưa khớp với hoá đơn.",
   "error.permission_denied": "Vai trò của bạn không được phép thực hiện thao tác này.",
+  "error.price_out_of_range": "Giá này nằm ngoài mức cửa hàng cho phép: phải lớn hơn 0 và không vượt quá bội số đã đặt của giá món.",
   "error.reason_not_valid": "Hãy chọn một lý do trong danh sách.",
   "error.receipt_from_another_day": "Hóa đơn này thuộc ngày trước. Quản lý in lại từ console.",
   "error.reduction_exceeds_bill": "Giảm giá này làm hoá đơn nhỏ hơn 0.",

@@ -219,7 +219,8 @@ export type ReasonAction =
   | "REASON_ACTION_STOCK_WASTE"
   | "REASON_ACTION_WAIVE_FEE"
   | "REASON_ACTION_CASH_VARIANCE"
-  | "REASON_ACTION_CASH_DROPPED";
+  | "REASON_ACTION_CASH_DROPPED"
+  | "REASON_ACTION_PRICE_OVERRIDE";
 
 /** Every action a reason can be tagged for, in the order the picker lists them. */
 export const REASON_ACTIONS: readonly ReasonAction[] = [
@@ -237,6 +238,7 @@ export const REASON_ACTIONS: readonly ReasonAction[] = [
   "REASON_ACTION_WAIVE_FEE",
   "REASON_ACTION_CASH_VARIANCE",
   "REASON_ACTION_CASH_DROPPED",
+  "REASON_ACTION_PRICE_OVERRIDE",
 ];
 
 /**

@@ -171,6 +171,7 @@
   "error.order_rejected": "This order was refused by a member of staff.",
   "error.payments_do_not_sum_to_total": "The payments do not add up to the bill total.",
   "error.permission_denied": "Your role is not allowed to do this.",
+  "error.price_out_of_range": "That price is outside what this store allows: above zero, and at most its set multiple of the item's price.",
   "error.reason_not_valid": "Pick a reason from the list.",
   "error.receipt_from_another_day": "That receipt is from an earlier day. A manager reprints it from the console.",
   "error.reduction_exceeds_bill": "That discount would take the bill below zero.",
