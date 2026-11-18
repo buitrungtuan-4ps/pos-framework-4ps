@@ -449,6 +449,17 @@ sales.line.void	refusal=APPROVAL_REQUIRED
 sales.line.void	refusal=VOID_REASON_NOT_VALID
 sales.line.void	route=POST /api/lines/{id}/void
 sales.line.void	since=0.14.1
+sales.order.close
+sales.order.close	effect=ACTION_EFFECT_EDGE_WRITE
+sales.order.close	frequency=ACTION_FREQUENCY_RARE
+sales.order.close	param=order_id:ACTION_PARAM_KIND_ID:required
+sales.order.close	param=reason_code_id:ACTION_PARAM_KIND_ID:optional
+sales.order.close	permission=sales.line.add
+sales.order.close	refusal=CLOSE_REASON_NOT_VALID
+sales.order.close	refusal=ORDER_NOT_EMPTY
+sales.order.close	refusal=UNKNOWN_ORDER
+sales.order.close	route=POST /api/orders/{id}/close
+sales.order.close	since=0.14.1
 sales.order.confirm
 sales.order.confirm	effect=ACTION_EFFECT_EDGE_WRITE
 sales.order.confirm	frequency=ACTION_FREQUENCY_COMMON

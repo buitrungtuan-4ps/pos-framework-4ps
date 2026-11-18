@@ -64,6 +64,7 @@ use utoipa::{Modify, OpenApi};
         super::counter::open_orders,
         super::counter::open_order,
         super::tabs::open_tabs,
+        super::tabs::close_order,
         super::check::order_check,
         super::counter::add_order_line,
         super::bills::open_for_order,

@@ -428,6 +428,10 @@ where
         .route("/api/bills/settled", get(settled_bills::<S, Q>))
         .route("/api/orders", post(open_order::<S, Q>))
         .route("/api/tabs", get(super::tabs::open_tabs::<S, Q>))
+        .route(
+            "/api/orders/{id}/close",
+            post(super::tabs::close_order::<S, Q>),
+        )
         .route("/api/orders/{id}/lines", post(add_order_line::<S, Q>))
         .with_state(Arc::new(CounterDeps { edge, queue }))
 }

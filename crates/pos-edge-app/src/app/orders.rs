@@ -5,6 +5,7 @@
 //! lines an order is made of, the counter, and changing a line once taken.
 
 mod amend;
+mod close;
 mod confirmation;
 mod counter;
 mod inbound;

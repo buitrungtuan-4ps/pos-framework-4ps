@@ -43,6 +43,7 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
   REASON_CODE_NOT_VALID: "error.reason_not_valid",
   VOID_REASON_NOT_VALID: "error.reason_not_valid",
   CASH_REASON_NOT_VALID: "error.reason_not_valid",
+  CLOSE_REASON_NOT_VALID: "error.reason_not_valid",
   SHIFT_NOT_OPEN: "error.shift_not_open",
   // Cash into a drawer already counted for its close (ADR-0186 decision 4); card still settles.
   DRAWER_COUNTED: "error.drawer_counted",

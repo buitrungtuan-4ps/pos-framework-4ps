@@ -150,7 +150,7 @@
   "error.fee_not_waivable": "Khoản phí này không được miễn.",
   "error.not_settled": "Hóa đơn này chưa thanh toán nên chưa có hóa đơn để in lại. Hãy in phiếu tạm tính.",
   "error.not_the_shift_handed_over": "Két này không phải vừa được ca đó đóng. Hãy đếm và mở lại từ màn hình Ca.",
-  "error.order_not_empty": "Bàn này đã có món. Hãy thanh toán, hoặc huỷ các món trước.",
+  "error.order_not_empty": "Đơn này đã có món. Hãy thanh toán, hoặc huỷ các món trước.",
   "error.nothing_to_bill": "Đơn này chưa có món nào nên không có gì để tính tiền.",
   "error.bills_on_different_tables": "Không thể gộp hoá đơn của hai bàn khác nhau.",
   "error.bills_on_different_orders": "Không thể gộp hoá đơn của hai đơn khác nhau. Hãy thanh toán riêng từng đơn.",

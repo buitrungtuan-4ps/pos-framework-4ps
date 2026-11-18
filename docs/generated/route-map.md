@@ -55,6 +55,7 @@ From [`docs/openapi-edge.json`](../openapi-edge.json).
 | POST | `/api/orders/{id}/bill` | `open_for_order` | `till_session` | `billing.bill.open` | [`crates/pos-edge/src/http/bills.rs`](../../crates/pos-edge/src/http/bills.rs) |
 | GET | `/api/orders/{id}/check` | `order_check` | `till_session` | — | [`crates/pos-edge/src/http/check.rs`](../../crates/pos-edge/src/http/check.rs) |
 | POST | `/api/orders/{id}/check/print` | `print_order_check` | `till_session` | `billing.bill.open` | [`crates/pos-edge/src/http/check.rs`](../../crates/pos-edge/src/http/check.rs) |
+| POST | `/api/orders/{id}/close` | `close_order` | `till_session` | `sales.line.add` | [`crates/pos-edge/src/http/tabs.rs`](../../crates/pos-edge/src/http/tabs.rs) |
 | POST | `/api/orders/{id}/confirm` | `confirm_order` | `till_session` | `sales.order.confirm_qr` | [`crates/pos-edge/src/http/qr.rs`](../../crates/pos-edge/src/http/qr.rs) |
 | POST | `/api/orders/{id}/fire` | `fire_order` | `till_session` | `sales.line.fire` | [`crates/pos-edge/src/http/lines.rs`](../../crates/pos-edge/src/http/lines.rs) |
 | POST | `/api/orders/{id}/fire/{course_id}` | `fire_course` | `till_session` | `sales.line.fire` | [`crates/pos-edge/src/http/lines.rs`](../../crates/pos-edge/src/http/lines.rs) |

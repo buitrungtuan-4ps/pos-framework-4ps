@@ -203,6 +203,10 @@ pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
         RouteGate::Person(&[Permission::OpenBill]),
     ),
     (
+        "POST /api/orders/{id}/close",
+        RouteGate::Person(&[Permission::AddLine]),
+    ),
+    (
         "POST /api/orders/{id}/confirm",
         RouteGate::Person(&[Permission::ConfirmQrOrder]),
     ),

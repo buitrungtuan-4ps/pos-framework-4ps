@@ -240,7 +240,11 @@ fn scans(menu: &Value, items: &[Value]) -> Result<(), Failed> {
 }
 
 /// The first reason the store publishes for `action`, as the till's picker offers it.
-async fn reason_for(till: &Till, action: &str, step: &'static str) -> Result<String, Failed> {
+pub(super) async fn reason_for(
+    till: &Till,
+    action: &str,
+    step: &'static str,
+) -> Result<String, Failed> {
     let reasons = till
         .send("GET", "/api/reason-codes", None)
         .await

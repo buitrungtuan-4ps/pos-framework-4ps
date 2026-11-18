@@ -2487,6 +2487,73 @@
         "x-permission": "billing.bill.open"
       }
     },
+    "/api/orders/{id}/close": {
+      "post": {
+        "tags": [
+          "orders"
+        ],
+        "summary": "`POST /api/orders/{id}/close` — close an open tableless order nothing was sold on, such as a\ntab opened by mistake, with the reason given (ADR-0221).",
+        "operationId": "close_order",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The order's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "An optional `reason_code_id`, from the store's reasons for `REASON_ACTION_CLOSE_ORDER`; owed where the list gives one. The body may be left out",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloseOrderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Closed: the `order_id`, gone from the counter's and the tabs' lists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClosedOrderResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; or this box was superseded by a replacement that holds the store's lease (`SUPERSEDED`)"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, the order is not an open one without a table (`UNKNOWN_ORDER`), something is sold on it or a bill is open (`ORDER_NOT_EMPTY`), or the reason is not one the store lists for closing, or is missing where it lists one (`CLOSE_REASON_NOT_VALID`)"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "sales.line.add"
+      }
+    },
     "/api/orders/{id}/confirm": {
       "post": {
         "tags": [
@@ -5644,6 +5711,23 @@
         ],
         "description": "What the claim page shows, as `GET /api/claim` answers it."
       },
+      "CloseOrderRequest": {
+        "type": "object",
+        "description": "Why an empty tableless order is closed.",
+        "properties": {
+          "reason_code_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ReasonCodeId",
+                "description": "A reason from the store's list for `REASON_ACTION_CLOSE_ORDER`, owed where the list gives\none."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
       "CloseRequest": {
         "type": "object",
         "description": "A close's optional body: the approver for another till's drawer, and the reason for an over or\nshort the store asks one of (ADR-0167 decision 12).",
@@ -5669,6 +5753,18 @@
                 "type": "null"
               }
             ]
+          }
+        }
+      },
+      "ClosedOrderResponse": {
+        "type": "object",
+        "description": "The order closed.",
+        "required": [
+          "order_id"
+        ],
+        "properties": {
+          "order_id": {
+            "$ref": "#/components/schemas/OrderId"
           }
         }
       },
