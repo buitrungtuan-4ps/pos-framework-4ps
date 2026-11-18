@@ -65,6 +65,7 @@ pub use config_wake::{ConfigDelivery, ConfigWakeReport, ConfigWakeStanding, WAKE
 pub use custom_data::{CONSENT_FIELD_PREFIX, CustomDataView};
 pub use device_reads::{DEVICE_READS_MAX, DeviceRead, DeviceReads};
 pub use error::{AppError, Approval};
+pub use orders::TabLabel;
 pub use package::{PackageRefusal, PackageStanding, RefusedPackage};
 pub use receipt_fields::{PersonalOnPaper, PrintedField, PrintedObjects, PrintedValue};
 pub use record_slip::{FRESH_SLIPS_MAX, RecordSlipCopy};

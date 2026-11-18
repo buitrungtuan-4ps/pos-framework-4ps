@@ -185,6 +185,12 @@ pub(crate) struct MenuResponse {
     /// Whether the store sells by barcode (`barcode_enabled`), which turns on the till's scan
     /// listener and its code index (decision 7).
     barcode_enabled: bool,
+    /// Whether the store keeps bar tabs (`tabs_enabled`), which shows the till's tabs list
+    /// ([ADR-0221](../../../../docs/adr/0221-a-bar-tab-is-an-order-without-a-table-that-stays-open.md)).
+    tabs_enabled: bool,
+    /// Whether staff may type a guest's label on a tab: tabs on and the store's `tabs.guest_label`
+    /// on, which the cloud writes only with a recorded confirmation (ADR-0221 decision 2).
+    tab_guest_label: bool,
     /// Whether the store takes a bill in parts, one payment at a time, from its `billing` node
     /// ([ADR-0220](../../../../docs/adr/0220-a-bill-takes-its-payments-one-at-a-time.md)): `true`
     /// until a store turns it off. The pay screen offers its even split only where it is on; a till
@@ -444,6 +450,9 @@ where
             check_before_payment: session.billing.check_before_payment(),
             scan_keystroke_window_ms: session.scan.keystroke_window_ms(),
             barcode_enabled: session.capabilities.enabled(Capability::Barcode),
+            tabs_enabled: session.capabilities.enabled(Capability::Tabs),
+            tab_guest_label: session.capabilities.enabled(Capability::Tabs)
+                && session.tabs.guest_label() == pos_proto::tabs::GuestLabel::On,
             part_payments: session.billing.part_payments(),
             // The same resolution the reason-code and QR routes use: the store's language, or the
             // empty string, which every `localized_name` treats as "no translation, use the base".

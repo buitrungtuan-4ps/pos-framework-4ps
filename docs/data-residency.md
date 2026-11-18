@@ -35,6 +35,7 @@ the configuration described.
 | Custom data values ([ADR-0194](adr/0194-custom-data-is-declared-and-personal-fields-are-kept-apart.md)) | No: only non-personal typed values (numbers, yes or no, list entries, dates, quantities) and the `subject_id` of an object's personal record; free text and every personal value stay on the store ([ADR-0206](adr/0206-a-personal-custom-value-stays-on-its-store-and-expires-on-its-own-clock.md) decision 3) | The store's event log, then the cell's `custom_values` table; the cell's `custom_subjects` table holds only which store holds which `subject_id` | The cell runs outside the store's country |
 | Cloud subject records (marketplace or delivery contact) | Yes | The cell's `subjects` table, with the masking sweep and the request tool ([ADR-0076](adr/0076-subject-request-tooling.md)). A delivery order's recipient is one: kept for the store that makes the order and read only by it, until the store's retention ends ([below](#a-delivery-orders-recipient-dpia-note)) | The cell runs outside the store's country |
 | Personal custom values entered at a till | Yes | The store's `subjects` table only, expiring on each field's own period. The request tool reaches them by id: an erasure travels to the store on its `erasures` config node, and the store confirms with `data.subject.masked`, which carries only the id and the time ([ADR-0206](adr/0206-a-personal-custom-value-stays-on-its-store-and-expires-on-its-own-clock.md) decision 4) | Only inside a sealed store archive |
+| A bar tab's guest label ([ADR-0221](adr/0221-a-bar-tab-is-an-order-without-a-table-that-stays-open.md)) | Yes: usually a name | The store's `subjects` table only, under the tab's order id, where the store has turned `tabs.guest_label` on ([below](#a-bar-tabs-guest-label-dpia-note)) | Only inside a sealed store archive |
 | Employees (name, staff code) and PIN hashes | Yes | The cell; the config pull sends id, code, permissions and the Argon2id PIN hash to the store | The cell, or a hosted edge, runs outside the store's country |
 | Console admins (email) and the audit trail | Yes | The cell's PostgreSQL | The cell runs outside the admin's country |
 | Store archive (the whole store database) | Yes, sealed (XChaCha20-Poly1305) | The cell's object store, and the off-box backup tier ([ADR-0124](adr/0124-a-store-that-can-be-restored.md)) | The object store or the off-box destination is abroad |
@@ -83,6 +84,26 @@ does, as input to the tenant's data protection impact assessment; it is not that
 - **Crossing a border.** Only if the cell runs outside the store's country (the table above); a
   Vietnamese store's cell is hosted in Vietnam (gate L6). A cell abroad needs a data transfer
   agreement or the person's explicit consent.
+
+## A bar tab's guest label: DPIA note
+
+[ADR-0221](adr/0221-a-bar-tab-is-an-order-without-a-table-that-stays-open.md) decision 2. Input to
+the tenant's DPIA, not that assessment.
+
+- **What is collected.** One label of at most 32 characters, typed by staff beside a tab's number to
+  find it again, usually a guest's first name. Nothing else. A guest who wants no name gets a number.
+- **When.** Only on a store whose `tabs.guest_label` is `GUEST_LABEL_ON`, which the cloud writes only
+  with a recorded confirmation of its notice naming the lawful basis and this entry
+  ([ADR-0169](adr/0169-a-setting-value-can-require-a-recorded-confirmation.md)). No template turns it
+  on. Under Vietnam's PDPD (Decree 13/2023/NĐ-CP) the tenant records its lawful basis and this DPIA
+  entry before turning it on.
+- **Where it rests.** The store's `subjects` table, under a subject whose id is the tab's order id:
+  never an event, a log, a `Debug` print, a kitchen ticket or the cloud. Every till of the store
+  reads it beside the tab's number (`GET /api/tabs`); turning the setting off hides every label.
+- **Retention.** The store's `default_retention_days` from when the label was first typed, by the
+  store's own sweep; staff clear it at any time by saving an empty label, which is also how a
+  guest's erasure request is met at the store.
+- **Crossing a border.** Only inside a sealed store archive.
 
 ## The mechanisms the framework gives
 

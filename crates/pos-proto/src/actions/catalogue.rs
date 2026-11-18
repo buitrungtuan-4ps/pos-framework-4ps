@@ -95,6 +95,16 @@ pub const CATALOGUE: &[Action] = &[
         ..BASE
     },
     Action {
+        action_id: "sales.tab.label",
+        effect: EdgeWrite,
+        params: &[required("order_id", Id), optional("label", Text)],
+        routes: &["POST /api/tabs/{id}/label"],
+        permissions: ADD_LINE,
+        refusals: &["CAPABILITY_DISABLED", "GUEST_LABEL_OFF", "UNKNOWN_ORDER"],
+        summary: "Write or clear a guest's label on an open tab, kept on the store only",
+        ..BASE
+    },
+    Action {
         action_id: "sales.order.close",
         effect: EdgeWrite,
         frequency: Rare,
