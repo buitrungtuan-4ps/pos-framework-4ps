@@ -1,11 +1,13 @@
 # ADR-0218 — A printed check is an event every till sees
 
-**Status** Proposed · **Owner** @maintainers-architecture · **Date** 2026-11-18
+**Status** Accepted 2026-11-18 (owner) · **Owner** @maintainers-architecture · **Date** 2026-11-18
 · Completes roadmap-v3 B2.1 and D9 · Needed by [ADR-0200](0200-six-business-type-templates-ship-with-the-framework.md)
 decision 5 · Relates to [ADR-0128](0128-a-bill-splits-and-merges.md),
 [ADR-0196](0196-every-act-paints-first-and-money-waits-for-the-edge.md)
 
-Waits on the owner: the event's name, and whether a store may require a check before payment.
+Accepted by the owner on 2026-11-18 as recommended: the event is `billing.check.printed`; a store
+does not have to print a check before payment, which is a setting that is off unless a store turns it
+on; and a change after the print marks the check stale on every till.
 
 ## Context
 
@@ -36,12 +38,25 @@ shown looks the same as one that was not. A full-service template needs all thre
    fee, a split or a merge) marks the check **stale** until the next print. Nothing is refused
    because of the marker.
 3. **No capability flag.** Whether a store prints checks is the act's permission and whether the
-   package puts the button on a screen. Roadmap-v3's `pre_bill` flag is not added.
+   package puts the button on a screen. Roadmap-v3's `pre_bill` flag is not added. Requiring a check
+   before payment is a setting, off by default (Configuration, below).
 4. **Reports** count checks and copies per shift, so a check reprinted many times is visible.
+
+## Configuration
+
+- **A setting** (ADR-0160): `billing.check_before_payment`, on or off at every scope, **default off**.
+  On, a bill whose check is missing or stale is refused at settle with a named refusal the till
+  predicts (ADR-0196 safeguard 2). No template turns it on; a chain that wants it sets it.
+- **Whether checks are printed at all** is the act's permission per role (ADR-0158) and whether the
+  package puts the button on a screen: configuration already.
+- **Fixed rules:** every print, reprint included, is an event (an audit a store cannot switch off), it
+  takes no receipt number and opens no bill (receipt numbering, ADR-0025), and the stale marker is
+  shown on every till (it states a fact about money shown to a guest, so no store hides it).
 
 ## Consequences accepted
 
 - One new event in `pos-proto` and `docs/snapshots/events.txt`; a cloud reader that does not know it
   ignores it. The `PROTOCOL_VERSION` stays (an added event is additive).
 - An event per print: a busy floor adds a few hundred small events a day.
-- Requiring a check before payment, if the owner wants it, is a later setting and its own change.
+- A store that requires a check before payment refuses a settle without a fresh one; the till says
+  so before it sends.
