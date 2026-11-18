@@ -580,17 +580,8 @@ fn read_back(node: &str, field: &str, value: Option<&Value>) -> Option<Value> {
                 _ => None,
             }
         }
-        crate::tabs::PublishedTabs::NODE => {
-            let tabs: crate::tabs::PublishedTabs = serde_json::from_value(document).ok()?;
-            (field == "guest_label").then(|| json!(tabs.guest_label().as_wire()))
-        }
-        crate::scan::PublishedScan::NODE => {
-            let scan: crate::scan::PublishedScan = serde_json::from_value(document).ok()?;
-            match field {
-                "keystroke_window_ms" => Some(json!(scan.keystroke_window_ms())),
-                "variable_measure_layout" => Some(json!(scan.variable_measure_layout().as_wire())),
-                _ => None,
-            }
+        crate::tabs::PublishedTabs::NODE | crate::scan::PublishedScan::NODE => {
+            read_back_counter_tools(node, field, document)
         }
         PublishedPackage::NODE => read_back_package(field, document),
         PublishedReceipt::NODE => read_back_receipt(field, document),
@@ -635,6 +626,20 @@ fn read_back_receipt(field: &str, document: Value) -> Option<Value> {
 }
 
 /// [`read_back`] for the `package` node (ADR-0189): an absent id reads as `null`.
+/// What the edge reads back from the `tabs` and `scan` nodes (ADR-0221, ADR-0222).
+fn read_back_counter_tools(node: &str, field: &str, document: Value) -> Option<Value> {
+    if node == crate::tabs::PublishedTabs::NODE {
+        let tabs: crate::tabs::PublishedTabs = serde_json::from_value(document).ok()?;
+        return (field == "guest_label").then(|| json!(tabs.guest_label().as_wire()));
+    }
+    let scan: crate::scan::PublishedScan = serde_json::from_value(document).ok()?;
+    match field {
+        "keystroke_window_ms" => Some(json!(scan.keystroke_window_ms())),
+        "variable_measure_layout" => Some(json!(scan.variable_measure_layout().as_wire())),
+        _ => None,
+    }
+}
+
 fn read_back_package(field: &str, document: Value) -> Option<Value> {
     let package: PublishedPackage = serde_json::from_value(document).ok()?;
     let id = |id: Option<crate::ids::PackageVersionId>| json!(id.map(|id| id.to_string()));
