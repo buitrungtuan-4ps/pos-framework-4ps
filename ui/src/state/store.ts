@@ -242,6 +242,10 @@ export interface StoreShape {
   // `WALK_IN_CHANNEL_TAKEAWAY`, `_DINE_IN` or `_ASK`. `null` until the read lands, and from an edge
   // older than the setting, which opens every walk-in for takeaway.
   walkInChannel: string | null;
+  // Whether the store takes payment only against a fresh printed check, from the same read
+  // (ADR-0218): `false` until it lands, and from an edge older than the setting, whose own settle
+  // still refuses.
+  checkBeforePayment: boolean;
   // The sales channel of each walk-in whose channel the till knows: the one this till opened it on,
   // or the one the edge's live read names. A walk-in it has no channel for is on the store's.
   walkInChannels: Record<string, string>;
@@ -351,6 +355,7 @@ const [state, setState] = createStore<StoreShape>({
   tipPercents: null,
   splitWaysMax: null,
   walkInChannel: null,
+  checkBeforePayment: false,
   walkInChannels: {},
   cashDenominations: null,
   cashRoundingIncrement: null,
@@ -1430,6 +1435,7 @@ export function applyMenu(response: MenuResponse): void {
   setState("tipPercents", readTipPercents(response.tip_percents));
   setState("splitWaysMax", readSplitWaysMax(response.split_ways_max));
   setState("walkInChannel", readWalkInChannel(response.walk_in_channel));
+  setState("checkBeforePayment", response.check_before_payment === true);
   setState("coursesEnabled", response.courses_enabled);
   setState("courses", response.courses);
 }

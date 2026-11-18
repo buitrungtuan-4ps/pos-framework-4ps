@@ -11,6 +11,8 @@
   "codepad.backspace": "Xoá ký tự cuối",
   "codepad.clear": "Xoá hết",
   "codepad.clear_short": "C",
+  "check.printed": "Đã in phiếu tạm tính lúc {time} (lần {copy}).",
+  "check.printed_stale": "Phiếu tạm tính in lúc {time} đã cũ: đơn đã thay đổi sau đó. Hãy in lại trước khi thanh toán.",
   "common.back_counter": "← Quầy",
   "common.back_floor": "← Sơ đồ bàn",
   "common.back_order": "← Gọi món",

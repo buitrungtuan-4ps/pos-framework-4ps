@@ -54,7 +54,8 @@
 //! `tip_percents` and `split_ways_max` are published settings rather than flags, and arrived under
 //! the same rule: the pay screen's tip row and its even split read them in the changes that added them
 //! ([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)).
-//! So did `walk_in_channel`, which the counter reads to know which book a walk-in is sold from.
+//! So did `walk_in_channel`, which the counter reads to know which book a walk-in is sold from, and
+//! `check_before_payment`, which the pay screen reads to refuse a payment the edge would refuse.
 //!
 //! Empty until the cloud publishes a menu — a store never guesses a price (ADR-0063).
 //!
@@ -169,6 +170,13 @@ pub(crate) struct MenuResponse {
     /// ignores it, and a till reading an edge older than the field shows the takeaway book, the
     /// channel that edge opens every walk-in on.
     walk_in_channel: &'static str,
+    /// Whether the store takes payment only once a check showing what the bill now comes to has
+    /// been printed, from its `billing` node
+    /// ([ADR-0218](../../../../docs/adr/0218-a-printed-check-is-an-event-every-till-sees.md)): `false`
+    /// until a store turns it on. The pay screen refuses such a payment before it paints, with the
+    /// edge's own `CHECK_REQUIRED`; a till reading an edge older than the field takes it as `false`
+    /// and the edge still refuses.
+    check_before_payment: bool,
     /// Every modifier group any item above attaches, listed once
     /// ([ADR-0127](../../../../docs/adr/0127-modifier-groups-reach-the-edge.md)).
     ///
@@ -404,6 +412,7 @@ where
             tip_percents: session.tender_keys.tip_percents(),
             split_ways_max: session.tender_keys.split_ways_max(),
             walk_in_channel: session.counter.walk_in_channel().as_wire(),
+            check_before_payment: session.billing.check_before_payment(),
             // The same resolution the reason-code and QR routes use: the store's language, or the
             // empty string, which every `localized_name` treats as "no translation, use the base".
             modifier_groups: menu

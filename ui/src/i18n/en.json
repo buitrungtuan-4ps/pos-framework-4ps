@@ -11,6 +11,8 @@
   "codepad.backspace": "Delete the last character",
   "codepad.clear": "Clear the field",
   "codepad.clear_short": "C",
+  "check.printed": "Check printed at {time} (copy {copy}).",
+  "check.printed_stale": "The check printed at {time} is out of date: the order has changed since. Print it again before taking payment.",
   "common.back_counter": "← Counter",
   "common.back_floor": "← Floor",
   "common.back_order": "← Order",

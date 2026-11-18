@@ -36,6 +36,13 @@ pub(super) async fn sell(till: &Till) -> Result<Sale, Failed> {
         .take(2)
         .cloned()
         .collect();
+    // No template asks for a check before payment (ADR-0218), and the till learns that from this read.
+    if menu["check_before_payment"] != false {
+        return Err((
+            "read the menu",
+            format!("a check before payment the template does not ask for: {menu}"),
+        ));
+    }
     if items.len() < 2 {
         return Err((
             "read the menu",

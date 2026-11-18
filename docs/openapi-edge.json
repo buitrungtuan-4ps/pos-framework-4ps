@@ -6966,6 +6966,7 @@
           "tip_percents",
           "split_ways_max",
           "walk_in_channel",
+          "check_before_payment",
           "modifier_groups",
           "courses_enabled",
           "courses"
@@ -6980,6 +6981,10 @@
               "type": "string"
             },
             "description": "The payment methods this store accepts, as their wire names, or `None` when the store\nrestricts nothing and every method is on ([ADR-0080](../../../docs/adr/0080-channels-and-tender.md)).\n\n`None` rather than \"all seven listed\" so the till can tell \"no restriction published\" from \"a\nrestriction that happens to allow everything\" — and so a method added to the enum later is\naccepted by an unrestricted store without a config change."
+          },
+          "check_before_payment": {
+            "type": "boolean",
+            "description": "Whether the store takes payment only once a check showing what the bill now comes to has\nbeen printed, from its `billing` node\n([ADR-0218](../../../../docs/adr/0218-a-printed-check-is-an-event-every-till-sees.md)): `false`\nuntil a store turns it on. The pay screen refuses such a payment before it paints, with the\nedge's own `CHECK_REQUIRED`; a till reading an edge older than the field takes it as `false`\nand the edge still refuses."
           },
           "courses": {
             "type": "array",
