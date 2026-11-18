@@ -350,10 +350,6 @@ pub const NOT_ON_A_ROUTE: &[(Permission, &str)] = &[
         "the till cannot override a price yet",
     ),
     (
-        Permission::ApplyComp,
-        "the till cannot comp a bill yet; the discount route only discounts",
-    ),
-    (
         Permission::IssueRefund,
         "refunds are not built yet (ADR-0028)",
     ),

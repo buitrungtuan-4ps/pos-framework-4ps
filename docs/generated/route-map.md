@@ -15,6 +15,7 @@ From [`docs/openapi-edge.json`](../openapi-edge.json).
 | GET | `/api/bills/settled` | `settled_bills` | `till_session` | — | [`crates/pos-edge/src/http/counter.rs`](../../crates/pos-edge/src/http/counter.rs) |
 | GET | `/api/bills/{id}/check` | `bill_check` | `till_session` | — | [`crates/pos-edge/src/http/check.rs`](../../crates/pos-edge/src/http/check.rs) |
 | POST | `/api/bills/{id}/check/print` | `print_bill_check` | `till_session` | `billing.bill.open` | [`crates/pos-edge/src/http/check.rs`](../../crates/pos-edge/src/http/check.rs) |
+| POST | `/api/bills/{id}/comp` | `comp_line` | `till_session` | `billing.comp.apply` | [`crates/pos-edge/src/http/comp.rs`](../../crates/pos-edge/src/http/comp.rs) |
 | POST | `/api/bills/{id}/discount` | `discount_bill` | `till_session` | `billing.discount.apply`, `billing.discount.override_ceiling` | [`crates/pos-edge/src/http/bills.rs`](../../crates/pos-edge/src/http/bills.rs) |
 | POST | `/api/bills/{id}/fees/{fee_id}/waive` | `waive_fee` | `till_session` | `billing.fee.waive` | [`crates/pos-edge/src/http/bills.rs`](../../crates/pos-edge/src/http/bills.rs) |
 | POST | `/api/bills/{id}/merge` | `merge_bills` | `till_session` | `billing.bill.split` | [`crates/pos-edge/src/http/bills.rs`](../../crates/pos-edge/src/http/bills.rs) |
