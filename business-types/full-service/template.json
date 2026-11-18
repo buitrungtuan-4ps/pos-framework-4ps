@@ -1,0 +1,9 @@
+{
+  "business_type": "BUSINESS_TYPE_FULL_SERVICE",
+  "recommended_settings": [
+    {
+      "setting_key": "tender_keys.split_ways_max",
+      "value": 8
+    }
+  ]
+}

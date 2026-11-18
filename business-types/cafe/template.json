@@ -1,0 +1,6 @@
+{
+  "business_type": "BUSINESS_TYPE_CAFE",
+  "recommended_settings": [
+    { "setting_key": "counter.walk_in_channel", "value": "WALK_IN_CHANNEL_ASK" }
+  ]
+}

@@ -1,0 +1,73 @@
+{
+  "items": [
+    {
+      "key": 1,
+      "display_name": "Demo Ramen A",
+      "tax_class": "food",
+      "prices": {
+        "VND": 95000,
+        "JPY": 980,
+        "INR": 32000,
+        "USD": 1400
+      }
+    },
+    {
+      "key": 2,
+      "display_name": "Demo Gyoza B",
+      "tax_class": "food",
+      "prices": {
+        "VND": 59000,
+        "JPY": 480,
+        "INR": 18000,
+        "USD": 650
+      }
+    },
+    {
+      "key": 3,
+      "display_name": "Demo Tea C",
+      "tax_class": "food",
+      "prices": {
+        "VND": 15000,
+        "JPY": 200,
+        "INR": 5000,
+        "USD": 250
+      }
+    }
+  ],
+  "floor": {
+    "areas": [
+      {
+        "name": "Demo room",
+        "tables": [
+          {
+            "label": "1",
+            "seats": 4
+          },
+          {
+            "label": "2",
+            "seats": 4
+          },
+          {
+            "label": "3",
+            "seats": 4
+          },
+          {
+            "label": "4",
+            "seats": 4
+          },
+          {
+            "label": "5",
+            "seats": 4
+          },
+          {
+            "label": "6",
+            "seats": 4
+          }
+        ]
+      }
+    ]
+  },
+  "stations": [
+    "Demo kitchen"
+  ]
+}
