@@ -22,6 +22,7 @@ import type {
   FeeLine,
   PaymentRequest,
   ReprintResponse,
+  VoidBillResponse,
 } from "../api/schemas";
 import { t, type MessageKey } from "../i18n";
 import { WhyUnavailable } from "../components/StoreData";
@@ -74,6 +75,18 @@ const SPLIT_COLUMNS = 5;
 // Whether the bill was reduced — a discount or a comp — when the screen spells out its arithmetic.
 function reduced(totals: CheckResponse): boolean {
   return totals.discount_total.amount_minor > 0 || totals.comp_total.amount_minor > 0;
+}
+
+// What voiding a part-paid bill gave back, as the voided panel says it: the cash from the drawer
+// and what other tenders reverse. Null where the void gave nothing back, as an unpaid bill's does.
+function givenBackLine(voided: VoidBillResponse): string | null {
+  const cash = voided.cash_returned;
+  const other = voided.other_reversed;
+  if ((cash?.amount_minor ?? 0) === 0 && (other?.amount_minor ?? 0) === 0) {
+    return null;
+  }
+  const none = { currency_code: cash?.currency_code ?? other?.currency_code ?? "", amount_minor: 0 };
+  return t("pay.void_gave_back", { cash: formatAmount(cash ?? none), other: formatAmount(other ?? none) });
 }
 
 // Whether a set of tip keys is still worth offering: every key positive, and no two the same.
@@ -162,6 +175,8 @@ export function Pay() {
   // are one pair for the void, the discount and the waive: only one of their panels is ever open,
   // and they live for the length of one refusal and are cleared with the panel.
   const [voided, setVoided] = createSignal(false);
+  // What voiding a part-paid bill gave back (ADR-0220 decision 4), or null where nothing was paid.
+  const [givenBack, setGivenBack] = createSignal<string | null>(null);
   const approver = createApprover();
   // The fee whose waive is being reasoned about (ADR-0159 decision 5), and the name of the last one
   // waived, which the screen says back. The manager fields are the void's and the discount's: only
@@ -375,8 +390,9 @@ export function Pay() {
       setGivenChange(change);
       setDone(bill);
     },
-    onVoided: () => {
+    onVoided: (voided) => {
       voiding.closeVoid();
+      setGivenBack(givenBackLine(voided));
       setVoided(true);
     },
     onTaken: (_answer, change) => {
@@ -669,7 +685,9 @@ export function Pay() {
   const voidedPanel = () => (
     <div class="mt-6 rounded-token border border-line bg-surface p-4" data-outcome="bill-voided">
       <p class="text-lg font-semibold">{t("pay.void_done")}</p>
-      <p class="mt-1 text-sm text-ink-muted">{t("pay.void_done_hint")}</p>
+      <p class="mt-1 text-sm text-ink-muted" data-outcome={givenBack() === null ? undefined : "void-gave-back"}>
+        {givenBack() ?? t("pay.void_done_hint")}
+      </p>
       <button
         type="button"
         class="mt-4 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink"
@@ -1171,7 +1189,7 @@ export function Pay() {
               <button
                 type="button"
                 class="mt-6 min-h-touch w-full rounded-token border border-line text-sm text-ink-muted disabled:opacity-50"
-                disabled={billId() === null || reasonsFor(VOID_BILL).length === 0 || taken().length > 0}
+                disabled={billId() === null || reasonsFor(VOID_BILL).length === 0}
                 aria-describedby="why-reasons"
                 data-step="askVoidBill"
                 onClick={() => voiding.askVoidBill()}
