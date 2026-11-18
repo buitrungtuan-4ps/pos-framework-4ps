@@ -53,7 +53,8 @@ settings, its demo menu priced in the pack's currency, its floor and kitchen sta
 approved as a terminal). A till paired to it and signed in as a fake member of staff then drives
 the edge's own HTTP routes: it opens a shift, sells two items the store can ring up (at the first
 table where the template serves at tables, as a takeaway at the counter otherwise), sends them to
-the kitchen where there is one, opens the bill, pays the check's total in cash and counts and closes
+the kitchen where there is one, opens the bill, prints its check (which every check read must then
+show, fresh, ADR-0218), pays the check's total in cash and counts and closes
 the shift. A cell passes when the bill settles with receipt number 1 and the drawer closes on the
 amount paid with no variance; a failure names the step and the edge's answer, with its
 `pos-error-reason`. The command exits non-zero when a cell fails, and `2` when the filter names no

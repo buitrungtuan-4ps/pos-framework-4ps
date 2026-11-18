@@ -648,26 +648,44 @@ pub(super) fn backup_settings() -> Vec<Setting> {
 
 /// The settings on the `billing` node, in the register's order.
 pub(super) fn billing_settings() -> Vec<Setting> {
-    vec![Setting {
-        node: PublishedBilling::NODE,
-        field: "settled_void_window",
-        shape: SettingShape::Choice {
-            values: choices::<SettledVoidWindow>(),
-            default: PublishedBilling::default().settled_void_window().as_wire(),
-            // ADR-0184 decision 7 names the business date as the default and gives a new store
-            // nothing else.
-            preset: None,
-        },
-        scopes: STORE_WIDE,
-        since: NEXT_RELEASE,
-        confirm: None,
-        summary: "How long after it was paid a bill may still be voided at the till, whole, by \
+    vec![
+        Setting {
+            node: PublishedBilling::NODE,
+            field: "settled_void_window",
+            shape: SettingShape::Choice {
+                values: choices::<SettledVoidWindow>(),
+                default: PublishedBilling::default().settled_void_window().as_wire(),
+                // ADR-0184 decision 7 names the business date as the default and gives a new store
+                // nothing else.
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            confirm: None,
+            summary: "How long after it was paid a bill may still be voided at the till, whole, by \
                   somebody holding `billing.bill.void_settled`. \
                   `SETTLED_VOID_WINDOW_BUSINESS_DATE` allows it while the store trades on the \
                   bill's own business date. `SETTLED_VOID_WINDOW_SHIFT` allows it only while the \
                   shift that took the money is open. Outside the window the till refuses and says \
                   why, and the correction belongs in the cloud.",
-    }]
+        },
+        Setting {
+            node: PublishedBilling::NODE,
+            field: "check_before_payment",
+            shape: SettingShape::Bool {
+                default: PublishedBilling::default().check_before_payment(),
+                // ADR-0218, accepted by the owner on 2026-11-18: off, and no template turns it on.
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            confirm: None,
+            summary: "Whether a bill is paid only once a check showing what it now comes to has been \
+                      printed. On, the till refuses to take payment for a bill whose check was never \
+                      printed, or was printed before the order last changed, and says so. Off, the \
+                      default, a check is printed only when somebody asks for one.",
+        },
+    ]
 }
 
 /// The settings on the `package` node: how a store is pinned to a package version

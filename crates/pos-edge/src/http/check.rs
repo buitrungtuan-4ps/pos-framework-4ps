@@ -29,10 +29,11 @@ use pos_ports::event_store::EventStore;
 use pos_ports::subject_store::SubjectStore;
 use pos_proto::WireEnum;
 use pos_proto::events::BillFeeLine;
-use pos_proto::ids::{BillId, DeviceId, OrderId, TableId};
+use pos_proto::ids::{BillId, OrderId, TableId};
 use pos_proto::money::Money;
+use pos_proto::time::Timestamp;
 
-use crate::app::{AppError, Edge, EdgeSession, PreBill, fee_records_in};
+use crate::app::{AppError, CheckPrinted, Edge, EdgeSession, PreBill, fee_records_in};
 use crate::http::{bad_request, error_response, parse_ulid};
 use crate::printing::{PrintOutcome, Printers, TillPrinting, short_reference};
 
@@ -60,6 +61,27 @@ pub(crate) struct CheckResponse {
     /// `fees` node. The till shows each line, and its total is still `total_due`. A fee waived on
     /// the bill charges nothing and is not listed (decision 5).
     fee_lines: Vec<CheckFeeLine>,
+    /// The last check printed for this order, or for this part of its split bill
+    /// ([ADR-0218](../../../../docs/adr/0218-a-printed-check-is-an-event-every-till-sees.md)), on
+    /// every till: when, what it showed, which copy, and whether the order has changed since
+    /// (`stale`). Absent until one is printed, and once the order is paid.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    check_printed: Option<CheckPrintedResponse>,
+}
+
+/// A printed check's marker, as the till shows it.
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub(crate) struct CheckPrintedResponse {
+    /// When it printed, in milliseconds since the epoch.
+    printed_time: Timestamp,
+    /// What it showed as owed.
+    total_due: Money,
+    /// Which check of the order or part it was, from 1.
+    copy: u32,
+    /// Whether the order has changed since it printed, so the paper no longer shows what is owed.
+    stale: bool,
 }
 
 /// One fee as the till shows it: the line the settle records, and whether staff may waive it.
@@ -101,7 +123,19 @@ impl CheckResponse {
             tax_total: totals.tax_total,
             total_due: totals.total_due,
             fee_lines: check_fee_lines(totals, session),
+            check_printed: None,
         }
+    }
+
+    /// The same, with the marker of the last check printed for it.
+    fn with_check(mut self, check: Option<CheckPrinted>) -> Self {
+        self.check_printed = check.map(|check| CheckPrintedResponse {
+            printed_time: check.printed_time,
+            total_due: check.total_due,
+            copy: check.copy,
+            stale: check.stale,
+        });
+        self
     }
 }
 
@@ -151,10 +185,13 @@ where
     let Some(table_id) = parse_ulid(&table_id).map(TableId::new) else {
         return bad_request("a table id is a ULID");
     };
+    let check = edge
+        .order_for_table(table_id)
+        .and_then(|order_id| edge.check_printed(order_id, None));
     match edge.check_totals(table_id) {
         Ok(totals) => (
             StatusCode::OK,
-            Json(CheckResponse::of(&totals, &edge.session())),
+            Json(CheckResponse::of(&totals, &edge.session()).with_check(check)),
         )
             .into_response(),
         // The one real failure is a line whose tax class the store has published no rate for. That is
@@ -202,7 +239,10 @@ where
     match edge.order_totals(order_id) {
         Ok(totals) => (
             StatusCode::OK,
-            Json(CheckResponse::of(&totals, &edge.session())),
+            Json(
+                CheckResponse::of(&totals, &edge.session())
+                    .with_check(edge.check_printed(order_id, None)),
+            ),
         )
             .into_response(),
         Err(error) => error_response(&error),
@@ -253,7 +293,10 @@ where
                     .iter()
                     .map(ToString::to_string)
                     .collect(),
-                totals: CheckResponse::of(&check.totals, &edge.session()),
+                totals: CheckResponse::of(&check.totals, &edge.session()).with_check(
+                    edge.order_for_bill(bill_id)
+                        .and_then(|order_id| edge.check_for_bill(order_id, bill_id)),
+                ),
             }),
         )
             .into_response(),
@@ -314,14 +357,7 @@ where
         return error_response(&AppError::NothingToPrint);
     };
     let pre_bills = edge.pre_bills_for_order(order_id);
-    print_all(
-        printers.as_deref(),
-        &edge,
-        actor.device_id,
-        order_id,
-        pre_bills,
-    )
-    .await
+    print_all(printers.as_deref(), &edge, actor, order_id, pre_bills).await
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(
@@ -361,14 +397,7 @@ where
         return error_response(&refused);
     }
     let pre_bills = edge.pre_bills_for_order(order_id);
-    print_all(
-        printers.as_deref(),
-        &edge,
-        actor.device_id,
-        order_id,
-        pre_bills,
-    )
-    .await
+    print_all(printers.as_deref(), &edge, actor, order_id, pre_bills).await
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(
@@ -411,14 +440,7 @@ where
         return error_response(&AppError::UnknownBill);
     };
     let pre_bill = edge.pre_bill_for_bill(bill_id).map(|one| vec![one]);
-    print_all(
-        printers.as_deref(),
-        &edge,
-        actor.device_id,
-        order_id,
-        pre_bill,
-    )
-    .await
+    print_all(printers.as_deref(), &edge, actor, order_id, pre_bill).await
 }
 
 /// Prints each pre-bill under the order's short reference — the one its kitchen tickets carry — at
@@ -429,7 +451,7 @@ where
 async fn print_all<S>(
     printers: Option<&Arc<Printers>>,
     edge: &Arc<Edge<S>>,
-    device: DeviceId,
+    actor: Actor,
     order_id: OrderId,
     pre_bills: Result<Vec<PreBill>, AppError>,
 ) -> Response
@@ -443,6 +465,12 @@ where
         Ok(pre_bills) => pre_bills,
         Err(error) => return error_response(&error),
     };
+    // Recorded before any paper moves (ADR-0218 decision 1): every till then sees the check, and a
+    // printer that fails afterwards leaves the record standing.
+    if let Err(error) = edge.record_checks(actor, order_id, &pre_bills).await {
+        return error_response(&error);
+    }
+    let device = actor.device_id;
     let reference = short_reference(&order_id.to_string());
     let session = edge.session();
     // The till's own receipt printer and languages, where its terminal names them (ADR-0160

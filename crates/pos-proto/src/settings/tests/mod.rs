@@ -586,6 +586,10 @@ fn read_back(node: &str, field: &str, value: Option<&Value>) -> Option<Value> {
             let billing: PublishedBilling = serde_json::from_value(document).ok()?;
             Some(json!(billing.settled_void_window().as_wire()))
         }
+        PublishedBilling::NODE if field == "check_before_payment" => {
+            let billing: PublishedBilling = serde_json::from_value(document).ok()?;
+            Some(json!(billing.check_before_payment()))
+        }
         PublishedBackup::NODE => read_back_backup(field, document),
         _ => None,
     }

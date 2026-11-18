@@ -2082,6 +2082,8 @@
   "settings.hidden": "Đã ẩn “{setting}” đối với {store}: cửa hàng đang chạy phiên bản {installed}, còn cài đặt này có hiệu lực từ phiên bản {since}.",
   "settings.item.backup.interval_hours.help": "Số giờ giữa hai lần cửa hàng gửi bản sao lưu đã mã hóa của cơ sở dữ liệu ra khỏi máy chủ cửa hàng. Đây là lượng giao dịch nhiều nhất cửa hàng có thể mất nếu ổ đĩa của máy hỏng. Thay đổi áp dụng từ lần sao lưu tiếp theo. Không giá trị nào tắt được việc sao lưu.",
   "settings.item.backup.interval_hours.title": "Khoảng cách giữa các lần sao lưu",
+  "settings.item.billing.check_before_payment.help": "Bật: máy chỉ nhận thanh toán cho hóa đơn khi phiếu tạm tính đã được in và đơn hàng chưa thay đổi kể từ đó. Tắt: phiếu tạm tính chỉ được in khi có người yêu cầu.",
+  "settings.item.billing.check_before_payment.title": "In phiếu tạm tính trước khi thanh toán",
   "settings.item.billing.settled_void_window.help": "Sau khi thanh toán bao lâu thì hóa đơn vẫn có thể bị hủy tại máy bán hàng, bởi người được phép hủy hóa đơn đã thanh toán. Ngày kinh doanh cho phép trong khi cửa hàng còn bán hàng trong ngày của hóa đơn. Ca chỉ cho phép khi ca đã nhận tiền vẫn còn mở. Ngoài khoảng đó, máy từ chối, và việc điều chỉnh được làm trên trang quản trị.",
   "settings.item.billing.settled_void_window.title": "Hủy hóa đơn đã thanh toán",
   "settings.item.counter.walk_in_channel.help": "Đơn quầy mở cho khách đến gọi món là mang đi, ăn tại chỗ, hay hỏi khách mỗi lần. Kênh quyết định giá và thuế của đơn. Mang đi là như trước đây. Với Hỏi từng khách, quầy hiện Ăn tại chỗ và Mang về khi mở đơn. Nếu cửa hàng giới hạn các kênh nhận đơn, kênh này phải nằm trong đó, nếu không đơn tại quầy bị từ chối.",

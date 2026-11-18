@@ -141,6 +141,7 @@
   "error.count_does_not_add_up": "Số tờ tiền đã đếm không khớp với tổng số tiền. Hãy kiểm tra từng dòng và số tiền khác, rồi thử lại.",
   "error.awaiting_staff_confirmation": "Cần nhân viên xác nhận hoặc từ chối đơn này của khách trước đã.",
   "error.bill_already_open": "Đơn này đã có hoá đơn đang mở.",
+  "error.check_required": "Hãy in phiếu tạm tính trước: cửa hàng chỉ nhận thanh toán khi phiếu tạm tính thể hiện đúng số tiền hiện tại của hóa đơn.",
   "error.drawer_assigned_to_another": "Ngăn kéo này là của người khác trong ca của họ. Mã và PIN của quản lý cho phép bạn nhận tiền mặt vào, mở, kiểm đếm hoặc đóng ca ngăn kéo này. Thanh toán thẻ vẫn dùng được.",
   "error.fee_not_on_bill": "Hoá đơn không còn khoản phí này.",
   "error.fee_not_waivable": "Khoản phí này không được miễn.",

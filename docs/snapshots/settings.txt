@@ -18,6 +18,16 @@ backup.interval_hours	scope=SETTING_SCOPE_STORE_GROUP
 backup.interval_hours	scope=SETTING_SCOPE_TENANT
 backup.interval_hours	since=0.14.1
 backup.interval_hours	unit=SETTING_UNIT_HOURS
+billing.check_before_payment
+billing.check_before_payment	default=false
+billing.check_before_payment	kind=SETTING_KIND_BOOL
+billing.check_before_payment	scope=SETTING_SCOPE_BRAND
+billing.check_before_payment	scope=SETTING_SCOPE_STORE
+billing.check_before_payment	scope=SETTING_SCOPE_STORE_GROUP
+billing.check_before_payment	scope=SETTING_SCOPE_TENANT
+billing.check_before_payment	since=0.14.1
+billing.check_before_payment	value=false
+billing.check_before_payment	value=true
 billing.settled_void_window
 billing.settled_void_window	default=SETTLED_VOID_WINDOW_BUSINESS_DATE
 billing.settled_void_window	kind=SETTING_KIND_CHOICE

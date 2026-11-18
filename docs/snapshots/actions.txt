@@ -76,6 +76,7 @@ billing.bill.settle	param=buyer:ACTION_PARAM_KIND_ENTERED:optional
 billing.bill.settle	param=payments:ACTION_PARAM_KIND_ENTERED:required
 billing.bill.settle	permission=billing.payment.take
 billing.bill.settle	permission=cash.drawer.override_assignment
+billing.bill.settle	refusal=CHECK_REQUIRED
 billing.bill.settle	refusal=DRAWER_ASSIGNED_TO_ANOTHER
 billing.bill.settle	refusal=DRAWER_COUNTED
 billing.bill.settle	refusal=DRAWER_DAY_ENDED

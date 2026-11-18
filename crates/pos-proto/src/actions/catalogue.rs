@@ -303,6 +303,7 @@ pub const CATALOGUE: &[Action] = &[
             "NOT_A_TILL",
             "PAYMENTS_DO_NOT_SUM_TO_TOTAL",
             "DRAWER_DAY_ENDED",
+            "CHECK_REQUIRED",
         ],
         summary: "Take payment for a bill and settle it",
         ..BASE

@@ -170,6 +170,10 @@ impl<S: EventStore> Edge<S> {
         // Assemble the amount owed from the order's captured line totals, grouped per tax class, at
         // the rate for the channel *this order* came in on (B1.2).
         let session = self.session();
+        // A store that shows the guest a check before it takes money (ADR-0218).
+        if session.billing.check_before_payment() {
+            self.require_fresh_check(bill.order_id, bill_id)?;
+        }
         let order = self.bill_snapshot(&bill, &session)?;
         let totals = billing::assemble(&Self::bill_input(
             &session,
