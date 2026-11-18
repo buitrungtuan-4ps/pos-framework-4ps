@@ -61,7 +61,7 @@ pub(super) async fn sell(till: &Till) -> Result<Sale, Failed> {
         .map_err(|detail| ("open the shift", detail))?;
     let shift_id = text(&shift, "shift_id").map_err(|detail| ("open the shift", detail))?;
 
-    let (bill_id, first_line) = if till.tables {
+    let (bill_id, first_line) = if till.tables() {
         at_a_table(till, &items).await?
     } else {
         at_the_counter(till, &items).await?
@@ -97,7 +97,7 @@ pub(super) async fn sell(till: &Till) -> Result<Sale, Failed> {
         return Err(("pay the bill", format!("receipt number {settled}")));
     }
 
-    if till.kitchen && till.pay_first {
+    if till.kitchen() && till.pay_first() {
         sent_at_settle(till).await?;
     }
     let expected_cash = close_shift(till, &shift_id, paid).await?;
@@ -280,7 +280,7 @@ async fn at_a_table(till: &Till, items: &[Value]) -> Result<(String, String), Fa
         }
     }
     reprice(till, &last_line, &items[1]["unit_price"]).await?;
-    if till.kitchen {
+    if till.kitchen() {
         fire(till, &order_id).await?;
     }
     let bill = till
@@ -331,7 +331,7 @@ async fn at_the_counter(till: &Till, items: &[Value]) -> Result<(String, String)
     }
     reprice(till, &last_line, &items[1]["unit_price"]).await?;
     // A pay-first counter sends nothing before it is paid: the settle sends it (ADR-0222).
-    if till.kitchen && !till.pay_first {
+    if till.kitchen() && !till.pay_first() {
         fire(till, &order_id).await?;
     }
     let bill = till
