@@ -5,7 +5,8 @@
 //! ([ADR-0219](../../../../../docs/adr/0219-a-comp-and-a-price-override-each-need-a-reason-and-an-approver.md)
 //! decision 2).
 
-use pos_core::decision::{Actor, Reprice, decide_reprice, reprice_bounds};
+use pos_core::decision::Actor;
+use pos_core::decision::reprice::{Reprice, decide_reprice, reprice_bounds};
 use pos_core::error::DomainError;
 use pos_core::permission::Permission;
 use pos_ports::event_store::EventStore;

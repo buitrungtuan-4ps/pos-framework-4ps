@@ -45,9 +45,8 @@ use crate::machines::{Bill, BillTrigger, LineTrigger, OrderLine, Shift, ShiftTri
 use crate::permission::{Grant, Permission, PermissionSet, require};
 use crate::state_machine::StateMachine;
 
-mod reprice;
+pub mod reprice;
 mod settled_void;
-pub use reprice::{Reprice, decide_reprice, reprice_bounds};
 pub use settled_void::{SettledVoid, within_settled_void_window};
 
 /// Who is performing an action, for authorisation and the audit trail.
@@ -1472,7 +1471,6 @@ mod tests {
     // ---- Tips: in `tests/tips.rs` ----
     mod tips;
     // ---- A paid bill voided whole: in `tests/settled_void.rs` ----
-    mod reprice;
     mod settled_void;
 
     // ---- Shift ----

@@ -4,8 +4,37 @@
 //! The decision tests for a price override (ADR-0219 decision 2): the bounds first, then the
 //! permission with its PIN.
 
-use super::*;
-use crate::decision::{Reprice, decide_reprice};
+use pos_proto::Ulid;
+use pos_proto::ids::{DeviceId, EmployeeId};
+use pos_proto::money::{CurrencyCode, Money};
+use pos_proto::time::{BusinessDate, Timestamp};
+
+use super::{Reprice, decide_reprice};
+use crate::campaign::Connectivity;
+use crate::capability::CapabilityContext;
+use crate::decision::{Actor, DecisionCtx};
+use crate::error::DomainError;
+use crate::permission::{Permission, PermissionSet};
+
+fn vnd(amount: i64) -> Money {
+    Money::new(CurrencyCode::VND, amount)
+}
+
+fn ctx_with(granted: PermissionSet) -> DecisionCtx {
+    DecisionCtx {
+        now: Timestamp::EPOCH,
+        business_date: BusinessDate::from_ymd(2026, 8, 19).expect("valid date"),
+        actor: Actor {
+            employee_id: EmployeeId::new(Ulid::from_u128(1)),
+            device_id: DeviceId::new(Ulid::from_u128(2)),
+        },
+        granted,
+        granted_directly: PermissionSet::EMPTY,
+        capabilities: CapabilityContext::NONE,
+        connectivity: Connectivity::Online,
+        currency: CurrencyCode::VND,
+    }
+}
 
 /// A line added at 50,000, at a store that allows three times the price.
 fn reprice(unit_price: i64, pin_verified: bool) -> Reprice {
@@ -18,10 +47,7 @@ fn reprice(unit_price: i64, pin_verified: bool) -> Reprice {
 }
 
 fn manager() -> DecisionCtx {
-    ctx_with(
-        PermissionSet::EMPTY.with(Permission::OverridePrice),
-        CapabilityContext::NONE,
-    )
+    ctx_with(PermissionSet::EMPTY.with(Permission::OverridePrice))
 }
 
 #[test]
@@ -51,9 +77,6 @@ fn an_override_needs_the_permission_and_its_pin() {
             permission: "billing.price.override"
         })
     ));
-    let server = ctx_with(
-        PermissionSet::EMPTY.with(Permission::AddLine),
-        CapabilityContext::NONE,
-    );
+    let server = ctx_with(PermissionSet::EMPTY.with(Permission::AddLine));
     assert!(decide_reprice(reprice(60_000, true), &server).is_err());
 }

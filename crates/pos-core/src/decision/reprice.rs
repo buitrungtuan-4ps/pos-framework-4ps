@@ -68,3 +68,7 @@ pub fn decide_reprice(reprice: Reprice, ctx: &DecisionCtx) -> Result<(), DomainE
     )?;
     require_with_pin(ctx, Permission::OverridePrice, reprice.pin_verified)
 }
+
+#[cfg(test)]
+#[path = "tests/reprice.rs"]
+mod tests;
