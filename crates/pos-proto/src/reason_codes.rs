@@ -357,8 +357,8 @@ impl PublishedReasonCodes {
     #[must_use]
     pub fn framework_default() -> Self {
         use ReasonAction::{
-            CashPaidIn, CashPaidOut, CashVariance, Comp, Discount, DrawerOpen, Refund, RejectOrder,
-            PriceOverride, StockAdjustment, StockWaste, VoidBill, VoidLine, WaiveFee,
+            CashPaidIn, CashPaidOut, CashVariance, Comp, Discount, DrawerOpen, PriceOverride,
+            Refund, RejectOrder, StockAdjustment, StockWaste, VoidBill, VoidLine, WaiveFee,
         };
 
         let vi = |text: &str| BTreeMap::from([("vi".to_owned(), DisplayName::new(text))]);

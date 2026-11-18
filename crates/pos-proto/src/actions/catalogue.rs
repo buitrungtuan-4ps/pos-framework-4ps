@@ -351,6 +351,25 @@ pub const CATALOGUE: &[Action] = &[
         ..BASE
     },
     Action {
+        action_id: "billing.line.comp",
+        effect: Money,
+        frequency: Rare,
+        params: &[
+            required("bill_id", Id),
+            required("order_line_id", Id),
+            required("reason_code_id", Id),
+        ],
+        routes: &["POST /api/bills/{id}/comp"],
+        permissions: &["billing.comp.apply"],
+        refusals: &[
+            "REASON_CODE_NOT_VALID",
+            "APPROVAL_REQUIRED",
+            "ALREADY_COMPED",
+        ],
+        summary: "Give one line of an open bill away, whole, with a reason",
+        ..BASE
+    },
+    Action {
         action_id: "billing.fee.waive",
         effect: Money,
         frequency: Rare,

@@ -132,6 +132,7 @@
   "error.activation_unavailable": "Activation did not go through: this store server could not reach the cloud, or could not store its credential. Check its internet connection and try again.",
   "error.activation_wrong_state": "The cloud says this code or device is in the wrong state. Issue a new code in the console and try again.",
   "error.already_activated": "This store server is already activated.",
+  "error.already_comped": "That item has already been comped.",
   "error.already_fired": "Already sent to the kitchen — it can no longer be refused.",
   "error.approval_refused": "That manager PIN cannot authorise this.",
   "error.approver_locked_out": "Too many wrong PINs for that manager. Try again in a few minutes.",

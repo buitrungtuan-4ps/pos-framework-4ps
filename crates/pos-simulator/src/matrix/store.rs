@@ -11,7 +11,7 @@ use axum::http::Request;
 use http_body_util::BodyExt;
 use pos_business_types::Template;
 use pos_core::capability::{Capability, CapabilityContext};
-use pos_core::permission::PermissionSet;
+use pos_core::permission::{Permission, PermissionSet};
 use pos_country::CountryModule;
 use pos_edge::pairing::Minter;
 use pos_edge::{
@@ -107,6 +107,12 @@ impl Till {
         )
         .await?;
         Ok(till)
+    }
+
+    /// The badge code and PIN of somebody who may approve a comp: the cell's one member of staff,
+    /// who, as the store does not enforce each person's own set, may approve their own.
+    pub(super) const fn approver() -> (&'static str, &'static str) {
+        (STAFF_CODE, STAFF_PIN)
     }
 
     /// Sends one request as the signed-in till; the answer's body when it succeeds (any `2xx`).
@@ -245,7 +251,9 @@ fn roster() -> Result<StaffRoster, String> {
         STAFF_CODE,
         StaffAuth {
             employee_id: Some(EmployeeId::new(Ulid::from_u128(0x51_0001))),
-            permissions: PermissionSet::default(),
+            // What they may approve: a comp (ADR-0219). The store does not enforce each person's own
+            // set, so what they may do themselves is the framework's, whatever this says.
+            permissions: PermissionSet::EMPTY.with(Permission::ApplyComp),
             permissions_with_approval: PermissionSet::EMPTY,
             discount_ceiling: None,
             pin_phc: Some(pin_phc),

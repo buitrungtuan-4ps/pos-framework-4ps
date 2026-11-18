@@ -86,6 +86,7 @@ use utoipa::{Modify, OpenApi};
         super::check::print_bill_check,
         super::bills::discount_bill,
         super::bills::waive_fee,
+        super::comp::comp_line,
         super::bills::merge_bills,
         super::bills::reprint_receipt,
         super::bills::settle_bill,

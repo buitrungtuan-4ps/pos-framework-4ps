@@ -117,6 +117,10 @@ pub(in crate::app) struct LineRecord {
     /// the note's text does not, and a screen can say a note was lost rather than show none
     /// (ADR-0157).
     pub(in crate::app) note_present: bool,
+    /// Whether the line has been given away, from `billing.comp.applied`
+    /// ([ADR-0219](../../../../../docs/adr/0219-a-comp-and-a-price-override-each-need-a-reason-and-an-approver.md)):
+    /// a line is comped at most once, whichever bill it sits on after a split or a merge.
+    pub(in crate::app) comped: bool,
 }
 
 impl From<SalesOrderLineAdded> for LineRecord {
@@ -144,6 +148,8 @@ impl From<SalesOrderLineAdded> for LineRecord {
             fired_time: None,
             station_id: None,
             note_present: event.note_present,
+            // A line is added sold; `billing.comp.applied` gives it away later.
+            comped: false,
         }
     }
 }
