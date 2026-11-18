@@ -31786,21 +31786,11 @@
             "description": "Up to [`BARCODES_MAX`] GTINs with valid check digits."
           },
           "open_price": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/OpenPrice",
-                "description": "The bounds of a price the cashier types, for an open-price item."
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/OpenPrice",
+            "description": "The bounds of a price the cashier types, for an open-price item."
           },
           "plu": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "description": "One to five digits."
           }
         }
