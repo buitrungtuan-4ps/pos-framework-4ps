@@ -292,6 +292,10 @@ pub struct EdgeSession {
     /// decision 2): the channel it takes when the till names none. Takeaway, as every walk-in was
     /// before the setting, in the bootstrap and wherever the node sets none.
     pub counter: PublishedCounter,
+    /// How quickly a barcode scanner's keystrokes arrive, from the `scan` node
+    /// ([ADR-0222](../../../../docs/adr/0222-items-carry-barcodes-and-plus-and-a-counter-can-pay-first.md)
+    /// decision 2): 50 ms in the bootstrap and wherever the node sets none.
+    pub scan: pos_proto::scan::PublishedScan,
     /// How long after it was paid a bill may still be voided, from the `billing` node
     /// ([ADR-0184](../../../../docs/adr/0184-a-settled-bill-is-voided-whole-not-refunded.md)
     /// decision 7). The bill's business date in the bootstrap and wherever the node sets none.

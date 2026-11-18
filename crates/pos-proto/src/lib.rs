@@ -65,6 +65,7 @@ pub mod reaction;
 pub mod reason_codes;
 pub mod receipt;
 pub mod retention;
+pub mod scan;
 pub mod screen;
 pub mod session;
 pub mod settings;

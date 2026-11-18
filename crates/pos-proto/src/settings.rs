@@ -84,6 +84,8 @@ wire_enum! {
     Percent = "PERCENT",
     /// Hours.
     Hours = "HOURS",
+    /// Milliseconds.
+    Milliseconds = "MILLISECONDS",
 }
 
 /// What a setting's value is, and what the register holds it to.
@@ -374,6 +376,7 @@ pub fn register() -> Vec<Setting> {
         nodes::locale_settings(),
         nodes::tender_key_settings(),
         nodes::counter_settings(),
+        nodes::scan_settings(),
         nodes::backup_settings(),
         nodes::billing_settings(),
         nodes::package_settings(),
@@ -575,6 +578,7 @@ fn unit_phrase(unit: SettingUnit) -> &'static str {
         SettingUnit::MinorUnits => "an amount in the store currency's minor unit",
         SettingUnit::Percent => "a whole percentage",
         SettingUnit::Hours => "a whole number of hours",
+        SettingUnit::Milliseconds => "a whole number of milliseconds",
     }
 }
 

@@ -7134,6 +7134,8 @@
           "split_ways_max",
           "walk_in_channel",
           "check_before_payment",
+          "scan_keystroke_window_ms",
+          "barcode_enabled",
           "part_payments",
           "modifier_groups",
           "courses_enabled",
@@ -7149,6 +7151,10 @@
               "type": "string"
             },
             "description": "The payment methods this store accepts, as their wire names, or `None` when the store\nrestricts nothing and every method is on ([ADR-0080](../../../docs/adr/0080-channels-and-tender.md)).\n\n`None` rather than \"all seven listed\" so the till can tell \"no restriction published\" from \"a\nrestriction that happens to allow everything\" — and so a method added to the enum later is\naccepted by an unrestricted store without a config change."
+          },
+          "barcode_enabled": {
+            "type": "boolean",
+            "description": "Whether the store sells by barcode (`barcode_enabled`), which turns on the till's scan\nlistener and its code index (decision 7)."
           },
           "check_before_payment": {
             "type": "boolean",
@@ -7190,6 +7196,11 @@
           "part_payments": {
             "type": "boolean",
             "description": "Whether the store takes a bill in parts, one payment at a time, from its `billing` node\n([ADR-0220](../../../../docs/adr/0220-a-bill-takes-its-payments-one-at-a-time.md)): `true`\nuntil a store turns it off. The pay screen offers its even split only where it is on; a till\nreading an edge older than the field offers none, since that edge takes no part payment."
+          },
+          "scan_keystroke_window_ms": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The most milliseconds between two keystrokes of one barcode scan, from the `scan` node\n([ADR-0222](../../../../docs/adr/0222-items-carry-barcodes-and-plus-and-a-counter-can-pay-first.md)\ndecision 2): 50 until a store sets it. A till reading an edge older than the field uses 50."
           },
           "seats_enabled": {
             "type": "boolean",
