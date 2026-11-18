@@ -1,6 +1,6 @@
 # ADR-0224 — Self-order is a guest page the cloud serves and a kiosk that signs in as itself
 
-**Status** Proposed · **Owner** @maintainers-architecture · **Date** 2026-11-18
+**Status** Accepted 2026-11-18 (owner) · **Owner** @maintainers-architecture · **Date** 2026-11-18
 · Needed by [ADR-0200](0200-six-business-type-templates-ship-with-the-framework.md) decision 5 ·
 Completes [ADR-0012](0012-qr-ordering-via-cloud.md) and [ADR-0057](0057-qr-ordering.md) for the
 guest's side · Relates to [ADR-0116](0116-the-qr-hold-is-derived-and-it-gates-firing.md),
@@ -8,7 +8,10 @@ guest's side · Relates to [ADR-0116](0116-the-qr-hold-is-derived-and-it-gates-f
 [ADR-0158](0158-the-till-enforces-each-persons-own-permissions.md),
 [ADR-0201](0201-the-till-runs-on-every-device-class.md), ADR-0222
 
-Waits on the owner: where the guest page is hosted, how a kiosk is paid, and how a kiosk signs in.
+Accepted by the owner on 2026-11-18 as recommended: the cloud hosts the guest page, which collects
+nothing personal and is reviewed for security in phase 9; a kiosk order is paid at the counter, and
+by card at the kiosk once the card terminal arrives in phase 8; a kiosk signs in as a staff record of
+its own with a `KIOSK` role, and leaving the kiosk screen needs a manager's PIN.
 
 ## Context
 
@@ -44,6 +47,18 @@ nothing.
    terminal (phase 8). An order abandoned for 120 seconds is voided with a published reason.
 6. **Catalogue:** the self-order template's screens use `kiosk_menu`, `kiosk_cart` and
    `kiosk_done` components and the existing acts.
+
+## Configuration
+
+- **The capability** `qr_ordering_enabled` and the existing QR guardrails node (business hours, rate
+  limits, staff confirmation, ADR-0057, ADR-0116), which the self-order preset turns on.
+- **A device's class:** a till is a kiosk where the console sets `DEVICE_CLASS_KIOSK` (ADR-0201).
+- **A setting** (ADR-0160): `kiosk.abandon_seconds`, 30 to 900, **default 120**: how long an
+  untouched kiosk order waits before it is voided.
+- **Which channels a kiosk offers** (eat in, take away) are the store's accepted channels.
+- **The self-order template's screens** for the guest page and the kiosk are its package's.
+- **Fixed rules,** all security: the guest page collects nothing personal; the `KIOSK` role's
+  permissions are a fixed set a tenant cannot widen; leaving the kiosk needs a manager's PIN.
 
 ## Consequences accepted
 
