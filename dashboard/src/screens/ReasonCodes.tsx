@@ -65,6 +65,7 @@ const ACTION_LABEL: Record<ReasonAction, MessageKey> = {
   REASON_ACTION_CASH_VARIANCE: "reasonCodes.action.cashVariance",
   REASON_ACTION_CASH_DROPPED: "reasonCodes.action.cashDropped",
   REASON_ACTION_PRICE_OVERRIDE: "reasonCodes.action.priceOverride",
+  REASON_ACTION_CLOSE_ORDER: "reasonCodes.action.closeOrder",
 };
 
 export function ReasonCodes() {

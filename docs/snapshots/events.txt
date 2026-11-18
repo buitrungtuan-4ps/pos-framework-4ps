@@ -248,6 +248,7 @@ promotion.voucher.reserved	field=bill_id
 promotion.voucher.reserved	field=voucher_id
 promotion.voucher.reserved	schema_version=1
 sales.order.closed	field=order_id
+sales.order.closed	field=reason_code_id
 sales.order.closed	schema_version=1
 sales.order.confirmed_by_staff	field=order_id
 sales.order.confirmed_by_staff	schema_version=1
