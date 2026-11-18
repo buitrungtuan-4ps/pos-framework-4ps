@@ -6,7 +6,7 @@ Completes [ADR-0012](0012-qr-ordering-via-cloud.md) and [ADR-0057](0057-qr-order
 guest's side · Relates to [ADR-0116](0116-the-qr-hold-is-derived-and-it-gates-firing.md),
 [ADR-0155](0155-a-qr-payment-is-confirmed-by-its-gateway-through-the-cloud.md),
 [ADR-0158](0158-the-till-enforces-each-persons-own-permissions.md),
-[ADR-0201](0201-the-till-runs-on-every-device-class.md), [ADR-0222](0222-items-carry-barcodes-and-plus-and-a-counter-can-pay-first.md)
+[ADR-0201](0201-the-till-runs-on-every-device-class.md), ADR-0222
 
 Waits on the owner: where the guest page is hosted, how a kiosk is paid, and how a kiosk signs in.
 
