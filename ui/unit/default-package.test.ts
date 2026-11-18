@@ -24,6 +24,7 @@ const DRAWN_FROM: Record<ScreenId, string | undefined> = {
     expo: "expo",
     counter: "counter",
     guests: "guests",
+    tabs: "tabs",
     today: "today",
     records: "records",
     shift: "shift",

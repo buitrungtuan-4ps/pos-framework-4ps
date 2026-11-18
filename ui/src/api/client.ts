@@ -46,6 +46,7 @@ import type {
   OpenDrawerRequest,
   OpenDrawerResponse,
   OpenedOrder,
+  Tab,
   OpenShiftRequest,
   OrderLineRequest,
   PairAccepted,
@@ -472,6 +473,14 @@ export const api = {
     request<OpenedOrder>("POST", "/api/orders", channel === undefined ? {} : { channel }),
   // The line a scanned code names, priced by the edge, which reads a scale's label (ADR-0222).
   scanLine: (orderId: string, code: string) => request<LineResponse>("POST", `/api/orders/${orderId}/scan`, { code }),
+  // Bar tabs (ADR-0221): open one, numbered for the day; list the open ones; label one where the
+  // store keeps labels; and close one nothing was sold on, with the store's reason.
+  openTab: () => request<OpenedOrder>("POST", "/api/orders", { tab: true }),
+  openTabs: () => request<Tab[]>("GET", "/api/tabs"),
+  labelTab: (orderId: string, label: string) =>
+    request<unknown>("POST", `/api/tabs/${orderId}/label`, { label }),
+  closeOrder: (orderId: string, reasonCodeId?: string) =>
+    request<unknown>("POST", `/api/orders/${orderId}/close`, reasonCodeId === undefined ? {} : { reason_code_id: reasonCodeId }),
   addOrderLine: (orderId: string, line: OrderLineRequest) =>
     request<LineResponse>("POST", `/api/orders/${orderId}/lines`, line),
 

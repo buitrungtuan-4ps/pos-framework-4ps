@@ -48,6 +48,7 @@ export const IMPLEMENTATIONS: Implementations = {
   confirm_queue: region("confirm_queue"),
   counter_frame: region("counter_frame"),
   counter_flow: region("counter_flow"),
+  tabs_list: region("tabs_list"),
   today_body: region("today_body"),
   records_body: region("records_body"),
   shift_screen: region("shift_screen"),

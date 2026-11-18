@@ -303,6 +303,12 @@ pub static CATALOGUE: &[Component] = &[
         ..BASE
     },
     Component {
+        component_id: "tabs_list",
+        reads: "tabs",
+        summary: "A bar's open tabs by the day's number, with any guest label, what each owes and its last round; opening one, labelling one and closing an empty one (ADR-0221).",
+        ..BASE
+    },
+    Component {
         component_id: "records_body",
         reads: "custom_records",
         summary: "A package's custom records: its object types, each one's records, and the form that enters or changes one (ADR-0194).",
