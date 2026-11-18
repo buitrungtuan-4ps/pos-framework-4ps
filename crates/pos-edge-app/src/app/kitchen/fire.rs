@@ -5,12 +5,14 @@
 //! consuming its recipe's stock.
 
 use pos_core::capability::Capability;
-use pos_core::decision::{Actor, LineCommand, decide_line};
+use pos_core::decision::{Actor, DecisionCtx, LineCommand, LineDecision, decide_line};
 use pos_ports::event_store::EventStore;
+use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::events::SalesOrderLineFired;
 use pos_proto::ids::{CourseId, OrderId, OrderLineId, StationId};
 
-use crate::app::{AppError, Edge, FiredLine, LineView, StaffStanding};
+use crate::app::{AppError, Edge, FiredLine, LineRecord, LineView, StaffStanding};
+use crate::fanout::ServerMessage;
 
 impl<S: EventStore> Edge<S> {
     /// Fires a line to the kitchen (`sales.order_line.fired`), consuming its recipe (§8).
@@ -218,13 +220,38 @@ impl<S: EventStore> Edge<S> {
             return Ok(Vec::new());
         }
 
+        let (envelopes, messages, applied) =
+            self.prepare_fires(&ctx, unfired, |_| station_id, course)?;
+
+        // Nothing above has written or told anybody: a refusal on the last line leaves the first
+        // five unsent, which is the whole point of doing this in one transaction.
+        self.append_and_publish(envelopes, messages).await?;
+        Ok(self.apply_fires(&ctx, applied))
+    }
+
+    /// Decides firing each of `unfired` and prepares its `sales.order_line.fired`, for the caller
+    /// to commit in one transaction with whatever else it writes: each line to the station the
+    /// published plan routes it to, or else to `fallback`'s for it.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::UnroutableLine`] for a line nothing routes, and [`AppError::Domain`] for a line
+    /// that may not fire.
+    pub(in crate::app) fn prepare_fires(
+        &self,
+        ctx: &DecisionCtx,
+        unfired: Vec<(OrderLineId, LineRecord)>,
+        fallback: impl Fn(&LineRecord) -> Option<StationId>,
+        course: Option<CourseId>,
+    ) -> Result<PreparedFires, AppError> {
+        let session = self.session();
         let mut envelopes = Vec::with_capacity(unfired.len());
         let mut messages = Vec::with_capacity(unfired.len());
         let mut applied = Vec::with_capacity(unfired.len());
         for (order_line_id, record) in unfired {
             let station_id = session
                 .resolve_station(record.menu_item_id, record.course_id)
-                .or(station_id)
+                .or_else(|| fallback(&record))
                 .ok_or(AppError::UnroutableLine)?;
             let command = LineCommand::Fire {
                 base_item: record.menu_item_id,
@@ -236,9 +263,9 @@ impl<S: EventStore> Edge<S> {
                 // line on a course would make the whole order unfireable.
                 course,
             };
-            let decision = decide_line(record.state, command, &ctx, &session.recipes)?;
+            let decision = decide_line(record.state, command, ctx, &session.recipes)?;
             let (envelope, message) = self.prepare(
-                &ctx,
+                ctx,
                 &SalesOrderLineFired {
                     order_id: record.order_id,
                     order_line_id,
@@ -250,11 +277,16 @@ impl<S: EventStore> Edge<S> {
             messages.push(message);
             applied.push((order_line_id, record, station_id, decision));
         }
+        Ok((envelopes, messages, applied))
+    }
 
-        // Nothing above has written or told anybody: a refusal on the last line leaves the first
-        // five unsent, which is the whole point of doing this in one transaction.
-        self.append_and_publish(envelopes, messages).await?;
-
+    /// Folds fires that have committed into the projection, as the replay folds them; the lines as
+    /// they now stand.
+    pub(in crate::app) fn apply_fires(
+        &self,
+        ctx: &DecisionCtx,
+        applied: Vec<(OrderLineId, LineRecord, StationId, LineDecision)>,
+    ) -> Vec<LineView> {
         let mut views = Vec::with_capacity(applied.len());
         {
             let mut projection = self.lock_projection();
@@ -279,6 +311,14 @@ impl<S: EventStore> Edge<S> {
                 });
             }
         }
-        Ok(views)
+        views
     }
 }
+
+/// Fires decided and prepared, not yet committed: the envelopes and messages to commit, and what
+/// each line becomes once they have.
+pub(in crate::app) type PreparedFires = (
+    Vec<EventEnvelope<RawPayload>>,
+    Vec<ServerMessage>,
+    Vec<(OrderLineId, LineRecord, StationId, LineDecision)>,
+);

@@ -44,17 +44,19 @@ struct CapabilityFlagView {
 /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 /// decision 5: every switch the console offers changes behaviour at the edge).
 ///
-/// `false` for the four nothing reads yet: no domain rule, edge route or till screen acts on
-/// `tabs_enabled`, `pay_first_enabled`, `barcode_enabled` or `queue_number_enabled`. No tab, no
-/// pay-first flow and no barcode entry exists, and every tableless order is given a queue number
-/// whatever the switch says. Only the console stops offering them. A store's stored value is kept,
+/// `false` for the three nothing reads yet: no domain rule, edge route or till screen acts on
+/// `tabs_enabled`, `barcode_enabled` or `queue_number_enabled`. No tab and no barcode entry exists,
+/// and every tableless order is given a queue number whatever the switch says. `pay_first_enabled`
+/// is offered again since a settle reads it
+/// ([ADR-0222](../../../docs/adr/0222-items-carry-barcodes-and-plus-and-a-counter-can-pay-first.md)
+/// decision 6). Only the console stops offering them. A store's stored value is kept,
 /// published and parsed as before, the presets still name them, and the §10 rules still apply to
 /// them. A flag is offered again in the change that gives it a reader.
 const fn offered(capability: pos_core::capability::Capability) -> bool {
     use pos_core::capability::Capability;
     !matches!(
         capability,
-        Capability::Tabs | Capability::PayFirst | Capability::Barcode | Capability::QueueNumber
+        Capability::Tabs | Capability::Barcode | Capability::QueueNumber
     )
 }
 

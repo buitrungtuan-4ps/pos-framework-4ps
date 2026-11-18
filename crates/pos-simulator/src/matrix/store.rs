@@ -39,15 +39,28 @@ pub(super) struct Till {
     token: String,
     /// The currency the store trades in, from its country pack.
     pub(super) currency: CurrencyCode,
-    /// Whether the store serves at tables.
-    pub(super) tables: bool,
-    /// Whether the store sends lines to a kitchen display.
-    pub(super) kitchen: bool,
+    /// The template's capability preset, which says how the store sells.
+    capabilities: CapabilityContext,
     /// Whether the store takes a bill in parts, as the template recommends (ADR-0220).
     pub(super) part_payments: bool,
 }
 
 impl Till {
+    /// Whether the store serves at tables.
+    pub(super) fn tables(&self) -> bool {
+        self.capabilities.enabled(Capability::Tables)
+    }
+
+    /// Whether the store sends lines to a kitchen display.
+    pub(super) fn kitchen(&self) -> bool {
+        self.capabilities.enabled(Capability::Kds)
+    }
+
+    /// Whether the store takes the money before the kitchen hears of the order (ADR-0222).
+    pub(super) fn pay_first(&self) -> bool {
+        self.capabilities.enabled(Capability::PayFirst)
+    }
+
     /// Builds the cell's edge from `template` in `pack`'s country, pairs a till and signs it in.
     pub(super) async fn open(
         template: &Template,
@@ -102,8 +115,7 @@ impl Till {
             router,
             token,
             currency,
-            tables: preset.enabled(Capability::Tables),
-            kitchen: preset.enabled(Capability::Kds),
+            capabilities: preset,
             part_payments,
         };
         till.send(
