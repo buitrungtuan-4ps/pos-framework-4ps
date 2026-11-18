@@ -109,7 +109,7 @@ impl Till {
         Ok(till)
     }
 
-    /// The badge code and PIN of somebody who may approve a comp: the cell's one member of staff,
+    /// The badge code and PIN of somebody who may approve a comp or an override: the cell's one member of staff,
     /// who, as the store does not enforce each person's own set, may approve their own.
     pub(super) const fn approver() -> (&'static str, &'static str) {
         (STAFF_CODE, STAFF_PIN)
@@ -251,9 +251,12 @@ fn roster() -> Result<StaffRoster, String> {
         STAFF_CODE,
         StaffAuth {
             employee_id: Some(EmployeeId::new(Ulid::from_u128(0x51_0001))),
-            // What they may approve: a comp (ADR-0219). The store does not enforce each person's own
-            // set, so what they may do themselves is the framework's, whatever this says.
-            permissions: PermissionSet::EMPTY.with(Permission::ApplyComp),
+            // What they may approve: a comp and a price override (ADR-0219). The store does not
+            // enforce each person's own set, so what they may do themselves is the framework's,
+            // whatever this says.
+            permissions: PermissionSet::EMPTY
+                .with(Permission::ApplyComp)
+                .with(Permission::OverridePrice),
             permissions_with_approval: PermissionSet::EMPTY,
             discount_ceiling: None,
             pin_phc: Some(pin_phc),
