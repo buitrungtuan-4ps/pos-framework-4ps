@@ -115,6 +115,7 @@ fn one_of(menu_item_id: MenuItemId) -> OrderLineChoice {
         seat: None,
         course_id: None,
         note_present: false,
+        typed_unit_price: None,
     }
 }
 
