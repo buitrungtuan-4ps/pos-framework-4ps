@@ -38,10 +38,10 @@ export function createCodesDraft(item: Accessor<CatalogItem | null>) {
       const high = maximum();
       return {
         barcodes: barcodes().split(/[\s,]+/).filter((entry) => entry !== ""),
-        plu: plu().trim() === "" ? null : plu().trim(),
+        plu: plu().trim() === "" ? undefined : plu().trim(),
         open_price:
           low === null || high === null
-            ? null
+            ? undefined
             : {
                 minimum: { currency_code: code, amount_minor: low },
                 maximum: { currency_code: code, amount_minor: high },
