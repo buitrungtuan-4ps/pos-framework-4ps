@@ -3406,6 +3406,48 @@ test("a discounted bill shows its subtotal, the discount and the tax, and they a
   }
 });
 
+// A price changed before the bill opens, and a line given away on the bill (ADR-0219): each cites a
+// reason the store publishes for it, with a manager's badge and PIN where the store asks for one, and
+// the edge's figures replace the till's: the line's new total, then the bill with the comp off it.
+test("a line is repriced before the bill opens, and another is comped on the bill", async ({ page }) => {
+  const edge = await startEdge();
+  const approve = async (prefix) => {
+    const code = page.locator(`#${prefix}-approver-code`);
+    if ((await code.count()) > 0) {
+      await code.fill(edge.staffCode);
+      await page.locator(`#${prefix}-approver-pin`).fill(edge.staffPin);
+    }
+  };
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addItem(page);
+    await addItem(page);
+
+    await page.locator('[data-step="askReprice"]').first().click();
+    const keypad = page.locator('[data-step="repriceKeypad"]');
+    for (const digit of ["5", "0", "0", "0", "0"]) {
+      await keypad.getByRole("button", { name: digit, exact: true }).click();
+    }
+    await approve("reprice");
+    await page.locator('[data-step="repriceReason"]').first().click();
+    await expect(page.locator('[data-outcome="reprice-panel"]')).toHaveCount(0);
+    await expect(page.locator('[data-outcome="line-added"]').first()).toContainText("50,000₫");
+
+    await sendThenTakePayment(page);
+    await expect(page.locator('[data-step="askReprice"]')).toHaveCount(0);
+    await page.locator('[data-step="askComp"]').click();
+    await page.locator('[data-step="compLine"]').first().click();
+    await approve("comp");
+    await page.locator('[data-step="compReason"]').first().click();
+    await expect(page.locator('[data-outcome="line-comped"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="bill-subtotal"]')).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A table split by item charges each guest their own part, and waits for the last one (ADR-0128).
 //
 // The guest who only had a drink pays for the drink: the iced tea is split off, its part reads what

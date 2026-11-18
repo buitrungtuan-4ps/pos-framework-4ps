@@ -763,6 +763,7 @@ export function fold(event: ServerEvent): void {
     // A quantity somebody changed — on this device or another one. Folded for the same reason a
     // void is: two servers on one table must not disagree about how many, and the running total on
     // the order screen is derived from these lines.
+    case "sales.order_line.repriced": // A new price (ADR-0219): the line's new total, as for a quantity.
     case "sales.order_line.updated": {
       const lineId = str(payload, "order_line_id");
       const quantity = record(payload["quantity"]);
@@ -1788,6 +1789,13 @@ export async function waiveFee(
   approval?: ApproverRequest,
 ): Promise<CheckResponse> {
   return api.waiveFee(billId, feeId, { reason_code_id: reasonCodeId, ...approval });
+}
+
+// A line's price the edge changed (ADR-0219): its new total, before the fan-out says so too.
+export function applyRepriced(orderLineId: string, lineTotal: Money): void {
+  if (state.lines[orderLineId] !== undefined) {
+    setState("lines", orderLineId, { pending: false, lineTotal });
+  }
 }
 
 export async function voidBill(

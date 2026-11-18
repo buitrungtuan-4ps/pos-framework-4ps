@@ -58,6 +58,7 @@ import { createPrint } from "../state/print-writes";
 import { printOutcomeKey } from "../lib/print";
 import { SendFirst } from "../components/SendFirst";
 import { PrintedCheck } from "../components/PrintedCheck";
+import { RepriceLine } from "../components/RepriceLine";
 import { createSendFirst, waitingByCourse } from "../state/unsent";
 import { DRAFT, draftChannel, eatenIn, keyToAddTo } from "../state/draft-walk-in";
 import { asksApprover, can } from "../state/permissions";
@@ -787,9 +788,7 @@ export function Order() {
                       class="min-h-touch w-11 rounded-token border border-line text-lg text-ink disabled:opacity-40"
                       disabled={line.quantityMilli <= 1000}
                       aria-label={t("order.fewer", { item: line.name })}
-                      onClick={() =>
-                        void guard(() => setQuantity(line.orderLineId, line.quantityMilli - 1000))
-                      }
+                      onClick={() => void guard(() => setQuantity(line.orderLineId, line.quantityMilli - 1000))}
                     >
                       {"−"}
                     </button>
@@ -849,6 +848,8 @@ export function Order() {
                     {t("order.fired")}
                   </span>
                 </Show>
+                {/* A new price before the bill opens (ADR-0219), its own control and panel. */}
+                <RepriceLine line={line} billOpen={openBillsFor(key()).length > 0} />
                 {/* The void control (ADR-0115, §11 item 2). Disabled while the store's reason list
                     has not loaded: the edge falls back to the framework's own set when nothing is
                     published, so an empty list here means the read has not landed, never that the

@@ -6,6 +6,7 @@ import { ApproverFields, createApprover } from "../components/ApproverFields";
 import { DISCOUNT, DiscountPanel, useDiscount } from "../components/DiscountPanel";
 import { VOID_BILL, VoidBillPanel, useVoidBill } from "../components/VoidBillPanel";
 import { BillEnded } from "../components/BillEnded";
+import { CompPanel } from "../components/CompPanel";
 import { PendingSettle } from "../components/PendingSettle";
 import { RefusalPanel } from "../components/RefusalPanel";
 import { PrintedCheck } from "../components/PrintedCheck";
@@ -1143,6 +1144,8 @@ export function Pay() {
           </div>
           </Show>
 
+          {/* Giving a whole line away (ADR-0219), its own panel. */}
+          <CompPanel billId={billId()} lineIds={covered() ?? []} disabled={taken().length > 0} onComped={setCheck} />
           {/* Taking money off and voiding the bill: each its own panel, shared with the counter. */}
           <Show
             when={discount.open()}
