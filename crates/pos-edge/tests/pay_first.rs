@@ -102,6 +102,7 @@ async fn sell_and_settle(capabilities: CapabilityContext) -> Vec<String> {
             seat: None,
             course_id: None,
             note_present: false,
+            typed_unit_price: None,
         },
     )
     .await
