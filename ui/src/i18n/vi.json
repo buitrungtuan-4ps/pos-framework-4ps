@@ -148,6 +148,7 @@
   "error.drawer_assigned_to_another": "Ngăn kéo này là của người khác trong ca của họ. Mã và PIN của quản lý cho phép bạn nhận tiền mặt vào, mở, kiểm đếm hoặc đóng ca ngăn kéo này. Thanh toán thẻ vẫn dùng được.",
   "error.fee_not_on_bill": "Hoá đơn không còn khoản phí này.",
   "error.fee_not_waivable": "Khoản phí này không được miễn.",
+  "error.guest_label_off": "Cửa hàng này chỉ dùng số tab.",
   "error.not_settled": "Hóa đơn này chưa thanh toán nên chưa có hóa đơn để in lại. Hãy in phiếu tạm tính.",
   "error.not_the_shift_handed_over": "Két này không phải vừa được ca đó đóng. Hãy đếm và mở lại từ màn hình Ca.",
   "error.order_not_empty": "Đơn này đã có món. Hãy thanh toán, hoặc huỷ các món trước.",

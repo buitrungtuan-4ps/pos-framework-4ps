@@ -148,6 +148,7 @@
   "error.drawer_assigned_to_another": "This drawer is another person's for their shift. A manager's code and PIN let you take cash into it, open it, count it or close it. Cards still work.",
   "error.fee_not_on_bill": "That fee is no longer on this bill.",
   "error.fee_not_waivable": "This fee cannot be waived.",
+  "error.guest_label_off": "This store keeps a tab's number only.",
   "error.not_settled": "This bill has not been paid, so it has no receipt to print again. Print a pre-bill instead.",
   "error.not_the_shift_handed_over": "This drawer was not just closed by that shift. Count it and open it again from the Shift screen.",
   "error.order_not_empty": "Something is sold on this order. Take payment, or void the lines first.",
