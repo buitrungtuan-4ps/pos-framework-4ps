@@ -1,0 +1,40 @@
+{
+  "items": [
+    {
+      "key": 1,
+      "display_name": "Demo Latte A",
+      "tax_class": "food",
+      "prices": {
+        "VND": 55000,
+        "JPY": 550,
+        "INR": 18000,
+        "USD": 450
+      }
+    },
+    {
+      "key": 2,
+      "display_name": "Demo Bubble Tea B",
+      "tax_class": "food",
+      "prices": {
+        "VND": 49000,
+        "JPY": 600,
+        "INR": 22000,
+        "USD": 550
+      }
+    },
+    {
+      "key": 3,
+      "display_name": "Demo Croissant C",
+      "tax_class": "food",
+      "prices": {
+        "VND": 35000,
+        "JPY": 350,
+        "INR": 15000,
+        "USD": 375
+      }
+    }
+  ],
+  "stations": [
+    "Demo drinks"
+  ]
+}

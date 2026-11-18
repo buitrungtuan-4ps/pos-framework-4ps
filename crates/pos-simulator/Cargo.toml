@@ -1,7 +1,7 @@
 [package]
 name        = "pos-simulator"
 version     = "0.0.0"
-description = "The virtual-fleet simulator: an executable capacity model and deterministic fleet scenarios (P12)."
+description = "The virtual-fleet simulator: an executable capacity model, deterministic fleet scenarios (P12), and the template-by-country matrix (ADR-0200)."
 edition.workspace      = true
 rust-version.workspace = true
 license.workspace      = true
@@ -23,6 +23,26 @@ path = "src/main.rs"
 # `ota::decide_rollout` — over a virtual fleet, so the simulator proves the shipped logic rather than a
 # re-implementation of it. Path, not version: resolved by the workspace.
 pos-core = { path = "../pos-core" }
+
+# The template-by-country matrix (ADR-0200 decision 6): each template, read from `business-types/`,
+# sold in each shipped country pack through an in-process edge over the in-memory store, by the
+# edge's own HTTP routes. Workspace crates and dependencies already in the lockfile; nothing new.
+pos-business-types = { path = "../pos-business-types" }
+pos-country        = { path = "../pos-country" }
+pos-country-in     = { path = "../../countries/in" }
+pos-country-jp     = { path = "../../countries/jp" }
+pos-country-vn     = { path = "../../countries/vn" }
+pos-country-zz     = { path = "../../countries/zz" }
+pos-edge           = { path = "../pos-edge" }
+pos-fakes          = { path = "../pos-fakes" }
+pos-proto          = { path = "../pos-proto" }
+
+argon2         = "0.6"
+axum           = "0.8"
+http-body-util = "0.1"
+serde_json     = { workspace = true }
+tokio          = { version = "1", features = ["rt", "macros"] }
+tower          = { version = "0.5", features = ["util"] }
 
 [lints]
 # The simulator declares its OWN lint table (like the binaries), per the workspace comment: it is a
@@ -50,6 +70,6 @@ allow_attributes_without_reason = "deny"
 
 [package.metadata.pos]
 layer = "testing"
-purpose = "The virtual-fleet simulator: an executable capacity model and deterministic fleet scenarios."
-adrs = [48]
+purpose = "The virtual-fleet simulator: an executable capacity model, deterministic fleet scenarios, and the template-by-country matrix."
+adrs = [48, 200]
 owners = ["@maintainers-architecture"]
