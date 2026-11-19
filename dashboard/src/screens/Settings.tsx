@@ -291,6 +291,8 @@ function explained(caught: unknown, clearing: boolean): unknown {
     key = "settings.refused.keyWithoutEnglish";
   } else if (reasons.includes("SECTION_REQUIRED")) {
     key = "settings.refused.sectionRequired";
+  } else if (reasons.includes("SETTING_FORBIDDEN_BY_COUNTRY")) {
+    key = "settings.refused.forbiddenByCountry";
   } else if (reasons.includes("UNKNOWN_SETTING")) {
     key = "settings.refused.unknownSetting";
   } else if (caught.status === 404) {

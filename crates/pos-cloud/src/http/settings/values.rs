@@ -192,8 +192,8 @@ where
     publish_results_response(&results)
 }
 
-/// The value held where a write lands, before it lands, once the `package` settings' own rules let
-/// the write through (ADR-0189 decision 2).
+/// The value held where a write lands, before it lands, once the law of every store it reaches
+/// (ADR-0223 decision 3) and the `package` settings' own rules (ADR-0189 decision 2) let it through.
 async fn before_write<St, Rg, Grp, Cfg, A, C>(
     state: &SettingsState<St, Rg, Grp, Cfg, A, C>,
     tenant_id: TenantId,
@@ -203,7 +203,16 @@ async fn before_write<St, Rg, Grp, Cfg, A, C>(
 ) -> Result<Option<serde_json::Value>, Response>
 where
     St: SettingsStore + SettingsPackages,
+    Cfg: ConfigTreeStore,
 {
+    super::country_law::law_refusal(
+        &state.country_forbidden,
+        &state.config_trees,
+        tenant_id,
+        &layout.reached_by(scope, scope_id),
+        (setting_key, value),
+    )
+    .await?;
     let held = state
         .settings
         .list(tenant_id)
