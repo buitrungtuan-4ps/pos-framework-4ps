@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use pos_core::permission::{KIOSK_GRANTS, Permission, PermissionSet};
 use pos_proto::ids::{BrandId, DeviceId, EmployeeId, StoreId, TenantId};
 use pos_proto::money::Money;
+use pos_proto::people::PublishedStaffMember;
 use pos_proto::ulid::Ulid;
 
 /// Which tenant, brand and store this edge is — the envelope context every event carries. All three
@@ -133,7 +134,7 @@ pub struct StaffRoster {
     roles_by_code: BTreeMap<String, RoleIds>,
     /// The kiosk staff records, by the same code, and the terminal each is the record of
     /// ([ADR-0224](../../../../docs/adr/0224-self-order-is-a-guest-page-and-a-kiosk.md) decision 4).
-    kiosk_by_code: BTreeMap<String, DeviceId>,
+    kiosks: BTreeMap<String, DeviceId>,
 }
 
 impl StaffRoster {
@@ -152,7 +153,7 @@ impl StaffRoster {
     /// ([ADR-0213](../../../../docs/adr/0213-a-store-knows-each-persons-roles.md)).
     pub fn insert_with_roles(&mut self, code: impl Into<String>, auth: StaffAuth, roles: RoleIds) {
         let code = code.into();
-        self.kiosk_by_code.remove(&code);
+        self.kiosks.remove(&code);
         if roles.as_slice().is_empty() {
             self.roles_by_code.remove(&code);
         } else {
@@ -184,13 +185,34 @@ impl StaffRoster {
                 pin_phc: None,
             },
         );
-        self.kiosk_by_code.insert(code, terminal);
+        self.kiosks.insert(code, terminal);
+    }
+
+    /// Takes the kiosk records out of a published `staff` list into the roster, holding each to the
+    /// fixed kiosk set whatever it lists, and answers the people left
+    /// ([ADR-0224](../../../../docs/adr/0224-self-order-is-a-guest-page-and-a-kiosk.md) decision 4).
+    /// A record whose ids do not parse is left out, never read as a person.
+    pub fn take_published_kiosks(
+        &mut self,
+        staff: Vec<PublishedStaffMember>,
+    ) -> Vec<PublishedStaffMember> {
+        let (kiosks, people): (Vec<_>, Vec<_>) = staff
+            .into_iter()
+            .partition(|member| member.kiosk_device_id.is_some());
+        for kiosk in kiosks {
+            let employee = kiosk.id.as_deref().map(str::parse::<EmployeeId>);
+            let terminal = kiosk.kiosk_device_id.as_deref().map(str::parse::<DeviceId>);
+            if let (Some(Ok(employee)), Some(Ok(terminal))) = (employee, terminal) {
+                self.insert_kiosk(kiosk.code, employee, terminal);
+            }
+        }
+        people
     }
 
     /// The kiosk staff record of the `TERMINAL` device `terminal`, if the roster holds one.
     #[must_use]
     pub fn kiosk_record_of(&self, terminal: DeviceId) -> Option<EmployeeId> {
-        self.kiosk_by_code
+        self.kiosks
             .iter()
             .find(|(_, of)| **of == terminal)
             .and_then(|(code, _)| self.by_code.get(code))
@@ -200,7 +222,7 @@ impl StaffRoster {
     /// Whether `employee_id` is a kiosk's staff record rather than a person.
     #[must_use]
     pub fn is_kiosk(&self, employee_id: EmployeeId) -> bool {
-        self.kiosk_by_code.keys().any(|code| {
+        self.kiosks.keys().any(|code| {
             self.by_code
                 .get(code)
                 .is_some_and(|auth| auth.employee_id == Some(employee_id))
