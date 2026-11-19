@@ -297,13 +297,16 @@ export interface SessionState {
   // device is bound to (ADR-0201 decision 3). Absent where it names none, and from an edge too old
   // to send it: the till then reads the class from its screen.
   device_class?: string;
+  // How many seconds an untouched kiosk order waits before the kiosk gives it up, from the store's
+  // `kiosk.abandon_seconds` (ADR-0224). Absent from an edge too old to send it: two minutes.
+  kiosk_abandon_seconds?: number;
 }
 
 // The outcome of a sign-in attempt: the signed-in employee, or a refusal the screen can explain
 // (a wrong code/PIN, or a lockout with the instant it lifts). Never leaks whether a code exists.
 export type SignInResult =
   | { ok: true; employeeId: string }
-  | { ok: false; outcome: "wrong" | "locked_out"; remaining?: number; untilMs?: number };
+  | { ok: false; outcome: "wrong" | "locked_out" | "kiosk_exit_not_allowed"; remaining?: number; untilMs?: number };
 
 /**
  * A refused sign-in read out of a response body, or `undefined` when the body is not one.
@@ -667,6 +670,8 @@ export const api = {
   // Who (if anyone) is signed in on this device (S0b). Throws `isUnauthorized` if the device is not
   // paired, which the app treats the same as a missing token — route to pairing.
   session: () => request<SessionState>("GET", "/api/session"),
+  // A kiosk signs in as its own staff record, with no PIN (ADR-0224 decision 4).
+  kioskSignIn: () => request<{ employee_id: string }>("POST", "/api/session/kiosk"),
 
   // Sign a member of staff in with their badge code and PIN (S0b, ADR-0084). Returns a structured
   // result rather than throwing on a wrong PIN, so the screen can show the attempts left or the
@@ -690,6 +695,10 @@ export const api = {
     // The body decides, not the status: a refused sign-in and an unpaired device are both `401`, and
     // reading the status alone dropped the device token on every mistyped PIN — the tablet bounced
     // back to pairing, and the screen's three refusal messages could never be reached.
+    // A kiosk refuses a right PIN from someone who may not leave it (ADR-0224 decision 4).
+    if (response.headers.get("pos-error-reason") === "KIOSK_EXIT_NOT_ALLOWED") {
+      return { ok: false, outcome: "kiosk_exit_not_allowed" };
+    }
     const body = await response.text().catch(() => "");
     const refusal = signInRefusal(body);
     if (refusal !== undefined) {

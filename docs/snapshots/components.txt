@@ -127,6 +127,33 @@ kds_tickets	device_class=DEVICE_CLASS_TABLET
 kds_tickets	device_class=DEVICE_CLASS_TERMINAL
 kds_tickets	reads=kitchen
 kds_tickets	since=0.14.1
+kiosk_cart
+kiosk_cart	children=false
+kiosk_cart	device_class=DEVICE_CLASS_KIOSK
+kiosk_cart	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+kiosk_cart	device_class=DEVICE_CLASS_PHONE
+kiosk_cart	device_class=DEVICE_CLASS_TABLET
+kiosk_cart	device_class=DEVICE_CLASS_TERMINAL
+kiosk_cart	reads=order
+kiosk_cart	since=0.14.1
+kiosk_done
+kiosk_done	children=false
+kiosk_done	device_class=DEVICE_CLASS_KIOSK
+kiosk_done	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+kiosk_done	device_class=DEVICE_CLASS_PHONE
+kiosk_done	device_class=DEVICE_CLASS_TABLET
+kiosk_done	device_class=DEVICE_CLASS_TERMINAL
+kiosk_done	reads=order
+kiosk_done	since=0.14.1
+kiosk_menu
+kiosk_menu	children=false
+kiosk_menu	device_class=DEVICE_CLASS_KIOSK
+kiosk_menu	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+kiosk_menu	device_class=DEVICE_CLASS_PHONE
+kiosk_menu	device_class=DEVICE_CLASS_TABLET
+kiosk_menu	device_class=DEVICE_CLASS_TERMINAL
+kiosk_menu	reads=order
+kiosk_menu	since=0.14.1
 lookup_field
 lookup_field	children=false
 lookup_field	device_class=DEVICE_CLASS_KIOSK

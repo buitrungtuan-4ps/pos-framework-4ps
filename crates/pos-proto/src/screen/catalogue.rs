@@ -309,6 +309,24 @@ pub static CATALOGUE: &[Component] = &[
         ..BASE
     },
     Component {
+        component_id: "kiosk_menu",
+        reads: "order",
+        summary: "A kiosk's menu: a guest's tap rings an item on the kiosk's own order, opening it on the first (ADR-0224).",
+        ..BASE
+    },
+    Component {
+        component_id: "kiosk_cart",
+        reads: "order",
+        summary: "A kiosk's order: its lines, one more or fewer of each, and sending it to be paid at the counter (ADR-0224).",
+        ..BASE
+    },
+    Component {
+        component_id: "kiosk_done",
+        reads: "order",
+        summary: "A kiosk's order sent to be paid: the number it is called by, and a new order for the next guest (ADR-0224).",
+        ..BASE
+    },
+    Component {
         component_id: "tabs_list",
         reads: "tabs",
         summary: "A bar's open tabs by the day's number, with any guest label, what each owes and its last round; opening one, labelling one and closing an empty one (ADR-0221).",
