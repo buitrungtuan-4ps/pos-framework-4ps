@@ -173,6 +173,11 @@ pub(super) fn apply_store_identity(session: &mut EdgeSession, document: &serde_j
     {
         session.devices = devices;
     }
+    // A kiosk's own record, for each terminal the published node makes a kiosk (ADR-0224
+    // decision 4): only this signed node turns a terminal into one, never a local setting or a
+    // device's claim.
+    let devices = session.devices.clone();
+    session.staff.derive_kiosks(&devices);
     // The `integrations` node (ADR-0153): the vendor connections that serve this store. Absent
     // leaves the session's as the base has it — empty on a box that never synced, which keeps every
     // family on its offline path; unparseable does the same, so a bad publish never switches a

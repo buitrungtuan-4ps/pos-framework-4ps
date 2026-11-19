@@ -101,7 +101,7 @@ fn permission_set_from_ids(ids: &[String]) -> PermissionSet {
 /// (ADR-0070), with each discount ceiling in the store's `currency`.
 fn roster_from(staff: Vec<PublishedStaffMember>, currency: CurrencyCode) -> StaffRoster {
     let mut roster = StaffRoster::new();
-    for member in roster.take_published_kiosks(staff) {
+    for member in staff {
         let permissions = permission_set_from_ids(&member.permissions);
         // Held directly wins: a permission listed both ways is one the person acts on alone, so the
         // with-approval set never overlaps it.
