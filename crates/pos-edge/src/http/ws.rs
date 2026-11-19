@@ -24,14 +24,21 @@
 //! said it may have missed something, and the safe reading of a request that cannot be understood is
 //! that it did.
 
-use axum::extract::rejection::QueryRejection;
+use std::sync::Arc;
+
+use axum::extract::rejection::{QueryRejection, WebSocketUpgradeRejection};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Query, State};
+use axum::extract::{Extension, Query, State};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
 use axum::response::Response;
 use serde::Deserialize;
 use tokio::sync::broadcast::error::RecvError;
 
+use pos_proto::ids::DeviceId;
+
 use crate::fanout::{Frame, Gap, ServerMessage};
+use crate::printing::Printers;
 use crate::state::AppState;
 
 /// The subprotocol name this endpoint speaks.
@@ -113,10 +120,26 @@ impl Start {
 /// before this runs. Until S0c that gate was absent and this endpoint served the whole
 /// committed-event stream — orders, bills, settlements — to anyone who could route to the box.
 pub(crate) async fn fan_out(
-    upgrade: WebSocketUpgrade,
+    upgrade: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
     State(state): State<AppState>,
+    device: Option<Extension<DeviceId>>,
+    printers: Option<Extension<Arc<Printers>>>,
     query: Result<Query<ResumeQuery>, QueryRejection>,
 ) -> Response {
+    // A kiosk sees only its own orders, so never the store's whole stream (ADR-0224 decision 4).
+    if let (Some(Extension(device)), Some(Extension(printers)), Some(devices)) =
+        (device, printers, state.devices.clone())
+        && super::kiosk::kiosk_terminal(|| devices(), &printers, device)
+            .await
+            .is_some()
+    {
+        return (StatusCode::FORBIDDEN, "a kiosk does not open the store's event stream")
+            .into_response();
+    }
+    let upgrade = match upgrade {
+        Ok(upgrade) => upgrade,
+        Err(rejection) => return rejection.into_response(),
+    };
     let start = Start::from_query(query);
     // Echo the protocol *name* when the client offered it. A client that offered none negotiates
     // none, which RFC 6455 permits and which is what a non-browser consumer authenticating with the

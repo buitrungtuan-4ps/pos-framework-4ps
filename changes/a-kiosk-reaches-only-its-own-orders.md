@@ -6,3 +6,4 @@ kind: security
   tableless order, and read, ring, change, void, send to be paid and close an order it opened
   itself. Every other route, reads included, answers `403 KIOSK_NOT_ALLOWED`, so a kiosk cannot
   list the store's orders, act on another till's, or reach money, the drawer or a shift.
+  A device bound to a kiosk terminal may not open `/ws`, the store's event stream (`403`).

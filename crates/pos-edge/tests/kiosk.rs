@@ -116,6 +116,7 @@ fn staff() -> StaffRoster {
 /// one bound to an ordinary counter terminal, and one bound to none.
 struct Store {
     app: Router,
+    edge: Arc<Edge<FakeStore>>,
     kiosk: String,
     counter: String,
     unbound: String,
@@ -194,8 +195,21 @@ async fn store() -> Store {
             .await
             .expect("the binding is recorded");
     }
+    let devices = {
+        let edge = Arc::clone(&edge);
+        Arc::new(move || edge.session().devices.clone()) as pos_edge::state::DevicesReader
+    };
+    let config = pos_edge::EdgeConfig::new(
+        "127.0.0.1:0".parse().expect("an address"),
+        StoreId::new(Ulid::from_u128(1)),
+    );
+    let live = pos_edge::http::router(
+        pos_edge::AppState::new(config)
+            .with_pairing(Arc::clone(&pairing))
+            .with_devices(devices),
+    );
     let app = pos_edge::http::domain_router(
-        edge,
+        Arc::clone(&edge),
         InMemoryQueueNumbers::new(),
         agents,
         queue,
@@ -204,9 +218,11 @@ async fn store() -> Store {
         Arc::new(Sessions::new()),
         &Arc::new(pos_edge::origins::Origins::new()),
     )
+    .merge(live)
     .layer(axum::Extension(printers));
     Store {
         app,
+        edge,
         kiosk,
         counter,
         unbound,
@@ -505,4 +521,35 @@ async fn a_kiosk_works_its_own_order_and_is_refused_everything_else() {
     // And the manager, a person, is not held to the kiosk's routes.
     let (status, _, _) = send(&store.app, &store.counter, "GET", "/api/orders/open", None).await;
     assert_eq!(status, StatusCode::OK);
+}
+
+/// A kiosk never opens the store's event stream, which carries every till's orders (ADR-0224
+/// decision 4); an ordinary till's device is not refused for it.
+#[tokio::test]
+async fn a_kiosk_may_not_open_the_stores_event_stream() {
+    let store = store().await;
+    let upgrade = |token: &str| {
+        Request::builder()
+            .uri("/ws")
+            .header("connection", "Upgrade")
+            .header("upgrade", "websocket")
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .expect("request builds")
+    };
+    let kiosk = store
+        .app
+        .clone()
+        .oneshot(upgrade(&store.kiosk))
+        .await
+        .expect("router responds");
+    assert_eq!(kiosk.status(), StatusCode::FORBIDDEN);
+    let counter = store
+        .app
+        .clone()
+        .oneshot(upgrade(&store.counter))
+        .await
+        .expect("router responds");
+    assert_ne!(counter.status(), StatusCode::FORBIDDEN, "only the handshake's own rules apply");
+    assert!(store.edge.session().devices.devices().len() >= 2);
 }
