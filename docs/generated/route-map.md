@@ -62,6 +62,7 @@ From [`docs/openapi-edge.json`](../openapi-edge.json).
 | POST | `/api/orders/{id}/lines` | `add_order_line` | `till_session` | `sales.line.add` | [`crates/pos-edge/src/http/counter.rs`](../../crates/pos-edge/src/http/counter.rs) |
 | POST | `/api/orders/{id}/reject` | `reject_order` | `till_session` | `sales.order.confirm_qr` | [`crates/pos-edge/src/http/qr.rs`](../../crates/pos-edge/src/http/qr.rs) |
 | POST | `/api/orders/{id}/scan` | `scan_line` | `till_session` | `sales.line.add` | [`crates/pos-edge/src/http/scan.rs`](../../crates/pos-edge/src/http/scan.rs) |
+| POST | `/api/orders/{id}/weigh` | `weigh_line` | `till_session` | `sales.line.add` | [`crates/pos-edge/src/http/weigh.rs`](../../crates/pos-edge/src/http/weigh.rs) |
 | GET | `/api/package` | `package_standing` | `till_session` | — | [`crates/pos-edge/src/http/package.rs`](../../crates/pos-edge/src/http/package.rs) |
 | POST | `/api/pair` | `pair` | public: a pairing code a manager minted, spent once (ADR-0030) | — | [`crates/pos-edge/src/http/pair.rs`](../../crates/pos-edge/src/http/pair.rs) |
 | POST | `/api/pair/codes` | `mint_pairing_code` | `till_session` | `admin.device.manage` | [`crates/pos-edge/src/http/pair.rs`](../../crates/pos-edge/src/http/pair.rs) |
@@ -77,6 +78,7 @@ From [`docs/openapi-edge.json`](../openapi-edge.json).
 | POST | `/api/printers/{id}/test` | `test_printer` | `till_session` | `admin.device.manage` | [`crates/pos-edge/src/http/printers.rs`](../../crates/pos-edge/src/http/printers.rs) |
 | GET | `/api/reason-codes` | `list_reason_codes` | `till_session` | — | [`crates/pos-edge/src/http/reason_codes.rs`](../../crates/pos-edge/src/http/reason_codes.rs) |
 | GET | `/api/reports/takings` | `takings` | `till_session` | `reports.takings.view` | [`crates/pos-edge/src/http/reports.rs`](../../crates/pos-edge/src/http/reports.rs) |
+| GET | `/api/scale` | `read_scale` | `till_session` | — | [`crates/pos-edge/src/http/weigh.rs`](../../crates/pos-edge/src/http/weigh.rs) |
 | GET | `/api/session` | `current_session` | `till_session` | — | [`crates/pos-edge/src/http/auth.rs`](../../crates/pos-edge/src/http/auth.rs) |
 | POST | `/api/session/sign-in` | `sign_in` | `till_session` | — | [`crates/pos-edge/src/http/auth.rs`](../../crates/pos-edge/src/http/auth.rs) |
 | POST | `/api/session/sign-out` | `sign_out` | `till_session` | — | [`crates/pos-edge/src/http/auth.rs`](../../crates/pos-edge/src/http/auth.rs) |

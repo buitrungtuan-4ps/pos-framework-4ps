@@ -2948,6 +2948,73 @@
         "x-permission": "sales.line.add"
       }
     },
+    "/api/orders/{id}/weigh": {
+      "post": {
+        "tags": [
+          "orders"
+        ],
+        "summary": "`POST /api/orders/{id}/weigh` — add a weighed item's line.",
+        "operationId": "weigh_line",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The order's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The weighed item, and the scale or a typed weight",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WeighRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The weighed line: its net grams at the item's price per kilogram, rounded once, its weight's source recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LineResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An id is not a ULID, the source is not the scale or a hand, or a typed weight names no grams"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          },
+          "409": {
+            "description": "Refused: the item is sold by the piece (`NOT_SOLD_BY_WEIGHT`), a typed weight where the store takes none (`MANUAL_WEIGHT_NOT_ALLOWED`), a scale that has not settled (`SCALE_NOT_SETTLED`) or does not answer (`SCALE_ABSENT`), a net weight out of bounds (`WEIGHT_BELOW_MINIMUM`, `WEIGHT_ABOVE_MAXIMUM`), or what adding a line refuses"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "sales.line.add"
+      }
+    },
     "/api/package": {
       "get": {
         "tags": [
@@ -3546,6 +3613,41 @@
           }
         ],
         "x-permission": "reports.takings.view"
+      }
+    },
+    "/api/scale": {
+      "get": {
+        "tags": [
+          "orders"
+        ],
+        "summary": "`GET /api/scale` — what the scale says now.",
+        "operationId": "read_scale",
+        "responses": {
+          "200": {
+            "description": "What the scale beside the till says now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScaleResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          },
+          "409": {
+            "description": "No scale answers (`SCALE_ABSENT`)"
+          }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
       }
     },
     "/api/session": {
@@ -7382,6 +7484,8 @@
           "walk_in_channel",
           "check_before_payment",
           "scan_keystroke_window_ms",
+          "weighing_manual_entry",
+          "weighing_min_grams",
           "barcode_enabled",
           "pay_first_enabled",
           "tabs_enabled",
@@ -7494,6 +7598,16 @@
           "walk_in_channel": {
             "type": "string",
             "description": "The channel the counter opens a walk-in on, from the store's `counter` node (ADR-0160\ndecision 2): `WALK_IN_CHANNEL_TAKEAWAY` until a store sets its own, `WALK_IN_CHANNEL_DINE_IN`,\nor `WALK_IN_CHANNEL_ASK`, where the cashier asks each guest. A value the edge cannot read is\nsent as takeaway, the channel it opens such a store's walk-ins on.\n\nThe counter shows a walk-in the book of the channel it opens on. A till older than the field\nignores it, and a till reading an edge older than the field shows the takeaway book, the\nchannel that edge opens every walk-in on."
+          },
+          "weighing_manual_entry": {
+            "type": "boolean",
+            "description": "Whether a weighed item's weight may be typed by hand, from the `weighing` node\n([ADR-0223](../../../../docs/adr/0223-a-weighed-item-is-priced-by-its-weight.md)): `false`\nuntil the store's country pack or the store turns it on, and on a till reading an older edge."
+          },
+          "weighing_min_grams": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The least net grams a weighed line may carry: 1 until a store sets it.",
+            "minimum": 0
           }
         }
       },
@@ -7922,9 +8036,17 @@
         "type": "string",
         "description": "A `SalesChannel` token: SALES_CHANNEL_UNSPECIFIED, SALES_CHANNEL_DINE_IN, SALES_CHANNEL_TAKEAWAY, SALES_CHANNEL_DELIVERY, SALES_CHANNEL_QR, SALES_CHANNEL_API, or one a newer build sent, which is kept as it arrived"
       },
+      "OpenScaleState_ScaleState": {
+        "type": "string",
+        "description": "A `ScaleState` token: SCALE_STATE_UNSPECIFIED, SCALE_STATE_STABLE, SCALE_STATE_UNSTABLE, SCALE_STATE_OVERLOADED, SCALE_STATE_UNDER_ZERO, or one a newer build sent, which is kept as it arrived"
+      },
       "OpenStepKind_StepKind": {
         "type": "string",
         "description": "A `StepKind` token: STEP_KIND_UNSPECIFIED, STEP_KIND_REQUIRED, STEP_KIND_OPTIONAL, or one a newer build sent, which is kept as it arrived"
+      },
+      "OpenWeightSource_WeightSource": {
+        "type": "string",
+        "description": "A `WeightSource` token: WEIGHT_SOURCE_UNSPECIFIED, WEIGHT_SOURCE_LABEL, WEIGHT_SOURCE_SCALE, WEIGHT_SOURCE_MANUAL, or one a newer build sent, which is kept as it arrived"
       },
       "OpenedOrderResponse": {
         "type": "object",
@@ -8926,6 +9048,25 @@
           "version_label": {
             "type": "string",
             "description": "The version's name in the console."
+          }
+        }
+      },
+      "ScaleResponse": {
+        "type": "object",
+        "description": "What the scale says now.",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "net_grams": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The settled net weight in grams, before the item's tare; absent unless settled.",
+            "minimum": 0
+          },
+          "state": {
+            "$ref": "#/components/schemas/OpenScaleState_ScaleState",
+            "description": "Settled, moving, over its capacity or below zero."
           }
         }
       },
@@ -10410,6 +10551,33 @@
           },
           "reason_code_id": {
             "$ref": "#/components/schemas/ReasonCodeId"
+          }
+        }
+      },
+      "WeighRequest": {
+        "type": "object",
+        "description": "What to weigh, and from where.",
+        "required": [
+          "menu_item_id",
+          "source"
+        ],
+        "properties": {
+          "menu_item_id": {
+            "type": "string",
+            "description": "The weighed item, a ULID."
+          },
+          "net_grams": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "For a typed weight, its net grams.",
+            "minimum": 0
+          },
+          "source": {
+            "$ref": "#/components/schemas/OpenWeightSource_WeightSource",
+            "description": "`WEIGHT_SOURCE_SCALE` or `WEIGHT_SOURCE_MANUAL`; a label is scanned instead."
           }
         }
       },

@@ -119,6 +119,15 @@ impl CountryModule for Vietnam {
             value: SettingDefaultValue::Int(VARIANCE_REASON),
         }]
     }
+
+    /// A weight typed by hand is refused (ADR-0223 decision 3): only a scale or a scale's label
+    /// sets a weight sold by it until phase 7's legal suite decides the country's trade law.
+    fn forbidden_settings(&self) -> Vec<SettingDefault> {
+        vec![SettingDefault {
+            setting_key: "weighing.manual_entry",
+            value: SettingDefaultValue::Bool(true),
+        }]
+    }
 }
 
 /// The default table: one rate, every channel, and alcohol stated rather than assumed.

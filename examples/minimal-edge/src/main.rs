@@ -16,7 +16,7 @@ use pos_edge::{
     Edge, EdgeConfig, EdgeError, EdgeSession, InMemoryLease, InMemoryOtaState,
     InMemoryQueueNumbers, InMemoryReceipts, StoreIdentity, serve, telemetry,
 };
-use pos_fakes::FakeStore;
+use pos_fakes::{FakeScale, FakeStore};
 use pos_proto::ids::StoreId;
 use pos_proto::ulid::Ulid;
 
@@ -54,7 +54,8 @@ async fn main() -> Result<(), EdgeError> {
             session,
             Arc::new(InMemoryReceipts::new()),
         )
-        .expect("seed the id generator"),
+        .expect("seed the id generator")
+        .with_scale(demo_scale()),
     );
     // The `custom-data` profile's labels, as a tenant's grid would give them (ADR-0043): a real
     // store pulls them from its cloud, and this example has none.
@@ -137,4 +138,12 @@ fn print_badges() {
             "this demo store publishes no staff (POS_DEMO_PROFILE=unstaffed): nobody can sign in"
         );
     }
+}
+
+/// The scale beside this example's till (ADR-0223): the fake, with a fake 375 g load settled on
+/// it, so a weighed demo item can be weighed. A real store's scale is an adapter (phase 8).
+fn demo_scale() -> FakeScale {
+    let scale = FakeScale::new();
+    scale.settle(375);
+    scale
 }

@@ -309,6 +309,15 @@ pub enum AppError {
     /// piece, or one outside the line's bounds (ADR-0223).
     #[error("{0}")]
     Weighing(WeighError),
+    /// A weight typed by hand where the store's `weighing.manual_entry` refuses one (ADR-0223).
+    #[error("this store takes a weight from a scale or a label only")]
+    ManualWeightNotAllowed,
+    /// The scale's load is moving, over its capacity or below zero: no weight may be taken.
+    #[error("the scale has not settled on a weight")]
+    ScaleNotSettled,
+    /// No scale answered.
+    #[error("no scale answered")]
+    ScaleAbsent,
     /// A custom-data entry does not fit the package the store runs
     /// ([ADR-0194](../../../../docs/adr/0194-custom-data-is-declared-and-personal-fields-are-kept-apart.md)).
     /// It names the field and the fault, never the value.

@@ -27,6 +27,7 @@ GET /api/print/jobs
 GET /api/printers
 GET /api/reason-codes
 GET /api/reports/takings
+GET /api/scale
 GET /api/session
 GET /api/shifts
 GET /api/shifts/current
@@ -72,6 +73,7 @@ POST /api/orders/{id}/fire/{course_id}
 POST /api/orders/{id}/lines
 POST /api/orders/{id}/reject
 POST /api/orders/{id}/scan
+POST /api/orders/{id}/weigh
 POST /api/pair
 POST /api/pair/codes
 POST /api/pair/revoke

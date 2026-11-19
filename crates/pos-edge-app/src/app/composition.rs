@@ -175,7 +175,39 @@ impl<S: EventStore> Edge<S> {
             device_reads: super::DeviceReads::default(),
             labels: RwLock::new(Arc::new(crate::labels::LabelGrid::default())),
             custom_writes: tokio::sync::Mutex::new(super::record_slip::FreshSlips::default()),
+            scale: Arc::new(super::orders::NoScale),
+            manual_weight_forbidden: std::sync::atomic::AtomicBool::new(false),
         })
+    }
+
+    /// The same edge, reading `scale` for a weighed line
+    /// ([ADR-0223](../../../../docs/adr/0223-a-weighed-item-is-priced-by-its-weight.md)). A real
+    /// scale's driver is an adapter (phase 8); until a composition passes one, every read answers
+    /// that no scale is connected.
+    #[must_use]
+    pub fn with_scale<G>(mut self, scale: G) -> Self
+    where
+        G: pos_ports::scale::Scale + std::fmt::Debug + 'static,
+    {
+        self.scale = Arc::new(scale);
+        self
+    }
+
+    /// Refuses every weight typed by hand from now on, as this binary's country pack forbids one
+    /// (ADR-0223 decision 3), whatever the store's setting says.
+    pub fn forbid_manual_weight(&self) {
+        self.manual_weight_forbidden
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether a weight may be typed by hand here: the store's `weighing.manual_entry`, unless the
+    /// country forbids it.
+    #[must_use]
+    pub fn manual_weight_allowed(&self) -> bool {
+        !self
+            .manual_weight_forbidden
+            .load(std::sync::atomic::Ordering::Relaxed)
+            && self.session().weighing.manual_entry()
     }
 
     /// The PIN lockout sign-ins and approvals share ([`Lockout`], ADR-0030).

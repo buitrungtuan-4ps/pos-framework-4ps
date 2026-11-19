@@ -439,6 +439,11 @@ where
             "/api/orders/{id}/scan",
             post(super::scan::scan_line::<S, Q>),
         )
+        .route(
+            "/api/orders/{id}/weigh",
+            post(super::weigh::weigh_line::<S, Q>),
+        )
+        .route("/api/scale", get(super::weigh::read_scale::<S, Q>))
         .with_state(Arc::new(CounterDeps { edge, queue }))
 }
 
