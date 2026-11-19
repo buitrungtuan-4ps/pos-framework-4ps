@@ -87,7 +87,14 @@ pub struct AppState {
 }
 
 /// Reads the store's published `devices` node as it is now.
-pub type DevicesReader = Arc<dyn Fn() -> pos_proto::devices::PublishedDevices + Send + Sync>;
+#[derive(Clone)]
+pub struct DevicesReader(pub Arc<dyn Fn() -> pos_proto::devices::PublishedDevices + Send + Sync>);
+
+impl core::fmt::Debug for DevicesReader {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("DevicesReader")
+    }
+}
 
 impl AppState {
     /// Builds the shared state from a loaded configuration, with a fresh fan-out and pairing state.

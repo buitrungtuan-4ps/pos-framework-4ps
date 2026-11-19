@@ -899,7 +899,7 @@ where
         // A kiosk may not open the store's event stream (ADR-0224 decision 4).
         .with_devices({
             let edge = Arc::clone(&edge);
-            Arc::new(move || edge.session().devices.clone())
+            crate::state::DevicesReader(Arc::new(move || edge.session().devices.clone()))
         });
     // One allow-list, shared by the CORS layer on every covered router, the `/ws` upgrade and the
     // config-pull loop that keeps it current (ADR-0111). Empty until a store publishes an `origins`

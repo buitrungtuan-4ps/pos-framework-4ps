@@ -26,7 +26,8 @@
 
 use std::sync::Arc;
 
-use axum::extract::rejection::{QueryRejection, WebSocketUpgradeRejection};
+use axum::extract::rejection::QueryRejection;
+use axum::extract::ws::rejection::WebSocketUpgradeRejection;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Extension, Query, State};
 use axum::http::StatusCode;
@@ -129,11 +130,14 @@ pub(crate) async fn fan_out(
     // A kiosk sees only its own orders, so never the store's whole stream (ADR-0224 decision 4).
     if let (Some(Extension(device)), Some(Extension(printers)), Some(devices)) =
         (device, printers, state.devices.clone())
-        && super::kiosk::kiosk_terminal(|| devices(), &printers, device)
+        && super::kiosk::kiosk_terminal(|| (devices.0)(), &printers, device)
             .await
             .is_some()
     {
-        return (StatusCode::FORBIDDEN, "a kiosk does not open the store's event stream")
+        return (
+            StatusCode::FORBIDDEN,
+            "a kiosk does not open the store's event stream",
+        )
             .into_response();
     }
     let upgrade = match upgrade {
