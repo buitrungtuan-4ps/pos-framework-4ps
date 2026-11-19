@@ -18,6 +18,8 @@ import { region } from "../../../packages/package-renderer/src/regions";
 import type { Implementations } from "../../../packages/package-renderer/src/render";
 import { FloorAlerts, FloorPlan } from "../screens/Floor";
 import { LookupField, LookupResult } from "./lookup";
+import { PluKeypad } from "../components/PluKeypad";
+import { ScanField } from "../components/ScanField";
 import { OrderColumn, OrderLayout, OrderMenu } from "./order-regions";
 
 /** Every catalogued component's implementation. */
@@ -56,4 +58,6 @@ export const IMPLEMENTATIONS: Implementations = {
   sign_in_screen: region("sign_in_screen"),
   lookup_field: LookupField,
   lookup_result: LookupResult,
+  scan_field: ScanField,
+  plu_keypad: PluKeypad,
 };

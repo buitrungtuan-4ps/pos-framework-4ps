@@ -471,6 +471,8 @@ export const api = {
   // (ADR-0160 decision 2).
   openOrder: (channel?: string) =>
     request<OpenedOrder>("POST", "/api/orders", channel === undefined ? {} : { channel }),
+  // The line a scanned code names, priced by the edge, which reads a scale's label (ADR-0222).
+  scanLine: (orderId: string, code: string) => request<LineResponse>("POST", `/api/orders/${orderId}/scan`, { code }),
   // Bar tabs (ADR-0221): open one, numbered for the day; list the open ones; label one where the
   // store keeps labels; and close one nothing was sold on, with the store's reason.
   openTab: () => request<OpenedOrder>("POST", "/api/orders", { tab: true }),
