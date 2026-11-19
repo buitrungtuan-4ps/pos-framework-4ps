@@ -10,7 +10,10 @@ use axum::http::StatusCode;
 use pos_proto::ids::StoreId;
 use tower::ServiceExt;
 
-use crate::{FakeConfigTrees, admin_cookie, json_body, put_with_cookie, settings_app, settings_stores, tenant};
+use crate::{
+    FakeConfigTrees, admin_cookie, json_body, put_with_cookie, settings_app, settings_stores,
+    tenant,
+};
 
 /// Gives `store` a published `locale` naming `country`.
 fn in_country(config_trees: &FakeConfigTrees, store: StoreId, country: &str) {
@@ -46,7 +49,10 @@ async fn hand_entry(
 
 fn refused_by_country(answer: &(StatusCode, serde_json::Value)) -> bool {
     answer.0 == StatusCode::BAD_REQUEST
-        && answer.1.to_string().contains("SETTING_FORBIDDEN_BY_COUNTRY")
+        && answer
+            .1
+            .to_string()
+            .contains("SETTING_FORBIDDEN_BY_COUNTRY")
 }
 
 #[tokio::test]
@@ -61,8 +67,14 @@ async fn a_store_whose_country_forbids_a_typed_weight_cannot_turn_it_on() {
     let refused = hand_entry(&router, &cookie, store(first), true).await;
     assert!(refused_by_country(&refused), "{refused:?}");
     // Off is what the law asks, and a country that allows it takes it on.
-    assert_eq!(hand_entry(&router, &cookie, store(first), false).await.0, StatusCode::OK);
-    assert_eq!(hand_entry(&router, &cookie, store(second), true).await.0, StatusCode::OK);
+    assert_eq!(
+        hand_entry(&router, &cookie, store(first), false).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        hand_entry(&router, &cookie, store(second), true).await.0,
+        StatusCode::OK
+    );
 }
 
 #[tokio::test]
@@ -73,12 +85,20 @@ async fn a_wider_scope_is_refused_when_any_store_it_reaches_is_in_a_forbidding_c
     let tenant_wide = ("SETTING_SCOPE_TENANT", tenant().as_ulid().to_string());
 
     // No store has a country yet: the edge's own pack holds the law, so the write goes through.
-    assert_eq!(hand_entry(&router, &cookie, tenant_wide.clone(), true).await.0, StatusCode::OK);
+    assert_eq!(
+        hand_entry(&router, &cookie, tenant_wide.clone(), true)
+            .await
+            .0,
+        StatusCode::OK
+    );
 
     in_country(&config_trees, first, "ZZ");
     in_country(&config_trees, second, "ZZ");
     in_country(&config_trees, third, "VN");
     let refused = hand_entry(&router, &cookie, tenant_wide, true).await;
     assert!(refused_by_country(&refused), "{refused:?}");
-    assert!(refused.1.to_string().contains(&third.to_string()), "{refused:?}");
+    assert!(
+        refused.1.to_string().contains(&third.to_string()),
+        "{refused:?}"
+    );
 }
