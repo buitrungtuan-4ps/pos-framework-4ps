@@ -126,3 +126,83 @@ async fn menu_reads_are_rate_limited_apart_from_the_tables_orders() {
         .expect("route the QR order");
     assert_eq!(response.status(), StatusCode::CREATED);
 }
+
+#[tokio::test]
+async fn the_guest_page_is_served_with_a_policy_that_runs_only_its_own_script() {
+    let secret = TableTokenSecret::new("qr-endpoint-secret");
+    let router = qr_router(secret, FakeIntake::new(), store_trees(10), clock());
+    for (uri, kind) in [
+        ("/qr/", "text/html"),
+        ("/qr/app.js", "text/javascript"),
+        ("/qr/style.css", "text/css"),
+        ("/qr/i18n/vi.json", "application/json"),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(get(uri, None))
+            .await
+            .expect("route the page");
+        assert_eq!(response.status(), StatusCode::OK, "{uri}");
+        let header = |name: &str| {
+            response
+                .headers()
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_owned()
+        };
+        assert!(header("content-type").starts_with(kind), "{uri}");
+        assert!(
+            header("content-security-policy").contains("script-src 'self'"),
+            "{uri}"
+        );
+        assert_eq!(header("referrer-policy"), "no-referrer", "{uri}");
+        assert_eq!(header("x-content-type-options"), "nosniff", "{uri}");
+    }
+    for uri in ["/qr/i18n/fr.json", "/qr/i18n/..%2Fapp.js"] {
+        let response = router
+            .clone()
+            .oneshot(get(uri, None))
+            .await
+            .expect("route the page");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+    }
+}
+
+#[tokio::test]
+async fn a_guest_order_is_refused_unless_it_is_shaped_as_the_page_sends_it() {
+    let secret = TableTokenSecret::new("qr-endpoint-secret");
+    let token = mint_table_token(&secret, tenant(), order_store(), qr_table());
+    let (known, _price) = known_menu_item();
+    let router = qr_router(secret, FakeIntake::new(), store_trees(100), clock());
+    let line = |quantity: i64| serde_json::json!({ "menu_item_id": known.to_string(), "quantity_milli": quantity });
+    let order = |lines: Vec<serde_json::Value>| {
+        serde_json::json!({
+            "table_token": token,
+            "external_reference": "qr-shape",
+            "lines": lines,
+            "placed_at_ms": NOW_MS,
+        })
+    };
+    let mut noted = line(1_000);
+    noted["note"] = serde_json::json!("call me on my phone");
+    for body in [
+        order(Vec::new()),
+        order(vec![line(1_000); 31]),
+        order(vec![line(1_500)]),
+        order(vec![line(100_000)]),
+        order(vec![noted]),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(post_json("/v1/qr/orders", &body))
+            .await
+            .expect("route the QR order");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{body}");
+    }
+    let response = router
+        .oneshot(post_json("/v1/qr/orders", &order(vec![line(2_000)])))
+        .await
+        .expect("route the QR order");
+    assert_eq!(response.status(), StatusCode::CREATED);
+}

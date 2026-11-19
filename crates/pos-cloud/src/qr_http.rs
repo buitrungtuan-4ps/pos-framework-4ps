@@ -55,6 +55,10 @@ use crate::orders::{OrderLineRequest, intake_error, order_response, to_inbound_l
 use crate::qr::{QrDecision, QrFacts, QrRejection, TableTokenSecret, verify_table_token};
 
 mod menu;
+mod page;
+
+/// The most lines one guest order may carry: what the guest page lets a basket hold.
+const MAX_GUEST_LINES: usize = 30;
 
 /// The default per-table submission ceiling in the rate-limit window, when config does not say.
 const DEFAULT_PER_TABLE_LIMIT: u32 = 10;
@@ -186,7 +190,8 @@ impl<X: Clone, T: Clone, C: Clone> Clone for QrState<X, T, C> {
     }
 }
 
-/// Builds the guest QR sub-router: `POST /v1/qr/orders` and `GET /v1/qr/menu`. Carries its own state and is merged into the
+/// Builds the guest QR sub-router: `POST /v1/qr/orders`, `GET /v1/qr/menu` and the guest page at
+/// `/qr/` ([`page`]). Carries its own state and is merged into the
 /// app router (the same shape the other sub-routers take), so the `CloudApp` generics do not grow.
 pub fn qr_router<X, T, C>(secret: TableTokenSecret, intake: X, config_trees: T, clock: C) -> Router
 where
@@ -197,6 +202,7 @@ where
     Router::new()
         .route("/v1/qr/orders", post(submit_qr_order::<X, T, C>))
         .route("/v1/qr/menu", get(menu::read_qr_menu::<X, T, C>))
+        .merge(page::routes())
         .with_state(QrState {
             secret,
             intake,
@@ -284,8 +290,13 @@ fn to_inbound_qr_order(
         .map_err(|_ignored| "external_reference must be non-empty and at most 128 bytes")?;
     let placed_at = Timestamp::from_milliseconds_since_epoch(request.placed_at_ms)
         .map_err(|_ignored| "placed_at_ms is out of range")?;
+    // A guest's order is untrusted input: bounded and shaped before it reaches the intake.
+    if request.lines.is_empty() || request.lines.len() > MAX_GUEST_LINES {
+        return Err("a guest's order carries 1 to 30 lines");
+    }
     let mut lines = Vec::with_capacity(request.lines.len());
     for line in &request.lines {
+        line.guest_shaped()?;
         lines.push(to_inbound_line(line)?);
     }
     Ok(InboundOrder {
