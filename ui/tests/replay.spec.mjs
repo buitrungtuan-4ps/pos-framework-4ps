@@ -8547,3 +8547,28 @@ test("the PLU pad sells an item by its PLU, and an open-price item asks its pric
     await edge.stop();
   }
 });
+
+// A weighed item (ADR-0223) asks for its weight: the weight display shows the scale's settled
+// reading, here the example's fake scale at 375 g, and Add sells the item by that weight through
+// `sales.line.weigh`, priced by the edge per kilogram. The `weighed` profile sells a rye loaf by
+// weight; this store takes no typed weight, so no keypad is offered.
+test("a weighed item is weighed on the scale and sold by its weight", async ({ page }) => {
+  const edge = await startEdge("weighed");
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await startWalkIn(page);
+    await addItem(page);
+    await expectLineAdded(page);
+    await page.locator('[data-step="onItem"]').filter({ hasText: "Rye by weight" }).click();
+    const display = page.locator('[data-outcome="weight-display"]');
+    await expect(display).toBeVisible();
+    await expect(display.locator('[data-outcome="scale-reading"]')).toHaveText("0.375 kg");
+    await expect(display.getByRole("button", { name: "5", exact: true })).toHaveCount(0);
+    await display.getByRole("button", { name: "Add at this weight" }).click();
+    await expect(display).toHaveCount(0);
+    await expect(page.locator('[data-outcome="line-added"]')).toHaveCount(2);
+  } finally {
+    await edge.stop();
+  }
+});

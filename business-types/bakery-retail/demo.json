@@ -44,6 +44,22 @@
         "40000039"
       ],
       "plu": "103"
+    },
+    {
+      "key": 4,
+      "display_name": "Demo Rye By Weight D",
+      "tax_class": "food",
+      "prices": {
+        "VND": 120000,
+        "JPY": 1200,
+        "INR": 40000,
+        "USD": 1500
+      },
+      "barcodes": [
+        "40000046"
+      ],
+      "plu": "104",
+      "sold_by_weight": true
     }
   ]
 }

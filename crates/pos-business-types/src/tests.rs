@@ -246,6 +246,28 @@ fn no_two_templates_publish_the_same_item_id() {
 }
 
 #[test]
+fn the_bakery_sells_an_item_by_weight_and_no_other_template_does() {
+    // ADR-0223: the bakery-retail template uses weighed items in its demo menu.
+    for template in templates().unwrap_or_default() {
+        let menu = template
+            .demo
+            .menu(template.business_type, pos_proto::money::CurrencyCode::VND);
+        let weighed = menu.iter().any(|book| {
+            book.catalog_for(pos_proto::SalesChannel::DineIn)
+                .items()
+                .iter()
+                .any(|entry| entry.codes.sold_by_weight())
+        });
+        assert_eq!(
+            weighed,
+            template.business_type == BusinessType::BakeryRetail,
+            "business-types/{}",
+            template.directory
+        );
+    }
+}
+
+#[test]
 fn a_demo_with_a_real_looking_name_a_shared_key_or_no_price_is_refused() {
     use super::demo::{Demo, DemoFault};
     let demo = |items: &str| serde_json::from_str::<Demo>(&format!(r#"{{"items": {items}}}"#));

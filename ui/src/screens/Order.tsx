@@ -59,7 +59,7 @@ import { printOutcomeKey } from "../lib/print";
 import { SendFirst } from "../components/SendFirst";
 import { PrintedCheck } from "../components/PrintedCheck";
 import { OpenPricePrompt } from "../components/OpenPricePrompt";
-import { SellContext, askOpenPrice } from "../state/sell";
+import { SellContext, askOpenPrice, askWeight } from "../state/sell";
 import { RepriceLine } from "../components/RepriceLine";
 import { createSendFirst, waitingByCourse } from "../state/unsent";
 import { DRAFT, draftChannel, eatenIn, keyToAddTo } from "../state/draft-walk-in";
@@ -444,7 +444,7 @@ export function Order() {
   // Tapping an item: sell it, or ask first. The question is the store's, not this screen's — an
   // item attaches groups or it does not, and the till has no opinion beyond obeying that.
   const onItem = (item: MenuItemResponse) => {
-    if (askOpenPrice(item, onItem)) return;
+    if (askWeight(item) || askOpenPrice(item, onItem)) return;
     if (groupsFor(item, menuGroups()).length === 0) {
       void guard(() => addWithNote(item, []));
       return;
