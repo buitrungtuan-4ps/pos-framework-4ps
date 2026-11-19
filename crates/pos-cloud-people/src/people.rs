@@ -884,16 +884,21 @@ mod tests {
     use pos_proto::ids::{StoreId, TenantId};
     use pos_proto::ulid::Ulid;
 
+    /// A migration's SQL, by its file name.
+    macro_rules! migration {
+        ($name:literal) => {
+            include_str!(concat!(
+                "../../adapters/store-postgres/migrations/",
+                $name,
+                ".sql"
+            ))
+        };
+    }
+
     /// The later grants both backfill tests read, 0086, 0087 and 0104.
-    const MIGRATION_0086: &str = include_str!(
-        "../../adapters/store-postgres/migrations/0086_roles_can_override_an_assigned_drawer.sql"
-    );
-    const MIGRATION_0087: &str = include_str!(
-        "../../adapters/store-postgres/migrations/0087_roles_can_void_a_paid_bill.sql"
-    );
-    /// `admin.kiosk.exit` (ADR-0224 decision 4).
-    const MIGRATION_0104: &str =
-        include_str!("../../adapters/store-postgres/migrations/0104_roles_can_leave_a_kiosk.sql");
+    const MIGRATION_0086: &str = migration!("0086_roles_can_override_an_assigned_drawer");
+    const MIGRATION_0087: &str = migration!("0087_roles_can_void_a_paid_bill");
+    const MIGRATION_0104: &str = migration!("0104_roles_can_leave_a_kiosk");
 
     /// A one-store assignment reads as it did, with `scope_kind` added before the `store_id` it
     /// always carried; a group's names its group instead, and a tenant-wide one names neither
@@ -950,14 +955,9 @@ mod tests {
     /// cannot drift.
     #[test]
     fn the_with_approval_backfills_list_exactly_the_pin_flagged_permissions() {
-        const MIGRATION_0074: &str = include_str!(
-            "../../adapters/store-postgres/migrations/0074_role_permissions_with_approval.sql"
-        );
-        const MIGRATION_0076: &str =
-            include_str!("../../adapters/store-postgres/migrations/0076_roles_can_waive_a_fee.sql");
-        const MIGRATION_0084: &str = include_str!(
-            "../../adapters/store-postgres/migrations/0084_roles_can_manage_another_tills_drawer.sql"
-        );
+        const MIGRATION_0074: &str = migration!("0074_role_permissions_with_approval");
+        const MIGRATION_0076: &str = migration!("0076_roles_can_waive_a_fee");
+        const MIGRATION_0084: &str = migration!("0084_roles_can_manage_another_tills_drawer");
         let open = MIGRATION_0074
             .find("ARRAY[")
             .expect("the backfill's literal list")
@@ -1014,12 +1014,8 @@ mod tests {
     /// rule silently nor leave it reading a list that no longer says who approves.
     #[test]
     fn the_takings_grant_lists_exactly_the_pin_flagged_permissions() {
-        const MIGRATION_0079: &str = include_str!(
-            "../../adapters/store-postgres/migrations/0079_approvers_who_close_a_shift_see_takings.sql"
-        );
-        const MIGRATION_0084: &str = include_str!(
-            "../../adapters/store-postgres/migrations/0084_roles_can_manage_another_tills_drawer.sql"
-        );
+        const MIGRATION_0079: &str = migration!("0079_approvers_who_close_a_shift_see_takings");
+        const MIGRATION_0084: &str = migration!("0084_roles_can_manage_another_tills_drawer");
         let open = MIGRATION_0079
             .find("ARRAY[")
             .expect("the grant's literal list")
