@@ -7,9 +7,9 @@
 use std::collections::BTreeMap;
 
 use pos_core::permission::{KIOSK_GRANTS, Permission, PermissionSet};
+use pos_proto::devices::{DeviceClass, DeviceKind, PublishedDevices};
 use pos_proto::ids::{BrandId, DeviceId, EmployeeId, StoreId, TenantId};
 use pos_proto::money::Money;
-use pos_proto::devices::{DeviceClass, DeviceKind, PublishedDevices};
 use pos_proto::ulid::Ulid;
 
 /// Which tenant, brand and store this edge is — the envelope context every event carries. All three
