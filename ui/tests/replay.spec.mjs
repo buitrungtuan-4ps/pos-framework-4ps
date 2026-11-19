@@ -8451,3 +8451,55 @@ test("a void the store asks a manager for waits for one at the till, and the edg
     await edge.stop();
   }
 });
+
+// A bar's tabs (ADR-0221), on the demo store that keeps them with a guest's label
+// (`POS_DEMO_PROFILE=bar`): a tab opens with the day's number and takes a round, the Tabs screen
+// lists it by that number, it is paid at the counter as any counter order and leaves the list; a
+// second tab is labelled, and closed empty with the store's reason. The label is fake.
+test("a bar opens a tab, lists it by its number, pays it, labels another and closes it empty", async ({ page }) => {
+  const edge = await startEdge("bar");
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await navigateTo(page, "/tabs");
+    await page.locator('[data-outcome="tab-open"]').click();
+    await expect(page.locator('[data-outcome="order-open"]')).toBeVisible();
+    await addItem(page);
+    await sendOrder(page);
+
+    await navigateTo(page, "/tabs");
+    const tab = page.locator('[data-outcome="tab"]');
+    await expect(tab).toHaveCount(1);
+    await expect(tab.first()).toContainText("Tab 1");
+    await expect(tab.locator('[data-outcome="tab-close"]')).toHaveCount(0);
+
+    await navigateTo(page, "/counter");
+    await page.locator('[data-step="charge"]').first().click();
+    await page.locator('[data-step="setTender"]').first().click();
+    await page.locator('[data-step="payCash"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+
+    await navigateTo(page, "/tabs");
+    await expect(page.locator('[data-outcome="tab"]')).toHaveCount(0);
+    await page.locator('[data-outcome="tab-open"]').click();
+    await expect(page.locator('[data-outcome="order-open"]')).toBeVisible();
+    await navigateTo(page, "/tabs");
+    await expect(tab).toHaveCount(1);
+    await expect(tab.first()).toContainText("Tab 2");
+
+    await tab.first().getByRole("button", { name: "Label" }).click();
+    await tab.first().getByRole("textbox").fill("Fake Guest");
+    const labelled = page.waitForResponse((response) => /\/api\/tabs\/[^/]+\/label$/.test(new URL(response.url()).pathname));
+    await tab.first().getByRole("button", { name: "Save" }).click();
+    expect((await labelled).status()).toBe(200);
+    await expect(tab.first()).toContainText("Fake Guest");
+
+    await tab.locator('[data-outcome="tab-close"]').click();
+    const closed = page.waitForResponse((response) => /\/api\/orders\/[^/]+\/close$/.test(new URL(response.url()).pathname));
+    await tab.first().getByRole("button", { name: "Customer changed their mind" }).click();
+    expect((await closed).status()).toBe(200);
+    await expect(page.locator('[data-outcome="tab"]')).toHaveCount(0);
+  } finally {
+    await edge.stop();
+  }
+});
