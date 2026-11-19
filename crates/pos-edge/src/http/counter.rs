@@ -406,6 +406,7 @@ where
         course_id: request.course_id,
         note_present: request.note_present,
         typed_unit_price: request.typed_unit_price,
+        weight_source: None,
     };
     match deps
         .edge

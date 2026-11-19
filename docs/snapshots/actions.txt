@@ -440,7 +440,9 @@ sales.line.scan	refusal=ITEM_NOT_SELLABLE
 sales.line.scan	refusal=PRICE_LABEL_NOT_OPEN_PRICE
 sales.line.scan	refusal=PRICE_OUT_OF_RANGE
 sales.line.scan	refusal=UNKNOWN_CODE
+sales.line.scan	refusal=WEIGHT_BELOW_MINIMUM
 sales.line.scan	refusal=WEIGHT_LABEL_NOT_SOLD
+sales.line.scan	refusal=WEIGHT_REQUIRED
 sales.line.scan	route=POST /api/orders/{id}/scan
 sales.line.scan	since=0.14.1
 sales.line.set_quantity

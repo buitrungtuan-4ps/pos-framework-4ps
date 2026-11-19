@@ -5,8 +5,8 @@
 //! ([ADR-0222](../../../docs/adr/0222-items-carry-barcodes-and-plus-and-a-counter-can-pay-first.md)
 //! decisions 3 and 5): a barcode or a PLU sells one at the menu's price; a price label read by the
 //! store's layout sells an open-price item at its price within the item's bounds, and is refused
-//! for a fixed-price item or outside the bounds; a weight label waits for items sold by weight; a
-//! code no item carries is refused.
+//! for a fixed-price item or outside the bounds; a weight label is refused for an item sold by the
+//! piece (`weighed_items.rs` sells a weighed one); a code no item carries is refused.
 
 use std::sync::Arc;
 
@@ -147,7 +147,8 @@ fn a_price_label_sells_an_open_price_item_within_its_bounds_and_nothing_else() {
 }
 
 #[test]
-fn a_weight_label_waits_and_a_store_without_a_layout_reads_a_label_as_a_plain_code() {
+fn a_weight_label_on_a_piece_item_is_refused_and_a_store_without_a_layout_reads_a_label_as_a_plain_code()
+ {
     run_ready(async {
         let weighed = edge(VariableMeasureLayout::Weight5);
         let order_id = order(&weighed).await;

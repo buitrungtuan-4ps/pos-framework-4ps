@@ -84,6 +84,7 @@ async fn a_round(edge: &Edge<FakeStore>, order_id: OrderId) {
             course_id: None,
             note_present: false,
             typed_unit_price: None,
+            weight_source: None,
         },
     )
     .await

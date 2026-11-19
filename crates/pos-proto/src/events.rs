@@ -171,6 +171,10 @@ event_catalogue! {
         /// A note is where a name and a health condition get typed, and an immutable
         /// log could never erase them.
         note_present: bool,
+        /// Where a weighed line's weight (its `quantity`, in net grams) came from (ADR-0223).
+        /// Absent on a line sold by the piece and on every line before the field.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        weight_source: Option<Open<crate::weighing::WeightSource>>,
     },
     /// A line's quantity or total changed while still editable.
     SalesOrderLineUpdated => "sales.order_line.updated", version = 1 {

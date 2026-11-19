@@ -45,6 +45,7 @@ pub(in crate::app) fn priced_open(
         modifier_menu_item_ids: draft.modifier_menu_item_ids.clone(),
         quoted_unit_price: None,
         typed_unit_price: Some(typed),
+        weight_source: None,
     };
     let priced = reprice_line(
         &session.menu,

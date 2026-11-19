@@ -10,11 +10,17 @@
 //! cloud refuses a duplicate at the write, naming both items. An open-price item is sold at a price
 //! the cashier types within its published bounds. These are fixed data-integrity rules, so they live
 //! here, once, for the cloud that refuses and the till that indexes.
+//!
+//! An item sold by weight ([ADR-0223](../../../docs/adr/0223-a-weighed-item-is-priced-by-its-weight.md)
+//! decision 1) says so here too, with the tare a scale's reading loses, because it is how the till
+//! sells the item, as an open price is.
 
 use serde::{Deserialize, Serialize};
 
 use crate::money::Money;
+use crate::weighing::{MAX_GRAMS, SoldBy};
 use crate::wire_enum;
+use crate::wire_enum::{Open, is_absent};
 
 /// The most barcodes one item carries.
 pub const BARCODES_MAX: usize = 8;
@@ -54,7 +60,7 @@ impl OpenPrice {
     }
 }
 
-/// One item's codes and open price as the catalogue authors and keeps them: the three fields a
+/// One item's codes, open price and weighing as the catalogue authors and keeps them: the fields a
 /// [`crate::menu::MenuEntry`] carries, together.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -70,16 +76,34 @@ pub struct ItemCodes {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub open_price: Option<OpenPrice>,
+    /// How the item is sold; absent is [`SoldBy::Unit`] (ADR-0223 decision 1).
+    #[serde(default, skip_serializing_if = "is_absent")]
+    pub sold_by: Open<SoldBy>,
+    /// The grams a scale's reading loses for the item's container, for an item sold by weight.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    pub tare_grams: Option<u32>,
 }
 
 impl ItemCodes {
-    /// Whether the item has no code and no open price, as every item had before them.
+    /// Whether the item has no code, no open price and no weighing, as every item had before them.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.barcodes.is_empty() && self.plu.is_none() && self.open_price.is_none()
+        self.barcodes.is_empty()
+            && self.plu.is_none()
+            && self.open_price.is_none()
+            && is_absent(&self.sold_by)
+            && self.tare_grams.is_none()
     }
 
-    /// The first thing wrong with these codes, or `None` (see [`codes_fault`]).
+    /// Whether the item is sold by the kilogram, its line counting net grams.
+    #[must_use]
+    pub fn sold_by_weight(&self) -> bool {
+        self.sold_by.known() == SoldBy::Weight
+    }
+
+    /// The first thing wrong with these codes, or `None` (see [`codes_fault`]). A tare is for an
+    /// item sold by weight, and below the most a line may weigh.
     #[must_use]
     pub fn fault(&self) -> Option<String> {
         codes_fault(
@@ -87,6 +111,15 @@ impl ItemCodes {
             self.plu.as_deref(),
             self.open_price.as_ref(),
         )
+        .or_else(|| match self.tare_grams {
+            Some(_) if !self.sold_by_weight() => {
+                Some("a tare is for an item sold by weight".to_owned())
+            }
+            Some(tare) if tare >= MAX_GRAMS => {
+                Some(format!("a tare is less than {MAX_GRAMS} grams"))
+            }
+            _ => None,
+        })
     }
 
     /// Every code here, barcodes then the PLU, for a uniqueness check across a menu.
@@ -228,5 +261,31 @@ mod tests {
         assert_eq!(codes_fault(&[], None, Some(&bounds)), None);
         assert!(bounds.admits(vnd(5_000)) && bounds.admits(vnd(50_000)));
         assert!(!bounds.admits(vnd(4_999)) && !bounds.admits(vnd(50_001)));
+    }
+
+    #[test]
+    fn a_tare_is_only_for_an_item_sold_by_weight() {
+        let weighed = ItemCodes {
+            sold_by: SoldBy::Weight.into(),
+            tare_grams: Some(50),
+            ..ItemCodes::default()
+        };
+        assert!(weighed.sold_by_weight() && weighed.fault().is_none());
+        let piece = ItemCodes {
+            sold_by: Open::default(),
+            ..weighed.clone()
+        };
+        assert!(!piece.sold_by_weight() && piece.fault().is_some());
+        let heavy = ItemCodes {
+            tare_grams: Some(MAX_GRAMS),
+            ..weighed
+        };
+        assert!(heavy.fault().is_some());
+        let json = serde_json::to_value(ItemCodes::default()).unwrap_or_default();
+        assert_eq!(
+            json,
+            serde_json::json!({}),
+            "an item sold by the piece writes nothing new"
+        );
     }
 }

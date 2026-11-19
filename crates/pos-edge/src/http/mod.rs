@@ -74,6 +74,7 @@ use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
 use pos_core::error::DomainError;
+use pos_core::weighing::WeighError;
 use pos_ports::event_store::EventStore;
 use pos_ports::subject_store::SubjectStore;
 use pos_proto::ulid::Ulid;
@@ -610,6 +611,11 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
         AppError::UnknownCode => "UNKNOWN_CODE",
         AppError::PriceLabelNotOpenPrice => "PRICE_LABEL_NOT_OPEN_PRICE",
         AppError::WeightLabelNotSold => "WEIGHT_LABEL_NOT_SOLD",
+        AppError::Weighing(WeighError::Required) => "WEIGHT_REQUIRED",
+        AppError::Weighing(WeighError::NotSoldByWeight) => "NOT_SOLD_BY_WEIGHT",
+        AppError::Weighing(WeighError::BelowMinimum { .. }) => "WEIGHT_BELOW_MINIMUM",
+        // `WeighError` is non-exhaustive: a reason this build has not named is out of bounds too.
+        AppError::Weighing(_) => "WEIGHT_ABOVE_MAXIMUM",
         AppError::CustomEntryRefused(_) => "CUSTOM_ENTRY_REFUSED",
         AppError::UnknownObject => "UNKNOWN_OBJECT",
         AppError::UnknownCustomRecord => "UNKNOWN_CUSTOM_RECORD",
@@ -687,6 +693,7 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::UnknownCode
         | AppError::PriceLabelNotOpenPrice
         | AppError::WeightLabelNotSold
+        | AppError::Weighing(_)
         | AppError::UnknownObject
         | AppError::UnknownCustomRecord
         | AppError::UnknownSubject

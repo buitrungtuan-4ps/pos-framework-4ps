@@ -70,6 +70,11 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
   UNKNOWN_CODE: "error.unknown_code",
   PRICE_LABEL_NOT_OPEN_PRICE: "error.price_label_not_open_price",
   WEIGHT_LABEL_NOT_SOLD: "error.weight_label_not_sold",
+  // A weighed item without its weight, a weight on a piece item, or one out of bounds (ADR-0223).
+  WEIGHT_REQUIRED: "error.weight_required",
+  NOT_SOLD_BY_WEIGHT: "error.not_sold_by_weight",
+  WEIGHT_BELOW_MINIMUM: "error.weight_below_minimum",
+  WEIGHT_ABOVE_MAXIMUM: "error.weight_above_maximum",
   APPROVAL_REQUIRED: "error.approval_required",
   APPROVAL_REFUSED: "error.approval_refused",
   APPROVER_LOCKED_OUT: "error.approver_locked_out",

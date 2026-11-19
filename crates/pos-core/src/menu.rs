@@ -26,7 +26,10 @@
 use pos_proto::locale::TaxRateTable;
 use pos_proto::menu::MenuCatalog;
 use pos_proto::money::{Money, MoneyError, Ratio, Rounding};
+use pos_proto::weighing::WeightSource;
 use pos_proto::{DisplayName, MenuItemId, Quantity, SalesChannel, TaxClassId, WireEnum};
+
+use crate::weighing::{WeighError, check_source};
 
 /// One line an inbound order asks for, before the store has priced it.
 ///
@@ -48,6 +51,10 @@ pub struct RequestedLine {
     /// ([ADR-0222](../../../docs/adr/0222-items-carry-barcodes-and-plus-and-a-counter-can-pay-first.md)
     /// decision 4). Ignored for any other item.
     pub typed_unit_price: Option<Money>,
+    /// Where a weighed item's weight came from, its `quantity` then being the net grams
+    /// ([ADR-0223](../../../docs/adr/0223-a-weighed-item-is-priced-by-its-weight.md)). A weighed
+    /// item needs one, and any other item takes none.
+    pub weight_source: Option<WeightSource>,
 }
 
 /// A line the store has priced from its own catalog — exactly the amounts a `sales.order_line.added`
@@ -118,6 +125,8 @@ pub enum RepriceError {
         /// The most the typed price may be, in minor units.
         maximum_minor: i64,
     },
+    /// A weighed item with no weight's source, or a source on an item sold by the piece (ADR-0223).
+    Weighing(WeighError),
 }
 
 impl core::fmt::Display for RepriceError {
@@ -138,6 +147,7 @@ impl core::fmt::Display for RepriceError {
                 formatter,
                 "an open price is typed within its bounds, at most {maximum_minor}"
             ),
+            Self::Weighing(error) => write!(formatter, "{error}"),
         }
     }
 }
@@ -172,6 +182,10 @@ pub fn reprice_line(
     if !base.available {
         return Err(RepriceError::Unavailable(base.menu_item_id));
     }
+    // A weighed item's price is per kilogram and its quantity net grams (ADR-0223), so the total
+    // below is its weight's price, rounded once as any line's.
+    check_source(base.codes.sold_by_weight(), line.weight_source)
+        .map_err(RepriceError::Weighing)?;
 
     // A modifier is a catalog item too: choosing it adds its price to the unit price, and an unknown
     // or 86'd modifier refuses the line exactly as an unknown base item does. `checked_add` also
@@ -229,7 +243,7 @@ pub fn reprice_line(
 
 #[cfg(test)]
 mod tests {
-    use super::{RepriceError, RequestedLine, reprice_line};
+    use super::{RepriceError, RequestedLine, WeighError, reprice_line};
     use pos_proto::locale::{TaxRate, TaxRateTable};
     use pos_proto::menu::{MenuCatalog, MenuEntry};
     use pos_proto::money::{CurrencyCode, Money};
@@ -277,6 +291,7 @@ mod tests {
             modifier_menu_item_ids: Vec::new(),
             quoted_unit_price: None,
             typed_unit_price: None,
+            weight_source: None,
         }
     }
 
@@ -330,6 +345,50 @@ mod tests {
         let priced =
             reprice_line(&catalog, &rates(), SalesChannel::DineIn, &menu_priced).expect("prices");
         assert_eq!(priced.unit_price, vnd(150_000));
+    }
+
+    #[test]
+    fn a_weighed_item_is_priced_per_kilogram_by_its_grams_rounded_once() {
+        // ADR-0223: 123 g of a 99,999 per kilogram item is 12,299.877, which is 12,300.
+        let weighed = MenuEntry {
+            codes: pos_proto::item_codes::ItemCodes {
+                sold_by: pos_proto::weighing::SoldBy::Weight.into(),
+                ..Default::default()
+            },
+            ..MenuEntry::new(item(800), DisplayName::new("Rye"), vnd(99_999), food())
+        };
+        let catalog = catalog().with(weighed);
+        let weighed_line = |source| RequestedLine {
+            weight_source: source,
+            ..line(item(800), Quantity::from_milli(123))
+        };
+        let source = Some(pos_proto::weighing::WeightSource::Scale);
+        let priced = reprice_line(
+            &catalog,
+            &rates(),
+            SalesChannel::DineIn,
+            &weighed_line(source),
+        )
+        .expect("weighed");
+        assert_eq!(priced.line_total, vnd(12_300));
+        assert_eq!(
+            reprice_line(
+                &catalog,
+                &rates(),
+                SalesChannel::DineIn,
+                &weighed_line(None)
+            )
+            .err(),
+            Some(RepriceError::Weighing(WeighError::Required))
+        );
+        let piece = RequestedLine {
+            weight_source: source,
+            ..line(item(500), Quantity::ONE)
+        };
+        assert_eq!(
+            reprice_line(&catalog, &rates(), SalesChannel::DineIn, &piece).err(),
+            Some(RepriceError::Weighing(WeighError::NotSoldByWeight))
+        );
     }
 
     #[test]

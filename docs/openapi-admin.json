@@ -31776,7 +31776,7 @@
       },
       "ItemCodes": {
         "type": "object",
-        "description": "One item's codes and open price as the catalogue authors and keeps them: the three fields a\n[`crate::menu::MenuEntry`] carries, together.",
+        "description": "One item's codes, open price and weighing as the catalogue authors and keeps them: the fields a\n[`crate::menu::MenuEntry`] carries, together.",
         "properties": {
           "barcodes": {
             "type": "array",
@@ -31792,6 +31792,16 @@
           "plu": {
             "type": "string",
             "description": "One to five digits."
+          },
+          "sold_by": {
+            "$ref": "#/components/schemas/OpenSoldBy_SoldBy",
+            "description": "How the item is sold; absent is [`SoldBy::Unit`] (ADR-0223 decision 1)."
+          },
+          "tare_grams": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The grams a scale's reading loses for the item's container, for an item sold by weight.",
+            "minimum": 0
           }
         }
       },
@@ -32733,6 +32743,10 @@
       "OpenSettingScope_SettingScope": {
         "type": "string",
         "description": "A `SettingScope` token: SETTING_SCOPE_UNSPECIFIED, SETTING_SCOPE_TENANT, SETTING_SCOPE_BRAND, SETTING_SCOPE_STORE_GROUP, SETTING_SCOPE_STORE, or one a newer build sent, which is kept as it arrived"
+      },
+      "OpenSoldBy_SoldBy": {
+        "type": "string",
+        "description": "A `SoldBy` token: SOLD_BY_UNSPECIFIED, SOLD_BY_UNIT, SOLD_BY_WEIGHT, or one a newer build sent, which is kept as it arrived"
       },
       "OpenStepKind_StepKind": {
         "type": "string",

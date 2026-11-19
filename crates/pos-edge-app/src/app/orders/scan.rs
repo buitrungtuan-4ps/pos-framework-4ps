@@ -9,16 +9,20 @@
 //! [`pos_core::variable_measure::read`]; its item reference names an item by its PLU. The edge stays
 //! the only pricer: a price label is taken only for an open-price item, as a typed price that the
 //! line's own check holds to the item's bounds, a fixed-price item refuses one, and a weight label
-//! waits for items sold by weight (ADR-0223). Any other code is looked up as it is, by barcode or
-//! PLU, and sells one at the menu's price.
+//! sells an item sold by weight by the net grams it carries, its source recorded as the label
+//! ([ADR-0223](../../../../../docs/adr/0223-a-weighed-item-is-priced-by-its-weight.md)); an item
+//! sold by the piece refuses one. Any other code is looked up as it is, by barcode or PLU, and
+//! sells one at the menu's price.
 
 use pos_core::decision::Actor;
 use pos_core::variable_measure::{self, Measure};
+use pos_core::weighing::net_quantity;
 use pos_ports::event_store::EventStore;
 use pos_proto::ids::{MenuItemId, OrderId};
 use pos_proto::menu::MenuEntry;
 use pos_proto::money::Money;
 use pos_proto::quantity::Quantity;
+use pos_proto::weighing::WeightSource;
 
 use crate::app::{AppError, Edge, LineView, OrderLineChoice};
 
@@ -29,7 +33,9 @@ impl<S: EventStore> Edge<S> {
     ///
     /// [`AppError::UnknownCode`] for a code no item carries,
     /// [`AppError::PriceLabelNotOpenPrice`] for a price label on a fixed-price item,
-    /// [`AppError::WeightLabelNotSold`] for a weight label, or what adding the line refuses.
+    /// [`AppError::WeightLabelNotSold`] for a weight label on an item sold by the piece,
+    /// [`AppError::Weighing`] for a label's weight below the store's least, or what adding the
+    /// line refuses.
     pub async fn add_scanned_line(
         &self,
         actor: Actor,
@@ -61,6 +67,13 @@ impl<S: EventStore> Edge<S> {
                     Some(Money::new(entry.unit_price.currency_code, minor)),
                 )),
                 Measure::PriceMinor(_) => Err(AppError::PriceLabelNotOpenPrice),
+                // A labelling scale prints the net weight, so no tare comes off it.
+                Measure::Grams(grams) if entry.codes.sold_by_weight() => Ok(OrderLineChoice {
+                    quantity: net_quantity(grams, None, session.weighing.min_grams())
+                        .map_err(AppError::Weighing)?,
+                    weight_source: Some(WeightSource::Label),
+                    ..one(entry.menu_item_id, None)
+                }),
                 Measure::Grams(_) => Err(AppError::WeightLabelNotSold),
             };
         }
@@ -88,5 +101,6 @@ fn one(menu_item_id: MenuItemId, typed_unit_price: Option<Money>) -> OrderLineCh
         course_id: None,
         note_present: false,
         typed_unit_price,
+        weight_source: None,
     }
 }

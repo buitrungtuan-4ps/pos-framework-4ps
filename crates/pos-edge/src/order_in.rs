@@ -121,6 +121,7 @@ where
                 modifier_menu_item_ids: line.modifier_menu_item_ids.clone(),
                 quoted_unit_price: line.quoted_unit_price,
                 typed_unit_price: None,
+                weight_source: None,
             };
             let priced = reprice_line(
                 session.menu_for(channel),

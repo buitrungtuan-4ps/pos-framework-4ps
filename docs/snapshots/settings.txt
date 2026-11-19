@@ -423,3 +423,24 @@ tender_keys.third_tip_percent	scope=SETTING_SCOPE_STORE_GROUP
 tender_keys.third_tip_percent	scope=SETTING_SCOPE_TENANT
 tender_keys.third_tip_percent	since=0.14.1
 tender_keys.third_tip_percent	unit=SETTING_UNIT_PERCENT
+weighing.manual_entry
+weighing.manual_entry	default=false
+weighing.manual_entry	kind=SETTING_KIND_BOOL
+weighing.manual_entry	scope=SETTING_SCOPE_BRAND
+weighing.manual_entry	scope=SETTING_SCOPE_STORE
+weighing.manual_entry	scope=SETTING_SCOPE_STORE_GROUP
+weighing.manual_entry	scope=SETTING_SCOPE_TENANT
+weighing.manual_entry	since=0.14.1
+weighing.manual_entry	value=false
+weighing.manual_entry	value=true
+weighing.min_grams
+weighing.min_grams	default=1
+weighing.min_grams	kind=SETTING_KIND_INT
+weighing.min_grams	max=1000
+weighing.min_grams	min=1
+weighing.min_grams	scope=SETTING_SCOPE_BRAND
+weighing.min_grams	scope=SETTING_SCOPE_STORE
+weighing.min_grams	scope=SETTING_SCOPE_STORE_GROUP
+weighing.min_grams	scope=SETTING_SCOPE_TENANT
+weighing.min_grams	since=0.14.1
+weighing.min_grams	unit=SETTING_UNIT_GRAMS

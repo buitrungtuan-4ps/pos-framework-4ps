@@ -119,10 +119,7 @@ const BOOL = "SETTING_KIND_BOOL";
 /** A set of receipt templates (ADR-0207), edited by its own structured editor. */
 const RECEIPT = "SETTING_KIND_RECEIPT_TEMPLATES";
 
-/**
- * What a whole number counts, in the operator's words: each unit's key takes the number as `count`.
- * A unit from a newer cloud is not here, and its number is shown bare rather than mislabelled.
- */
+/** What a whole number counts (each key takes it as `count`); a newer cloud's unit shows it bare. */
 const UNIT_LABEL: Readonly<Record<string, MessageKey>> = {
   SETTING_UNIT_SECONDS: "settings.unit.seconds",
   SETTING_UNIT_MINUTES: "settings.unit.minutes",
@@ -131,6 +128,7 @@ const UNIT_LABEL: Readonly<Record<string, MessageKey>> = {
   SETTING_UNIT_PERCENT: "settings.unit.percent",
   SETTING_UNIT_HOURS: "settings.unit.hours",
   SETTING_UNIT_MILLISECONDS: "settings.unit.milliseconds",
+  SETTING_UNIT_GRAMS: "settings.unit.grams",
 };
 
 /**
@@ -287,11 +285,7 @@ function explained(caught: unknown, clearing: boolean): unknown {
   let key: MessageKey | null = null;
   if (reasons.includes("SCOPE_NOT_ALLOWED")) {
     key = "settings.notAtScope";
-  } else if (
-    reasons.includes("INVALID_ENUM_VALUE") ||
-    reasons.includes("OUT_OF_RANGE") ||
-    reasons.includes("INVALID_VALUE")
-  ) {
+  } else if (["INVALID_ENUM_VALUE", "OUT_OF_RANGE", "INVALID_VALUE"].some((reason) => reasons.includes(reason))) {
     key = "settings.refused.value";
   } else if (reasons.includes("UNKNOWN_TRANSLATION_KEY")) {
     key = "settings.refused.keyWithoutEnglish";
