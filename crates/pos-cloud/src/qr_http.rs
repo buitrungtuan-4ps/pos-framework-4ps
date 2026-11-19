@@ -1,7 +1,8 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The guest-facing QR ordering endpoint — `POST /v1/qr/orders`
+//! The guest-facing QR ordering endpoints — `POST /v1/qr/orders`, and `GET /v1/qr/menu`
+//! ([`menu`], ADR-0224) for what the guest orders from
 //! ([ADR-0057](../../../docs/adr/0057-qr-ordering.md), [ADR-0012](../../../docs/adr/0012-qr-ordering-via-cloud.md)).
 //!
 //! A guest scanning a printed table code has no API key — the HMAC-signed table token *is* the
@@ -37,7 +38,7 @@ use axum::Json;
 use axum::Router;
 use axum::extract::State;
 use axum::response::Response;
-use axum::routing::post;
+use axum::routing::{get, post};
 use serde::Deserialize;
 
 use pos_ports::order_in::{ExternalReference, InboundOrder, OrderIn};
@@ -52,6 +53,8 @@ use crate::config_tree::{CapabilityValidator, ConfigTree, ConfigTreeStore};
 use crate::http::api_error;
 use crate::orders::{OrderLineRequest, intake_error, order_response, to_inbound_line};
 use crate::qr::{QrDecision, QrFacts, QrRejection, TableTokenSecret, verify_table_token};
+
+mod menu;
 
 /// The default per-table submission ceiling in the rate-limit window, when config does not say.
 const DEFAULT_PER_TABLE_LIMIT: u32 = 10;
@@ -166,6 +169,8 @@ struct QrState<X, T, C> {
     config_trees: T,
     clock: C,
     limiter: Arc<TableRateLimiter>,
+    /// Menu reads, counted apart from orders so reading the menu never spends the order budget.
+    menu_limiter: Arc<TableRateLimiter>,
 }
 
 impl<X: Clone, T: Clone, C: Clone> Clone for QrState<X, T, C> {
@@ -176,11 +181,12 @@ impl<X: Clone, T: Clone, C: Clone> Clone for QrState<X, T, C> {
             config_trees: self.config_trees.clone(),
             clock: self.clock.clone(),
             limiter: self.limiter.clone(),
+            menu_limiter: self.menu_limiter.clone(),
         }
     }
 }
 
-/// Builds the guest QR sub-router: `POST /v1/qr/orders`. Carries its own state and is merged into the
+/// Builds the guest QR sub-router: `POST /v1/qr/orders` and `GET /v1/qr/menu`. Carries its own state and is merged into the
 /// app router (the same shape the other sub-routers take), so the `CloudApp` generics do not grow.
 pub fn qr_router<X, T, C>(secret: TableTokenSecret, intake: X, config_trees: T, clock: C) -> Router
 where
@@ -190,12 +196,14 @@ where
 {
     Router::new()
         .route("/v1/qr/orders", post(submit_qr_order::<X, T, C>))
+        .route("/v1/qr/menu", get(menu::read_qr_menu::<X, T, C>))
         .with_state(QrState {
             secret,
             intake,
             config_trees,
             clock,
             limiter: Arc::new(TableRateLimiter::new()),
+            menu_limiter: Arc::new(TableRateLimiter::new()),
         })
 }
 
@@ -300,16 +308,27 @@ async fn qr_config_for<T: ConfigTreeStore>(
     tenant: TenantId,
     store_id: StoreId,
 ) -> QrConfig {
+    store_effective(config_trees, tenant, store_id)
+        .await
+        .as_ref()
+        .map_or_else(QrConfig::default, qr_config_from)
+}
+
+/// A store's effective configuration document, or `None` when it has none or it cannot be read.
+async fn store_effective<T: ConfigTreeStore>(
+    config_trees: &T,
+    tenant: TenantId,
+    store_id: StoreId,
+) -> Option<serde_json::Value> {
     let Ok(Some(state)) = config_trees
         .load(tenant, store_id)
         .await
         .map(crate::http::strip_tree_version)
     else {
-        return QrConfig::default();
+        return None;
     };
     let tree = ConfigTree::from_state(store_id, CapabilityValidator, state);
-    tree.current_effective()
-        .map_or_else(QrConfig::default, qr_config_from)
+    tree.current_effective().cloned()
 }
 
 /// [`qr_config_for`]'s reading of a store's effective document.

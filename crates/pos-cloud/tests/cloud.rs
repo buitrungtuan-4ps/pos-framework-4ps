@@ -124,6 +124,8 @@ mod people_republish_contract;
 mod people_republisher;
 #[path = "cloud/people_scopes.rs"]
 mod people_scopes;
+#[path = "cloud/qr_menu.rs"]
+mod qr_menu;
 #[path = "cloud/reason_codes.rs"]
 mod reason_codes;
 #[path = "cloud/reconcile.rs"]
