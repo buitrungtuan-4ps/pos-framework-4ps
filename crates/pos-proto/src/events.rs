@@ -42,7 +42,6 @@ use crate::quantity::Quantity;
 use crate::text::{DisplayName, PermissionKey, ReleaseTag};
 use crate::time::Timestamp;
 use crate::ulid::Ulid;
-use crate::weighing::WeightSource;
 use crate::wire_enum::Open;
 
 #[macro_use]
@@ -172,13 +171,10 @@ event_catalogue! {
         /// A note is where a name and a health condition get typed, and an immutable
         /// log could never erase them.
         note_present: bool,
-        /// Where a weighed line's weight came from: a label, the scale or a hand
-        /// ([ADR-0223](../../../docs/adr/0223-a-weighed-item-is-priced-by-its-weight.md)
-        /// decision 2). Its `quantity` is then the net grams and its `unit_price` per
-        /// kilogram. Absent on a line sold by the piece and on every line written before
-        /// this field; left off the wire while absent.
+        /// Where a weighed line's weight (its `quantity`, in net grams) came from (ADR-0223).
+        /// Absent on a line sold by the piece and on every line before the field.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        weight_source: Option<Open<WeightSource>>,
+        weight_source: Option<Open<crate::weighing::WeightSource>>,
     },
     /// A line's quantity or total changed while still editable.
     SalesOrderLineUpdated => "sales.order_line.updated", version = 1 {

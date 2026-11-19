@@ -266,7 +266,7 @@ mod tests {
     #[test]
     fn a_tare_is_only_for_an_item_sold_by_weight() {
         let weighed = ItemCodes {
-            sold_by: crate::weighing::SoldBy::Weight.into(),
+            sold_by: SoldBy::Weight.into(),
             tare_grams: Some(50),
             ..ItemCodes::default()
         };
