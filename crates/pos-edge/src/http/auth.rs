@@ -221,7 +221,7 @@ pub(crate) struct SignInRequest {
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub(crate) struct SignedIn {
-    employee_id: String,
+    pub(crate) employee_id: String,
 }
 
 /// A refused sign-in. `outcome` is `"wrong"` (bad code or PIN) or `"locked_out"`; `remaining` counts
@@ -282,6 +282,10 @@ pub(crate) struct SessionState {
     /// signed in. The till keeps the time, because what counts as a touch is what happens on its
     /// screen.
     idle_lock_seconds: u32,
+    /// How many seconds an untouched kiosk order waits before the kiosk voids it, from the store's
+    /// `kiosk` node ([ADR-0224](../../../../docs/adr/0224-self-order-is-a-guest-page-and-a-kiosk.md)
+    /// decision 5). A store fact like the idle lock; only a kiosk's till reads it.
+    kiosk_abandon_seconds: u32,
     /// The float the Shift screen fills in when a shift opens, in the store currency's minor unit,
     /// from the store's `shift` node (ADR-0160 decision 2); `0` fills in nothing. A store fact like
     /// the idle lock, sent whoever is signed in. The cashier may change it, and the shift opens with
@@ -364,6 +368,7 @@ fn permission_ids(set: PermissionSet) -> Vec<&'static str> {
 pub(crate) async fn sign_in<S>(
     State(deps): State<SignInDeps<S>>,
     Extension(device_id): Extension<DeviceId>,
+    printers: Option<Extension<Arc<Printers>>>,
     Json(request): Json<SignInRequest>,
 ) -> Response
 where
@@ -392,6 +397,14 @@ where
         .authenticate(employee_id, phc, &request.pin, now, policy)
     {
         SignIn::Ok => {
+            // On a kiosk, a person signing in is leaving it, which needs `admin.kiosk.exit`
+            // (ADR-0224 decision 4); the kiosk stays signed in as itself otherwise.
+            let printers = printers.as_ref().map(|Extension(printers)| printers);
+            if let Some(refused) =
+                super::kiosk::refuse_kiosk_exit(&deps, printers, device_id, employee_id).await
+            {
+                return refused;
+            }
             // Recorded durably before it is reported (ADR-0091): telling someone they are signed in
             // and then silently forgetting would surface mid-sale.
             if let Err(error) = deps.sessions.sign_in(device_id, employee_id, now).await {
@@ -497,6 +510,7 @@ where
     let sign_in_ready = session.staff.sign_in_ready();
     let permissions_enforced = session.permissions_enforced;
     let idle_lock_seconds = session.session_settings.idle_lock_seconds();
+    let kiosk_abandon_seconds = session.kiosk.abandon_seconds();
     let opening_float_minor = session.shift.opening_float_minor();
     let display_language = session.display_language.clone();
     let device_class = device_class_of(&session.devices, printers.as_deref(), device_id)
@@ -525,6 +539,7 @@ where
                 .map(ToString::to_string)
                 .collect(),
             idle_lock_seconds,
+            kiosk_abandon_seconds,
             opening_float_minor,
             display_language,
             device_class,
@@ -539,6 +554,7 @@ where
             permissions_with_approval: Vec::new(),
             role_ids: Vec::new(),
             idle_lock_seconds,
+            kiosk_abandon_seconds,
             opening_float_minor,
             display_language,
             device_class,

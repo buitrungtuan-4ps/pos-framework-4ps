@@ -3679,6 +3679,41 @@
         ]
       }
     },
+    "/api/session/kiosk": {
+      "post": {
+        "tags": [
+          "session"
+        ],
+        "summary": "`POST /api/session/kiosk` — sign this device in as its kiosk's own staff record, with no PIN\n(ADR-0224 decision 4). The till calls it when it starts on a kiosk.",
+        "operationId": "kiosk_sign_in",
+        "responses": {
+          "200": {
+            "description": "Signed in as the kiosk's own staff record: the body carries its `employee_id`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignedIn"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "This device is not bound to a kiosk terminal, or the store publishes no staff record for it"
+          },
+          "503": {
+            "description": "The sign-in could not be recorded"
+          }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
+      }
+    },
     "/api/session/sign-in": {
       "post": {
         "tags": [
@@ -9139,6 +9174,7 @@
           "permissions_with_approval",
           "role_ids",
           "idle_lock_seconds",
+          "kiosk_abandon_seconds",
           "opening_float_minor"
         ],
         "properties": {
@@ -9157,6 +9193,12 @@
             "type": "integer",
             "format": "int32",
             "description": "How many seconds an attended till may sit untouched before it signs its person out and\nlocks, from the store's `session` node\n([ADR-0160](../../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md));\n`0` never locks. A fact about the store rather than the person, so it is sent whoever is\nsigned in. The till keeps the time, because what counts as a touch is what happens on its\nscreen.",
+            "minimum": 0
+          },
+          "kiosk_abandon_seconds": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many seconds an untouched kiosk order waits before the kiosk voids it, from the store's\n`kiosk` node ([ADR-0224](../../../../docs/adr/0224-self-order-is-a-guest-page-and-a-kiosk.md)\ndecision 5). A store fact like the idle lock; only a kiosk's till reads it.",
             "minimum": 0
           },
           "lease_standing": {

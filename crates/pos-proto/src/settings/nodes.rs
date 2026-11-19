@@ -7,6 +7,7 @@
 use crate::backup::{self, PublishedBackup};
 use crate::billing::{self, PublishedBilling, SettledVoidWindow};
 use crate::counter::{PublishedCounter, WalkInChannel};
+use crate::kiosk::{self, PublishedKiosk};
 use crate::locale::{LocaleSettings, TaxRounding};
 use crate::package::{ALLOWED_VERSIONS_MAX, PackageMode, PublishedPackage};
 use crate::people::PublishedPermissions;
@@ -917,4 +918,26 @@ pub(super) fn package_settings() -> Vec<Setting> {
                       `PUT /admin/settings`.",
         },
     ]
+}
+
+/// The settings on the `kiosk` node (ADR-0224), in the register's order.
+pub(super) fn kiosk_settings() -> Vec<Setting> {
+    vec![Setting {
+        node: PublishedKiosk::NODE,
+        field: "abandon_seconds",
+        shape: SettingShape::Int {
+            min: *kiosk::ABANDON_SECONDS.start(),
+            max: *kiosk::ABANDON_SECONDS.end(),
+            unit: SettingUnit::Seconds,
+            default: kiosk::DEFAULT_ABANDON_SECONDS,
+            preset: None,
+        },
+        scopes: STORE_WIDE,
+        since: NEXT_RELEASE,
+        confirm: None,
+        summary: "How long, in seconds, a kiosk order nobody touches waits before the kiosk voids \
+                  its unsent lines and closes it, citing the reason `ABANDONED`, and starts over \
+                  for the next guest. An order already sent to be paid is never voided. `120`, \
+                  the default, is two minutes.",
+    }]
 }

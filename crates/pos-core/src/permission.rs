@@ -658,6 +658,22 @@ permissions! {
         default_roles: [Owner],
         description: "Manage staff and role assignments across stores",
     },
+
+    // ---- Store administration, kiosks (last, so no earlier permission's bit moves) ----
+    /// Leave a kiosk's self-order screen for the till's own
+    /// ([ADR-0224](../../../docs/adr/0224-self-order-is-a-guest-page-and-a-kiosk.md) decision 4).
+    ///
+    /// Its own permission rather than `admin.device.manage`, so a tenant can let a shift lead take
+    /// a kiosk back without letting them manage devices. Always with the person's own PIN: leaving
+    /// a kiosk is a sign-in at it, under the sign-in's lockout, and never a weaker path.
+    ExitKiosk {
+        id: "admin.kiosk.exit",
+        group: StoreAdministration,
+        risk: Medium,
+        pin: true,
+        default_roles: [Manager, Owner],
+        description: "Leave a kiosk's self-order screen; always with the person's own PIN",
+    },
 }
 
 // The bitset in `PermissionSet` holds one bit per permission by enum discriminant, so the catalogue
@@ -723,6 +739,17 @@ impl FromIterator<Permission> for PermissionSet {
         set
     }
 }
+
+/// What a kiosk's own staff record may do, and all it may do
+/// ([ADR-0224](../../../docs/adr/0224-self-order-is-a-guest-page-and-a-kiosk.md) decision 4): open
+/// an order, add and remove its lines (`sales.line.add`), and send it to be paid
+/// (`billing.bill.open`).
+///
+/// A fixed rule, not a role a tenant edits: the edge holds a kiosk record to this set whatever its
+/// published roles say, so no configuration can widen what a guest standing at a kiosk can do.
+pub const KIOSK_GRANTS: PermissionSet = PermissionSet::EMPTY
+    .with(Permission::AddLine)
+    .with(Permission::OpenBill);
 
 /// The default permissions a built-in role receives.
 ///
@@ -805,6 +832,13 @@ pub fn render_matrix_markdown() -> String {
         "Generated from `crates/pos-core/src/permission.rs`. Do not edit by hand — run \
          `POS_UPDATE_SNAPSHOTS=1 cargo test -p pos-core`. A `✓` is a default grant; roles are data, \
          so a deployment overrides these in the cloud.\n\n",
+    );
+    out.push_str(
+        "**The `KIOSK` role is not a column here and not a role row.** It is the code constant \
+         `KIOSK_GRANTS` ([ADR-0224](adr/0224-self-order-is-a-guest-page-and-a-kiosk.md) decision 4): \
+         `sales.line.add` and `billing.bill.open`, which no tenant can widen. A kiosk's staff record \
+         is not stored either: the store derives one for each terminal the published `devices` node \
+         makes `DEVICE_CLASS_KIOSK`, with the terminal's own id, no code to type and no PIN.\n\n",
     );
 
     out.push_str("| id | group | risk | PIN |");

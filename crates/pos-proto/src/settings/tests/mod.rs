@@ -582,9 +582,8 @@ fn read_back(node: &str, field: &str, value: Option<&Value>) -> Option<Value> {
         }
         crate::tabs::PublishedTabs::NODE
         | crate::scan::PublishedScan::NODE
-        | crate::weighing::PublishedWeighing::NODE => {
-            read_back_counter_tools(node, field, document)
-        }
+        | crate::weighing::PublishedWeighing::NODE
+        | crate::kiosk::PublishedKiosk::NODE => read_back_counter_tools(node, field, document),
         PublishedPackage::NODE => read_back_package(field, document),
         PublishedReceipt::NODE => read_back_receipt(field, document),
         PublishedBilling::NODE => read_back_billing(field, document),
@@ -628,12 +627,16 @@ fn read_back_receipt(field: &str, document: Value) -> Option<Value> {
 }
 
 /// [`read_back`] for the `package` node (ADR-0189): an absent id reads as `null`.
-/// What the edge reads back from the `tabs`, `scan` and `weighing` nodes (ADR-0221, ADR-0222,
-/// ADR-0223).
+/// What the edge reads back from the `tabs`, `scan`, `weighing` and `kiosk` nodes (ADR-0221,
+/// ADR-0222, ADR-0223, ADR-0224).
 fn read_back_counter_tools(node: &str, field: &str, document: Value) -> Option<Value> {
     if node == crate::tabs::PublishedTabs::NODE {
         let tabs: crate::tabs::PublishedTabs = serde_json::from_value(document).ok()?;
         return (field == "guest_label").then(|| json!(tabs.guest_label().as_wire()));
+    }
+    if node == crate::kiosk::PublishedKiosk::NODE {
+        let kiosk: crate::kiosk::PublishedKiosk = serde_json::from_value(document).ok()?;
+        return (field == "abandon_seconds").then(|| json!(kiosk.abandon_seconds()));
     }
     if node == crate::weighing::PublishedWeighing::NODE {
         let weighing: crate::weighing::PublishedWeighing = serde_json::from_value(document).ok()?;

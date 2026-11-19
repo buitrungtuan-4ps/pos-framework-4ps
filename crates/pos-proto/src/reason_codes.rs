@@ -332,6 +332,28 @@ fn cash_drawer_defaults() -> [PublishedReasonCode; 3] {
     ]
 }
 
+/// The code of the framework's reason for an order a guest walked away from at a kiosk
+/// ([ADR-0224](../../../docs/adr/0224-self-order-is-a-guest-page-and-a-kiosk.md) decision 5): the
+/// one reason a kiosk voids its untouched lines and closes the order with. A kiosk at a store whose
+/// list names no reason with this code voids only where the list asks no reason at all, and never
+/// cites another reason in its place.
+pub const ABANDONED: &str = "ABANDONED";
+
+/// The framework's reason for an order a guest abandoned at a kiosk, part of
+/// [`PublishedReasonCodes::framework_default`].
+fn kiosk_default() -> PublishedReasonCode {
+    PublishedReasonCode::new(
+        framework_id(13),
+        ReasonCode::new(ABANDONED),
+        DisplayName::new("Guest walked away"),
+        vec![ReasonAction::VoidLine, ReasonAction::CloseOrder],
+    )
+    .with_name_translations(BTreeMap::from([(
+        "vi".to_owned(),
+        DisplayName::new("Khách bỏ đi"),
+    )]))
+}
+
 impl PublishedReasonCodes {
     /// An empty node.
     ///
@@ -447,6 +469,7 @@ impl PublishedReasonCodes {
             ]
             .into_iter()
             .chain(cash_drawer_defaults())
+            .chain([kiosk_default()])
             .collect(),
         )
     }

@@ -2,6 +2,8 @@
 
 Generated from `crates/pos-core/src/permission.rs`. Do not edit by hand — run `POS_UPDATE_SNAPSHOTS=1 cargo test -p pos-core`. A `✓` is a default grant; roles are data, so a deployment overrides these in the cloud.
 
+**The `KIOSK` role is not a column here and not a role row.** It is the code constant `KIOSK_GRANTS` ([ADR-0224](adr/0224-self-order-is-a-guest-page-and-a-kiosk.md) decision 4): `sales.line.add` and `billing.bill.open`, which no tenant can widen. A kiosk's staff record is not stored either: the store derives one for each terminal the published `devices` node makes `DEVICE_CLASS_KIOSK`, with the terminal's own id, no code to type and no PIN.
+
 | id | group | risk | PIN | OWNER | MANAGER | SUPERVISOR | CASHIER | SERVER | COOK |
 |---|---|---|---|---|---|---|---|---|---|
 | `sales.line.void_fired` | SALES | HIGH | yes | ✓ | ✓ | ✓ | · | · | · |
@@ -45,3 +47,4 @@ Generated from `crates/pos-core/src/permission.rs`. Do not edit by hand — run 
 | `integrations.lookup.run` | SALES | MEDIUM | · | · | · | · | · | · | · |
 | `cloud.tenant.manage` | CLOUD_ADMINISTRATION | HIGH | · | ✓ | · | · | · | · | · |
 | `cloud.staff.manage` | CLOUD_ADMINISTRATION | HIGH | · | ✓ | · | · | · | · | · |
+| `admin.kiosk.exit` | STORE_ADMINISTRATION | MEDIUM | yes | ✓ | ✓ | · | · | · | · |

@@ -6,8 +6,9 @@
 
 use std::collections::BTreeMap;
 
-use pos_core::permission::{Permission, PermissionSet};
-use pos_proto::ids::{BrandId, EmployeeId, StoreId, TenantId};
+use pos_core::permission::{KIOSK_GRANTS, Permission, PermissionSet};
+use pos_proto::devices::{DeviceClass, DeviceKind, PublishedDevices};
+use pos_proto::ids::{BrandId, DeviceId, EmployeeId, StoreId, TenantId};
 use pos_proto::money::Money;
 use pos_proto::ulid::Ulid;
 
@@ -131,6 +132,9 @@ pub struct StaffRoster {
     /// The roles of each member who holds any, by the same code. Beside [`StaffAuth`] rather than in
     /// it because nothing the edge authorises reads them: only the session read answers them.
     roles_by_code: BTreeMap<String, RoleIds>,
+    /// The kiosk staff records, by the same code, and the terminal each is the record of
+    /// ([ADR-0224](../../../../docs/adr/0224-self-order-is-a-guest-page-and-a-kiosk.md) decision 4).
+    kiosks: BTreeMap<String, DeviceId>,
 }
 
 impl StaffRoster {
@@ -149,12 +153,87 @@ impl StaffRoster {
     /// ([ADR-0213](../../../../docs/adr/0213-a-store-knows-each-persons-roles.md)).
     pub fn insert_with_roles(&mut self, code: impl Into<String>, auth: StaffAuth, roles: RoleIds) {
         let code = code.into();
+        self.kiosks.remove(&code);
         if roles.as_slice().is_empty() {
             self.roles_by_code.remove(&code);
         } else {
             self.roles_by_code.insert(code.clone(), roles);
         }
         self.by_code.insert(code, auth);
+    }
+
+    /// Adds (or replaces) the kiosk staff record of the `TERMINAL` device `terminal` under `code`
+    /// ([ADR-0224](../../../../docs/adr/0224-self-order-is-a-guest-page-and-a-kiosk.md) decision 4).
+    ///
+    /// The record holds [`KIOSK_GRANTS`] directly and nothing else, whatever its published roles
+    /// said: a fixed rule no configuration widens. It has no PIN, so its code never signs in; only
+    /// a device bound to `terminal` signs in as it ([`Self::kiosk_record_of`]).
+    pub fn insert_kiosk(
+        &mut self,
+        code: impl Into<String>,
+        employee_id: EmployeeId,
+        terminal: DeviceId,
+    ) {
+        let code = code.into();
+        self.insert(
+            code.clone(),
+            StaffAuth {
+                employee_id: Some(employee_id),
+                permissions: KIOSK_GRANTS,
+                permissions_with_approval: PermissionSet::EMPTY,
+                discount_ceiling: None,
+                pin_phc: None,
+            },
+        );
+        self.kiosks.insert(code, terminal);
+    }
+
+    /// Replaces the kiosk records with one for each `TERMINAL` the store's published `devices` node
+    /// makes `DEVICE_CLASS_KIOSK`
+    /// ([ADR-0224](../../../../docs/adr/0224-self-order-is-a-guest-page-and-a-kiosk.md) decision 4).
+    ///
+    /// The record's id is the terminal's own ULID, so the events a kiosk writes name its terminal for
+    /// good, after the terminal is retired or made something else. Its code, `KIOSK-<terminal>`,
+    /// never signs in: it has no PIN. A terminal no longer a kiosk loses its record on the next node,
+    /// and a code a person already holds is never taken from them.
+    pub fn derive_kiosks(&mut self, devices: &PublishedDevices) {
+        for code in core::mem::take(&mut self.kiosks).into_keys() {
+            self.by_code.remove(&code);
+            self.roles_by_code.remove(&code);
+        }
+        for entry in devices.devices() {
+            if entry.kind.known() != DeviceKind::Terminal
+                || entry.device_class() != Some(DeviceClass::Kiosk)
+            {
+                continue;
+            }
+            let code = format!("KIOSK-{}", entry.device_id);
+            if self.by_code.contains_key(&code) {
+                continue;
+            }
+            let employee = EmployeeId::new(entry.device_id.as_ulid());
+            self.insert_kiosk(code, employee, entry.device_id);
+        }
+    }
+
+    /// The kiosk staff record of the `TERMINAL` device `terminal`, if the roster holds one.
+    #[must_use]
+    pub fn kiosk_record_of(&self, terminal: DeviceId) -> Option<EmployeeId> {
+        self.kiosks
+            .iter()
+            .find(|(_, of)| **of == terminal)
+            .and_then(|(code, _)| self.by_code.get(code))
+            .and_then(|auth| auth.employee_id)
+    }
+
+    /// Whether `employee_id` is a kiosk's staff record rather than a person.
+    #[must_use]
+    pub fn is_kiosk(&self, employee_id: EmployeeId) -> bool {
+        self.kiosks.keys().any(|code| {
+            self.by_code
+                .get(code)
+                .is_some_and(|auth| auth.employee_id == Some(employee_id))
+        })
     }
 
     /// The roles a signed-in person holds, sorted: none for an id the roster does not know, or a
@@ -393,5 +472,79 @@ mod tests {
             roster.role_ids_for(alice).is_empty(),
             "replaced with no role"
         );
+    }
+
+    #[test]
+    fn a_kiosk_record_holds_the_kiosk_set_signs_in_by_no_code_and_answers_its_terminal() {
+        use pos_core::permission::KIOSK_GRANTS;
+        use pos_proto::ids::DeviceId;
+
+        let kiosk = EmployeeId::new(Ulid::from_u128(0x0C1));
+        let terminal = DeviceId::new(Ulid::from_u128(0x7E1));
+        let mut roster = super::StaffRoster::new();
+        roster.insert_kiosk("kiosk-1", kiosk, terminal);
+        assert_eq!(roster.permissions_for(kiosk), Some(KIOSK_GRANTS));
+        assert!(
+            roster.credentials("kiosk-1").is_none(),
+            "no PIN, no code sign-in"
+        );
+        assert!(!roster.sign_in_ready());
+        assert_eq!(roster.kiosk_record_of(terminal), Some(kiosk));
+        assert_eq!(
+            roster.kiosk_record_of(DeviceId::new(Ulid::from_u128(0x7E2))),
+            None
+        );
+        assert!(roster.is_kiosk(kiosk));
+        // The same code published again as a person is a person.
+        roster.insert(
+            "kiosk-1",
+            super::StaffAuth {
+                employee_id: Some(kiosk),
+                permissions: KIOSK_GRANTS,
+                permissions_with_approval: pos_core::permission::PermissionSet::EMPTY,
+                discount_ceiling: None,
+                pin_phc: None,
+            },
+        );
+        assert!(!roster.is_kiosk(kiosk));
+        assert_eq!(roster.kiosk_record_of(terminal), None);
+    }
+
+    #[test]
+    fn a_kiosk_record_is_derived_from_each_kiosk_terminal_and_goes_with_it() {
+        use pos_proto::devices::{DeviceClass, DeviceKind, PublishedDevice, PublishedDevices};
+        use pos_proto::ids::DeviceId;
+        use pos_proto::text::DisplayName;
+        use pos_proto::wire_enum::Open;
+
+        let terminal = DeviceId::new(Ulid::from_u128(0x7E1));
+        let node = |class: Option<DeviceClass>| {
+            PublishedDevices::new(vec![PublishedDevice {
+                device_id: terminal,
+                kind: DeviceKind::Terminal.into(),
+                connection: Open::default(),
+                address: String::new(),
+                name: DisplayName::new("Kiosk"),
+                station_id: None,
+                agent_device_id: None,
+                drawer_attached: false,
+                paper_width: Open::default(),
+                cuts_paper: None,
+                receipt_printer_id: None,
+                receipt_language: Open::default(),
+                receipt_second_language: Open::default(),
+                opening_float_minor: None,
+                device_class: class.map_or_else(Open::default, Open::from_known),
+            }])
+        };
+        let record = EmployeeId::new(terminal.as_ulid());
+        let mut roster = super::StaffRoster::new();
+        roster.derive_kiosks(&node(Some(DeviceClass::Kiosk)));
+        assert_eq!(roster.kiosk_record_of(terminal), Some(record));
+        assert!(roster.credentials(&format!("KIOSK-{terminal}")).is_none());
+        roster.derive_kiosks(&node(Some(DeviceClass::Terminal)));
+        assert_eq!(roster.kiosk_record_of(terminal), None);
+        assert!(!roster.is_kiosk(record));
+        assert!(roster.is_empty());
     }
 }

@@ -81,6 +81,7 @@ POST /api/print/agent
 POST /api/print/agent/revoke
 POST /api/print/jobs/{job_id}/ack
 POST /api/printers/{id}/test
+POST /api/session/kiosk
 POST /api/session/sign-in
 POST /api/session/sign-out
 POST /api/shifts

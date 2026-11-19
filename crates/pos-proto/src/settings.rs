@@ -380,6 +380,7 @@ pub fn register() -> Vec<Setting> {
         nodes::counter_settings(),
         nodes::scan_settings(),
         nodes::weighing_settings(),
+        nodes::kiosk_settings(),
         nodes::tabs_settings(),
         nodes::backup_settings(),
         nodes::billing_settings(),

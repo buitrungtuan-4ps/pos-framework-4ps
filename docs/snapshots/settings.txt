@@ -71,6 +71,17 @@ counter.walk_in_channel	since=0.14.1
 counter.walk_in_channel	value=WALK_IN_CHANNEL_ASK
 counter.walk_in_channel	value=WALK_IN_CHANNEL_DINE_IN
 counter.walk_in_channel	value=WALK_IN_CHANNEL_TAKEAWAY
+kiosk.abandon_seconds
+kiosk.abandon_seconds	default=120
+kiosk.abandon_seconds	kind=SETTING_KIND_INT
+kiosk.abandon_seconds	max=900
+kiosk.abandon_seconds	min=30
+kiosk.abandon_seconds	scope=SETTING_SCOPE_BRAND
+kiosk.abandon_seconds	scope=SETTING_SCOPE_STORE
+kiosk.abandon_seconds	scope=SETTING_SCOPE_STORE_GROUP
+kiosk.abandon_seconds	scope=SETTING_SCOPE_TENANT
+kiosk.abandon_seconds	since=0.14.1
+kiosk.abandon_seconds	unit=SETTING_UNIT_SECONDS
 locale.tax_rounding
 locale.tax_rounding	default=TAX_ROUNDING_HALF_UP
 locale.tax_rounding	kind=SETTING_KIND_CHOICE
