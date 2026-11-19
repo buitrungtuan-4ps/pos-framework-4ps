@@ -285,11 +285,7 @@ function explained(caught: unknown, clearing: boolean): unknown {
   let key: MessageKey | null = null;
   if (reasons.includes("SCOPE_NOT_ALLOWED")) {
     key = "settings.notAtScope";
-  } else if (
-    reasons.includes("INVALID_ENUM_VALUE") ||
-    reasons.includes("OUT_OF_RANGE") ||
-    reasons.includes("INVALID_VALUE")
-  ) {
+  } else if (["INVALID_ENUM_VALUE", "OUT_OF_RANGE", "INVALID_VALUE"].some((reason) => reasons.includes(reason))) {
     key = "settings.refused.value";
   } else if (reasons.includes("UNKNOWN_TRANSLATION_KEY")) {
     key = "settings.refused.keyWithoutEnglish";
