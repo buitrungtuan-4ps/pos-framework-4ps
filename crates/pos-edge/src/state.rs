@@ -90,6 +90,15 @@ pub struct AppState {
 #[derive(Clone)]
 pub struct DevicesReader(pub Arc<dyn Fn() -> pos_proto::devices::PublishedDevices + Send + Sync>);
 
+impl DevicesReader {
+    /// Reads `edge`'s published `devices` node.
+    #[must_use]
+    pub fn of<S: Send + Sync + 'static>(edge: &Arc<crate::app::Edge<S>>) -> Self {
+        let edge = Arc::clone(edge);
+        Self(Arc::new(move || edge.session().devices.clone()))
+    }
+}
+
 impl core::fmt::Debug for DevicesReader {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("DevicesReader")

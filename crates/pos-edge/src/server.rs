@@ -893,14 +893,9 @@ where
     let local_font_size = config.font_size_dots;
     let state = AppState::with_fanout(config, edge.fanout().clone())
         .with_pairing(Arc::clone(&pairing))
-        // The same cell the commands refuse on, so the `pos-lease-standing` header on every
-        // `/api/*` answer and the refusal a tap gets cannot disagree (ADR-0123).
+        // The cell the commands refuse on (ADR-0123), and the node `/ws` refuses a kiosk by (ADR-0224).
         .with_lease_standing(Arc::clone(edge.lease()))
-        // A kiosk may not open the store's event stream (ADR-0224 decision 4).
-        .with_devices({
-            let edge = Arc::clone(&edge);
-            crate::state::DevicesReader(Arc::new(move || edge.session().devices.clone()))
-        });
+        .with_devices(crate::state::DevicesReader::of(&edge));
     // One allow-list, shared by the CORS layer on every covered router, the `/ws` upgrade and the
     // config-pull loop that keeps it current (ADR-0111). Empty until a store publishes an `origins`
     // node, which allows same-origin and nothing else — exactly today's behaviour.
