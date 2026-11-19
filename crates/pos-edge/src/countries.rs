@@ -30,3 +30,17 @@ pub fn registry() -> CountryRegistry {
         #[cfg(feature = "country-in")] pos_country_in::India,
     }
 }
+
+/// Holds `edge` to what this binary's countries forbid whatever the store's settings say: a weight
+/// typed by hand, where trade law takes a weight from a certified scale only (ADR-0223 decision 3).
+pub(crate) fn apply_law<S: pos_ports::event_store::EventStore>(
+    countries: &CountryRegistry,
+    edge: &crate::app::Edge<S>,
+) {
+    if countries.forbids(
+        "weighing.manual_entry",
+        pos_country::SettingDefaultValue::Bool(true),
+    ) {
+        edge.forbid_manual_weight();
+    }
+}

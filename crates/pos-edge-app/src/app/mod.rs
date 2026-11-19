@@ -65,7 +65,7 @@ pub use config_wake::{ConfigDelivery, ConfigWakeReport, ConfigWakeStanding, WAKE
 pub use custom_data::{CONSENT_FIELD_PREFIX, CustomDataView};
 pub use device_reads::{DEVICE_READS_MAX, DeviceRead, DeviceReads};
 pub use error::{AppError, Approval};
-pub use orders::TabLabel;
+pub use orders::{TabLabel, WeighFrom};
 pub use package::{PackageRefusal, PackageStanding, RefusedPackage};
 pub use receipt_fields::{PersonalOnPaper, PrintedField, PrintedObjects, PrintedValue};
 pub use record_slip::{FRESH_SLIPS_MAX, RecordSlipCopy};
@@ -325,6 +325,13 @@ pub struct Edge<S> {
     /// writes to one object cannot each start a subject for it (ADR-0206). It guards the record each
     /// person last saved, whose first slip is the save's own (ADR-0207 decision 5).
     custom_writes: tokio::sync::Mutex<record_slip::FreshSlips>,
+    /// The scale beside the till (ADR-0223), read for a weighed line. One that never answers
+    /// until a composition gives the edge one with [`Edge::with_scale`].
+    scale: Arc<dyn orders::DynScale>,
+    /// Whether this binary's country pack forbids a weight typed by hand (ADR-0223 decision 3):
+    /// the law, which holds whatever the store's `weighing.manual_entry` says, even a value set
+    /// before the store's country was known. Set once at start by [`Edge::forbid_manual_weight`].
+    manual_weight_forbidden: std::sync::atomic::AtomicBool,
 }
 
 /// What [`Edge::open_inbound_order`] opened, and the one acceptance fact the caller must not work

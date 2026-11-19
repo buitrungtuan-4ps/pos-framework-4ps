@@ -56,6 +56,7 @@ mod sync;
 pub mod tables;
 mod tabs;
 mod void_settled;
+mod weigh;
 pub mod ws;
 
 use std::str::FromStr;
@@ -616,6 +617,9 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
         AppError::Weighing(WeighError::BelowMinimum { .. }) => "WEIGHT_BELOW_MINIMUM",
         // `WeighError` is non-exhaustive: a reason this build has not named is out of bounds too.
         AppError::Weighing(_) => "WEIGHT_ABOVE_MAXIMUM",
+        AppError::ManualWeightNotAllowed => "MANUAL_WEIGHT_NOT_ALLOWED",
+        AppError::ScaleNotSettled => "SCALE_NOT_SETTLED",
+        AppError::ScaleAbsent => "SCALE_ABSENT",
         AppError::CustomEntryRefused(_) => "CUSTOM_ENTRY_REFUSED",
         AppError::UnknownObject => "UNKNOWN_OBJECT",
         AppError::UnknownCustomRecord => "UNKNOWN_CUSTOM_RECORD",
@@ -694,6 +698,9 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::PriceLabelNotOpenPrice
         | AppError::WeightLabelNotSold
         | AppError::Weighing(_)
+        | AppError::ManualWeightNotAllowed
+        | AppError::ScaleNotSettled
+        | AppError::ScaleAbsent
         | AppError::UnknownObject
         | AppError::UnknownCustomRecord
         | AppError::UnknownSubject

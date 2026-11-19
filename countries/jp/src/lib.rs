@@ -108,6 +108,15 @@ impl CountryModule for Japan {
     fn receipt_required_sections(&self) -> Vec<ReceiptSection> {
         vec![ReceiptSection::Modifiers]
     }
+
+    /// A weight typed by hand is refused (ADR-0223 decision 3): only a scale or a scale's label
+    /// sets a weight sold by it until phase 7's legal suite decides the country's trade law.
+    fn forbidden_settings(&self) -> Vec<pos_country::SettingDefault> {
+        vec![pos_country::SettingDefault {
+            setting_key: "weighing.manual_entry",
+            value: pos_country::SettingDefaultValue::Bool(true),
+        }]
+    }
 }
 
 /// The default table: the reduced rate where the law puts it, and nowhere else.

@@ -89,6 +89,43 @@ fn no_template_sets_a_key_a_country_pack_sets() {
     }
 }
 
+#[test]
+fn a_pack_forbids_only_a_value_its_setting_takes_and_seeds_none_it_forbids() {
+    // ADR-0223 decision 3: `vn`, `jp` and `in` refuse a weight typed by hand; `zz` allows it.
+    let settings = register();
+    for pack in packs() {
+        for forbidden in pack.forbidden_settings() {
+            let setting = settings
+                .iter()
+                .find(|setting| setting.key() == forbidden.setting_key)
+                .unwrap_or_else(|| panic!("{} is not in the register", forbidden.setting_key));
+            let value = match forbidden.value {
+                pos_country::SettingDefaultValue::Choice(token) => serde_json::json!(token),
+                pos_country::SettingDefaultValue::Int(number) => serde_json::json!(number),
+                pos_country::SettingDefaultValue::Bool(on) => serde_json::json!(on),
+            };
+            assert_eq!(setting.check(&value), Ok(()), "{}", forbidden.setting_key);
+            assert!(
+                pack.setting_defaults()
+                    .iter()
+                    .all(|seeded| seeded != &forbidden),
+                "the {} pack seeds a value it forbids",
+                pack.country_code()
+            );
+        }
+        let refuses_hand_entry = pack.forbidden_settings().iter().any(|forbidden| {
+            forbidden.setting_key == "weighing.manual_entry"
+                && forbidden.value == pos_country::SettingDefaultValue::Bool(true)
+        });
+        assert_eq!(
+            refuses_hand_entry,
+            pack.country_code() != pos_proto::locale::CountryCode::ZZ,
+            "{}",
+            pack.country_code()
+        );
+    }
+}
+
 /// Reads `body` as the café template, against the real register.
 fn cafe(body: &str) -> Result<super::Template, TemplateError> {
     let source = format!(r#"{{"business_type": "BUSINESS_TYPE_CAFE", {body}}}"#);

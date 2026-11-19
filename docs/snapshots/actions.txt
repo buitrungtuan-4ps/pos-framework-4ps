@@ -464,6 +464,23 @@ sales.line.void	refusal=APPROVAL_REQUIRED
 sales.line.void	refusal=VOID_REASON_NOT_VALID
 sales.line.void	route=POST /api/lines/{id}/void
 sales.line.void	since=0.14.1
+sales.line.weigh
+sales.line.weigh	effect=ACTION_EFFECT_EDGE_WRITE
+sales.line.weigh	frequency=ACTION_FREQUENCY_COMMON
+sales.line.weigh	param=menu_item_id:ACTION_PARAM_KIND_ID:required
+sales.line.weigh	param=net_grams:ACTION_PARAM_KIND_COUNT:optional
+sales.line.weigh	param=order_id:ACTION_PARAM_KIND_ID:required
+sales.line.weigh	param=source:ACTION_PARAM_KIND_TEXT:required
+sales.line.weigh	permission=sales.line.add
+sales.line.weigh	refusal=ITEM_NOT_SELLABLE
+sales.line.weigh	refusal=MANUAL_WEIGHT_NOT_ALLOWED
+sales.line.weigh	refusal=NOT_SOLD_BY_WEIGHT
+sales.line.weigh	refusal=SCALE_ABSENT
+sales.line.weigh	refusal=SCALE_NOT_SETTLED
+sales.line.weigh	refusal=WEIGHT_ABOVE_MAXIMUM
+sales.line.weigh	refusal=WEIGHT_BELOW_MINIMUM
+sales.line.weigh	route=POST /api/orders/{id}/weigh
+sales.line.weigh	since=0.14.1
 sales.order.close
 sales.order.close	effect=ACTION_EFFECT_EDGE_WRITE
 sales.order.close	frequency=ACTION_FREQUENCY_RARE

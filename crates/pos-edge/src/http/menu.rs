@@ -182,6 +182,12 @@ pub(crate) struct MenuResponse {
     /// ([ADR-0222](../../../../docs/adr/0222-items-carry-barcodes-and-plus-and-a-counter-can-pay-first.md)
     /// decision 2): 50 until a store sets it. A till reading an edge older than the field uses 50.
     scan_keystroke_window_ms: i64,
+    /// Whether a weighed item's weight may be typed by hand, from the `weighing` node
+    /// ([ADR-0223](../../../../docs/adr/0223-a-weighed-item-is-priced-by-its-weight.md)): `false`
+    /// until the store's country pack or the store turns it on, and on a till reading an older edge.
+    weighing_manual_entry: bool,
+    /// The least net grams a weighed line may carry: 1 until a store sets it.
+    weighing_min_grams: u32,
     /// Whether the store sells by barcode (`barcode_enabled`), which turns on the till's scan
     /// listener and its code index (decision 7).
     barcode_enabled: bool,
@@ -459,6 +465,8 @@ where
             walk_in_channel: session.counter.walk_in_channel().as_wire(),
             check_before_payment: session.billing.check_before_payment(),
             scan_keystroke_window_ms: session.scan.keystroke_window_ms(),
+            weighing_manual_entry: edge.manual_weight_allowed(),
+            weighing_min_grams: session.weighing.min_grams(),
             barcode_enabled: session.capabilities.enabled(Capability::Barcode),
             pay_first_enabled: session.capabilities.enabled(Capability::PayFirst),
             tabs_enabled: session.capabilities.enabled(Capability::Tabs),

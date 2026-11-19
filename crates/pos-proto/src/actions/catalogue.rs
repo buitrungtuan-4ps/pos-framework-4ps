@@ -153,6 +153,30 @@ pub const CATALOGUE: &[Action] = &[
         ..BASE
     },
     Action {
+        action_id: "sales.line.weigh",
+        effect: EdgeWrite,
+        params: &[
+            required("order_id", Id),
+            required("menu_item_id", Id),
+            required("source", Text),
+            optional("net_grams", Count),
+        ],
+        routes: &["POST /api/orders/{id}/weigh"],
+        permissions: ADD_LINE,
+        refusals: &[
+            "NOT_SOLD_BY_WEIGHT",
+            "MANUAL_WEIGHT_NOT_ALLOWED",
+            "SCALE_NOT_SETTLED",
+            "SCALE_ABSENT",
+            "WEIGHT_BELOW_MINIMUM",
+            "WEIGHT_ABOVE_MAXIMUM",
+            "ITEM_NOT_SELLABLE",
+        ],
+        summary: "Add a weighed item by the scale's settled weight or a typed one, priced per \
+                  kilogram by the edge",
+        ..BASE
+    },
+    Action {
         action_id: "sales.line.set_quantity",
         effect: EdgeWrite,
         params: &[required("order_line_id", Id), required("quantity", Count)],

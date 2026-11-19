@@ -107,6 +107,19 @@ pub trait CountryModule: Send + Sync + 'static {
         Vec::new()
     }
 
+    /// The setting values this country's law forbids a store to run
+    /// ([ADR-0223](../../../docs/adr/0223-a-weighed-item-is-priced-by-its-weight.md) decision 3):
+    /// each a register key and the one value refused, such as `weighing.manual_entry` on where only
+    /// a certified scale may set a weight sold by it.
+    ///
+    /// Values only, like [`Self::setting_defaults`] (ADR-0105). The cloud refuses such a write, and
+    /// the edge refuses the act it would allow whatever the store's setting says. Phase 7's legal
+    /// suites may lift an entry once a country's law is confirmed. Empty by default, so a pack that
+    /// says nothing forbids nothing.
+    fn forbidden_settings(&self) -> Vec<SettingDefault> {
+        Vec::new()
+    }
+
     /// The sections of a receipt a template may leave out that this country's law requires all the
     /// same ([ADR-0207](../../../docs/adr/0207-a-receipt-is-a-structured-template-per-store-and-channel.md)
     /// decision 3): the cloud refuses a `receipt` template that turns one of these off.
@@ -180,6 +193,18 @@ impl CountryRegistry {
     /// Every country in this build, in the order the features were listed.
     pub fn modules(&self) -> impl Iterator<Item = &dyn CountryModule> {
         self.modules.iter().map(Box::as_ref)
+    }
+
+    /// Whether any country in this build forbids `setting_key` to be `value`
+    /// ([`CountryModule::forbidden_settings`], ADR-0223).
+    #[must_use]
+    pub fn forbids(&self, setting_key: &str, value: SettingDefaultValue) -> bool {
+        self.modules().any(|module| {
+            module
+                .forbidden_settings()
+                .iter()
+                .any(|forbidden| forbidden.setting_key == setting_key && forbidden.value == value)
+        })
     }
 
     /// Every country code in this build.
@@ -444,6 +469,12 @@ mod tests {
         // The trait's default, which every pack written before ADR-0183 takes: it changes nothing a
         // new store is given.
         assert!(Stub::of(CountryCode::VN).setting_defaults().is_empty());
+        // Nor forbids one (ADR-0223), so a registry of such packs forbids nothing.
+        assert!(Stub::of(CountryCode::VN).forbidden_settings().is_empty());
+        assert!(!registry(&[CountryCode::VN]).forbids(
+            "weighing.manual_entry",
+            crate::SettingDefaultValue::Bool(true)
+        ));
     }
 
     #[test]

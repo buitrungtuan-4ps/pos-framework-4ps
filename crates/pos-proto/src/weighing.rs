@@ -37,6 +37,19 @@ wire_enum! {
     Manual = "MANUAL",
 }
 
+wire_enum! {
+    /// What the scale beside the till says, as the till shows it before it weighs.
+    ScaleState, prefix = "SCALE_STATE";
+    /// The load has settled: its net weight may be taken.
+    Stable = "STABLE",
+    /// The load is still moving.
+    Unstable = "UNSTABLE",
+    /// The load is above what the scale can weigh.
+    Overloaded = "OVERLOADED",
+    /// The scale reads below zero.
+    UnderZero = "UNDER_ZERO",
+}
+
 /// The values `min_grams` may take.
 pub const MIN_GRAMS: RangeInclusive<i64> = 1..=1_000;
 

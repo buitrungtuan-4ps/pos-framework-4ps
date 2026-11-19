@@ -16,5 +16,8 @@ mod scan;
 mod sold_out;
 mod tab_label;
 mod tabs;
+mod weigh;
 
 pub use tab_label::TabLabel;
+pub use weigh::WeighFrom;
+pub(crate) use weigh::{DynScale, NoScale};

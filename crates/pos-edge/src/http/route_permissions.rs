@@ -231,6 +231,10 @@ pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
         RouteGate::Person(&[Permission::AddLine]),
     ),
     (
+        "POST /api/orders/{id}/weigh",
+        RouteGate::Person(&[Permission::AddLine]),
+    ),
+    (
         "POST /api/pair",
         RouteGate::NoPerson("a pairing code a manager minted, spent once (ADR-0030)"),
     ),
