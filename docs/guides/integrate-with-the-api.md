@@ -202,11 +202,20 @@ Rollups are computed from the store's event stream after it syncs. A store that 
 reports nothing for those days until it reconnects and drains — the figures are eventually complete,
 not live. For anything that must be immediate, use webhooks (Part 3).
 
-### QR ordering — `POST /v1/qr/orders`
+### QR ordering — `GET /v1/qr/menu` and `POST /v1/qr/orders`
 
-A guest-facing endpoint for a table QR code, authenticated by a signed table token rather than an
-API key, and subject to the store's own guardrails (what may be ordered, whether staff confirm).
-Documented in [ADR-0057](../adr/0057-qr-ordering.md); it is not a general integration path.
+Guest-facing endpoints for a table QR code, authenticated by a signed table token rather than an
+API key, and subject to the store's own guardrails (whether QR ordering is on, the store online,
+its business hours, a per-table rate limit, whether staff confirm). Documented in
+[ADR-0057](../adr/0057-qr-ordering.md) and [ADR-0224](../adr/0224-self-order-is-a-guest-page-and-a-kiosk.md);
+they are not a general integration path.
+
+`GET /v1/qr/menu?table_token=…&lang=…` answers the store's published QR-channel menu: each item's
+`menu_item_id`, its `name` in the language asked for (else the store's display language, else
+English), its `unit_price` in integer minor units, whether it is `available`, and the modifier
+groups it asks about, plus the `languages` the menu carries names in. Tax classes and item codes
+are not on it. Reads count against the table's `per_table_limit` on a counter of their own, so
+reading the menu never spends the table's order budget. Neither endpoint takes personal data.
 
 ### What is deliberately not here
 
