@@ -85,6 +85,28 @@ pub(crate) struct OrderLineRequest {
     note: Option<String>,
 }
 
+impl OrderLineRequest {
+    /// Refuses a line a guest at a table could not have meant
+    /// ([ADR-0224](../../../docs/adr/0224-self-order-is-a-guest-page-and-a-kiosk.md) decision 2):
+    /// a quantity that is not 1 to 99 whole items, more than [`MAX_GUEST_MODIFIERS`] modifiers,
+    /// or a note, which is free text a guest could put personal data in and the page never asks.
+    pub(crate) fn guest_shaped(&self) -> Result<(), &'static str> {
+        if !(1_000..=99_000).contains(&self.quantity_milli) || self.quantity_milli % 1_000 != 0 {
+            return Err("quantity_milli must be 1 to 99 whole items");
+        }
+        if self.modifier_menu_item_ids.len() > MAX_GUEST_MODIFIERS {
+            return Err("a line names too many modifiers");
+        }
+        if self.note.is_some() {
+            return Err("a guest's line carries no note");
+        }
+        Ok(())
+    }
+}
+
+/// The most modifiers one guest line may name.
+pub(crate) const MAX_GUEST_MODIFIERS: usize = 16;
+
 /// An order arriving through the public API.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub(crate) struct OrderRequest {

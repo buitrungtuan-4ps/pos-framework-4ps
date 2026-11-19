@@ -254,6 +254,10 @@ mod full_boot {
         "POST /sync/stores/{store_id}/archive",
         "POST /sync/stores/{store_id}/archive-key",
         "POST /sync/stores/{store_id}/artifact",
+        "GET /qr/",
+        "GET /qr/app.js",
+        "GET /qr/i18n/{file}",
+        "GET /qr/style.css",
         "GET /v1/qr/menu",
         "POST /v1/qr/orders",
     ];
