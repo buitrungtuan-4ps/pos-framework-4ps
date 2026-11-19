@@ -133,6 +133,46 @@ fn publish_bar(document: &mut serde_json::Value) {
     }
 }
 
+/// Whether this demo store has a kiosk — `POS_DEMO_PROFILE=kiosk`
+/// ([ADR-0224](../../../docs/adr/0224-self-order-is-a-guest-page-and-a-kiosk.md)).
+fn kiosk() -> bool {
+    std::env::var("POS_DEMO_PROFILE").is_ok_and(|profile| profile.eq_ignore_ascii_case("kiosk"))
+}
+
+/// The terminal the `kiosk` profile makes a kiosk.
+const DEMO_KIOSK: u128 = 403;
+
+/// On the `kiosk` profile only: the tills of [`demo_tills`] and a third, `Kiosk`, of class
+/// `DEVICE_CLASS_KIOSK`, from which the store derives the kiosk's own record (ADR-0224 decision 4),
+/// and no selling without a shift. A device a manager binds to `Kiosk` signs in as it.
+fn publish_kiosk(document: &mut serde_json::Value) {
+    if !kiosk() {
+        return;
+    }
+    let mut devices = demo_tills(None);
+    if let Some(list) = devices
+        .get_mut("devices")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        list.push(serde_json::json!({
+            "device_id": DeviceId::new(Ulid::from_u128(DEMO_KIOSK)).to_string(),
+            "kind": "DEVICE_KIND_TERMINAL",
+            "connection": "DEVICE_CONNECTION_UNSPECIFIED",
+            "address": "",
+            "name": "Kiosk",
+            "device_class": "DEVICE_CLASS_KIOSK",
+        }));
+    }
+    if let Some(object) = document.as_object_mut() {
+        object.insert("devices".to_owned(), devices);
+        // A kiosk takes orders only while a shift is open, so its replay can see it say so.
+        object.insert(
+            "shift".to_owned(),
+            serde_json::json!({ "no_shift_selling": "NO_SHIFT_SELLING_REFUSE" }),
+        );
+    }
+}
+
 /// Whether this demo store's country rounds its cash — `POS_DEMO_PROFILE=cash-rounding`.
 ///
 /// A property of the *country*, not of the shop: Vietnam rounds to the thousand đồng because that is
@@ -624,6 +664,7 @@ pub fn config_document() -> Option<serde_json::Value> {
         object.insert("shift".to_owned(), demo_drawers());
     }
     publish_bar(&mut document);
+    publish_kiosk(&mut document);
     package::publish_on_its_profile(&mut document);
     // Removed rather than built empty: an absent node is what an unstaffed store is published, and
     // it leaves the bootstrap's empty roster in place exactly as it would there.
