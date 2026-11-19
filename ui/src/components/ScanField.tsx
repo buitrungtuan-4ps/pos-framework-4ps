@@ -56,7 +56,7 @@ export function ScanField() {
         />
       </form>
       <Show when={refusal()}>
-        {(message) => <p class="mb-2 text-sm text-danger" role="status">{message()}</p>}
+        {(message) => <p class="mb-2 text-sm text-danger" role="status" data-outcome="scan-unknown">{message()}</p>}
       </Show>
     </Show>
   );
