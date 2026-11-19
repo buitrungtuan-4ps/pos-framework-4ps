@@ -55,6 +55,9 @@
                   "component_id": "plu_keypad"
                 },
                 {
+                  "component_id": "weight_display"
+                },
+                {
                   "component_id": "menu_toolbar"
                 },
                 {

@@ -303,6 +303,12 @@ pub static CATALOGUE: &[Component] = &[
         ..BASE
     },
     Component {
+        component_id: "weight_display",
+        reads: "order",
+        summary: "The weight of an item sold by weight: what the scale beside the till reads, a weigh button, and a typed weight where the store allows one (ADR-0223).",
+        ..BASE
+    },
+    Component {
         component_id: "tabs_list",
         reads: "tabs",
         summary: "A bar's open tabs by the day's number, with any guest label, what each owes and its last round; opening one, labelling one and closing an empty one (ADR-0221).",

@@ -61,6 +61,9 @@ pub struct DemoItem {
     /// A PLU a cashier keys for it.
     #[serde(default)]
     pub plu: Option<String>,
+    /// Whether it is sold by the kilogram, its prices per kilogram (ADR-0223).
+    #[serde(default)]
+    pub sold_by_weight: bool,
 }
 
 impl DemoItem {
@@ -69,6 +72,11 @@ impl DemoItem {
         ItemCodes {
             barcodes: self.barcodes.clone(),
             plu: self.plu.clone(),
+            sold_by: if self.sold_by_weight {
+                pos_proto::weighing::SoldBy::Weight.into()
+            } else {
+                Open::default()
+            },
             ..ItemCodes::default()
         }
     }

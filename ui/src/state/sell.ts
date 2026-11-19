@@ -8,6 +8,9 @@ import { createContext, createSignal, useContext } from "solid-js";
 import type { MenuItemResponse } from "../api/schemas";
 import type { Money } from "../lib/money";
 
+// A weighed item asks its weight rather than its price (ADR-0223); the order screen asks both here.
+export { askWeight } from "./weigh";
+
 /** The order screen's selling, as `scan_field` and `plu_keypad` use it. */
 export interface Sell {
   readonly sell: (item: MenuItemResponse) => void;

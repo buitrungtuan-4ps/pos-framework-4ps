@@ -324,13 +324,39 @@ pub fn staffed() -> bool {
 /// 89,000₫.
 fn demo_menu(takeaway_apart: bool) -> MenuBook {
     let book = MenuBook::new()
-        .with(SalesChannel::DineIn, demo_catalog(89_000))
-        .with_fallback(demo_catalog(89_000));
+        .with(SalesChannel::DineIn, with_weighed(demo_catalog(89_000)))
+        .with_fallback(with_weighed(demo_catalog(89_000)));
     if takeaway_apart {
         book.with(SalesChannel::Takeaway, demo_catalog(79_000))
     } else {
         book
     }
+}
+
+/// Whether this demo store sells a loaf by weight — `POS_DEMO_PROFILE=weighed`
+/// ([ADR-0223](../../../docs/adr/0223-a-weighed-item-is-priced-by-its-weight.md)), so the browser
+/// gate can weigh it on the example's fake scale. Every other profile sells by the piece only.
+fn weighed() -> bool {
+    std::env::var("POS_DEMO_PROFILE").is_ok_and(|profile| profile.eq_ignore_ascii_case("weighed"))
+}
+
+/// `catalog`, with a fake rye loaf at 120,000₫ a kilogram on the `weighed` profile.
+fn with_weighed(catalog: MenuCatalog) -> MenuCatalog {
+    if !weighed() {
+        return catalog;
+    }
+    catalog.with(MenuEntry {
+        codes: pos_proto::item_codes::ItemCodes {
+            sold_by: pos_proto::weighing::SoldBy::Weight.into(),
+            ..pos_proto::item_codes::ItemCodes::default()
+        },
+        ..MenuEntry::new(
+            MenuItemId::new(Ulid::from_u128(106)),
+            DisplayName::new("Rye by weight"),
+            Money::new(CurrencyCode::VND, 120_000),
+            EdgeSession::standard_tax_class(),
+        )
+    })
 }
 
 /// The demo store's catalogue, with the garden salad at `salad` đồng.

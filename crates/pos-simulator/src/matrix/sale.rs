@@ -63,7 +63,7 @@ pub(super) async fn sell(till: &Till) -> Result<Sale, Failed> {
     let shift_id = text(&shift, "shift_id").map_err(|detail| ("open the shift", detail))?;
     super::tab::tab(till).await?;
     if menu["barcode_enabled"] == json!(true) {
-        super::labels::labels(till, &items[0]).await?;
+        super::labels::labels(till, &items[0], &menu).await?;
     }
 
     let (bill_id, first_line) = if till.tables() {
