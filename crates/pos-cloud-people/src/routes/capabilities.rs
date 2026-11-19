@@ -44,17 +44,17 @@ struct CapabilityFlagView {
 /// ([ADR-0160](../../../docs/adr/0160-everything-a-store-runs-differently-is-published-configuration.md)
 /// decision 5: every switch the console offers changes behaviour at the edge).
 ///
-/// `false` for the two nothing a person can reach reads yet: no till screen opens a tab, and every
-/// tableless order is given a queue number whatever `queue_number_enabled` says.
-/// `pay_first_enabled` is offered again since a settle reads it, and `barcode_enabled` since the
-/// till's order screen listens for a scanner where it is on
+/// `false` for the one nothing a person can reach reads yet: every tableless order is given a queue
+/// number whatever `queue_number_enabled` says. `pay_first_enabled` is offered again since a settle
+/// reads it, `barcode_enabled` since the till's order screen listens for a scanner where it is on
 /// ([ADR-0222](../../../docs/adr/0222-items-carry-barcodes-and-plus-and-a-counter-can-pay-first.md)
-/// decisions 6 and 7). Only the console stops offering them. A store's stored value is kept,
+/// decisions 6 and 7), and `tabs_enabled` since the till's Tabs screen opens and lists tabs
+/// ([ADR-0221](../../../docs/adr/0221-a-bar-tab-is-an-order-without-a-table-that-stays-open.md)). Only the console stops offering them. A store's stored value is kept,
 /// published and parsed as before, the presets still name them, and the §10 rules still apply to
 /// them. A flag is offered again in the change that gives it a reader.
 const fn offered(capability: pos_core::capability::Capability) -> bool {
     use pos_core::capability::Capability;
-    !matches!(capability, Capability::Tabs | Capability::QueueNumber)
+    !matches!(capability, Capability::QueueNumber)
 }
 
 /// One capability preset (§10) — a named starting profile the console offers as a button, given as the
