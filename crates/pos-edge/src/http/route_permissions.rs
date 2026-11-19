@@ -263,6 +263,12 @@ pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
         RouteGate::Person(&[Permission::ManageDevices]),
     ),
     (
+        "POST /api/session/kiosk",
+        RouteGate::NoPerson(
+            "a kiosk's own device signs in as its kiosk's staff record; the binding is the credential (ADR-0224)",
+        ),
+    ),
+    (
         "POST /api/session/sign-in",
         RouteGate::NoPerson("a staff code and PIN: where a person becomes the one acting"),
     ),
@@ -399,6 +405,10 @@ pub const NOT_ON_A_ROUTE: &[(Permission, &str)] = &[
     (
         Permission::ChoosePackage,
         "a store's package version is chosen in the console (ADR-0189)",
+    ),
+    (
+        Permission::ExitKiosk,
+        "checked as a person signs in on a kiosk, which is how they leave it (ADR-0224)",
     ),
     (Permission::ManageTenant, "cloud-only administration"),
     (Permission::ManageStaff, "cloud-only administration"),

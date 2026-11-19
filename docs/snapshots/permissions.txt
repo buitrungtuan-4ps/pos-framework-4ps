@@ -12,6 +12,12 @@ admin.device.manage	default_role=OWNER
 admin.device.manage	group=STORE_ADMINISTRATION
 admin.device.manage	pin_required=false
 admin.device.manage	risk=HIGH
+admin.kiosk.exit
+admin.kiosk.exit	default_role=MANAGER
+admin.kiosk.exit	default_role=OWNER
+admin.kiosk.exit	group=STORE_ADMINISTRATION
+admin.kiosk.exit	pin_required=true
+admin.kiosk.exit	risk=MEDIUM
 admin.package.choose
 admin.package.choose	default_role=MANAGER
 admin.package.choose	default_role=OWNER

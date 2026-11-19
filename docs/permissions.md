@@ -45,3 +45,4 @@ Generated from `crates/pos-core/src/permission.rs`. Do not edit by hand — run 
 | `integrations.lookup.run` | SALES | MEDIUM | · | · | · | · | · | · | · |
 | `cloud.tenant.manage` | CLOUD_ADMINISTRATION | HIGH | · | ✓ | · | · | · | · | · |
 | `cloud.staff.manage` | CLOUD_ADMINISTRATION | HIGH | · | ✓ | · | · | · | · | · |
+| `admin.kiosk.exit` | STORE_ADMINISTRATION | MEDIUM | yes | ✓ | ✓ | · | · | · | · |

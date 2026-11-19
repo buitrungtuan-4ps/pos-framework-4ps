@@ -18,6 +18,7 @@ use super::{
 
 use crate::origins::Origins;
 use pos_proto::billing::PublishedBilling;
+use pos_proto::kiosk::PublishedKiosk;
 use pos_proto::receipt::PublishedReceipt;
 use pos_proto::scan::PublishedScan;
 use pos_proto::tabs::PublishedTabs;
@@ -420,7 +421,7 @@ pub(super) fn apply_bill_rules(session: &mut EdgeSession, document: &serde_json:
     }
 }
 
-/// The `tender_keys`, `counter`, `scan`, `weighing`, `tabs` and `backup` nodes of settings
+/// The `tender_keys`, `counter`, `scan`, `weighing`, `kiosk`, `tabs` and `backup` nodes of settings
 /// (ADR-0160).
 pub(super) fn apply_till_settings(session: &mut EdgeSession, document: &serde_json::Value) {
     // The `tender_keys` node (ADR-0160 decision 2): the keys the pay screen offers. A node of
@@ -470,6 +471,15 @@ pub(super) fn apply_till_settings(session: &mut EdgeSession, document: &serde_js
         Some(value) => {
             if let Ok(weighing) = serde_json::from_value::<PublishedWeighing>(value.clone()) {
                 session.weighing = weighing;
+            }
+        }
+    }
+    // The `kiosk` node (ADR-0224): how long an untouched kiosk order waits, read as `scan` is.
+    match document.get(PublishedKiosk::NODE) {
+        None => session.kiosk = PublishedKiosk::default(),
+        Some(value) => {
+            if let Ok(kiosk) = serde_json::from_value::<PublishedKiosk>(value.clone()) {
+                session.kiosk = kiosk;
             }
         }
     }

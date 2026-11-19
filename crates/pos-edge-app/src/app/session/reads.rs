@@ -139,6 +139,7 @@ impl EdgeSession {
             counter: PublishedCounter::default(),
             scan: pos_proto::scan::PublishedScan::default(),
             weighing: pos_proto::weighing::PublishedWeighing::default(),
+            kiosk: pos_proto::kiosk::PublishedKiosk::default(),
             tabs: pos_proto::tabs::PublishedTabs::default(),
             billing: PublishedBilling::default(),
             backup: PublishedBackup::default(),

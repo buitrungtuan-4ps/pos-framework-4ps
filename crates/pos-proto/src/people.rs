@@ -74,6 +74,18 @@ pub struct PublishedStaffMember {
     /// event or a log: `Debug` prints only how many there are.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub role_ids: Vec<String>,
+    /// The `TERMINAL` device this record is the kiosk staff record of, as a ULID string, or `None`
+    /// for a person
+    /// ([ADR-0224](../../../docs/adr/0224-self-order-is-a-guest-page-and-a-kiosk.md) decision 4).
+    ///
+    /// The cloud creates one such record per terminal the console makes a kiosk, with a generated
+    /// name and no PIN, and retires it when the terminal stops being one. The edge signs a device
+    /// bound to that terminal in as the record when its till starts, and holds the record to the
+    /// fixed `KIOSK` set whatever [`Self::permissions`] says. Skipped from the wire when absent, so
+    /// a node with no kiosk is byte-identical; an edge that predates it reads the record as a person
+    /// with no PIN, who cannot sign in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kiosk_device_id: Option<String>,
 }
 
 impl core::fmt::Debug for PublishedStaffMember {
@@ -87,6 +99,7 @@ impl core::fmt::Debug for PublishedStaffMember {
             .field("discount_ceiling_minor", &self.discount_ceiling_minor)
             .field("has_pin", &self.pin_phc.is_some())
             .field("role_count", &self.role_ids.len())
+            .field("kiosk_device_id", &self.kiosk_device_id)
             .finish_non_exhaustive()
     }
 }
@@ -150,6 +163,7 @@ mod tests {
             discount_ceiling_minor: None,
             pin_phc: Some("$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA".to_owned()),
             role_ids: Vec::new(),
+            kiosk_device_id: None,
         }
     }
 
@@ -270,5 +284,25 @@ mod tests {
         assert!(!printed.contains("C01"));
         assert!(!printed.contains("argon2id"));
         assert!(printed.contains("has_pin: true"));
+    }
+
+    #[test]
+    fn a_kiosk_record_names_its_terminal_on_the_wire_only_when_it_is_one() {
+        const TERMINAL: &str = "01J0000000000000000000KSK1";
+        let kiosk = PublishedStaffMember {
+            kiosk_device_id: Some(TERMINAL.to_owned()),
+            pin_phc: None,
+            ..member()
+        };
+        let text = serde_json::to_string(&kiosk).expect("serialise");
+        assert!(text.contains(r#""kiosk_device_id":"01J0000000000000000000KSK1""#));
+        let back: PublishedStaffMember = serde_json::from_str(&text).expect("deserialise");
+        assert_eq!(back.kiosk_device_id.as_deref(), Some(TERMINAL));
+        assert!(
+            !serde_json::to_string(&member())
+                .expect("serialise")
+                .contains("kiosk_device_id"),
+            "a person is written as before the field"
+        );
     }
 }

@@ -300,6 +300,10 @@ pub struct EdgeSession {
     /// `weighing` node ([ADR-0223](../../../../docs/adr/0223-a-weighed-item-is-priced-by-its-weight.md)):
     /// no hand entry and one gram in the bootstrap and wherever the node sets none.
     pub weighing: pos_proto::weighing::PublishedWeighing,
+    /// How long an untouched kiosk order waits before the kiosk voids it, from the `kiosk` node
+    /// ([ADR-0224](../../../../docs/adr/0224-self-order-is-a-guest-page-and-a-kiosk.md)): 120
+    /// seconds in the bootstrap and wherever the node sets none.
+    pub kiosk: pos_proto::kiosk::PublishedKiosk,
     /// Whether a bar tab may carry a guest's label, from the `tabs` node
     /// ([ADR-0221](../../../../docs/adr/0221-a-bar-tab-is-an-order-without-a-table-that-stays-open.md)):
     /// off in the bootstrap and wherever the node sets none.

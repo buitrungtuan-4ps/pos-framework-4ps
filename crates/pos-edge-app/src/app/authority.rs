@@ -8,7 +8,7 @@
 use pos_core::business_date::derive_business_date;
 use pos_core::decision::{Actor, DecisionCtx};
 use pos_core::error::DomainError;
-use pos_core::permission::{Permission, PermissionSet};
+use pos_core::permission::{KIOSK_GRANTS, Permission, PermissionSet};
 use pos_ports::event_store::EventStore;
 use pos_proto::ClockSource;
 use pos_proto::events::SecurityPermissionOverridden;
@@ -37,6 +37,16 @@ impl<S: EventStore> Edge<S> {
         approval: Option<&Approval>,
     ) -> Result<Option<EmployeeId>, AppError> {
         let session = self.session();
+        // A kiosk's own record is never stepped up past its fixed set, by anybody's PIN (ADR-0224
+        // decision 4).
+        if session.staff.is_kiosk(ctx.actor.employee_id) {
+            if KIOSK_GRANTS.contains(permission) {
+                return Ok(None);
+            }
+            return Err(AppError::Domain(DomainError::PermissionDenied {
+                permission: permission.meta().id,
+            }));
+        }
         // Where the store enforces each person's own set (ADR-0158 decision 4), the actor's role
         // says whether this act needs an approver: none for a permission held directly, one for a
         // permission held with approval, and a refusal for one not held at all. Elsewhere the
@@ -135,7 +145,11 @@ impl<S: EventStore> Edge<S> {
         // approval joins a context one act at a time, in `resolve_step_up`. Until then the
         // store-wide set, in which nobody holds anything directly, so a PIN-flagged permission asks
         // for a PIN as it always has.
-        let (granted, granted_directly) = if session.permissions_enforced {
+        // A kiosk's own record acts on the fixed kiosk set alone, enforced or not (ADR-0224
+        // decision 4): the store-wide set would hand a guest at the kiosk everything.
+        let (granted, granted_directly) = if session.staff.is_kiosk(actor.employee_id) {
+            (KIOSK_GRANTS, KIOSK_GRANTS)
+        } else if session.permissions_enforced {
             let own = session
                 .staff
                 .permissions_for(actor.employee_id)

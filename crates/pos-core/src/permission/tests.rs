@@ -4,7 +4,7 @@
 //! The permission catalogue's unit tests.
 
 use super::{
-    Grant, Permission, PermissionSet, Role, default_grants, render_matrix_markdown,
+    Grant, KIOSK_GRANTS, Permission, PermissionSet, Role, default_grants, render_matrix_markdown,
     render_snapshot, require,
 };
 use crate::error::DomainError;
@@ -290,4 +290,24 @@ fn reading_a_shifts_x_is_the_manager_and_the_owners_without_a_pin() {
             "{role:?}"
         );
     }
+}
+
+#[test]
+fn a_kiosk_opens_an_order_rings_it_and_sends_it_to_be_paid_and_nothing_else() {
+    // ADR-0224 decision 4: the fixed set a tenant cannot widen.
+    let granted: Vec<&str> = Permission::ALL
+        .iter()
+        .filter(|permission| KIOSK_GRANTS.contains(**permission))
+        .map(|permission| permission.meta().id)
+        .collect();
+    assert_eq!(granted, ["sales.line.add", "billing.bill.open"]);
+}
+
+#[test]
+fn leaving_a_kiosk_takes_a_pin_and_is_the_manager_and_the_owners_by_default() {
+    let exit = Permission::ExitKiosk.meta();
+    assert_eq!(exit.id, "admin.kiosk.exit");
+    assert!(exit.pin_required);
+    assert_eq!(exit.default_roles, [Role::Manager, Role::Owner]);
+    assert!(!KIOSK_GRANTS.contains(Permission::ExitKiosk));
 }

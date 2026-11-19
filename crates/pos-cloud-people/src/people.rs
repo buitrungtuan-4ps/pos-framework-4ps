@@ -884,13 +884,16 @@ mod tests {
     use pos_proto::ids::{StoreId, TenantId};
     use pos_proto::ulid::Ulid;
 
-    /// The two later grants both backfill tests read, 0086 and 0087.
+    /// The later grants both backfill tests read, 0086, 0087 and 0104.
     const MIGRATION_0086: &str = include_str!(
         "../../adapters/store-postgres/migrations/0086_roles_can_override_an_assigned_drawer.sql"
     );
     const MIGRATION_0087: &str = include_str!(
         "../../adapters/store-postgres/migrations/0087_roles_can_void_a_paid_bill.sql"
     );
+    /// `admin.kiosk.exit` (ADR-0224 decision 4).
+    const MIGRATION_0104: &str =
+        include_str!("../../adapters/store-postgres/migrations/0104_roles_can_leave_a_kiosk.sql");
 
     /// A one-store assignment reads as it did, with `scope_kind` added before the `store_id` it
     /// always carried; a group's names its group instead, and a tenant-wide one names neither
@@ -942,7 +945,7 @@ mod tests {
     /// since is granted by a migration of its own, which names it — 0076 for `billing.fee.waive`
     /// (ADR-0159 decision 5), 0084 for `cash.shift.manage_other_till` (ADR-0167 decision 3), 0086
     /// for `cash.drawer.override_assignment` (decision 9) and 0087 for `billing.bill.void_settled`
-    /// (ADR-0184 decision 4). Together they are the `pin_required=true` lines of
+    /// (ADR-0184 decision 4), and 0104 for `admin.kiosk.exit` (ADR-0224 decision 4). Together they are the `pin_required=true` lines of
     /// `docs/snapshots/permissions.txt`, each granted once, so the backfills and the catalogue
     /// cannot drift.
     #[test]
@@ -978,6 +981,7 @@ mod tests {
             ("cash.shift.manage_other_till", MIGRATION_0084),
             ("cash.drawer.override_assignment", MIGRATION_0086),
             ("billing.bill.void_settled", MIGRATION_0087),
+            ("admin.kiosk.exit", MIGRATION_0104),
         ];
         for (id, migration) in later {
             assert!(
@@ -1038,6 +1042,7 @@ mod tests {
             ("cash.shift.manage_other_till", MIGRATION_0084),
             ("cash.drawer.override_assignment", MIGRATION_0086),
             ("billing.bill.void_settled", MIGRATION_0087),
+            ("admin.kiosk.exit", MIGRATION_0104),
         ];
         for (id, migration) in later {
             assert!(

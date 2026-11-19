@@ -48,6 +48,7 @@ use utoipa::{Modify, OpenApi};
         super::pair::paired_devices,
         super::auth::current_session,
         super::auth::sign_in,
+        super::kiosk::kiosk_sign_in,
         super::auth::sign_out,
         super::floor::floor_plan,
         super::menu::menu_catalog,

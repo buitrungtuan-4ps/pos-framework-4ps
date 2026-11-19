@@ -273,11 +273,12 @@ fn existing_roles_grant_each_pin_flagged_permission_with_approval_once() {
                         ('0084_roles_can_manage_another_tills_drawer'), \
                         ('0086_roles_can_override_an_assigned_drawer'), \
                         ('0087_roles_can_void_a_paid_bill'), \
-                        ('0088_roles_can_read_a_shifts_x')",
+                        ('0088_roles_can_read_a_shifts_x'), \
+                        ('0104_roles_can_leave_a_kiosk')",
                 &[],
             )
             .await
-            .expect("0073, 0076, 0079, 0084, 0086, 0087 and 0088 have already run");
+            .expect("0073, 0076, 0079, 0084, 0086, 0087, 0088 and 0104 have already run");
         let people = store.people();
         // A manager who voids directly, and so approves voids for others, listed out of order
         // as a console may have written it.
@@ -444,11 +445,12 @@ fn existing_roles_waive_a_fee_on_the_terms_they_exceed_the_ceiling_once() {
                         ('0084_roles_can_manage_another_tills_drawer'), \
                         ('0086_roles_can_override_an_assigned_drawer'), \
                         ('0087_roles_can_void_a_paid_bill'), \
-                        ('0088_roles_can_read_a_shifts_x')",
+                        ('0088_roles_can_read_a_shifts_x'), \
+                        ('0104_roles_can_leave_a_kiosk')",
                 &[],
             )
             .await
-            .expect("0073, 0074, 0079, 0084, 0086, 0087 and 0088 have already run");
+            .expect("0073, 0074, 0079, 0084, 0086, 0087, 0088 and 0104 have already run");
         let people = store.people();
         // A manager who exceeds the ceiling directly, and so approves it for others.
         people
@@ -643,11 +645,12 @@ fn existing_approvers_who_close_a_shift_see_takings_once_and_no_other_role_does(
                         ('0084_roles_can_manage_another_tills_drawer'), \
                         ('0086_roles_can_override_an_assigned_drawer'), \
                         ('0087_roles_can_void_a_paid_bill'), \
-                        ('0088_roles_can_read_a_shifts_x')",
+                        ('0088_roles_can_read_a_shifts_x'), \
+                        ('0104_roles_can_leave_a_kiosk')",
                 &[],
             )
             .await
-            .expect("0073, 0074, 0076, 0084, 0086, 0087 and 0088 have already run");
+            .expect("0073, 0074, 0076, 0084, 0086, 0087, 0088 and 0104 have already run");
         let people = store.people();
         // (role, name, direct, with approval), each the one case it is named for.
         let authored = [

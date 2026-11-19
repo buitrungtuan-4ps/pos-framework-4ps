@@ -102,6 +102,18 @@ fn permission_set_from_ids(ids: &[String]) -> PermissionSet {
 fn roster_from(staff: Vec<PublishedStaffMember>, currency: CurrencyCode) -> StaffRoster {
     let mut roster = StaffRoster::new();
     for member in staff {
+        // A kiosk's own record (ADR-0224 decision 4) holds the fixed kiosk set whatever it lists,
+        // and one whose ids do not parse is left out rather than read as a person.
+        if let Some(terminal) = member.kiosk_device_id.as_deref() {
+            let employee = member
+                .id
+                .as_deref()
+                .and_then(|id| id.parse::<pos_proto::ids::EmployeeId>().ok());
+            if let (Some(employee), Ok(terminal)) = (employee, terminal.parse()) {
+                roster.insert_kiosk(member.code, employee, terminal);
+            }
+            continue;
+        }
         let permissions = permission_set_from_ids(&member.permissions);
         // Held directly wins: a permission listed both ways is one the person acts on alone, so the
         // with-approval set never overlaps it.

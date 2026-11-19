@@ -80,6 +80,7 @@ From [`docs/openapi-edge.json`](../openapi-edge.json).
 | GET | `/api/reports/takings` | `takings` | `till_session` | `reports.takings.view` | [`crates/pos-edge/src/http/reports.rs`](../../crates/pos-edge/src/http/reports.rs) |
 | GET | `/api/scale` | `read_scale` | `till_session` | — | [`crates/pos-edge/src/http/weigh.rs`](../../crates/pos-edge/src/http/weigh.rs) |
 | GET | `/api/session` | `current_session` | `till_session` | — | [`crates/pos-edge/src/http/auth.rs`](../../crates/pos-edge/src/http/auth.rs) |
+| POST | `/api/session/kiosk` | `kiosk_sign_in` | `till_session` | — | [`crates/pos-edge/src/http/kiosk.rs`](../../crates/pos-edge/src/http/kiosk.rs) |
 | POST | `/api/session/sign-in` | `sign_in` | `till_session` | — | [`crates/pos-edge/src/http/auth.rs`](../../crates/pos-edge/src/http/auth.rs) |
 | POST | `/api/session/sign-out` | `sign_out` | `till_session` | — | [`crates/pos-edge/src/http/auth.rs`](../../crates/pos-edge/src/http/auth.rs) |
 | GET | `/api/shifts` | `list_drawers` | `till_session` | — | [`crates/pos-edge/src/http/shifts.rs`](../../crates/pos-edge/src/http/shifts.rs) |

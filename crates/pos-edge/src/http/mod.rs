@@ -28,6 +28,7 @@ mod guarded;
 pub mod health;
 mod integrations;
 pub mod kds;
+mod kiosk;
 pub mod layout;
 pub mod lines;
 mod live;
@@ -470,6 +471,7 @@ where
     Router::new()
         .route("/api/session", get(auth::current_session::<S>))
         .route("/api/session/sign-in", post(auth::sign_in::<S>))
+        .route("/api/session/kiosk", post(kiosk::kiosk_sign_in::<S>))
         .route("/api/session/sign-out", post(auth::sign_out::<S>))
         .with_state(auth::SignInDeps {
             edge,

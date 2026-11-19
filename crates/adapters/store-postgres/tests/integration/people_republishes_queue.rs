@@ -80,11 +80,12 @@ fn the_stores_whose_people_were_published_are_queued_once() {
                  VALUES ('0084_roles_can_manage_another_tills_drawer'), \
                         ('0086_roles_can_override_an_assigned_drawer'), \
                         ('0087_roles_can_void_a_paid_bill'), \
-                        ('0088_roles_can_read_a_shifts_x')",
+                        ('0088_roles_can_read_a_shifts_x'), \
+                        ('0104_roles_can_leave_a_kiosk')",
                 &[],
             )
             .await
-            .expect("0084, 0086, 0087 and 0088 have already run");
+            .expect("0084, 0086, 0087, 0088 and 0104 have already run");
         let trees = postgres.config_trees();
         for (tenant_id, store_id, state) in &seeded {
             trees
@@ -144,7 +145,7 @@ fn the_stores_whose_people_were_published_are_queued_once() {
 
 /// Every marker-gated migration that grants roles a permission, and the queue's: a test of one
 /// writes the others' markers before its boot, so the boot runs that one alone.
-const MARKED: [&str; 9] = [
+const MARKED: [&str; 10] = [
     "0073_roles_keep_every_till_action",
     "0074_role_permissions_with_approval",
     "0076_roles_can_waive_a_fee",
@@ -154,6 +155,7 @@ const MARKED: [&str; 9] = [
     "0086_roles_can_override_an_assigned_drawer",
     "0087_roles_can_void_a_paid_bill",
     "0088_roles_can_read_a_shifts_x",
+    "0104_roles_can_leave_a_kiosk",
 ];
 
 /// Every role that exists is given, once, `cash.shift.manage_other_till` on the terms it grants
@@ -190,6 +192,13 @@ fn a_paid_bills_void_is_granted_once_on_the_voids_terms_and_its_stores_are_queue
         "billing.bill.void",
         0x0087,
     );
+}
+
+/// Every role that exists is given, once, `admin.kiosk.exit` on the terms it grants
+/// `admin.device.manage` (migration 0104, ADR-0224 decision 4).
+#[test]
+fn leaving_a_kiosk_is_granted_once_on_device_managements_terms_and_its_stores_are_queued() {
+    granted_once_on_the_terms_of(MARKED[9], "admin.kiosk.exit", "admin.device.manage", 0x0104);
 }
 
 /// The migration `grant` gives every role, once, `permission` on the terms it grants `terms`
