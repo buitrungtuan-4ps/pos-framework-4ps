@@ -140,8 +140,6 @@ pub fn compile_permissions(
                     .cloned()
                     .flatten(),
                 role_ids: person.role_ids.into_iter().collect(),
-                // Kiosk records are the cloud's kiosk slice's to publish (ADR-0224 decision 4).
-                kiosk_device_id: None,
             }
         })
         .collect();

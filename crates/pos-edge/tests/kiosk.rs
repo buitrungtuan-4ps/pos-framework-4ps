@@ -36,7 +36,8 @@ const SALT: &[u8] = b"a-fixed-test-slt";
 
 const KIOSK_TERMINAL: u128 = 0x7A01;
 const COUNTER_TERMINAL: u128 = 0x7A02;
-const KIOSK_RECORD: u128 = 0x0C1;
+/// A kiosk's record is its terminal's own id.
+const KIOSK_RECORD: u128 = KIOSK_TERMINAL;
 const MANAGER: u128 = 24;
 const CASHIER: u128 = 21;
 const MANAGER_PIN: &str = "4417";
@@ -76,15 +77,10 @@ fn terminal(seed: u128, name: &str, class: Option<DeviceClass>) -> PublishedDevi
     }
 }
 
-/// The store's staff: the kiosk's own record, a manager who may leave a kiosk and a cashier who
-/// may not. The kiosk record is published with every permission, which it must not keep.
+/// The store's people: a manager who may leave a kiosk and a cashier who may not. The kiosk's own
+/// record is not among them: the store derives it from the published `devices` node.
 fn staff() -> StaffRoster {
     let mut staff = StaffRoster::new();
-    staff.insert_kiosk(
-        "KIOSK-1",
-        EmployeeId::new(Ulid::from_u128(KIOSK_RECORD)),
-        id(KIOSK_TERMINAL),
-    );
     let till = PermissionSet::EMPTY
         .with(Permission::AddLine)
         .with(Permission::OpenBill)
@@ -117,17 +113,25 @@ fn staff() -> StaffRoster {
 struct Store {
     app: Router,
     edge: Arc<Edge<FakeStore>>,
+    log: FakeStore,
     kiosk: String,
     counter: String,
     unbound: String,
 }
 
+/// The published `devices` node: the kiosk terminal, of `class`, and an ordinary counter.
+fn devices_node(class: Option<DeviceClass>) -> Value {
+    json!({
+        "devices": serde_json::to_value(PublishedDevices::new(vec![
+            terminal(KIOSK_TERMINAL, "Kiosk", class),
+            terminal(COUNTER_TERMINAL, "Counter", Some(DeviceClass::Terminal)),
+        ]))
+        .expect("the node encodes"),
+    })
+}
+
 async fn store() -> Store {
     let mut session = EdgeSession {
-        devices: PublishedDevices::new(vec![
-            terminal(KIOSK_TERMINAL, "Kiosk", Some(DeviceClass::Kiosk)),
-            terminal(COUNTER_TERMINAL, "Counter", Some(DeviceClass::Terminal)),
-        ]),
         ..EdgeSession::bootstrap()
             .with_menu(MenuCatalog::new().with(MenuEntry::new(
                 MenuItemId::new(Ulid::from_u128(ITEM)),
@@ -150,9 +154,15 @@ async fn store() -> Store {
             )
     };
     session.staff = staff();
+    // The kiosk's record comes only from the node the cloud publishes.
+    let log = FakeStore::new();
+    let session = pos_edge::config_client::session_from_config(
+        &session,
+        &devices_node(Some(DeviceClass::Kiosk)),
+    );
     let edge = Arc::new(
         Edge::new(
-            FakeStore::new(),
+            log.clone(),
             StoreIdentity::for_store(StoreId::new(Ulid::from_u128(1))),
             session,
             Arc::new(InMemoryReceipts::new()),
@@ -223,6 +233,7 @@ async fn store() -> Store {
     Store {
         app,
         edge,
+        log,
         kiosk,
         counter,
         unbound,
@@ -303,7 +314,7 @@ async fn only_a_device_bound_to_a_kiosk_terminal_signs_in_as_a_kiosk() {
         &store.counter,
         "POST",
         "/api/session/sign-in",
-        Some(json!({ "code": "KIOSK-1", "pin": "" })),
+        Some(json!({ "code": format!("KIOSK-{}", id(KIOSK_TERMINAL)), "pin": "" })),
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -552,4 +563,65 @@ async fn a_kiosk_may_not_open_the_stores_event_stream() {
         .expect("router responds");
     assert_ne!(counter.status(), StatusCode::FORBIDDEN, "only the handshake's own rules apply");
     assert!(store.edge.session().devices.devices().len() >= 2);
+/// Only the published `devices` node makes a terminal a kiosk: a session that carries the class
+/// any other way holds no kiosk record. And once the node stops making the terminal a kiosk, its
+/// record is gone and the device cannot sign in as it.
+#[tokio::test]
+async fn a_kiosk_record_comes_only_from_the_published_node_and_goes_with_it() {
+    let store = store().await;
+    let (status, _, _) = send(&store.app, &store.kiosk, "POST", "/api/session/kiosk", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let record = EmployeeId::new(Ulid::from_u128(KIOSK_RECORD));
+
+    // Set by hand, the class makes no record: only a node applied through the config path does.
+    let mut by_hand = store.edge.session().as_ref().clone();
+    by_hand.staff = staff();
+    store.edge.apply_session(by_hand);
+    assert!(!store.edge.session().staff.is_kiosk(record));
+    let (status, _, _) = send(&store.app, &store.kiosk, "POST", "/api/session/kiosk", None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // Published again as a kiosk, then retired from the class: the record goes with it.
+    for (class, signs_in) in [
+        (Some(DeviceClass::Kiosk), StatusCode::OK),
+        (None, StatusCode::FORBIDDEN),
+    ] {
+        let next = pos_edge::config_client::session_from_config(
+            &store.edge.session(),
+            &devices_node(class),
+        );
+        store.edge.apply_session(next);
+        let (status, _, _) =
+            send(&store.app, &store.kiosk, "POST", "/api/session/kiosk", None).await;
+        assert_eq!(status, signs_in, "{class:?}");
+    }
+}
+
+/// What a kiosk wrote names its terminal for good: the record goes with the kiosk class, and the
+/// order it opened still names the terminal's own id, which no person's record can carry.
+#[tokio::test]
+async fn a_kiosks_history_outlives_its_record() {
+    use pos_ports::event_store::{EventQuery, EventStore as _};
+
+    let store = store().await;
+    let (status, _, _) = send(&store.app, &store.kiosk, "POST", "/api/session/kiosk", None).await;
+    assert_eq!(status, StatusCode::OK);
+    an_order_with_a_pizza(&store.app, &store.kiosk).await;
+    let retired =
+        pos_edge::config_client::session_from_config(&store.edge.session(), &devices_node(None));
+    store.edge.apply_session(retired);
+    let record = EmployeeId::new(Ulid::from_u128(KIOSK_RECORD));
+    assert!(!store.edge.session().staff.is_kiosk(record));
+
+    let query = EventQuery::first(
+        StoreId::new(Ulid::from_u128(1)),
+        std::num::NonZeroU32::new(100).expect("a positive limit"),
+    );
+    let written = store.log.read(&query).await.expect("the log reads");
+    let opened = written
+        .iter()
+        .find(|envelope| envelope.event_type.as_str() == "sales.order.opened")
+        .expect("the kiosk opened an order");
+    assert_eq!(opened.employee_id, Some(record));
+    assert_eq!(record.as_ulid(), id(KIOSK_TERMINAL).as_ulid());
 }

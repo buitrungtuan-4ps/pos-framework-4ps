@@ -833,6 +833,13 @@ pub fn render_matrix_markdown() -> String {
          `POS_UPDATE_SNAPSHOTS=1 cargo test -p pos-core`. A `✓` is a default grant; roles are data, \
          so a deployment overrides these in the cloud.\n\n",
     );
+    out.push_str(
+        "**The `KIOSK` role is not a column here and not a role row.** It is the code constant \
+         `KIOSK_GRANTS` ([ADR-0224](adr/0224-self-order-is-a-guest-page-and-a-kiosk.md) decision 4): \
+         `sales.line.add` and `billing.bill.open`, which no tenant can widen. A kiosk's staff record \
+         is not stored either: the store derives one for each terminal the published `devices` node \
+         makes `DEVICE_CLASS_KIOSK`, with the terminal's own id, no code to type and no PIN.\n\n",
+    );
 
     out.push_str("| id | group | risk | PIN |");
     for role in Role::ALL {

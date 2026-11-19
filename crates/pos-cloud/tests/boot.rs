@@ -254,6 +254,7 @@ mod full_boot {
         "POST /sync/stores/{store_id}/archive",
         "POST /sync/stores/{store_id}/archive-key",
         "POST /sync/stores/{store_id}/artifact",
+        "GET /v1/qr/menu",
         "POST /v1/qr/orders",
     ];
 

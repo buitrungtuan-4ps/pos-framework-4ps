@@ -7,9 +7,9 @@
 use std::collections::BTreeMap;
 
 use pos_core::permission::{KIOSK_GRANTS, Permission, PermissionSet};
+use pos_proto::devices::{DeviceClass, DeviceKind, PublishedDevices};
 use pos_proto::ids::{BrandId, DeviceId, EmployeeId, StoreId, TenantId};
 use pos_proto::money::Money;
-use pos_proto::people::PublishedStaffMember;
 use pos_proto::ulid::Ulid;
 
 /// Which tenant, brand and store this edge is — the envelope context every event carries. All three
@@ -188,25 +188,32 @@ impl StaffRoster {
         self.kiosks.insert(code, terminal);
     }
 
-    /// Takes the kiosk records out of a published `staff` list into the roster, holding each to the
-    /// fixed kiosk set whatever it lists, and answers the people left
+    /// Replaces the kiosk records with one for each `TERMINAL` the store's published `devices` node
+    /// makes `DEVICE_CLASS_KIOSK`
     /// ([ADR-0224](../../../../docs/adr/0224-self-order-is-a-guest-page-and-a-kiosk.md) decision 4).
-    /// A record whose ids do not parse is left out, never read as a person.
-    pub fn take_published_kiosks(
-        &mut self,
-        staff: Vec<PublishedStaffMember>,
-    ) -> Vec<PublishedStaffMember> {
-        let (kiosks, people): (Vec<_>, Vec<_>) = staff
-            .into_iter()
-            .partition(|member| member.kiosk_device_id.is_some());
-        for kiosk in kiosks {
-            let employee = kiosk.id.as_deref().map(str::parse::<EmployeeId>);
-            let terminal = kiosk.kiosk_device_id.as_deref().map(str::parse::<DeviceId>);
-            if let (Some(Ok(employee)), Some(Ok(terminal))) = (employee, terminal) {
-                self.insert_kiosk(kiosk.code, employee, terminal);
-            }
+    ///
+    /// The record's id is the terminal's own ULID, so the events a kiosk writes name its terminal for
+    /// good, after the terminal is retired or made something else. Its code, `KIOSK-<terminal>`,
+    /// never signs in: it has no PIN. A terminal no longer a kiosk loses its record on the next node,
+    /// and a code a person already holds is never taken from them.
+    pub fn derive_kiosks(&mut self, devices: &PublishedDevices) {
+        for code in core::mem::take(&mut self.kiosks).into_keys() {
+            self.by_code.remove(&code);
+            self.roles_by_code.remove(&code);
         }
-        people
+        for entry in devices.devices() {
+            if entry.kind.known() != DeviceKind::Terminal
+                || entry.device_class() != Some(DeviceClass::Kiosk)
+            {
+                continue;
+            }
+            let code = format!("KIOSK-{}", entry.device_id);
+            if self.by_code.contains_key(&code) {
+                continue;
+            }
+            let employee = EmployeeId::new(entry.device_id.as_ulid());
+            self.insert_kiosk(code, employee, entry.device_id);
+        }
     }
 
     /// The kiosk staff record of the `TERMINAL` device `terminal`, if the roster holds one.
@@ -501,5 +508,43 @@ mod tests {
         );
         assert!(!roster.is_kiosk(kiosk));
         assert_eq!(roster.kiosk_record_of(terminal), None);
+    }
+
+    #[test]
+    fn a_kiosk_record_is_derived_from_each_kiosk_terminal_and_goes_with_it() {
+        use pos_proto::devices::{DeviceClass, DeviceKind, PublishedDevice, PublishedDevices};
+        use pos_proto::ids::DeviceId;
+        use pos_proto::text::DisplayName;
+        use pos_proto::wire_enum::Open;
+
+        let terminal = DeviceId::new(Ulid::from_u128(0x7E1));
+        let node = |class: Option<DeviceClass>| {
+            PublishedDevices::new(vec![PublishedDevice {
+                device_id: terminal,
+                kind: DeviceKind::Terminal.into(),
+                connection: Open::default(),
+                address: String::new(),
+                name: DisplayName::new("Kiosk"),
+                station_id: None,
+                agent_device_id: None,
+                drawer_attached: false,
+                paper_width: Open::default(),
+                cuts_paper: None,
+                receipt_printer_id: None,
+                receipt_language: Open::default(),
+                receipt_second_language: Open::default(),
+                opening_float_minor: None,
+                device_class: class.map_or_else(Open::default, Open::from_known),
+            }])
+        };
+        let record = EmployeeId::new(terminal.as_ulid());
+        let mut roster = super::StaffRoster::new();
+        roster.derive_kiosks(&node(Some(DeviceClass::Kiosk)));
+        assert_eq!(roster.kiosk_record_of(terminal), Some(record));
+        assert!(roster.credentials(&format!("KIOSK-{terminal}")).is_none());
+        roster.derive_kiosks(&node(Some(DeviceClass::Terminal)));
+        assert_eq!(roster.kiosk_record_of(terminal), None);
+        assert!(!roster.is_kiosk(record));
+        assert!(roster.is_empty());
     }
 }
