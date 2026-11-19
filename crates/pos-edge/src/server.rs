@@ -808,13 +808,7 @@ where
     let countries = crate::countries::registry();
     countries.validate().map_err(EdgeError::Country)?;
     tracing::info!(countries = ?countries.country_codes(), "country modules loaded");
-    // A weight typed by hand, where the country's law refuses one (ADR-0223 decision 3).
-    if countries.forbids(
-        "weighing.manual_entry",
-        pos_country::SettingDefaultValue::Bool(true),
-    ) {
-        edge.forbid_manual_weight();
-    }
+    crate::countries::apply_law(&countries, &edge);
 
     // The configuration this store last synced, back into the live session before anything binds
     // (C1). A box that reboots with its broadband down — or that an OTA install has just restarted —
