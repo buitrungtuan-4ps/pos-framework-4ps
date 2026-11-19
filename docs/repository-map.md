@@ -77,6 +77,15 @@ A change to how money, tax or receipt numbering works needs an ADR first (AGENTS
 | Screen | `dashboard/src/screens/<Screen>.tsx`, with strings in `dashboard/src/i18n/en.json` and `vi.json` | `dashboard build` |
 | Test | `dashboard/tests/<topic>.test.tsx` (vitest), and a flow in `dashboard/tests/replay.spec.mjs` | `dashboard build`, console-replay |
 
+## Guest page (`/qr/`)
+
+| Step | Files | Checked by |
+|---|---|---|
+| The page | `guest/index.html`, `guest/app.js`, `guest/style.css`, with no dependency and no build ([ADR-0224](adr/0224-self-order-is-a-guest-page-and-a-kiosk.md) decision 2) | `the_page_builds_nothing_from_markup` |
+| Strings | `guest/i18n/en.json` and `vi.json`; every key the script names is in both | `every_language_has_every_string`, `every_key_the_page_names_is_in_its_strings` |
+| Serving | `crates/pos-cloud/src/qr_http/page.rs`, compiled in, with its content security policy | `crates/pos-cloud/tests/cloud/qr_menu.rs` |
+| The flow | `ui/tests/guest.spec.mjs`, the page in a browser against fake guest routes | replay |
+
 ## Setting a store may run differently
 
 | Step | Files | Checked by |
