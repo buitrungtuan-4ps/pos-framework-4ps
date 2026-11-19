@@ -17,7 +17,7 @@ export { setKioskMenu };
 export function KioskMenu() {
   const items = () => (kioskMenu()?.items ?? []).filter((item) => !item.sold_by_weight && item.open_price === undefined);
   return (
-    <div class="grid grid-cols-2 gap-3 sm:grid-cols-3" data-outcome="kiosk-menu">
+    <div class="grid grid-cols-2 gap-3 tablet:grid-cols-3" data-outcome="kiosk-menu">
       <For each={items()}>
         {(item) => (
           <button

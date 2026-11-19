@@ -73,7 +73,7 @@ function KioskBody(props: { onExit: () => void }) {
           <KioskDone />
         </Match>
         <Match when={true}>
-          <div class="grid gap-4 md:grid-cols-[2fr_1fr]">
+          <div class="grid gap-4 tablet:grid-cols-[2fr_1fr]">
             <KioskMenu />
             <KioskCart />
           </div>
