@@ -20,6 +20,7 @@ import { FloorAlerts, FloorPlan } from "../screens/Floor";
 import { LookupField, LookupResult } from "./lookup";
 import { PluKeypad } from "../components/PluKeypad";
 import { ScanField } from "../components/ScanField";
+import { KioskCart, KioskDone, KioskMenu } from "../components/Kiosk";
 import { WeightDisplay } from "../components/WeightDisplay";
 import { OrderColumn, OrderLayout, OrderMenu } from "./order-regions";
 
@@ -62,4 +63,7 @@ export const IMPLEMENTATIONS: Implementations = {
   scan_field: ScanField,
   plu_keypad: PluKeypad,
   weight_display: WeightDisplay,
+  kiosk_menu: KioskMenu,
+  kiosk_cart: KioskCart,
+  kiosk_done: KioskDone,
 };

@@ -6,6 +6,7 @@ import { MINIMUM_EDGE_VERSION, edgeIsBehind, edgeVersion } from "./api/edgeVersi
 import { edgeIsSuperseded, edgeLeaseIsAhead } from "./api/leaseStanding";
 import { LiveLink } from "./api/live";
 import { IdleLock } from "./components/IdleLock";
+import { KioskApp } from "./components/KioskApp";
 import { ScreenReactions } from "./components/ScreenReactions";
 import { StatusBar } from "./components/StatusBar";
 import { t } from "./i18n";
@@ -160,6 +161,10 @@ export function App() {
   // `GET /api/claim`, and nothing else. So it gets the page alone — no status bar, no navigation, no
   // sign-out and no live link. Each of those reaches for a store that does not exist yet, and on the
   // box's own screen they offered a person reading a code off it a row of places that all failed.
+  // A kiosk draws self-order alone (ADR-0224), apart from the shell whose reads it may not make.
+  if (window.location.pathname.startsWith("/kiosk")) {
+    return <KioskApp />;
+  }
   if (window.location.pathname.startsWith("/claim")) {
     return (
       <main class="min-h-full" data-outcome="claim">
@@ -198,6 +203,11 @@ export function App() {
     void api
       .session()
       .then((session) => {
+        // A kiosk runs its own screen until a person who may leave it signs in.
+        if (session.device_class === "DEVICE_CLASS_KIOSK" && !(session.permissions ?? []).includes("admin.kiosk.exit")) {
+          sendTo("/kiosk");
+          return;
+        }
         if (!session.signed_in) {
           sendTo("/signin");
           return;
