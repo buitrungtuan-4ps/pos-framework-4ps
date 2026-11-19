@@ -15,6 +15,7 @@
 //   refusal rolls it back and the screen shows the refusal's own sentence. A write with no answer
 //   rolls back and the open orders are read again, because the edge may have made it.
 
+import { takeTypedPrice } from "./sell";
 import { createSignal } from "solid-js";
 
 import { api } from "../api/client";
@@ -278,6 +279,8 @@ function tableLine(
 function counterLine(item: MenuItemResponse, line: OrderLine): OrderLineRequest {
   return {
     menu_item_id: item.menu_item_id,
+    // An open-price item's price, as the cashier typed it (ADR-0222 decision 4); the edge bounds it.
+    typed_unit_price: takeTypedPrice(item.menu_item_id),
     quantity: { milli: 1000 },
     course_id: line.courseId,
     modifier_menu_item_ids: line.modifierMenuItemIds,

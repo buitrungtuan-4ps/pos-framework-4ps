@@ -8503,3 +8503,47 @@ test("a bar opens a tab, lists it by its number, pays it, labels another and clo
     await edge.stop();
   }
 });
+
+// Quick sale (ADR-0222 decisions 4 and 5). The edge here sells by no barcode, so its menu read is
+// given a PLU and an open price, as a bakery's would carry: on a walk-in, the PLU pad keys the first
+// item's PLU and Add sells it; the second item, open-priced, asks its price within its bounds first,
+// and Add at this price sells it.
+test("the PLU pad sells an item by its PLU, and an open-price item asks its price first", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await page.route("**/api/menu*", async (route) => {
+      const response = await fetchWhole(route);
+      const book = await response.json();
+      book.barcode_enabled = true;
+      book.items[0].plu = "42";
+      book.items[1].open_price = {
+        minimum: { ...book.items[1].unit_price, amount_minor: 10_000 },
+        maximum: { ...book.items[1].unit_price, amount_minor: 90_000 },
+      };
+      await route.fulfill({ response, json: book });
+    });
+    await pair(page, edge);
+    await signIn(page, edge);
+    await startWalkIn(page);
+    const pad = page.locator('[data-outcome="plu-keypad"]');
+    await pad.getByRole("button", { name: "4", exact: true }).click();
+    await pad.getByRole("button", { name: "2", exact: true }).click();
+    await pad.getByRole("button", { name: "Add", exact: true }).click();
+    await expectLineAdded(page);
+
+    await page.locator('[data-step="onItem"]').nth(1).click();
+    const prompt = page.locator('[data-outcome="open-price"]');
+    await expect(prompt).toBeVisible();
+    const add = prompt.getByRole("button", { name: "Add at this price" });
+    await prompt.getByRole("button", { name: "5", exact: true }).click();
+    await expect(add).toBeDisabled();
+    for (const digit of ["0", "0", "0", "0"]) {
+      await prompt.getByRole("button", { name: digit, exact: true }).click();
+    }
+    await add.click();
+    await expect(prompt).toHaveCount(0);
+    await expect(page.locator('[data-outcome="line-added"]')).toHaveCount(2);
+  } finally {
+    await edge.stop();
+  }
+});

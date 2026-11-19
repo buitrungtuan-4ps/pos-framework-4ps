@@ -58,7 +58,8 @@ import { createPrint } from "../state/print-writes";
 import { printOutcomeKey } from "../lib/print";
 import { SendFirst } from "../components/SendFirst";
 import { PrintedCheck } from "../components/PrintedCheck";
-import { ScanListener } from "../components/ScanListener";
+import { OpenPricePrompt } from "../components/OpenPricePrompt";
+import { SellContext, askOpenPrice } from "../state/sell";
 import { RepriceLine } from "../components/RepriceLine";
 import { createSendFirst, waitingByCourse } from "../state/unsent";
 import { DRAFT, draftChannel, eatenIn, keyToAddTo } from "../state/draft-walk-in";
@@ -443,6 +444,7 @@ export function Order() {
   // Tapping an item: sell it, or ask first. The question is the store's, not this screen's — an
   // item attaches groups or it does not, and the till has no opinion beyond obeying that.
   const onItem = (item: MenuItemResponse) => {
+    if (askOpenPrice(item, onItem)) return;
     if (groupsFor(item, menuGroups()).length === 0) {
       void guard(() => addWithNote(item, []));
       return;
@@ -593,7 +595,6 @@ export function Order() {
         >
           {walkIn() ? t("common.back_counter") : t("common.back_floor")}
         </a>
-        <ScanListener disabled={billed() || !can("sales.line.add") || flowWait() !== null} onItem={onItem} />
         {/* Seating a table, or starting a walk-in, ends here (ADR-0109, ADR-0146). */}
         <h1 class="text-lg font-semibold" data-outcome="order-open">
           {walkIn() ? t("order.walk_in") : t("common.table", { label: label() })}
@@ -1383,7 +1384,7 @@ export function Order() {
         </p>
       </Show>
       </>,
-    menu_fields: () => <>
+    menu_fields: () => <><OpenPricePrompt />
       {/*
         The box that makes a long menu usable. `type="search"` rather than `text` so the browser
         gives the operator its own clear affordance — one control fewer to draw, and the one every
@@ -1507,8 +1508,8 @@ export function Order() {
   });
 
   return (
-    <RegionsContext.Provider value={regions}>
-      <PackageScreen screenId="order" host={orderHost(walkIn, params)} />
-    </RegionsContext.Provider>
+    <SellContext.Provider value={{ sell: onItem, disabled: () => billed() || !can("sales.line.add") || flowWait() !== null, orderId: () => (walkIn() && params.id !== DRAFT ? params.id : undefined) }}>
+    <RegionsContext.Provider value={regions}><PackageScreen screenId="order" host={orderHost(walkIn, params)} /></RegionsContext.Provider>
+    </SellContext.Provider>
   );
 }

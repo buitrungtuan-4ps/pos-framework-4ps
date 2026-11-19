@@ -49,6 +49,12 @@
               "component_id": "order_menu",
               "children": [
                 {
+                  "component_id": "scan_field"
+                },
+                {
+                  "component_id": "plu_keypad"
+                },
+                {
                   "component_id": "menu_toolbar"
                 },
                 {

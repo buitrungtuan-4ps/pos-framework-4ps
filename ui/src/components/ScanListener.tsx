@@ -16,7 +16,12 @@ function typingInAField(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
 }
 
-export function ScanListener(props: { readonly disabled: boolean; readonly onItem: (item: MenuItemResponse) => void }) {
+export function ScanListener(props: {
+  readonly disabled: boolean;
+  readonly onItem: (item: MenuItemResponse) => void;
+  /** Takes a code the till's index does not hold, in place of saying it is unknown. */
+  readonly onUnknown?: (code: string) => void;
+}) {
   const [unknown, setUnknown] = createSignal<string | null>(null);
   const reader = createScanReader(scanWindowMs);
   const onKey = (event: KeyboardEvent) => {
@@ -30,6 +35,10 @@ export function ScanListener(props: { readonly disabled: boolean; readonly onIte
     event.preventDefault();
     const itemId = resolveCode(code);
     const item = state.menu.find((entry) => entry.menu_item_id === itemId);
+    if (item === undefined && props.onUnknown !== undefined) {
+      props.onUnknown(code);
+      return;
+    }
     setUnknown(item === undefined ? code : null);
     if (item !== undefined) {
       props.onItem(item);
