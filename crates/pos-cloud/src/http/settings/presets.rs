@@ -231,7 +231,7 @@ where
 
 /// The country the store's published `locale` names, `None` when it names none, or the `503` to
 /// answer when its configuration cannot be read.
-async fn store_country<Cfg: ConfigTreeStore>(
+pub(super) async fn store_country<Cfg: ConfigTreeStore>(
     config_trees: &Cfg,
     tenant_id: TenantId,
     store_id: StoreId,

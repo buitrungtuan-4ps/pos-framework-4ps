@@ -149,6 +149,17 @@ where
         Ok(scope_id) => scope_id,
         Err(refusal) => return refusal,
     };
+    if let Err(refusal) = super::country_law::law_refusal(
+        &state.country_forbidden,
+        &state.config_trees,
+        tenant_id,
+        &layout.reached_by(scope, &scope_id),
+        (&request.setting_key, &request.value),
+    )
+    .await
+    {
+        return refusal;
+    }
     let slot = (request.setting_key.as_str(), scope, scope_id.as_str());
     let before = match before_write(&state, tenant_id, &layout, slot, &request.value).await {
         Ok(before) => before,
