@@ -37,6 +37,7 @@ use pos_cloud_config::package_pin::SettingsPackages;
 // `pub(super)`: the unit tests in `http.rs` and `settings_confirm.rs` reach the catalogue entry.
 pub(super) mod catalogue;
 mod catch_up;
+mod country_law;
 mod effective;
 mod package_pin;
 mod package_status;
@@ -80,6 +81,8 @@ struct SettingsState<St, Rg, Grp, Cfg, A, C> {
     /// The tenant grid and the compiled-in countries a receipt template is checked against
     /// (ADR-0207 decision 3).
     receipt: receipt::ReceiptChecks,
+    /// The setting values each compiled-in country's law forbids (ADR-0223 decision 3).
+    country_forbidden: Arc<country_law::CountryForbidden>,
 }
 
 /// What the settings routes check a value against beyond the register.
@@ -166,6 +169,7 @@ where
             clock,
             audit,
             country_values: Arc::new(country_setting_values(&rules.countries)),
+            country_forbidden: Arc::new(country_law::country_forbidden(&rules.countries)),
             receipt: receipt::ReceiptChecks::new(&rules.countries, rules.translations),
         })
 }
@@ -205,6 +209,7 @@ where
         clock,
         audit,
         country_values: Arc::new(country_setting_values(countries)),
+        country_forbidden: Arc::new(country_law::country_forbidden(countries)),
         receipt: receipt::ReceiptChecks::without_grid(countries),
     };
     (hand_off, catch_up::run(state, receiver))

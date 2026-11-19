@@ -136,6 +136,8 @@ mod sealing_keys;
 mod settings;
 #[path = "cloud/settings_country.rs"]
 mod settings_country;
+#[path = "cloud/settings_law.rs"]
+mod settings_law;
 #[path = "cloud/settings_nodes.rs"]
 mod settings_nodes;
 #[path = "cloud/store_groups.rs"]

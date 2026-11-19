@@ -190,6 +190,17 @@ pub enum SettingRefusal {
         /// The country that requires it.
         country_code: CountryCode,
     },
+    /// A value the law of the country of a store the write reaches forbids
+    /// ([ADR-0223](../../../docs/adr/0223-a-weighed-item-is-priced-by-its-weight.md) decision 3).
+    #[error("`{setting_key}` cannot take this value in {country_code}, store {store_id}'s country")]
+    ForbiddenByCountry {
+        /// The setting.
+        setting_key: String,
+        /// The country whose law forbids it.
+        country_code: CountryCode,
+        /// One store the write reaches in that country.
+        store_id: String,
+    },
     /// The value is written only with a recorded confirmation, and the write did not confirm its
     /// notice ([ADR-0169](../../../docs/adr/0169-a-setting-value-can-require-a-recorded-confirmation.md)
     /// decision 2).
