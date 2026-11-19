@@ -24,7 +24,7 @@ use axum::response::{IntoResponse, Response};
 use pos_core::permission::Permission;
 use pos_ports::event_store::EventStore;
 use pos_proto::ClockSource;
-use pos_proto::devices::{DeviceClass, PublishedDevice};
+use pos_proto::devices::{DeviceClass, PublishedDevice, PublishedDevices};
 use pos_proto::ids::{DeviceId, EmployeeId};
 
 use super::auth::{LOG_TARGET, SignInDeps, SignedIn};
@@ -39,15 +39,24 @@ async fn kiosk_terminal_of<S>(
     printers: Option<&Arc<Printers>>,
     device: DeviceId,
 ) -> Option<DeviceId> {
-    let terminal = match printers?.terminal_of(device).await {
+    kiosk_terminal(|| deps.edge.session().devices.clone(), printers?, device).await
+}
+
+/// The kiosk terminal `device` is bound to, reading the store's `devices` node from `devices`
+/// once the binding is known. Shared by the sign-in and by `/ws`, which a kiosk may not open.
+pub(crate) async fn kiosk_terminal(
+    devices: impl FnOnce() -> PublishedDevices,
+    printers: &Printers,
+    device: DeviceId,
+) -> Option<DeviceId> {
+    let terminal = match printers.terminal_of(device).await {
         Ok(terminal) => terminal?,
         Err(error) => {
             tracing::warn!(target: LOG_TARGET, %device, %error, "a kiosk's binding could not be read");
             return None;
         }
     };
-    let session = deps.edge.session();
-    published_terminals(&session.devices)
+    published_terminals(&devices())
         .find(|entry| entry.device_id == terminal)
         .and_then(PublishedDevice::device_class)
         .filter(|class| *class == DeviceClass::Kiosk)

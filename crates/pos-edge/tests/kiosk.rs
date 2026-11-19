@@ -19,8 +19,13 @@ use pos_edge::{
 };
 use pos_fakes::FakeStore;
 use pos_proto::ClockSource;
+use pos_proto::SalesChannel;
 use pos_proto::devices::{DeviceClass, DeviceKind, PublishedDevice, PublishedDevices};
-use pos_proto::ids::{DeviceId, EmployeeId, StoreId};
+use pos_proto::ids::{DeviceId, EmployeeId, MenuItemId, StoreId};
+use pos_proto::locale::{TaxRate, TaxRateTable};
+use pos_proto::menu::{MenuCatalog, MenuEntry};
+use pos_proto::money::{CurrencyCode, Money};
+use pos_proto::quantity::Quantity;
 use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::Open;
@@ -37,6 +42,7 @@ const MANAGER: u128 = 24;
 const CASHIER: u128 = 21;
 const MANAGER_PIN: &str = "4417";
 const CASHIER_PIN: &str = "1357";
+const ITEM: u128 = 0x1734;
 
 fn hash_of(pin: &str) -> String {
     use argon2::Argon2;
@@ -107,6 +113,7 @@ fn staff() -> StaffRoster {
 struct Store {
     app: Router,
     edge: Arc<Edge<FakeStore>>,
+    log: FakeStore,
     kiosk: String,
     counter: String,
     unbound: String,
@@ -123,19 +130,42 @@ fn devices_node(class: Option<DeviceClass>) -> Value {
     })
 }
 
-async fn store() -> Store {
+/// The store's session: a pizza on the menu, taxed, and its people, with the published devices node
+/// that makes the kiosk terminal a kiosk.
+fn a_session() -> EdgeSession {
     let mut session = EdgeSession {
         ..EdgeSession::bootstrap()
+            .with_menu(MenuCatalog::new().with(MenuEntry::new(
+                MenuItemId::new(Ulid::from_u128(ITEM)),
+                DisplayName::new("Margherita"),
+                Money::new(CurrencyCode::VND, 150_000),
+                EdgeSession::standard_tax_class(),
+            )))
+            .with_tax_rates(
+                TaxRateTable::new()
+                    .with(
+                        EdgeSession::standard_tax_class(),
+                        SalesChannel::Takeaway,
+                        TaxRate::from_percent(10),
+                    )
+                    .with(
+                        EdgeSession::standard_tax_class(),
+                        SalesChannel::DineIn,
+                        TaxRate::from_percent(10),
+                    ),
+            )
     };
     session.staff = staff();
     // The kiosk's record comes only from the node the cloud publishes.
-    let session = pos_edge::config_client::session_from_config(
-        &session,
-        &devices_node(Some(DeviceClass::Kiosk)),
-    );
+    pos_edge::config_client::session_from_config(&session, &devices_node(Some(DeviceClass::Kiosk)))
+}
+
+async fn store() -> Store {
+    let log = FakeStore::new();
+    let session = a_session();
     let edge = Arc::new(
         Edge::new(
-            FakeStore::new(),
+            log.clone(),
             StoreIdentity::for_store(StoreId::new(Ulid::from_u128(1))),
             session,
             Arc::new(InMemoryReceipts::new()),
@@ -178,6 +208,19 @@ async fn store() -> Store {
             .await
             .expect("the binding is recorded");
     }
+    let devices = {
+        let edge = Arc::clone(&edge);
+        pos_edge::state::DevicesReader(Arc::new(move || edge.session().devices.clone()))
+    };
+    let config = pos_edge::EdgeConfig::new(
+        "127.0.0.1:0".parse().expect("an address"),
+        StoreId::new(Ulid::from_u128(1)),
+    );
+    let live = pos_edge::http::router(
+        pos_edge::AppState::new(config)
+            .with_pairing(Arc::clone(&pairing))
+            .with_devices(devices),
+    );
     let app = pos_edge::http::domain_router(
         Arc::clone(&edge),
         InMemoryQueueNumbers::new(),
@@ -188,10 +231,12 @@ async fn store() -> Store {
         Arc::new(Sessions::new()),
         &Arc::new(pos_edge::origins::Origins::new()),
     )
+    .merge(live)
     .layer(axum::Extension(printers));
     Store {
         app,
         edge,
+        log,
         kiosk,
         counter,
         unbound,
@@ -341,6 +386,188 @@ async fn a_person_leaves_a_kiosk_only_with_the_permission_and_their_pin() {
     assert_eq!(status, StatusCode::OK);
 }
 
+/// Rings a pizza on `order` from the device holding `token`, answering the line.
+async fn ring(app: &Router, token: &str, order: &str) -> String {
+    let (status, _, line) = send(
+        app,
+        token,
+        "POST",
+        &format!("/api/orders/{order}/lines"),
+        Some(json!({
+            "menu_item_id": MenuItemId::new(Ulid::from_u128(ITEM)),
+            "quantity": Quantity::ONE,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{line}");
+    line["order_line_id"]
+        .as_str()
+        .expect("a line id")
+        .to_owned()
+}
+
+/// Opens an order over the routes from the device holding `token` and rings a pizza on it,
+/// answering the order and the line.
+async fn an_order_with_a_pizza(app: &Router, token: &str) -> (String, String) {
+    let (status, _, opened) = send(app, token, "POST", "/api/orders", Some(json!({}))).await;
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    assert!(
+        opened["queue_number"].as_u64().is_some(),
+        "the guest's number: {opened}"
+    );
+    let order = opened["order_id"].as_str().expect("an order id").to_owned();
+    let line = ring(app, token, &order).await;
+    (order, line)
+}
+
+/// Each request, from the kiosk, is refused `KIOSK_NOT_ALLOWED`.
+async fn refused(store: &Store, requests: Vec<(&str, String, Value)>) {
+    for (method, uri, body) in requests {
+        let body = (!body.is_null()).then_some(body);
+        let (status, reason, _) = send(&store.app, &store.kiosk, method, &uri, body).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri}");
+        assert_eq!(
+            reason.as_deref(),
+            Some("KIOSK_NOT_ALLOWED"),
+            "{method} {uri}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_kiosk_works_its_own_order_and_is_refused_everything_else() {
+    let store = store().await;
+    let (status, _, _) = send(&store.app, &store.kiosk, "POST", "/api/session/kiosk", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, _) = send(
+        &store.app,
+        &store.counter,
+        "POST",
+        "/api/session/sign-in",
+        Some(json!({ "code": "MGR-1", "pin": MANAGER_PIN })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // The kiosk's own order: rung, read, a line changed and voided, then sent to be paid.
+    let (mine, my_line) = an_order_with_a_pizza(&store.app, &store.kiosk).await;
+    let extra = ring(&store.app, &store.kiosk, &mine).await;
+    let (status, _, body) = send(
+        &store.app,
+        &store.kiosk,
+        "POST",
+        &format!("/api/lines/{extra}/void"),
+        // The framework's `ABANDONED`, which a kiosk cites (ADR-0224 decision 5).
+        Some(json!({ "reason_code_id": Ulid::from_u128(13).to_string() })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a kiosk voids its own unsent line: {body}"
+    );
+    let (status, _, _) = send(
+        &store.app,
+        &store.kiosk,
+        "GET",
+        &format!("/api/orders/{mine}/check"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, bill) = send(
+        &store.app,
+        &store.kiosk,
+        "POST",
+        &format!("/api/orders/{mine}/bill"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "sent to be paid: {bill}");
+    let bill = bill["bill_id"].as_str().expect("a bill").to_owned();
+
+    // Money, the drawer, and the store's lists are not a kiosk's.
+    refused(
+        &store,
+        vec![
+            (
+                "POST",
+                format!("/api/bills/{bill}/settle"),
+                json!({ "payments": [] }),
+            ),
+            ("POST", format!("/api/bills/{bill}/payments"), json!({})),
+            ("POST", format!("/api/bills/{bill}/discount"), json!({})),
+            ("POST", format!("/api/bills/{bill}/comp"), json!({})),
+            ("POST", format!("/api/bills/{bill}/void"), json!({})),
+            ("POST", format!("/api/lines/{my_line}/price"), json!({})),
+            ("POST", "/api/drawer/open".to_owned(), json!({})),
+            ("POST", "/api/shifts".to_owned(), json!({})),
+            ("GET", "/api/orders/open".to_owned(), Value::Null),
+            ("GET", "/api/orders/live".to_owned(), Value::Null),
+            ("GET", "/api/floor".to_owned(), Value::Null),
+            ("GET", "/api/reports/takings".to_owned(), Value::Null),
+        ],
+    )
+    .await;
+
+    // The manager's order at the counter is out of the kiosk's reach, however it asks.
+    let (theirs, their_line) = an_order_with_a_pizza(&store.app, &store.counter).await;
+    refused(
+        &store,
+        vec![
+            ("GET", format!("/api/orders/{theirs}/check"), Value::Null),
+            ("POST", format!("/api/orders/{theirs}/lines"), json!({})),
+            ("POST", format!("/api/orders/{theirs}/bill"), json!({})),
+            ("POST", format!("/api/orders/{theirs}/close"), json!({})),
+            ("POST", format!("/api/lines/{their_line}/void"), json!({})),
+            (
+                "POST",
+                format!("/api/lines/{their_line}/quantity"),
+                json!({}),
+            ),
+        ],
+    )
+    .await;
+    // And the manager, a person, is not held to the kiosk's routes.
+    let (status, _, _) = send(&store.app, &store.counter, "GET", "/api/orders/open", None).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+/// A kiosk never opens the store's event stream, which carries every till's orders (ADR-0224
+/// decision 4); an ordinary till's device is not refused for it.
+#[tokio::test]
+async fn a_kiosk_may_not_open_the_stores_event_stream() {
+    let store = store().await;
+    let upgrade = |token: &str| {
+        Request::builder()
+            .uri("/ws")
+            .header("connection", "Upgrade")
+            .header("upgrade", "websocket")
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .expect("request builds")
+    };
+    let kiosk = store
+        .app
+        .clone()
+        .oneshot(upgrade(&store.kiosk))
+        .await
+        .expect("router responds");
+    assert_eq!(kiosk.status(), StatusCode::FORBIDDEN);
+    let counter = store
+        .app
+        .clone()
+        .oneshot(upgrade(&store.counter))
+        .await
+        .expect("router responds");
+    assert_ne!(
+        counter.status(),
+        StatusCode::FORBIDDEN,
+        "only the handshake's own rules apply"
+    );
+    assert!(store.edge.session().devices.devices().len() >= 2);
+}
+
 /// Only the published `devices` node makes a terminal a kiosk: a session that carries the class
 /// any other way holds no kiosk record. And once the node stops making the terminal a kiosk, its
 /// record is gone and the device cannot sign in as it.
@@ -373,4 +600,33 @@ async fn a_kiosk_record_comes_only_from_the_published_node_and_goes_with_it() {
             send(&store.app, &store.kiosk, "POST", "/api/session/kiosk", None).await;
         assert_eq!(status, signs_in, "{class:?}");
     }
+}
+
+/// What a kiosk wrote names its terminal for good: the record goes with the kiosk class, and the
+/// order it opened still names the terminal's own id, which no person's record can carry.
+#[tokio::test]
+async fn a_kiosks_history_outlives_its_record() {
+    use pos_ports::event_store::{EventQuery, EventStore as _};
+
+    let store = store().await;
+    let (status, _, _) = send(&store.app, &store.kiosk, "POST", "/api/session/kiosk", None).await;
+    assert_eq!(status, StatusCode::OK);
+    an_order_with_a_pizza(&store.app, &store.kiosk).await;
+    let retired =
+        pos_edge::config_client::session_from_config(&store.edge.session(), &devices_node(None));
+    store.edge.apply_session(retired);
+    let record = EmployeeId::new(Ulid::from_u128(KIOSK_RECORD));
+    assert!(!store.edge.session().staff.is_kiosk(record));
+
+    let query = EventQuery::first(
+        StoreId::new(Ulid::from_u128(1)),
+        std::num::NonZeroU32::new(100).expect("a positive limit"),
+    );
+    let written = store.log.read(&query).await.expect("the log reads");
+    let opened = written
+        .iter()
+        .find(|envelope| envelope.event_type.as_str() == "sales.order.opened")
+        .expect("the kiosk opened an order");
+    assert_eq!(opened.employee_id, Some(record));
+    assert_eq!(record.as_ulid(), id(KIOSK_TERMINAL).as_ulid());
 }

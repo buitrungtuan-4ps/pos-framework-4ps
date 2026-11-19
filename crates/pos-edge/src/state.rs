@@ -80,6 +80,29 @@ pub struct AppState {
     /// reading one value. Here for the same reason `origins` is: the request path runs in front of
     /// any handler and needs the fact without reaching into the application layer.
     pub standing: Arc<CurrentStanding>,
+    /// The store's published `devices` node, read when a device opens `/ws`: a device bound to a
+    /// kiosk terminal may not (ADR-0224 decision 4). `None` in a composition with no store, which
+    /// has no kiosk either.
+    pub devices: Option<DevicesReader>,
+}
+
+/// Reads the store's published `devices` node as it is now.
+#[derive(Clone)]
+pub struct DevicesReader(pub Arc<dyn Fn() -> pos_proto::devices::PublishedDevices + Send + Sync>);
+
+impl DevicesReader {
+    /// Reads `edge`'s published `devices` node.
+    #[must_use]
+    pub fn of<S: Send + Sync + 'static>(edge: &Arc<crate::app::Edge<S>>) -> Self {
+        let edge = Arc::clone(edge);
+        Self(Arc::new(move || edge.session().devices.clone()))
+    }
+}
+
+impl core::fmt::Debug for DevicesReader {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("DevicesReader")
+    }
 }
 
 impl AppState {
@@ -113,6 +136,13 @@ impl AppState {
         self
     }
 
+    /// Lets `/ws` read the store's `devices` node, to refuse a kiosk (ADR-0224 decision 4).
+    #[must_use]
+    pub fn with_devices(mut self, devices: DevicesReader) -> Self {
+        self.devices = Some(devices);
+        self
+    }
+
     /// Builds the shared state over an existing fan-out.
     ///
     /// The composed edge shares one fan-out between the application loop (which publishes) and the
@@ -128,6 +158,7 @@ impl AppState {
             pairing: Arc::new(Pairing::new()),
             origins: Arc::new(Origins::new()),
             standing: Arc::new(CurrentStanding::new()),
+            devices: None,
         }
     }
 }

@@ -143,6 +143,11 @@ struct Projection {
     /// folded from `sales.order.opened`. Dropped when the tab settles, closes or is refused, so it
     /// holds no more than the store's open orders.
     tabs: HashMap<OrderId, u64>,
+    /// Who opened each open order, from its `sales.order.opened` envelope: what keeps a kiosk to
+    /// the orders it opened itself
+    /// ([ADR-0224](../../../../docs/adr/0224-self-order-is-a-guest-page-and-a-kiosk.md) decision 4).
+    /// Dropped as [`Self::tabs`] is, so it holds no more than the store's open orders.
+    openers: HashMap<OrderId, pos_proto::ids::EmployeeId>,
     /// The orders a member of staff has confirmed or refused
     /// ([ADR-0116](../../../../docs/adr/0116-the-qr-hold-is-derived-and-it-gates-firing.md)), folded
     /// from `sales.order.confirmed_by_staff` and `sales.order.rejected_by_staff`.

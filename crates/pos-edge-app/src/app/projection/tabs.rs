@@ -18,6 +18,23 @@ impl Projection {
         }
     }
 
+    /// Records who opened `order_id`, live and on rebuild; an envelope that names nobody records
+    /// nothing.
+    pub(in crate::app) fn record_opener(
+        &mut self,
+        order_id: OrderId,
+        employee_id: Option<pos_proto::ids::EmployeeId>,
+    ) {
+        if let Some(employee_id) = employee_id {
+            self.openers.insert(order_id, employee_id);
+        }
+    }
+
+    /// Who opened `order_id`, while it is open.
+    pub(in crate::app) fn opener(&self, order_id: OrderId) -> Option<pos_proto::ids::EmployeeId> {
+        self.openers.get(&order_id).copied()
+    }
+
     /// Whether `order_id` is a tab still open: one that has not settled, closed or been refused.
     pub(in crate::app) fn is_open_tab(&self, order_id: OrderId) -> bool {
         self.tabs.contains_key(&order_id)

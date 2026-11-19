@@ -29,6 +29,7 @@ pub mod health;
 mod integrations;
 pub mod kds;
 mod kiosk;
+mod kiosk_scope;
 pub mod layout;
 pub mod lines;
 mod live;
@@ -413,8 +414,12 @@ where
     // Guarded: a paired, signed-in device. The signed-in gate is layered here (inner); the paired
     // gate is layered on the merged router below (outer), so it runs first and leaves the `DeviceId`
     // the signed-in gate reads.
-    let guarded = signed_in(guarded::guarded_routes::<S>(), Arc::clone(&sessions))
-        .with_state(Arc::clone(&edge));
+    let guarded = signed_in(
+        guarded::guarded_routes::<S>(),
+        Arc::clone(&sessions),
+        scope_of(&edge),
+    )
+    .with_state(Arc::clone(&edge));
     let counter = counter_routes(Arc::clone(&edge), queue, Arc::clone(&sessions));
     let binding = binding_routes(Arc::clone(&edge), agents.clone(), Arc::clone(&sessions));
     let codes = code_routes(
@@ -450,15 +455,33 @@ where
         .layer(crate::origins::cors_layer(origins))
 }
 
-/// The signed-in gate over `router`: a person signed in on the paired device.
-fn signed_in<T>(router: Router<T>, sessions: Arc<Sessions>) -> Router<T>
+/// The signed-in gate over `router`: a person signed in on the paired device, and inside it the
+/// kiosk's (ADR-0224), which keeps a kiosk's own record to self-order's routes and its own orders.
+fn signed_in<T>(
+    router: Router<T>,
+    sessions: Arc<Sessions>,
+    scope: Arc<dyn kiosk_scope::KioskScope>,
+) -> Router<T>
 where
     T: Clone + Send + Sync + 'static,
 {
-    router.layer(axum::middleware::from_fn_with_state(
-        sessions,
-        auth::require_signed_in,
-    ))
+    router
+        .layer(axum::middleware::from_fn_with_state(
+            scope,
+            kiosk_scope::kiosk_gate,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            sessions,
+            auth::require_signed_in,
+        ))
+}
+
+/// The store, as the kiosk gate asks it.
+fn scope_of<S>(edge: &Arc<Edge<S>>) -> Arc<dyn kiosk_scope::KioskScope>
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    Arc::clone(edge) as Arc<dyn kiosk_scope::KioskScope>
 }
 
 /// Session: a paired device signs a person in and out here, so these sit behind the paired gate but
@@ -488,7 +511,8 @@ where
     S: EventStore + SubjectStore + Send + Sync + 'static,
     Q: crate::queue::QueueNumberAuthority + 'static,
 {
-    signed_in(counter::router(edge, queue), sessions)
+    let scope = scope_of(&edge);
+    signed_in(counter::router(edge, queue), sessions, scope)
 }
 
 /// Binding a terminal's print agent, in its own sub-router for the same reason and behind the
@@ -500,7 +524,8 @@ where
     S: EventStore + Send + Sync + 'static,
     A: crate::print_agent::PrintAgents + 'static,
 {
-    signed_in(print_agent::router(edge, agents), sessions)
+    let scope = scope_of(&edge);
+    signed_in(print_agent::router(edge, agents), sessions, scope)
 }
 
 /// Minting the pairing code for the next device (ADR-0118) and retiring one (ADR-0158 decision
@@ -512,7 +537,8 @@ fn code_routes<S>(edge: Arc<Edge<S>>, pairing: Arc<Pairing>, sessions: Arc<Sessi
 where
     S: EventStore + Send + Sync + 'static,
 {
-    signed_in(pair::manager_routes(edge, pairing), sessions)
+    let scope = scope_of(&edge);
+    signed_in(pair::manager_routes(edge, pairing), sessions, scope)
 }
 
 /// Parses a ULID from a path segment. `None` if it is not a ULID, which every handler turns into a
