@@ -14,6 +14,7 @@
   [region order_menu]
     [region scan_field]
     [region plu_keypad]
+    [region weight_display]
     [region menu_toolbar]
     [region menu_fields]
     [region menu_buttons]

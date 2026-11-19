@@ -387,3 +387,12 @@ today_body	device_class=DEVICE_CLASS_TABLET
 today_body	device_class=DEVICE_CLASS_TERMINAL
 today_body	reads=takings
 today_body	since=0.14.1
+weight_display
+weight_display	children=false
+weight_display	device_class=DEVICE_CLASS_KIOSK
+weight_display	device_class=DEVICE_CLASS_KITCHEN_DISPLAY
+weight_display	device_class=DEVICE_CLASS_PHONE
+weight_display	device_class=DEVICE_CLASS_TABLET
+weight_display	device_class=DEVICE_CLASS_TERMINAL
+weight_display	reads=order
+weight_display	since=0.14.1

@@ -41,6 +41,7 @@ import type { DiscountResponse, FloorResponse, LayoutCategory, LayoutResponse } 
 import { applyAreaPlaces } from "./floor-tree";
 import { indexCodes } from "./codes";
 import { applyTabFlags } from "./tabs";
+import { applyWeighing } from "./weigh";
 import type { MenuItemResponse, ModifierGroup, PaymentRequest } from "../api/schemas";
 import type { CountBreakdown, ReasonCodeEntry, ReasonCodesResponse, VoidBillResponse } from "../api/schemas";
 
@@ -1438,6 +1439,7 @@ export function applyMenu(response: MenuResponse): void {
   setState("menu", reconcile(response.items, { key: "menu_item_id" }));
   indexCodes(response.items, response.scan_keystroke_window_ms, response.barcode_enabled);
   applyTabFlags(response);
+  applyWeighing(response);
   setState("currency", response.currency);
   setState("tipsEnabled", response.tips_enabled);
   setState("seatsEnabled", response.seats_enabled);

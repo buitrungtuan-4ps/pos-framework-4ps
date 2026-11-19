@@ -85,6 +85,8 @@ import type {
   VoidRequest,
   WaitingResponse,
   WaiveFeeRequest,
+  WeighRequest,
+  ScaleResponse,
 } from "./schemas";
 
 export class ApiError extends Error {
@@ -473,6 +475,9 @@ export const api = {
     request<OpenedOrder>("POST", "/api/orders", channel === undefined ? {} : { channel }),
   // The line a scanned code names, priced by the edge, which reads a scale's label (ADR-0222).
   scanLine: (orderId: string, code: string) => request<LineResponse>("POST", `/api/orders/${orderId}/scan`, { code }),
+  // A weighed item's line from the scale or a typed weight, and what the scale reads (ADR-0223).
+  weighLine: (orderId: string, body: WeighRequest) => request<LineResponse>("POST", `/api/orders/${orderId}/weigh`, body),
+  readScale: () => request<ScaleResponse>("GET", "/api/scale"),
   // Bar tabs (ADR-0221): open one, numbered for the day; list the open ones; label one where the
   // store keeps labels; and close one nothing was sold on, with the store's reason.
   openTab: () => request<OpenedOrder>("POST", "/api/orders", { tab: true }),
