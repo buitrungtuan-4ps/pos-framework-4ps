@@ -82,6 +82,7 @@ impl<S: EventStore> Edge<S> {
             projection.open_order_origin(order_id, Some(channel), None);
             projection.record_opened(order_id, None, package_version_id);
             projection.record_tab(order_id, tab_number);
+            projection.record_opener(order_id, Some(ctx.actor.employee_id));
         }
         Ok(CounterOrderOpened {
             order_id,

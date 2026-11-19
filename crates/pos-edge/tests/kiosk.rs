@@ -19,8 +19,13 @@ use pos_edge::{
 };
 use pos_fakes::FakeStore;
 use pos_proto::ClockSource;
+use pos_proto::SalesChannel;
 use pos_proto::devices::{DeviceClass, DeviceKind, PublishedDevice, PublishedDevices};
-use pos_proto::ids::{DeviceId, EmployeeId, StoreId};
+use pos_proto::ids::{DeviceId, EmployeeId, MenuItemId, StoreId};
+use pos_proto::locale::{TaxRate, TaxRateTable};
+use pos_proto::menu::{MenuCatalog, MenuEntry};
+use pos_proto::money::{CurrencyCode, Money};
+use pos_proto::quantity::Quantity;
 use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::Open;
@@ -36,6 +41,7 @@ const MANAGER: u128 = 24;
 const CASHIER: u128 = 21;
 const MANAGER_PIN: &str = "4417";
 const CASHIER_PIN: &str = "1357";
+const ITEM: u128 = 0x1734;
 
 fn hash_of(pin: &str) -> String {
     use argon2::Argon2;
@@ -122,6 +128,25 @@ async fn store() -> Store {
             terminal(COUNTER_TERMINAL, "Counter", Some(DeviceClass::Terminal)),
         ]),
         ..EdgeSession::bootstrap()
+            .with_menu(MenuCatalog::new().with(MenuEntry::new(
+                MenuItemId::new(Ulid::from_u128(ITEM)),
+                DisplayName::new("Margherita"),
+                Money::new(CurrencyCode::VND, 150_000),
+                EdgeSession::standard_tax_class(),
+            )))
+            .with_tax_rates(
+                TaxRateTable::new()
+                    .with(
+                        EdgeSession::standard_tax_class(),
+                        SalesChannel::Takeaway,
+                        TaxRate::from_percent(10),
+                    )
+                    .with(
+                        EdgeSession::standard_tax_class(),
+                        SalesChannel::DineIn,
+                        TaxRate::from_percent(10),
+                    ),
+            )
     };
     session.staff = staff();
     let edge = Arc::new(
@@ -328,5 +353,156 @@ async fn a_person_leaves_a_kiosk_only_with_the_permission_and_their_pin() {
         Some(json!({ "code": "CSH-1", "pin": CASHIER_PIN })),
     )
     .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+/// Opens an order over the routes from the device holding `token` and rings a pizza on it,
+/// answering the order and the line.
+async fn an_order_with_a_pizza(app: &Router, token: &str) -> (String, String) {
+    let (status, _, opened) = send(app, token, "POST", "/api/orders", Some(json!({}))).await;
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    assert!(
+        opened["queue_number"].as_u64().is_some(),
+        "the guest's number: {opened}"
+    );
+    let order = opened["order_id"].as_str().expect("an order id").to_owned();
+    let (status, _, line) = send(
+        app,
+        token,
+        "POST",
+        &format!("/api/orders/{order}/lines"),
+        Some(json!({
+            "menu_item_id": MenuItemId::new(Ulid::from_u128(ITEM)),
+            "quantity": Quantity::ONE,
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{line}");
+    let line = line["order_line_id"]
+        .as_str()
+        .expect("a line id")
+        .to_owned();
+    (order, line)
+}
+
+#[tokio::test]
+async fn a_kiosk_works_its_own_order_and_is_refused_everything_else() {
+    let store = store().await;
+    let (status, _, _) = send(&store.app, &store.kiosk, "POST", "/api/session/kiosk", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, _) = send(
+        &store.app,
+        &store.counter,
+        "POST",
+        "/api/session/sign-in",
+        Some(json!({ "code": "MGR-1", "pin": MANAGER_PIN })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // The kiosk's own order: rung, read, a line changed and voided, then sent to be paid.
+    let (mine, my_line) = an_order_with_a_pizza(&store.app, &store.kiosk).await;
+    let (_, extra) = {
+        let (status, _, line) = send(
+            &store.app,
+            &store.kiosk,
+            "POST",
+            &format!("/api/orders/{mine}/lines"),
+            Some(json!({
+                "menu_item_id": MenuItemId::new(Ulid::from_u128(ITEM)),
+                "quantity": Quantity::ONE,
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{line}");
+        (
+            status,
+            line["order_line_id"].as_str().expect("a line").to_owned(),
+        )
+    };
+    let (status, _, body) = send(
+        &store.app,
+        &store.kiosk,
+        "POST",
+        &format!("/api/lines/{extra}/void"),
+        // The framework's `ABANDONED`, which a kiosk cites (ADR-0224 decision 5).
+        Some(json!({ "reason_code_id": Ulid::from_u128(13).to_string() })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a kiosk voids its own unsent line: {body}"
+    );
+    let (status, _, _) = send(
+        &store.app,
+        &store.kiosk,
+        "GET",
+        &format!("/api/orders/{mine}/check"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, bill) = send(
+        &store.app,
+        &store.kiosk,
+        "POST",
+        &format!("/api/orders/{mine}/bill"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "sent to be paid: {bill}");
+    let bill = bill["bill_id"].as_str().expect("a bill").to_owned();
+
+    // Money, the drawer, and the store's lists are not a kiosk's.
+    for (method, uri, body) in [
+        (
+            "POST",
+            format!("/api/bills/{bill}/settle"),
+            json!({ "payments": [] }),
+        ),
+        ("POST", format!("/api/bills/{bill}/payments"), json!({})),
+        ("POST", format!("/api/bills/{bill}/discount"), json!({})),
+        ("POST", format!("/api/bills/{bill}/comp"), json!({})),
+        ("POST", format!("/api/bills/{bill}/void"), json!({})),
+        ("POST", format!("/api/lines/{my_line}/price"), json!({})),
+        ("POST", "/api/drawer/open".to_owned(), json!({})),
+        ("POST", "/api/shifts".to_owned(), json!({})),
+        ("GET", "/api/orders/open".to_owned(), Value::Null),
+        ("GET", "/api/orders/live".to_owned(), Value::Null),
+        ("GET", "/api/floor".to_owned(), Value::Null),
+        ("GET", "/api/reports/takings".to_owned(), Value::Null),
+    ] {
+        let body = (!body.is_null()).then_some(body);
+        let (status, reason, _) = send(&store.app, &store.kiosk, method, &uri, body).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri}");
+        assert_eq!(
+            reason.as_deref(),
+            Some("KIOSK_NOT_ALLOWED"),
+            "{method} {uri}"
+        );
+    }
+
+    // The manager's order at the counter is out of the kiosk's reach, however it asks.
+    let (theirs, their_line) = an_order_with_a_pizza(&store.app, &store.counter).await;
+    for (method, uri) in [
+        ("GET", format!("/api/orders/{theirs}/check")),
+        ("POST", format!("/api/orders/{theirs}/lines")),
+        ("POST", format!("/api/orders/{theirs}/bill")),
+        ("POST", format!("/api/orders/{theirs}/close")),
+        ("POST", format!("/api/lines/{their_line}/void")),
+        ("POST", format!("/api/lines/{their_line}/quantity")),
+    ] {
+        let (status, reason, _) =
+            send(&store.app, &store.kiosk, method, &uri, Some(json!({}))).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri}");
+        assert_eq!(
+            reason.as_deref(),
+            Some("KIOSK_NOT_ALLOWED"),
+            "{method} {uri}"
+        );
+    }
+    // And the manager, a person, is not held to the kiosk's routes.
+    let (status, _, _) = send(&store.app, &store.counter, "GET", "/api/orders/open", None).await;
     assert_eq!(status, StatusCode::OK);
 }

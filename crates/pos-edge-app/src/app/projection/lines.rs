@@ -43,6 +43,7 @@ impl Projection {
         }
         if settled || refused || closed {
             self.tabs.remove(&order_id);
+            self.openers.remove(&order_id);
         }
         // Paid, and served at no table: its food is still coming while a line waits for a bump.
         // "At a table" is where the order opened as well as where a table points now: a table
