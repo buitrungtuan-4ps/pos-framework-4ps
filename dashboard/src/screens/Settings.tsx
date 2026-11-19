@@ -119,10 +119,7 @@ const BOOL = "SETTING_KIND_BOOL";
 /** A set of receipt templates (ADR-0207), edited by its own structured editor. */
 const RECEIPT = "SETTING_KIND_RECEIPT_TEMPLATES";
 
-/**
- * What a whole number counts, in the operator's words: each unit's key takes the number as `count`.
- * A unit from a newer cloud is not here, and its number is shown bare rather than mislabelled.
- */
+/** What a whole number counts (each key takes it as `count`); a newer cloud's unit shows it bare. */
 const UNIT_LABEL: Readonly<Record<string, MessageKey>> = {
   SETTING_UNIT_SECONDS: "settings.unit.seconds",
   SETTING_UNIT_MINUTES: "settings.unit.minutes",
