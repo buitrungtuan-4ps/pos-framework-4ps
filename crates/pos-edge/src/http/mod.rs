@@ -532,6 +532,18 @@ fn refusal(status: StatusCode, reason: &'static str, message: String) -> Respons
         .into_response()
 }
 
+/// The reason a weight is refused with (ADR-0223).
+const fn weighing_reason(error: pos_core::weighing::WeighError) -> &'static str {
+    use pos_core::weighing::WeighError;
+    match error {
+        WeighError::Required => "WEIGHT_REQUIRED",
+        WeighError::NotSoldByWeight => "NOT_SOLD_BY_WEIGHT",
+        WeighError::BelowMinimum { .. } => "WEIGHT_BELOW_MINIMUM",
+        // `WeighError` is non-exhaustive: a reason this build has not named is out of bounds too.
+        _ => "WEIGHT_ABOVE_MAXIMUM",
+    }
+}
+
 /// The stable token for a failure kind — what a device translates, where the body is what a log
 /// reads. One per [`AppError`] variant, and one per [`DomainError`] rule, so a till can tell "the
 /// bill is underpaid" from "you may not do that" without parsing English.
@@ -610,6 +622,7 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
         AppError::UnknownCode => "UNKNOWN_CODE",
         AppError::PriceLabelNotOpenPrice => "PRICE_LABEL_NOT_OPEN_PRICE",
         AppError::WeightLabelNotSold => "WEIGHT_LABEL_NOT_SOLD",
+        AppError::Weighing(error) => weighing_reason(*error),
         AppError::CustomEntryRefused(_) => "CUSTOM_ENTRY_REFUSED",
         AppError::UnknownObject => "UNKNOWN_OBJECT",
         AppError::UnknownCustomRecord => "UNKNOWN_CUSTOM_RECORD",
@@ -687,6 +700,7 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::UnknownCode
         | AppError::PriceLabelNotOpenPrice
         | AppError::WeightLabelNotSold
+        | AppError::Weighing(_)
         | AppError::UnknownObject
         | AppError::UnknownCustomRecord
         | AppError::UnknownSubject

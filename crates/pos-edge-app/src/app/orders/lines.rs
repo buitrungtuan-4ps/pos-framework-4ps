@@ -8,12 +8,15 @@ use pos_core::capability::Capability;
 use pos_core::decision::{Actor, DecisionCtx};
 use pos_core::menu::{RequestedLine, reprice_line};
 use pos_core::permission::Permission;
+use pos_core::weighing::check_source;
 use pos_ports::event_store::EventStore;
 use pos_proto::OrderLineState;
 use pos_proto::events::SalesOrderLineAdded;
 use pos_proto::ids::{MenuItemId, OrderId, OrderLineId, TableId};
 use pos_proto::menu::MenuCatalog;
 use pos_proto::text::DisplayName;
+use pos_proto::weighing::WeightSource;
+use pos_proto::wire_enum::Open;
 
 use crate::app::records::attach_note;
 use crate::app::{AppError, Edge, LineDraft, LineRecord, LineView, OrderLineChoice, StaffDecision};
@@ -152,6 +155,11 @@ impl<S: EventStore> Edge<S> {
             return Err(AppError::ItemNotSellable);
         }
         let session = self.session();
+        // A device prices a table's line by the piece, so a weighed item, which needs its weight's
+        // source, is sold on an order by its id (ADR-0223).
+        if let Some(entry) = session.menu.get(draft.menu_item_id) {
+            check_source(entry.codes.sold_by_weight(), None).map_err(AppError::Weighing)?;
+        }
         Self::check_modifiers(&session.menu, &draft)?;
         let draft = super::open_price::priced_open(&session, draft)?;
         // The device priced this line from the session's price book and sends the modifiers' ids,
@@ -173,7 +181,7 @@ impl<S: EventStore> Edge<S> {
         if billed {
             return Err(AppError::BillAlreadyOpen);
         }
-        self.append_line(&ctx, order_id, draft, modifier_display_names, note)
+        self.append_line(&ctx, order_id, draft, modifier_display_names, note, None)
             .await
     }
 
@@ -254,6 +262,7 @@ impl<S: EventStore> Edge<S> {
             modifier_menu_item_ids: choice.modifier_menu_item_ids,
             quoted_unit_price: None,
             typed_unit_price: choice.typed_unit_price,
+            weight_source: choice.weight_source,
         };
         let priced = reprice_line(menu, &session.tax_rates, channel, &requested)
             .map_err(AppError::from_reprice)?;
@@ -271,7 +280,8 @@ impl<S: EventStore> Edge<S> {
             note_present: choice.note_present,
         };
         Self::check_modifiers(menu, &draft)?;
-        self.append_line(&ctx, order_id, draft, priced.modifier_display_names, note)
+        let names = priced.modifier_display_names;
+        self.append_line(&ctx, order_id, draft, names, note, choice.weight_source)
             .await
     }
 
@@ -290,6 +300,7 @@ impl<S: EventStore> Edge<S> {
         draft: LineDraft,
         modifier_display_names: Vec<DisplayName>,
         note: Option<NoteText>,
+        weight_source: Option<WeightSource>,
     ) -> Result<LineView, AppError> {
         let order_line_id = OrderLineId::new(self.next_ulid());
         // A device that still sends only the flag keeps working; a note implies it.
@@ -310,6 +321,7 @@ impl<S: EventStore> Edge<S> {
             modifier_menu_item_ids: draft.modifier_menu_item_ids.clone(),
             modifier_display_names,
             note_present,
+            weight_source: weight_source.map(Open::from),
         };
         let (envelope, mut message) = self.prepare(ctx, &payload)?;
         if let Some(note) = note {

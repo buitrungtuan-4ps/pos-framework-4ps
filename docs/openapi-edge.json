@@ -7295,7 +7295,8 @@
           "tax_rate",
           "modifier_group_ids",
           "available",
-          "sold_out"
+          "sold_out",
+          "sold_by_weight"
         ],
         "properties": {
           "available": {
@@ -7335,6 +7336,10 @@
           "plu": {
             "type": "string",
             "description": "The PLU a cashier keys for it, one to five digits."
+          },
+          "sold_by_weight": {
+            "type": "boolean",
+            "description": "Whether it is sold by the kilogram, its price per kilogram and its line in net grams\n([ADR-0223](../../../../docs/adr/0223-a-weighed-item-is-priced-by-its-weight.md)): the till\nweighs it rather than adding one. `false` on a till reading an edge older than the field."
           },
           "sold_out": {
             "type": "boolean",

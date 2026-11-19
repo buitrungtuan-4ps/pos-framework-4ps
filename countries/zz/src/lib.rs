@@ -142,11 +142,21 @@ impl CountryModule for Zz {
     /// inside, the commonest labelling-scale layout. A real country seeds what its national GS1
     /// body assigns to prefixes 20 to 29, or nothing until that is confirmed, and its stores read
     /// such codes as plain ones.
+    ///
+    /// And a weight typed by hand is allowed (ADR-0223 decision 3): the reference country has no
+    /// trade law requiring a certified scale. A real country seeds nothing until its legal suite
+    /// decides, and its stores take a weight from a scale or a label only.
     fn setting_defaults(&self) -> Vec<SettingDefault> {
-        vec![SettingDefault {
-            setting_key: "scan.variable_measure_layout",
-            value: SettingDefaultValue::Choice("VARIABLE_MEASURE_LAYOUT_PRICE_5"),
-        }]
+        vec![
+            SettingDefault {
+                setting_key: "scan.variable_measure_layout",
+                value: SettingDefaultValue::Choice("VARIABLE_MEASURE_LAYOUT_PRICE_5"),
+            },
+            SettingDefault {
+                setting_key: "weighing.manual_entry",
+                value: SettingDefaultValue::Bool(true),
+            },
+        ]
     }
 }
 

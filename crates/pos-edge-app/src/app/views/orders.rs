@@ -10,6 +10,7 @@ use pos_proto::money::{Money, Ratio};
 use pos_proto::quantity::Quantity;
 use pos_proto::text::DisplayName;
 use pos_proto::time::{BusinessDate, Timestamp};
+use pos_proto::weighing::WeightSource;
 use pos_proto::{OrderLineState, SalesChannel, TableState};
 
 use crate::line_notes::NoteText;
@@ -93,6 +94,8 @@ pub struct OrderLineChoice {
     pub note_present: bool,
     /// The price of one the cashier typed, for an open-price item (ADR-0222 decision 4).
     pub typed_unit_price: Option<Money>,
+    /// Where a weighed item's weight came from, `quantity` being its net grams (ADR-0223).
+    pub weight_source: Option<WeightSource>,
 }
 
 /// A counter order the till has just opened (ADR-0146).

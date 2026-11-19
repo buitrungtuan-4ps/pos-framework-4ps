@@ -7,6 +7,7 @@ use std::fmt;
 
 use pos_core::error::DomainError;
 use pos_core::menu::RepriceError;
+use pos_core::weighing::WeighError;
 use pos_ports::PortError;
 use pos_proto::envelope::DecodeError;
 
@@ -301,9 +302,13 @@ pub enum AppError {
     /// from outside the edge, within its bounds (ADR-0222 decision 3).
     #[error("a price label is accepted only for an open-price item")]
     PriceLabelNotOpenPrice,
-    /// A weight label, refused until an item can be sold by weight (ADR-0223).
+    /// A weight label naming an item sold by the piece (ADR-0223).
     #[error("a weight label names no item sold by weight")]
     WeightLabelNotSold,
+    /// A weight that cannot make a line: none for a weighed item, one for an item sold by the
+    /// piece, or one outside the line's bounds (ADR-0223).
+    #[error("{0}")]
+    Weighing(WeighError),
     /// A custom-data entry does not fit the package the store runs
     /// ([ADR-0194](../../../../docs/adr/0194-custom-data-is-declared-and-personal-fields-are-kept-apart.md)).
     /// It names the field and the fault, never the value.
@@ -333,6 +338,7 @@ impl AppError {
                 sales_channel: pos_proto::WireEnum::as_wire(sales_channel).to_owned(),
             }),
             RepriceError::Money(error) => Self::Domain(DomainError::Money(error)),
+            RepriceError::Weighing(error) => Self::Weighing(error),
             RepriceError::OpenPriceOutOfRange { maximum_minor } => {
                 Self::Domain(DomainError::PriceOutOfRange {
                     ceiling_minor: maximum_minor,

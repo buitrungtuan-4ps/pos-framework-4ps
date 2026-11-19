@@ -282,6 +282,7 @@ sales.order_line.added	field=seat
 sales.order_line.added	field=tax_class_id
 sales.order_line.added	field=tax_rate
 sales.order_line.added	field=unit_price
+sales.order_line.added	field=weight_source
 sales.order_line.added	schema_version=1
 sales.order_line.fired	field=fire_time
 sales.order_line.fired	field=order_id

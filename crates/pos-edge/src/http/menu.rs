@@ -281,6 +281,10 @@ pub(crate) struct MenuItemResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(nullable = false))]
     open_price: Option<pos_proto::item_codes::OpenPrice>,
+    /// Whether it is sold by the kilogram, its price per kilogram and its line in net grams
+    /// ([ADR-0223](../../../../docs/adr/0223-a-weighed-item-is-priced-by-its-weight.md)): the till
+    /// weighs it rather than adding one. `false` on a till reading an edge older than the field.
+    sold_by_weight: bool,
 }
 
 /// One course, as the till offers it.
@@ -347,6 +351,7 @@ impl MenuItemResponse {
             barcodes: entry.codes.barcodes.clone(),
             plu: entry.codes.plu.clone(),
             open_price: entry.codes.open_price,
+            sold_by_weight: entry.codes.sold_by_weight(),
         }
     }
 }

@@ -679,6 +679,7 @@ pub fn sample_bill(
                     modifier_menu_item_ids: Vec::new(),
                     quoted_unit_price: None,
                     typed_unit_price: None,
+                    weight_source: None,
                 },
             )
         })

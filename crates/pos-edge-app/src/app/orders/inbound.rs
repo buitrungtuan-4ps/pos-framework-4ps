@@ -414,5 +414,7 @@ fn line_added(
         // session snapshot, which the config pull may have swapped since.
         modifier_display_names: priced.modifier_display_names.clone(),
         note_present,
+        // An inbound order names no weight, so a weighed item was refused before it was priced.
+        weight_source: None,
     }
 }

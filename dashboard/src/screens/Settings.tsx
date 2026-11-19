@@ -131,6 +131,7 @@ const UNIT_LABEL: Readonly<Record<string, MessageKey>> = {
   SETTING_UNIT_PERCENT: "settings.unit.percent",
   SETTING_UNIT_HOURS: "settings.unit.hours",
   SETTING_UNIT_MILLISECONDS: "settings.unit.milliseconds",
+  SETTING_UNIT_GRAMS: "settings.unit.grams",
 };
 
 /**

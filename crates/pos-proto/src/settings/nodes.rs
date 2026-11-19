@@ -21,6 +21,8 @@ use crate::shift::{
 };
 use crate::tabs::{GuestLabel, PublishedTabs};
 use crate::tender_keys::{self, PublishedTenderKeys};
+use crate::weighing;
+use crate::weighing::PublishedWeighing;
 use crate::wire_enum::WireEnum;
 
 use super::{
@@ -696,6 +698,47 @@ pub(super) fn scan_settings() -> Vec<Setting> {
                           `VARIABLE_MEASURE_LAYOUT_WEIGHT_5` the reference then its grams. Each \
                           national GS1 body assigns these prefixes, so a store's country pack may \
                           seed the layout.",
+        },
+    ]
+}
+
+/// The settings on the `weighing` node (ADR-0223), in the register's order.
+pub(super) fn weighing_settings() -> Vec<Setting> {
+    vec![
+        Setting {
+            node: PublishedWeighing::NODE,
+            field: "manual_entry",
+            shape: SettingShape::Bool {
+                default: PublishedWeighing::default().manual_entry(),
+                // ADR-0223 decision 3: the law, so a country pack seeds it (ADR-0183) and no
+                // template sets it.
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            confirm: None,
+            summary: "Whether a weighed item's weight may be typed by hand when no scale or label \
+                      gives it. Off, the default, takes a weight only from the scale beside the \
+                      till or a scale's printed label, as trade law requires where only a \
+                      certified scale may set a weight sold by it. A store's country pack seeds \
+                      it; each line records where its weight came from.",
+        },
+        Setting {
+            node: PublishedWeighing::NODE,
+            field: "min_grams",
+            shape: SettingShape::Int {
+                min: *weighing::MIN_GRAMS.start(),
+                max: *weighing::MIN_GRAMS.end(),
+                unit: SettingUnit::Grams,
+                default: weighing::DEFAULT_MIN_GRAMS,
+                // ADR-0223: any weight above nothing, and no template changes it.
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            confirm: None,
+            summary: "The least net weight, in grams, a weighed line may carry; a lighter one is \
+                      refused. `1`, the default, takes any weight above nothing.",
         },
     ]
 }

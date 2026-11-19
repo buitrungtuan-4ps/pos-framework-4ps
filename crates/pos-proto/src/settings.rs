@@ -86,6 +86,8 @@ wire_enum! {
     Hours = "HOURS",
     /// Milliseconds.
     Milliseconds = "MILLISECONDS",
+    /// Grams.
+    Grams = "GRAMS",
 }
 
 /// What a setting's value is, and what the register holds it to.
@@ -377,6 +379,7 @@ pub fn register() -> Vec<Setting> {
         nodes::tender_key_settings(),
         nodes::counter_settings(),
         nodes::scan_settings(),
+        nodes::weighing_settings(),
         nodes::tabs_settings(),
         nodes::backup_settings(),
         nodes::billing_settings(),
@@ -580,6 +583,7 @@ fn unit_phrase(unit: SettingUnit) -> &'static str {
         SettingUnit::Percent => "a whole percentage",
         SettingUnit::Hours => "a whole number of hours",
         SettingUnit::Milliseconds => "a whole number of milliseconds",
+        SettingUnit::Grams => "a whole number of grams",
     }
 }
 

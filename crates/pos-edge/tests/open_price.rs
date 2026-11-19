@@ -91,6 +91,7 @@ fn the_counter_sells_an_open_price_item_at_the_typed_price_within_its_bounds() {
             course_id: None,
             note_present: false,
             typed_unit_price: minor.map(vnd),
+            weight_source: None,
         };
         for refused in [None, Some(9_999), Some(90_001)] {
             let line = edge.add_line_to_order(actor(), order, typed(refused)).await;

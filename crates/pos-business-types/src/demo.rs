@@ -69,7 +69,7 @@ impl DemoItem {
         ItemCodes {
             barcodes: self.barcodes.clone(),
             plu: self.plu.clone(),
-            open_price: None,
+            ..ItemCodes::default()
         }
     }
 }

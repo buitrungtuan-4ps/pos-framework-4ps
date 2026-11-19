@@ -143,10 +143,13 @@ pub const CATALOGUE: &[Action] = &[
             "UNKNOWN_CODE",
             "PRICE_LABEL_NOT_OPEN_PRICE",
             "WEIGHT_LABEL_NOT_SOLD",
+            "WEIGHT_REQUIRED",
+            "WEIGHT_BELOW_MINIMUM",
             "PRICE_OUT_OF_RANGE",
             "ITEM_NOT_SELLABLE",
         ],
-        summary: "Add the item a scanned barcode, PLU or price label names, priced by the edge",
+        summary: "Add the item a scanned barcode, PLU, price label or weight label names, priced by \
+                  the edge",
         ..BASE
     },
     Action {

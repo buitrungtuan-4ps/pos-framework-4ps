@@ -138,6 +138,7 @@ impl EdgeSession {
             tender_keys: PublishedTenderKeys::default(),
             counter: PublishedCounter::default(),
             scan: pos_proto::scan::PublishedScan::default(),
+            weighing: pos_proto::weighing::PublishedWeighing::default(),
             tabs: pos_proto::tabs::PublishedTabs::default(),
             billing: PublishedBilling::default(),
             backup: PublishedBackup::default(),

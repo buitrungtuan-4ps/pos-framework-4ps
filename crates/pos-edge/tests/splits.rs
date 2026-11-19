@@ -139,6 +139,7 @@ async fn a_counter_bill_of(edge: &Edge<FakeStore>, count: usize) -> (BillId, Vec
             course_id: None,
             note_present: false,
             typed_unit_price: None,
+            weight_source: None,
         };
         let view = edge
             .add_line_to_order(server(), order, dish)

@@ -373,6 +373,7 @@ fn a_line_recorded_before_modifier_names_existed_still_reads() {
         modifier_menu_item_ids: vec![MenuItemId::new(Ulid::from_parts(1, 13))],
         modifier_display_names: vec![DisplayName::new("30 cm")],
         note_present: false,
+        weight_source: None,
     };
     let mut json = serde_json::to_value(&line).expect("serialise");
     let removed = json
