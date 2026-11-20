@@ -361,6 +361,16 @@ fn is_special_purpose_v6(first: u16, second: u16, third: u16) -> bool {
         || first == 0x5f00
 }
 
+/// Whether an IPv6 address is a Subnet-Router anycast address (RFC 4291 §2.6.1)
+/// or in the reserved subnet anycast block (RFC 2526).
+fn is_subnet_anycast(segments: [u16; 8]) -> bool {
+    (segments[4] == 0 && segments[5] == 0 && segments[6] == 0 && segments[7] == 0)
+        || (segments[4] == 0xfdff
+            && segments[5] == 0xffff
+            && segments[6] == 0xffff
+            && segments[7] >= 0xff80)
+}
+
 /// The forbidden class of an IPv6 address, or `None` if it is public unicast.
 fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
     if ip.is_unspecified() {
@@ -481,7 +491,7 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
     } else if first == 0x2001 && (second & 0xfff0 == 0x0010 || second & 0xfff0 == 0x0020) {
         // 2001:10::/28 (ORCHIDv1, RFC 4843) and 2001:20::/28 (ORCHIDv2, RFC 7343).
         Some(ForbiddenReason::Reserved)
-    } else if is_special_purpose_v6(first, second, third) {
+    } else if is_special_purpose_v6(first, second, third) || is_subnet_anycast(segments) {
         Some(ForbiddenReason::Reserved)
     } else {
         None
