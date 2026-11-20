@@ -483,6 +483,10 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
         Some(ForbiddenReason::Reserved)
     } else if is_special_purpose_v6(first, second, third) {
         Some(ForbiddenReason::Reserved)
+    } else if first == 0x2001 && (second & 0xfe00 == 0x0000) {
+        // 2001::/23 IETF Protocol Assignments (RFC 2928, RFC 6890). Unassigned or special-purpose
+        // prefixes without an explicit public unicast allocation must not be webhook targets.
+        Some(ForbiddenReason::Reserved)
     } else {
         None
     }

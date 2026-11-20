@@ -599,9 +599,27 @@ fn the_rest_of_iana_s_special_purpose_ipv6_blocks_are_reserved() {
         );
     }
     // The neighbours stay public: the /48, /28, and /16 end where IANA says they do.
-    for address in ["2620:4f:8001::1", "2001:40::1", "5f01::1"] {
+    for address in ["2620:4f:8001::1", "5f01::1"] {
         assert_eq!(classify_ip(ip(address)), Ok(()), "{address}");
     }
+}
+
+#[test]
+fn iana_s_ietf_protocol_assignments_ipv6_block_is_reserved() {
+    // IETF Protocol Assignments (2001::/23, RFC 2928, RFC 6890): addresses without an explicit
+    // unicast allocation are reserved and cannot be webhook targets.
+    for address in ["2001:6::1", "2001:40::1", "2001:100::1", "2001:1ff:ffff::1"] {
+        assert_eq!(
+            classify_ip(ip(address)),
+            Err(SsrfRejection::ForbiddenAddress(
+                ip(address),
+                ForbiddenReason::Reserved
+            )),
+            "{address} in 2001::/23 must be refused"
+        );
+    }
+    // The immediate neighbour right after the /23 block stays public unicast.
+    assert_eq!(classify_ip(ip("2001:200::1")), Ok(()));
 }
 
 #[test]
