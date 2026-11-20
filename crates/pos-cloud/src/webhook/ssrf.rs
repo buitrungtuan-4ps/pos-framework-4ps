@@ -463,6 +463,9 @@ fn classify_v6(ip: Ipv6Addr) -> Option<ForbiddenReason> {
     } else if first & 0xffc0 == 0xfe80 {
         // fe80::/10 link-local.
         Some(ForbiddenReason::LinkLocal)
+    } else if first & 0xff80 == 0xfe00 {
+        // fe00::/9 reserved by IETF (RFC 4291).
+        Some(ForbiddenReason::Reserved)
     } else if (first == 0x2001 && second == 0x0db8)
         || (first == 0x3fff && (second & 0xf000 == 0x0000))
     {

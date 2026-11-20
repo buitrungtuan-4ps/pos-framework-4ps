@@ -82,3 +82,8 @@
 **Vulnerability:** ISATAP interface identifiers (`<prefix>:<u/g>:5efe:a.b.c.d`) were only checking if segment 4 equaled `0` or `0x0200`, ignoring other valid u/g modifier bit configurations in segment 4 (such as `0x0100` or `0xfe00`), allowing attackers to bypass SSRF validation while targeting internal IPv4 addresses like `127.0.0.1` or `169.254.169.254`.
 **Learning:** In RFC 5214 ISATAP address definitions, segment 4 contains the 16-bit field where universal/local (u) and individual/group (g) bits sit in the top byte, while the lower 8 bits are required to be zero (`0xuu00`). Checking exact values rather than bitwise masking (`segments[4] & 0x00ff == 0`) left other u/g modifier bit combinations uninspected.
 **Prevention:** Inspect ISATAP interface identifiers using `(segments[4] & 0x00ff == 0) && segments[5] == 0x5efe` to ensure all ISATAP modifier bit variants embedding private IPv4 addresses are properly classified.
+
+## 2026-10-07 - [SSRF IPv6 IETF Reserved fe00::/9 Prefix Bypass]
+**Vulnerability:** Webhook SSRF validation checked link-local (`fe80::/10`) and site-local (`fec0::/10`) ranges, but omitted the IETF Reserved `fe00::/9` block (RFC 4291), allowing reserved IPv6 addresses such as `fe00::1` or `fe7f:ffff::1` to fall through `classify_v6` as ordinary public unicast addresses.
+**Learning:** In the `fe00::/8` scoped block defined by RFC 4291, addresses with the 9th bit cleared (`first & 0xff80 == 0xfe00`) are explicitly Reserved by IETF and must never be routed as public unicast or targeted by outbound webhooks.
+**Prevention:** Include `first & 0xff80 == 0xfe00` (`fe00::/9`) in `classify_v6` to refuse IETF reserved IPv6 addresses as `ForbiddenReason::Reserved`.
