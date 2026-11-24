@@ -6,6 +6,7 @@
 
 mod checks;
 mod comp;
+mod invoice;
 
 pub use checks::CheckPrinted;
 pub use payments::{PaymentTaken, TakenPayment};

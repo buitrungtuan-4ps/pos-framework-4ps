@@ -85,6 +85,11 @@ impl From<TimeError> for ClockError {
 pub struct StoreTimeZone(TimeZone);
 
 impl StoreTimeZone {
+    /// The zone itself, for the schedules in this crate that read the wall clock.
+    pub(crate) const fn zone(&self) -> &TimeZone {
+        &self.0
+    }
+
     /// UTC — the safe default when a store has set no timezone yet.
     #[must_use]
     pub fn utc() -> Self {

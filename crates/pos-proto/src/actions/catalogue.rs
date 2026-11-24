@@ -398,6 +398,7 @@ pub const CATALOGUE: &[Action] = &[
             "PAYMENTS_DO_NOT_SUM_TO_TOTAL",
             "DRAWER_DAY_ENDED",
             "CHECK_REQUIRED",
+            "E_INVOICE_SYMBOL_MISSING",
         ],
         summary: "Take payment for a bill and settle it",
         ..BASE
@@ -422,6 +423,7 @@ pub const CATALOGUE: &[Action] = &[
             "CHECK_REQUIRED",
             "PAYMENT_EXCEEDS_REMAINING",
             "PART_PAYMENTS_OFF",
+            "E_INVOICE_SYMBOL_MISSING",
         ],
         summary: "Take one payment towards a bill; the last one settles it",
         ..BASE

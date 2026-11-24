@@ -201,6 +201,19 @@ pub enum SettingRefusal {
         /// One store the write reaches in that country.
         store_id: String,
     },
+    /// A value past the legal limit of the country of a store the write reaches
+    /// ([ADR-0229](../../../docs/adr/0229-the-e-invoice-issue-moment-is-a-schedule.md) decision 2).
+    #[error(
+        "`{setting_key}` is past the legal limit in {country_code}, store {store_id}'s country"
+    )]
+    BeyondCountryLimit {
+        /// The setting.
+        setting_key: String,
+        /// The country whose law sets the limit.
+        country_code: CountryCode,
+        /// One store the write reaches in that country.
+        store_id: String,
+    },
     /// The value is written only with a recorded confirmation, and the write did not confirm its
     /// notice ([ADR-0169](../../../docs/adr/0169-a-setting-value-can-require-a-recorded-confirmation.md)
     /// decision 2).

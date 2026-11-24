@@ -108,6 +108,7 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
   // invoiced. Neither changes on a second try, so each says where the correction is made.
   SETTLED_VOID_WINDOW_CLOSED: "error.settled_void_window_closed",
   E_INVOICE_ISSUED: "error.e_invoice_issued",
+  E_INVOICE_SYMBOL_MISSING: "error.e_invoice_symbol_missing",
   TRANSITION_REFUSED: "error.transition_refused",
   EMPTY: "error.empty",
   // `/setup`: the first screen a technician meets, and the one a store with no internet fails on.
