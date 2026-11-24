@@ -132,6 +132,26 @@ impl Fiscalization for OfflineFiscalization {
             // bill is a compliance incident rather than a duplicate row.
             return Ok(existing.clone());
         }
+        if let Some(given) = &request.issued_number {
+            // A submission of a number the store already issued (ADR-0225 decision 8): used as it
+            // is, consuming nothing, and refused if another bill holds it.
+            if state.consumed.contains(given) {
+                return Err(PortError::invalid_argument(
+                    PortName::Fiscalization,
+                    "the invoice number is already held by another bill",
+                ));
+            }
+            state.consumed.push(given.clone());
+            let invoice = IssuedInvoice {
+                bill_id: request.bill_id,
+                invoice_number: given.clone(),
+                issued_at: Timestamp::EPOCH,
+                submitted: false,
+                authority_reference: None,
+            };
+            state.issued.insert(request.bill_id, invoice.clone());
+            return Ok(invoice);
+        }
         if state.available.is_empty() {
             return Err(PortError::resource_exhausted(
                 PortName::Fiscalization,
