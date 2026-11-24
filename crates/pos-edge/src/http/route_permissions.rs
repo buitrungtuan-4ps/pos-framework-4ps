@@ -73,6 +73,15 @@ pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
             "an activation code brings a new box online, before anyone can sign in on it (ADR-0143)",
         ),
     ),
+    // A kiosk's own record is admitted on the card route on ADR-0230 decision 7's terms, inside it.
+    (
+        "POST /api/bills/{id}/card",
+        RouteGate::Person(&[Permission::TakePayment]),
+    ),
+    (
+        "POST /api/bills/{id}/card/{payment_id}/resolve",
+        RouteGate::Person(&[Permission::TakePayment]),
+    ),
     (
         "POST /api/bills/{id}/check/print",
         RouteGate::Person(&[Permission::OpenBill]),

@@ -709,5 +709,19 @@
   "lookup.pending": "Looking up…",
   "lookup.none": "Not given",
   "lookup.yes": "Yes",
-  "lookup.no": "No"
+  "lookup.no": "No",
+  "error.card_terminal_unavailable": "The card terminal did not answer. Nothing was charged; try again.",
+  "error.card_result_unknown": "A card on this bill has no result yet. Resolve it first.",
+  "error.card_not_parked": "This bill is no longer waiting on that card.",
+  "error.card_already_captured": "The terminal already took that card. Confirm it instead.",
+  "card.declined": "The card was declined. Nothing was charged.",
+  "card.unknown": "The card's result is not known. Do not take another payment until it is resolved.",
+  "card.look_up": "Ask the terminal again",
+  "card.confirm": "The terminal's slip says approved",
+  "card.cancel": "Cancel it on the terminal",
+  "card.still_unknown": "The terminal still has no result.",
+  "card.unanswered": "The edge did not answer. Check this bill before taking payment again.",
+  "kiosk.pay_card": "Pay by card",
+  "kiosk.card_unknown": "We could not confirm your card. Please see a member of staff.",
+  "kiosk.card_paid": "Paid. Thank you!"
 }

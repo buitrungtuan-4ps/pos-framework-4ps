@@ -4,10 +4,13 @@
 //! The bill: opening it, reading what it owes, voiding, discounting, comping a line of and waiving a fee on it, splitting
 //! and merging it, settling it, and the receipts, takings and buyers a settle leaves behind.
 
+mod card;
 mod checks;
 mod comp;
 mod invoice;
 
+pub(in crate::app) use card::CardTerminal;
+pub use card::{CardAsk, CardOutcome, CardRefusal, CardResolution, ParkedCard};
 pub use checks::CheckPrinted;
 pub use payments::{PaymentTaken, TakenPayment};
 pub use void::VoidedBill;

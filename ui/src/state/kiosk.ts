@@ -13,6 +13,10 @@ import { createSignal } from "solid-js";
 
 import { ApiError, api } from "../api/client";
 import type { MenuResponse, ReasonCodesResponse } from "../api/schemas";
+import type { Money } from "../lib/money";
+import { tenderAccepted } from "./store";
+
+const cardAccepted = () => tenderAccepted("PAYMENT_METHOD_CARD");
 
 /** The framework's reason for an order a guest walked away from (`pos_proto::reason_codes`). */
 const ABANDONED = "ABANDONED";
@@ -26,15 +30,23 @@ export interface KioskLine {
   readonly quantity: number;
 }
 export type KioskPhase = "start" | "ordering" | "done" | "closed";
+/**
+ * A card at the kiosk (ADR-0230 decision 7): not offered, offered, out to the terminal, taken,
+ * declined, or unknown, which only staff resolve. `none` where the store has no terminal.
+ */
+export type KioskCard = "none" | "offered" | "busy" | "paid" | "declined" | "unknown";
 
 const [phase, setPhase] = createSignal<KioskPhase>("start");
 const [lines, setLines] = createSignal<readonly KioskLine[]>([]);
 const [queueNumber, setQueueNumber] = createSignal<number | null>(null);
 const [refusal, setRefusal] = createSignal<unknown>(null);
+const [card, setCard] = createSignal<KioskCard>("none");
 let orderId: string | null = null;
+/** The bill the guest sent to be paid, and what it owes, for a card at the kiosk. */
+let sentBill: { readonly id: string; readonly due: Money } | null = null;
 let reasons: ReasonCodesResponse["reasons"] = [];
 
-export { lines, phase, queueNumber, refusal };
+export { card, lines, phase, queueNumber, refusal };
 
 /** The store's reason list, read once the kiosk has signed in. */
 export async function loadKioskReasons(): Promise<void> {
@@ -71,6 +83,8 @@ export function startOver(): void {
   setLines([]);
   setQueueNumber(null);
   setRefusal(null);
+  setCard("none");
+  sentBill = null;
   setPhase("start");
 }
 
@@ -126,10 +140,39 @@ export function fewer(line: KioskLine): Promise<void> {
 export function sendToPay(): Promise<void> {
   return run(async () => {
     if (orderId === null || lines().length === 0) return;
-    await api.openBillForOrder(orderId);
+    const order = orderId;
+    const bill = await api.openBillForOrder(order);
     orderId = null;
+    // What the bill owes, for a card: the order's check, which a kiosk may read for its own order.
+    const due = bill.total_due ?? (await api.checkOrder(order).then((check) => check.total_due, () => undefined));
+    sentBill = due === undefined ? null : { id: bill.bill_id, due };
+    setCard(sentBill === null || !cardAccepted() ? "none" : "offered");
     setPhase("done");
   });
+}
+
+/**
+ * Pays the bill just sent by card through the terminal, for the whole of it: the one payment a kiosk
+ * may take. An unknown result is never guessed at; the guest is sent to staff, who resolve it at a
+ * till. A store with no terminal stops offering it.
+ */
+export async function payByCard(): Promise<void> {
+  const bill = sentBill;
+  if (bill === null) return;
+  setCard("busy");
+  try {
+    const answer = await api.takeCard(bill.id, { amount: bill.due });
+    setCard(
+      answer.outcome === "PAYMENT_OUTCOME_CAPTURED" ? "paid" : answer.outcome === "PAYMENT_OUTCOME_DECLINED" ? "declined" : "unknown",
+    );
+  } catch (caught) {
+    if (caught instanceof ApiError && caught.reason === "CARD_TERMINAL_NONE") {
+      setCard("none");
+      return;
+    }
+    // Unanswered, or refused after the terminal may have been asked: staff look it up.
+    setCard(caught instanceof ApiError && caught.status === 503 ? "declined" : "unknown");
+  }
 }
 
 /**

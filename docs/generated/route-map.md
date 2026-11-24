@@ -13,6 +13,9 @@ From [`docs/openapi-edge.json`](../openapi-edge.json).
 | POST | `/api/activate` | `activate_device` | public: an activation code from the store's setup sheet (ADR-0050) | — | [`crates/pos-edge/src/activation.rs`](../../crates/pos-edge/src/activation.rs) |
 | GET | `/api/activation` | `activation_standing` | public: nothing: it says only whether this box is activated yet | — | [`crates/pos-edge/src/activation.rs`](../../crates/pos-edge/src/activation.rs) |
 | GET | `/api/bills/settled` | `settled_bills` | `till_session` | — | [`crates/pos-edge/src/http/counter.rs`](../../crates/pos-edge/src/http/counter.rs) |
+| GET | `/api/bills/{id}/card` | `parked_card` | `till_session` | — | [`crates/pos-edge/src/http/card.rs`](../../crates/pos-edge/src/http/card.rs) |
+| POST | `/api/bills/{id}/card` | `take_card` | `till_session` | `billing.payment.take` | [`crates/pos-edge/src/http/card.rs`](../../crates/pos-edge/src/http/card.rs) |
+| POST | `/api/bills/{id}/card/{payment_id}/resolve` | `resolve_card` | `till_session` | `billing.payment.take` | [`crates/pos-edge/src/http/card.rs`](../../crates/pos-edge/src/http/card.rs) |
 | GET | `/api/bills/{id}/check` | `bill_check` | `till_session` | — | [`crates/pos-edge/src/http/check.rs`](../../crates/pos-edge/src/http/check.rs) |
 | POST | `/api/bills/{id}/check/print` | `print_bill_check` | `till_session` | `billing.bill.open` | [`crates/pos-edge/src/http/check.rs`](../../crates/pos-edge/src/http/check.rs) |
 | POST | `/api/bills/{id}/comp` | `comp_line` | `till_session` | `billing.comp.apply` | [`crates/pos-edge/src/http/comp.rs`](../../crates/pos-edge/src/http/comp.rs) |

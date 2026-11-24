@@ -709,5 +709,19 @@
   "lookup.pending": "Đang tra cứu…",
   "lookup.none": "Không có",
   "lookup.yes": "Có",
-  "lookup.no": "Không"
+  "lookup.no": "Không",
+  "error.card_terminal_unavailable": "Máy quẹt thẻ không phản hồi. Chưa trừ tiền; hãy thử lại.",
+  "error.card_result_unknown": "Thẻ trên hóa đơn này chưa có kết quả. Hãy xử lý trước.",
+  "error.card_not_parked": "Hóa đơn này không còn chờ thẻ đó.",
+  "error.card_already_captured": "Máy đã trừ tiền thẻ đó. Hãy xác nhận thay vì hủy.",
+  "card.declined": "Thẻ bị từ chối. Chưa trừ tiền.",
+  "card.unknown": "Chưa biết kết quả thẻ. Không nhận thanh toán khác cho đến khi xử lý xong.",
+  "card.look_up": "Hỏi lại máy quẹt thẻ",
+  "card.confirm": "Phiếu của máy ghi đã duyệt",
+  "card.cancel": "Hủy trên máy quẹt thẻ",
+  "card.still_unknown": "Máy quẹt thẻ vẫn chưa có kết quả.",
+  "card.unanswered": "Máy chủ cửa hàng không phản hồi. Kiểm tra hóa đơn trước khi thu lại.",
+  "kiosk.pay_card": "Thanh toán bằng thẻ",
+  "kiosk.card_unknown": "Chưa xác nhận được thẻ của quý khách. Vui lòng gặp nhân viên.",
+  "kiosk.card_paid": "Đã thanh toán. Cảm ơn quý khách!"
 }

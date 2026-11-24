@@ -15,6 +15,8 @@ use super::{ROUTE_PERMISSIONS, RouteGate};
 /// or moves cash into, out of or through a drawer (ADR-0191 decision 2). An act calling one is a
 /// money act, and a money act calls only these.
 const MONEY_ROUTES: &[&str] = &[
+    "POST /api/bills/{id}/card",
+    "POST /api/bills/{id}/card/{payment_id}/resolve",
     "POST /api/bills/{id}/comp",
     "POST /api/bills/{id}/discount",
     "POST /api/bills/{id}/fees/{fee_id}/waive",
@@ -50,10 +52,14 @@ fn refusal_tokens() -> BTreeSet<&'static str> {
         .expect("error_reason is in http/mod.rs");
     let body = &source[start..];
     let body = &body[..body.find("\n}\n").expect("error_reason ends")];
-    body.split("=> \"")
+    let mut tokens: BTreeSet<&'static str> = body
+        .split("=> \"")
         .skip(1)
         .filter_map(|rest| rest.split('"').next())
-        .collect()
+        .collect();
+    // A card's refusals answer through `AppError::Card`, each with its own token (ADR-0230).
+    tokens.extend(crate::app::CardRefusal::ALL.map(crate::app::CardRefusal::reason));
+    tokens
 }
 
 #[test]

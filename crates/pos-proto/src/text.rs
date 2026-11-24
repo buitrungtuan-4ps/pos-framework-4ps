@@ -155,6 +155,32 @@ impl core::fmt::Display for ReleaseTag {
     }
 }
 
+/// A card terminal's own reference for one attempt
+/// ([ADR-0230](../../../docs/adr/0230-a-card-is-taken-through-the-terminal-port-and-an-unknown-result-parks-the-bill.md)
+/// decision 4).
+///
+/// Admissible in an event payload: it is the acquirer's opaque handle on what the terminal did,
+/// issued by the terminal and never typed by a person, and the `PaymentTerminal` port forbids
+/// card data in it. An adapter keeps it within 128 characters.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(transparent)]
+pub struct TerminalReference(Box<str>);
+
+impl TerminalReference {
+    /// Wraps a terminal's reference.
+    #[must_use]
+    pub fn new(value: impl Into<Box<str>>) -> Self {
+        Self(value.into())
+    }
+
+    /// The reference as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// A free-text note from or about a guest.
 ///
 /// **Deliberately not admissible in an event payload.** See the module documentation:

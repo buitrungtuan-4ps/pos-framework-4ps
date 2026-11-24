@@ -67,6 +67,10 @@ import type {
   SettleRequest,
   TakePaymentRequest,
   TakePaymentResponse,
+  CardRequest,
+  CardResponse,
+  ParkedCardResponse,
+  ResolveRequest,
   ShiftResponse,
   ShiftXResponse,
   StoreXResponse,
@@ -516,6 +520,12 @@ export const api = {
   // One payment towards a bill, recorded as it is taken; the last one settles it (ADR-0220).
   takePayment: (billId: string, take: TakePaymentRequest) =>
     request<TakePaymentResponse>("POST", `/api/bills/${billId}/payments`, take),
+  // A card through the card terminal, the card a bill is parked on, and resolving it (ADR-0230).
+  takeCard: (billId: string, card: CardRequest) =>
+    request<CardResponse>("POST", `/api/bills/${billId}/card`, card),
+  parkedCard: (billId: string) => request<ParkedCardResponse>("GET", `/api/bills/${billId}/card`),
+  resolveCard: (billId: string, paymentId: string, resolve: ResolveRequest) =>
+    request<CardResponse>("POST", `/api/bills/${billId}/card/${paymentId}/resolve`, resolve),
   // Today's settled bills, newest first, and a copy of one's receipt: the original under the same
   // number, marked COPY, and counted (ADR-0164). A bill that has not settled has no receipt to copy.
   settledBills: () => request<SettledBill[]>("GET", "/api/bills/settled"),

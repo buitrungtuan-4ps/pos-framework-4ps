@@ -39,7 +39,7 @@ use crate::ids::{
 use crate::money::{Money, Ratio};
 use crate::package::DataObject;
 use crate::quantity::Quantity;
-use crate::text::{DisplayName, PermissionKey, ReleaseTag};
+use crate::text::{DisplayName, PermissionKey, ReleaseTag, TerminalReference};
 use crate::time::Timestamp;
 use crate::ulid::Ulid;
 use crate::wire_enum::Open;
@@ -553,12 +553,12 @@ event_catalogue! {
         change_given: Money,
         /// Tip, held apart from the sale amount and outside `total_due`.
         tip_amount: Money,
-        /// How many equal shares the bill was split into, when this payment is one of them
-        /// ([ADR-0220](../../../docs/adr/0220-a-bill-takes-its-payments-one-at-a-time.md)
-        /// decision 3), 2 to 20. Absent for any other payment. Additive, so left off the wire
-        /// while absent and read as absent from a payment written before it.
+        /// The shares of an even split, 2 to 20, when this is one (ADR-0220); else absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         split_ways: Option<u8>,
+        /// The card terminal's reference for an attempt through the port (ADR-0230); else absent.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        terminal_reference: Option<TerminalReference>,
     },
     /// A tip was adjusted after the card was captured.
     BillingTipAdjusted => "billing.tip.adjusted", version = 1 {

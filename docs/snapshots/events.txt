@@ -89,6 +89,7 @@ billing.payment.captured	field=outcome
 billing.payment.captured	field=payment_id
 billing.payment.captured	field=split_ways
 billing.payment.captured	field=tendered
+billing.payment.captured	field=terminal_reference
 billing.payment.captured	field=tip_amount
 billing.payment.captured	schema_version=1
 billing.receipt.reprinted	field=bill_id

@@ -179,6 +179,10 @@ impl<S: EventStore> Edge<S> {
             EventType::BillingPaymentCaptured => {
                 let event: BillingPaymentCaptured =
                     envelope.data.decode().map_err(AppError::Encode)?;
+                // Only a captured payment moves money (ADR-0230 decision 5).
+                if !projection.fold_card_outcome(&event) {
+                    return Ok(());
+                }
                 // Only cash reaches the drawer, and the roll-up is the reason payments are evented. The
                 // payment names its drawer's shift on its envelope (ADR-0167 decision 5); one
                 // written without one went to the store's drawer's.

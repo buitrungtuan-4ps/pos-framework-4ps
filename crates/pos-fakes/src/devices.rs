@@ -180,6 +180,19 @@ impl FakePaymentTerminal {
         lock(&self.state).staged = Some(outcome);
     }
 
+    /// The acquirer later concludes `payment_id`'s attempt as `outcome`, as it does once a dropped
+    /// connection comes back: what a later look-up then reads. Nothing if there is no such attempt.
+    pub fn conclude(&self, payment_id: PaymentId, outcome: PaymentOutcome) {
+        let mut state = lock(&self.state);
+        if let Some(attempt) = state
+            .attempts
+            .iter_mut()
+            .find(|attempt| attempt.payment_id == payment_id)
+        {
+            attempt.outcome = Open::from_known(outcome);
+        }
+    }
+
     /// How many times money was actually moved.
     #[must_use]
     pub fn authorisation_count(&self) -> u32 {

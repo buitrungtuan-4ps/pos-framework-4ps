@@ -71,6 +71,7 @@ impl<S: EventStore> Edge<S> {
         reason_code_id: ReasonCodeId,
         approval: Option<&Approval>,
     ) -> Result<VoidedBill, AppError> {
+        self.refuse_parked(bill_id)?;
         let mut ctx = self.decision_ctx(actor)?;
         let session = self.session();
         let record = self

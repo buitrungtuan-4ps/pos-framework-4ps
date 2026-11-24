@@ -11,7 +11,7 @@
 //!
 //! What a kiosk may do: read the menu, the store's language and layout, its package and the reason
 //! list; open a tableless order; read, ring, change, void and send to be paid an order it opened;
-//! and close that order when it is empty. Nothing else, reads included, so it cannot list the
+//! close that order when it is empty, and pay its bill by card through the terminal (ADR-0230). Nothing else, reads included, so it cannot list the
 //! store's orders or read another till's.
 
 use std::sync::Arc;
@@ -23,7 +23,7 @@ use axum::response::Response;
 
 use pos_core::decision::Actor;
 use pos_ports::event_store::EventStore;
-use pos_proto::ids::{EmployeeId, OrderId, OrderLineId};
+use pos_proto::ids::{BillId, EmployeeId, OrderId, OrderLineId};
 
 use crate::app::Edge;
 
@@ -35,6 +35,8 @@ pub(crate) trait KioskScope: Send + Sync {
     fn opened_by(&self, order_id: OrderId, employee_id: EmployeeId) -> bool;
     /// The order a line is on.
     fn order_of_line(&self, line_id: OrderLineId) -> Option<OrderId>;
+    /// The order a bill is for.
+    fn order_of_bill(&self, bill_id: BillId) -> Option<OrderId>;
 }
 
 impl<S: EventStore + Send + Sync> KioskScope for Edge<S> {
@@ -49,6 +51,10 @@ impl<S: EventStore + Send + Sync> KioskScope for Edge<S> {
     fn order_of_line(&self, line_id: OrderLineId) -> Option<OrderId> {
         Self::order_of_line(self, line_id)
     }
+
+    fn order_of_bill(&self, bill_id: BillId) -> Option<OrderId> {
+        Self::order_of_bill(self, bill_id)
+    }
 }
 
 /// What a route a kiosk may call acts on.
@@ -60,6 +66,8 @@ enum Reach {
     Order,
     /// The line the path names, by its order.
     Line,
+    /// The bill the path names, by its order.
+    Bill,
 }
 
 /// The kiosk's routes, as `docs/snapshots/routes.txt` writes them.
@@ -76,6 +84,9 @@ const KIOSK_ROUTES: &[(&str, &str, Reach)] = &[
     ("POST", "/api/orders/{id}/close", Reach::Order),
     ("POST", "/api/lines/{id}/quantity", Reach::Line),
     ("POST", "/api/lines/{id}/void", Reach::Line),
+    // A card at the kiosk, through the terminal, for the whole of its own bill (ADR-0230
+    // decision 7): the route admits a kiosk on exactly those terms.
+    ("POST", "/api/bills/{id}/card", Reach::Bill),
 ];
 
 /// The route `method path` is, if it is a kiosk's, and the id its `{id}` names.
@@ -112,6 +123,11 @@ fn allowed(scope: &dyn KioskScope, employee_id: EmployeeId, method: &Method, pat
             .parse::<OrderLineId>()
             .ok()
             .and_then(|line| scope.order_of_line(line))
+            .is_some_and(|order| scope.opened_by(order, employee_id)),
+        Some((Reach::Bill, Some(id))) => id
+            .parse::<BillId>()
+            .ok()
+            .and_then(|bill| scope.order_of_bill(bill))
             .is_some_and(|order| scope.opened_by(order, employee_id)),
         _ => false,
     }

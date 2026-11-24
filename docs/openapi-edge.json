@@ -129,6 +129,190 @@
         ]
       }
     },
+    "/api/bills/{id}/card": {
+      "get": {
+        "tags": [
+          "bills"
+        ],
+        "summary": "`GET /api/bills/{id}/card` — the card a bill is parked on, which a till that reloads shows amber.",
+        "operationId": "parked_card",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The bill's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The card attempt this bill is parked on",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ParkedCardResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device"
+          },
+          "404": {
+            "description": "The bill is not parked on a card"
+          }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "bills"
+        ],
+        "summary": "`POST /api/bills/{id}/card` — take a card through the terminal (ADR-0230 decision 2).",
+        "operationId": "take_card",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The bill's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`amount`, with an optional `tip` and `split_ways`",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CardRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The terminal answered: captured (and recorded, settling the bill when it covered it), declined (nothing recorded) or unknown (the bill is parked)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CardResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The id is not a ULID, `split_ways` is not 2 to 20, or the store takes no card"
+          },
+          "401": {
+            "description": "This device is not paired"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or a kiosk outside its own order"
+          },
+          "409": {
+            "description": "No terminal (`CARD_TERMINAL_NONE`), a parked bill (`CARD_RESULT_UNKNOWN`), more than the bill owes, or the refusals a payment makes"
+          },
+          "503": {
+            "description": "The terminal was not reached (`CARD_TERMINAL_UNAVAILABLE`); nothing was recorded"
+          }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "billing.payment.take"
+      }
+    },
+    "/api/bills/{id}/card/{payment_id}/resolve": {
+      "post": {
+        "tags": [
+          "bills"
+        ],
+        "summary": "`POST /api/bills/{id}/card/{payment_id}/resolve` — resolve a parked card (ADR-0230 decision 3).",
+        "operationId": "resolve_card",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The bill's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "payment_id",
+            "in": "path",
+            "description": "The parked attempt's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`action`: `LOOK_UP`, `CONFIRM` or `CANCEL`",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Captured (recorded), declined (the park ends) or still unknown",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CardResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An id is not a ULID, or the action is not one of the three"
+          },
+          "401": {
+            "description": "This device is not paired"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device"
+          },
+          "409": {
+            "description": "The bill is not parked on that card (`CARD_NOT_PARKED`), a cancel of a card the terminal took (`CARD_ALREADY_CAPTURED`), no terminal, or the refusals a payment makes"
+          },
+          "503": {
+            "description": "The terminal was not reached; nothing changed"
+          }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "billing.payment.take"
+      }
+    },
     "/api/bills/{id}/check": {
       "get": {
         "tags": [
@@ -5718,6 +5902,71 @@
         "description": "A calendar date, YYYY-MM-DD",
         "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
       },
+      "CardRequest": {
+        "type": "object",
+        "description": "A card a till asks the terminal to take.",
+        "required": [
+          "amount"
+        ],
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Money",
+            "description": "What it applies to the bill."
+          },
+          "split_ways": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How many equal shares an even split divided the bill into, 2 to 20, when it is one of them.",
+            "minimum": 0
+          },
+          "tip": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Money",
+                "description": "The tip on it, taken on the terminal with the amount."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "CardResponse": {
+        "type": "object",
+        "description": "What came of a card.",
+        "required": [
+          "bill_id",
+          "payment_id",
+          "outcome"
+        ],
+        "properties": {
+          "bill_id": {
+            "$ref": "#/components/schemas/BillId"
+          },
+          "outcome": {
+            "type": "string",
+            "description": "`PAYMENT_OUTCOME_CAPTURED`, `PAYMENT_OUTCOME_DECLINED` or `PAYMENT_OUTCOME_UNKNOWN`: the\nlast parks the bill."
+          },
+          "paid_total": {
+            "$ref": "#/components/schemas/Money",
+            "description": "What the bill's payments now come to and what remains, after a capture."
+          },
+          "payment_id": {
+            "$ref": "#/components/schemas/PaymentId"
+          },
+          "remaining": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "settled": {
+            "$ref": "#/components/schemas/BillResponse",
+            "description": "The settled bill, when the capture covered what remained."
+          }
+        }
+      },
       "CategoryResponse": {
         "type": "object",
         "description": "One display category: a tab or section on the till.",
@@ -8342,6 +8591,35 @@
         ],
         "description": "A fixed parameter's value."
       },
+      "ParkedCardResponse": {
+        "type": "object",
+        "description": "The attempt a bill is parked on.",
+        "required": [
+          "bill_id",
+          "payment_id",
+          "amount",
+          "tip"
+        ],
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "bill_id": {
+            "$ref": "#/components/schemas/BillId"
+          },
+          "payment_id": {
+            "$ref": "#/components/schemas/PaymentId"
+          },
+          "tip": {
+            "$ref": "#/components/schemas/Money"
+          }
+        }
+      },
+      "PaymentId": {
+        "type": "string",
+        "description": "A `PaymentId`: a ULID, 26 Crockford base-32 characters",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
       "PaymentRequest": {
         "type": "object",
         "description": "One payment a device applies to a bill: how it was paid, what the guest handed over, what was put\nagainst the total, and what they left. Change is what is left of `tendered` once\n`applied_to_bill` and `tip` are taken out of it.\n\n`method` arrives as an [`Open`] enum so an unrecognised token is a clean rejection rather than a\ndeserialise failure; [`Self::into_payment`] is the domain boundary that refuses an unspecified or\nunknown method.",
@@ -8982,6 +9260,19 @@
           "receipt_print": {
             "type": "string",
             "description": "What came of the printing, as the settle reports it: `PRINTED`, `NO_PRINTER`, and so on."
+          }
+        }
+      },
+      "ResolveRequest": {
+        "type": "object",
+        "description": "How a person resolves a parked card.",
+        "required": [
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "`LOOK_UP`, `CONFIRM` or `CANCEL`."
           }
         }
       },
