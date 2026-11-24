@@ -128,6 +128,12 @@ pub trait CountryModule: Send + Sync + 'static {
         None
     }
 
+    /// Whether `symbol` is one this country writes for an e-invoice (ADR-0225 decision 2), checked
+    /// before the cloud publishes it to a store. By default the shape every country shares.
+    fn is_valid_invoice_symbol(&self, symbol: &str) -> bool {
+        pos_proto::einvoice::InvoiceSymbol::parse(symbol).is_some()
+    }
+
     /// The sections of a receipt a template may leave out that this country's law requires all the
     /// same ([ADR-0207](../../../docs/adr/0207-a-receipt-is-a-structured-template-per-store-and-channel.md)
     /// decision 3): the cloud refuses a `receipt` template that turns one of these off.
