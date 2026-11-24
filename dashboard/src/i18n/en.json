@@ -3155,6 +3155,7 @@
   "gateway.deleteMessage": "Stores can no longer call this endpoint, and its sealed headers are deleted with it.",
   "gateway.deleteTypePrompt": "Type the endpoint's name to confirm",
   "provider.delivery.demo": "Demo delivery (sandbox)",
+  "provider.einvoice.sandbox": "Sandbox e-invoice provider",
   "provider.field.item_map": "Item map (vendor code=menu item id, one per line)",
   "provider.field.webhook_secret": "Webhook signing secret",
   "designer.component.lookup_field": "Lookup field",

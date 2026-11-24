@@ -202,6 +202,34 @@ pub struct InvoiceRequest {
     pub lines: Vec<InvoiceLine>,
     /// The total, tax included.
     pub total: Money,
+    /// The number the store already issued, when this request is a submission of it
+    /// ([ADR-0225](../../../docs/adr/0225-a-vietnamese-store-issues-its-e-invoice-and-the-cloud-submits-it.md)
+    /// decision 8).
+    ///
+    /// A store numbers its invoice in the sale's own transaction and the cloud submits it, so the
+    /// provider must use this number rather than take one of its own. `None` keeps the original
+    /// behaviour: the adapter numbers from its allocated range.
+    pub issued_number: Option<InvoiceNumber>,
+    /// What this invoice corrects, for an adjustment or a replacement. `None` for an original.
+    pub correction: Option<InvoiceCorrection>,
+}
+
+/// How an invoice corrects an earlier one (ADR-0225 decision 7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CorrectionKind {
+    /// Changes the earlier invoice's amounts, up or down.
+    Adjustment,
+    /// Takes the earlier invoice's place.
+    Replacement,
+}
+
+/// The earlier invoice an adjustment or a replacement refers to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InvoiceCorrection {
+    /// Which kind of correction.
+    pub kind: CorrectionKind,
+    /// The invoice it corrects.
+    pub corrects: InvoiceNumber,
 }
 
 /// An invoice that has a number.
@@ -257,6 +285,10 @@ impl ReconciliationReport {
 ///    replacement path allocates a fresh range rather than resuming.
 /// 4. **`reconcile` reports both directions**, because only one of them is discoverable from
 ///    local data.
+/// 5. **A number the store issued is the number submitted.** Given
+///    [`InvoiceRequest::issued_number`], `issue` returns exactly that number and consumes nothing
+///    from a range; a number another bill already holds is refused as
+///    [`PortError::invalid_argument`], never renumbered.
 pub trait Fiscalization: Send + Sync {
     /// Asks the authority for a block of numbers.
     ///

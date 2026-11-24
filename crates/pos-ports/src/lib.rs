@@ -86,8 +86,8 @@ pub use erp::{AccountCode, ErpBatch, ErpLine, ErpPostingRef, ErpSink};
 pub use error::{PortError, PortName};
 pub use event_store::{AppendOutcome, EventQuery, EventStore, OutboxPosition, OutboxRecord};
 pub use fiscalization::{
-    Fiscalization, InvoiceBuyer, InvoiceLine, InvoiceNumber, InvoiceRange, InvoiceRequest,
-    IssuedInvoice, ReconciliationReport,
+    CorrectionKind, Fiscalization, InvoiceBuyer, InvoiceCorrection, InvoiceLine, InvoiceNumber,
+    InvoiceRange, InvoiceRequest, IssuedInvoice, ReconciliationReport,
 };
 pub use intake_ledger::{IntakeLedger, IntakeRecord};
 pub use key_keeper::{KeyKeeper, WrappedKey};
