@@ -668,6 +668,17 @@ async fn an_unreadable_binding_opens_no_event_stream() {
     }
     let (status, _, _) = send(&store.app, &store.kiosk, "POST", "/api/session/kiosk", None).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+    // Nor does a person leave a kiosk on a guess (finding K4): a cashier, who may not leave it,
+    // is not let through because the binding cannot be read.
+    let (status, _, _) = send(
+        &store.app,
+        &store.kiosk,
+        "POST",
+        "/api/session/sign-in",
+        Some(json!({ "code": "CSH-1", "pin": CASHIER_PIN })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
 }
 
 /// Only the published `devices` node makes a terminal a kiosk: a session that carries the class

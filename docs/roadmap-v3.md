@@ -461,7 +461,7 @@ Target shape: 500+ stores, 10+ brands, ~5 countries.
 
 **Phase 0 is done: five records.** Phase 1 has since built the placement column and its readers,
 the handover's conditional bump, the whole of ADR-0111, the whole of the print queue and the whole of
-ADR-0114; the container image and the host agent are the remainder. Each item below carries its own
+ADR-0114; the container image is built since (`deploy/edge-image/`, smoke-tested by the `edge-image` workflow), and the host agent is the remainder. Each item below carries its own
 state.
 
 - **C0.1** — [ADR-0110](adr/0110-edge-placement-is-a-deployment-axis.md): `edge_placement` is an
