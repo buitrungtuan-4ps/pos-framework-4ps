@@ -34,7 +34,9 @@ and a card payment completes through the terminal port** ([ADR-0201](../adr/0201
     tried.
   - **Android and iOS:** not built. Tauri v2 mobile needs POS Station split into a library with a
     mobile entry point, its desktop-only parts (tray, sidecar, OS keyring) behind `cfg(desktop)`, and
-    an Android Keystore or iOS Keychain store for the token, which is a new dependency and its ADR.
+    a store for the token on the phone, a new dependency or native code whose options
+    [ADR-0231](../adr/0231-a-phone-keeps-its-till-token-in-a-store-the-owner-chooses.md) (Proposed)
+    sets out.
     The CI job (an Android build on ubuntu; iOS needs macOS runners) is written up, not added. Until
     then a phone runs the till in its browser, the fallback ADR-0201 decision 1 names.
   - **Linux:** POS Station is built, linted and tested on Ubuntu 24.04 in CI (`station.yml`); the till
@@ -48,6 +50,7 @@ and a card payment completes through the terminal port** ([ADR-0201](../adr/0201
 | B9.2, the card | The edge calls the port; `billing.payment.captured` gains `terminal_reference`; the edge's fold counts only a captured payment; two catalogue acts; the till's card flow and park; the kiosk's card; the demo store's scripted fake terminal; unit tests and five replays | #1354 |
 | Program C, the image | `deploy/edge-image/`: the container image around a released binary, a compose file for one store, a smoke test, and the `edge-image` workflow | #1356 |
 | ADR-0201 decision 2, kiosk | POS Station's kiosk mode on any Windows edition, and the manual NUC check | #1357 |
+| [ADR-0231](../adr/0231-a-phone-keeps-its-till-token-in-a-store-the-owner-chooses.md), **Proposed** | Where the Tauri mobile shell keeps a phone's till token: four options and their trade-offs, for the owner to choose; it unblocks the mobile build | #1358 |
 
 ## Decisions taken during the phase
 
@@ -77,6 +80,9 @@ review), P20 to P23 (below):
 
 ## Open owner decisions
 
+- **Where a phone keeps its till token** ([ADR-0231](../adr/0231-a-phone-keeps-its-till-token-in-a-store-the-owner-chooses.md),
+  Proposed): the webview's storage, Stronghold, a vetted Keystore/Keychain plugin, or a small plugin
+  of our own. The mobile build waits on it.
 - **The card-terminal vendor for Vietnam** (B10.3): the adapter goes under `crates/adapters/`
   (`cargo xtask new adapter --kind card`), passes the contract suite and brings the per-device
   terminal binding on the `devices` node.
@@ -87,7 +93,7 @@ review), P20 to P23 (below):
 
 ## What the phase leaves open
 
-- Tauri mobile for Android and iOS, and its token store (a new dependency, so an ADR first).
+- Tauri mobile for Android and iOS, once ADR-0231 is decided.
 - The host agent (`pos_host`, ADR-0113).
 - Camera scanning: it would need a new dependency for the shell or the webview; deferred. A
   keyboard-wedge scanner works today.
