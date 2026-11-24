@@ -115,6 +115,29 @@ impl Fiscalization for FakeFiscal {
             // One bill, one number. Two numbers for one bill is a compliance incident.
             return Ok(existing.clone());
         }
+        let connected = state.connected;
+        if let Some(given) = &request.issued_number {
+            // A submission of the store's own number: used as it is, never twice.
+            if state
+                .issued
+                .values()
+                .any(|invoice| &invoice.invoice_number == given)
+            {
+                return Err(PortError::invalid_argument(
+                    PortName::Fiscalization,
+                    "the invoice number is already held by another bill",
+                ));
+            }
+            let invoice = IssuedInvoice {
+                bill_id: request.bill_id,
+                invoice_number: given.clone(),
+                issued_at: Timestamp::EPOCH,
+                submitted: connected,
+                authority_reference: connected.then(|| "fake-authority-ref".into()),
+            };
+            state.issued.insert(request.bill_id, invoice.clone());
+            return Ok(invoice);
+        }
         if state.available.is_empty() {
             return Err(PortError::resource_exhausted(
                 PortName::Fiscalization,
@@ -122,7 +145,6 @@ impl Fiscalization for FakeFiscal {
             ));
         }
         let invoice_number = state.available.remove(0);
-        let connected = state.connected;
         let invoice = IssuedInvoice {
             bill_id: request.bill_id,
             invoice_number,

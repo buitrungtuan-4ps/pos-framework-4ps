@@ -89,6 +89,7 @@ pub mod connectors;
 pub mod countries;
 pub mod cursor;
 pub mod dashboard;
+pub mod einvoice;
 pub mod erasures;
 pub mod fleet;
 pub mod gateway;

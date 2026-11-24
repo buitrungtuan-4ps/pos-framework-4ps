@@ -3155,6 +3155,7 @@
   "gateway.deleteMessage": "Cửa hàng sẽ không gọi được điểm kết nối này, và các header niêm phong cũng bị xóa.",
   "gateway.deleteTypePrompt": "Nhập tên điểm kết nối để xác nhận",
   "provider.delivery.demo": "Giao hàng mẫu (sandbox)",
+  "provider.einvoice.sandbox": "Nhà cung cấp hóa đơn điện tử mẫu (sandbox)",
   "provider.field.item_map": "Bảng món (mã của đối tác=mã món, mỗi dòng một món)",
   "provider.field.webhook_secret": "Khóa ký webhook",
   "designer.component.lookup_field": "Ô tra cứu",
