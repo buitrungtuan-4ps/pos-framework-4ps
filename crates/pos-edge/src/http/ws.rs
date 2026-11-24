@@ -128,17 +128,27 @@ pub(crate) async fn fan_out(
     query: Result<Query<ResumeQuery>, QueryRejection>,
 ) -> Response {
     // A kiosk sees only its own orders, so never the store's whole stream (ADR-0224 decision 4).
+    // A binding that cannot be read on a store with a kiosk is refused too, never guessed at.
     if let (Some(Extension(device)), Some(Extension(printers)), Some(devices)) =
         (device, printers, state.devices.clone())
-        && super::kiosk::kiosk_terminal(|| (devices.0)(), &printers, device)
-            .await
-            .is_some()
     {
-        return (
-            StatusCode::FORBIDDEN,
-            "a kiosk does not open the store's event stream",
-        )
-            .into_response();
+        match super::kiosk::kiosk_terminal(|| (devices.0)(), &printers, device).await {
+            Ok(None) => {}
+            Ok(Some(_)) => {
+                return (
+                    StatusCode::FORBIDDEN,
+                    "a kiosk does not open the store's event stream",
+                )
+                    .into_response();
+            }
+            Err(_) => {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "whether this device is a kiosk cannot be read",
+                )
+                    .into_response();
+            }
+        }
     }
     let upgrade = match upgrade {
         Ok(upgrade) => upgrade,

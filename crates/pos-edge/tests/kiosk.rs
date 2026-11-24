@@ -4,6 +4,8 @@
 //! A kiosk signs in as its own staff record, and a person leaves it only with `admin.kiosk.exit`
 //! and their PIN (ADR-0224 decision 4), over the shipped routes.
 
+use core::future::Future;
+use core::pin::Pin;
 use std::sync::Arc;
 
 use axum::Router;
@@ -18,6 +20,7 @@ use pos_edge::{
     StaffRoster, StoreIdentity, SystemClock,
 };
 use pos_fakes::FakeStore;
+use pos_ports::{PortError, PortName};
 use pos_proto::ClockSource;
 use pos_proto::SalesChannel;
 use pos_proto::devices::{DeviceClass, DeviceKind, PublishedDevice, PublishedDevices};
@@ -161,6 +164,38 @@ fn a_session() -> EdgeSession {
 }
 
 async fn store() -> Store {
+    store_reading_bindings(true).await
+}
+
+/// A binding record that cannot be read.
+struct Unreadable;
+
+impl AgentDispatch for Unreadable {
+    fn enqueue<'a>(
+        &'a self,
+        _agent: DeviceId,
+        _printer: DeviceId,
+        _job: pos_ports::printer::PrintJob,
+    ) -> Pin<Box<dyn Future<Output = pos_edge::printing::PrintOutcome> + Send + 'a>> {
+        Box::pin(async { pos_edge::printing::PrintOutcome::AgentUnavailable })
+    }
+
+    fn terminal_of<'a>(
+        &'a self,
+        _device: DeviceId,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<DeviceId>, PortError>> + Send + 'a>> {
+        Box::pin(async {
+            Err(PortError::unavailable(
+                PortName::EventStore,
+                "the binding cannot be read",
+            ))
+        })
+    }
+}
+
+/// [`store`], whose printers read the bindings it records or, when `readable` is false, cannot read
+/// any binding at all.
+async fn store_reading_bindings(readable: bool) -> Store {
     let log = FakeStore::new();
     let session = a_session();
     let edge = Arc::new(
@@ -180,6 +215,11 @@ async fn store() -> Store {
         Arc::clone(&queue),
         wake.clone(),
     ));
+    let dispatch: Arc<dyn AgentDispatch> = if readable {
+        dispatch
+    } else {
+        Arc::new(Unreadable)
+    };
     let printers = Arc::new(Printers::over(Arc::new(TcpTransports)).with_agents(dispatch));
     let pairing = Arc::new(Pairing::new());
     let now = SystemClock.now();
@@ -566,6 +606,33 @@ async fn a_kiosk_may_not_open_the_stores_event_stream() {
         "only the handshake's own rules apply"
     );
     assert!(store.edge.session().devices.devices().len() >= 2);
+}
+
+/// Whether a device is a kiosk is read from its binding; a binding that cannot be read, on a store
+/// with a kiosk terminal, opens no event stream for any device, and signs no kiosk in (phase 9
+/// security review, finding K1).
+#[tokio::test]
+async fn an_unreadable_binding_opens_no_event_stream() {
+    let store = store_reading_bindings(false).await;
+    for token in [&store.kiosk, &store.counter] {
+        let response = store
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/ws")
+                    .header("connection", "Upgrade")
+                    .header("upgrade", "websocket")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+    let (status, _, _) = send(&store.app, &store.kiosk, "POST", "/api/session/kiosk", None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
 /// Only the published `devices` node makes a terminal a kiosk: a session that carries the class
