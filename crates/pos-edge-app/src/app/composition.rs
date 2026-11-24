@@ -176,6 +176,7 @@ impl<S: EventStore> Edge<S> {
             labels: RwLock::new(Arc::new(crate::labels::LabelGrid::default())),
             custom_writes: tokio::sync::Mutex::new(super::record_slip::FreshSlips::default()),
             scale: Arc::new(super::orders::NoScale),
+            card_terminal: None,
             manual_weight_forbidden: std::sync::atomic::AtomicBool::new(false),
         })
     }
@@ -190,6 +191,19 @@ impl<S: EventStore> Edge<S> {
         G: pos_ports::scale::Scale + std::fmt::Debug + 'static,
     {
         self.scale = Arc::new(scale);
+        self
+    }
+
+    /// The same edge, taking a card through `terminal`
+    /// ([ADR-0230](../../../../docs/adr/0230-a-card-is-taken-through-the-terminal-port-and-an-unknown-result-parks-the-bill.md)
+    /// decision 1). Without one, `POST /api/bills/{id}/card` answers `CARD_TERMINAL_NONE` and a
+    /// card is recorded by hand, as before.
+    #[must_use]
+    pub fn with_card_terminal<T>(mut self, terminal: T) -> Self
+    where
+        T: pos_ports::payment::PaymentTerminal + 'static,
+    {
+        self.card_terminal = Some(super::bills::CardTerminal(Arc::new(terminal)));
         self
     }
 

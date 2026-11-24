@@ -8,7 +8,7 @@ import type { MenuResponse } from "../api/schemas";
 import { t } from "../i18n";
 import { errorMessage } from "../lib/errors";
 import { formatAmount } from "../state/store";
-import { canRemove, fewer, lines, queueNumber, refusal, ring, sendToPay, startOver } from "../state/kiosk";
+import { canRemove, card, fewer, lines, payByCard, queueNumber, refusal, ring, sendToPay, startOver } from "../state/kiosk";
 
 const [kioskMenu, setKioskMenu] = createSignal<MenuResponse | null>(null);
 export { setKioskMenu };
@@ -93,7 +93,18 @@ export function KioskDone() {
       <p class="my-4 text-6xl font-semibold tabular-nums" data-outcome="kiosk-number">
         {queueNumber() ?? ""}
       </p>
-      <p class="mb-6 text-ink-muted">{t("kiosk.pay_at_counter")}</p>
+      <Show when={card() === "paid"} fallback={<p class="mb-6 text-ink-muted">{t(card() === "unknown" ? "kiosk.card_unknown" : "kiosk.pay_at_counter")}</p>}>
+        <p class="mb-6 font-semibold" data-outcome="kiosk-paid">{t("kiosk.card_paid")}</p>
+      </Show>
+      {/* A card at the kiosk, through the terminal, for the whole bill (ADR-0230 decision 7). */}
+      <Show when={card() === "offered" || card() === "busy" || card() === "declined"}>
+        <Show when={card() === "declined"}>
+          <p class="mb-2 text-danger" role="status">{t("card.declined")}</p>
+        </Show>
+        <button type="button" class="mb-4 min-h-12 w-full rounded-token border border-line bg-surface px-6 font-semibold disabled:opacity-50" disabled={card() === "busy"} data-step="kioskCard" onClick={() => void payByCard()}>
+          {t(card() === "busy" ? "pay.paying" : "kiosk.pay_card")}
+        </button>
+      </Show>
       <button type="button" class="min-h-12 rounded-token bg-primary px-6 font-semibold text-primary-ink" onClick={startOver}>
         {t("kiosk.new_order")}
       </button>

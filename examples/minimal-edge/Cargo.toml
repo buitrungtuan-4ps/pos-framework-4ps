@@ -18,6 +18,8 @@ path = "src/main.rs"
 # (ADR-0109 Amendment 1); no shipped binary enables it.
 pos-edge  = { path = "../../crates/pos-edge", features = ["country-zz", "demo-fixtures"] }
 pos-proto = { path = "../../crates/pos-proto" }
+# The demo card terminal implements the port over the fake (ADR-0230).
+pos-ports = { path = "../../crates/pos-ports" }
 # The example composes the edge over the in-memory fakes — no database, no hardware.
 pos-fakes = { path = "../../crates/pos-fakes" }
 tokio     = { version = "1", features = ["rt-multi-thread", "macros"] }

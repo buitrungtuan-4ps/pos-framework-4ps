@@ -12,7 +12,7 @@ Boots `pos_edge` over the in-memory fakes with a fixed development store id and 
 
 ## Depends on / used by
 
-- **Depends on** (workspace crates): `pos-edge`, `pos-fakes`, `pos-proto`.
+- **Depends on** (workspace crates): `pos-edge`, `pos-fakes`, `pos-ports`, `pos-proto`.
 - **Used by** (workspace crates): no workspace crate.
 
 ## Entry points

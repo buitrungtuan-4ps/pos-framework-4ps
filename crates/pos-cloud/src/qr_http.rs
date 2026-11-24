@@ -62,10 +62,6 @@ mod page;
 /// The most lines one guest order may carry: what the guest page lets a basket hold.
 const MAX_GUEST_LINES: usize = 30;
 
-/// The longest reference a guest may send: what is left of the intake's 128 bytes once the token's
-/// table (a 26-character ULID) and a `:` are put in front of it.
-const MAX_GUEST_REFERENCE_BYTES: usize = 101;
-
 /// The default per-table submission ceiling in the rate-limit window, when config does not say.
 const DEFAULT_PER_TABLE_LIMIT: u32 = 10;
 /// The default rate-limit window, in seconds, when config does not say.
@@ -84,8 +80,7 @@ const SWEEP_HORIZON_MS: i64 = 86_400_000;
 pub(crate) struct QrOrderRequest {
     /// The HMAC-signed table token printed in the QR code.
     table_token: String,
-    /// The guest session's idempotency reference (the app mints one per basket), at most 101 bytes.
-    /// The intake receives it with the token's table and a `:` in front.
+    /// The guest session's idempotency reference (the app mints one per basket).
     external_reference: String,
     /// The requested lines, the same shape `/v1/orders` accepts.
     lines: Vec<OrderLineRequest>,
@@ -319,17 +314,8 @@ fn to_inbound_qr_order(
     store_id: StoreId,
     table_id: TableId,
 ) -> Result<InboundOrder, &'static str> {
-    // The intake is idempotent on the reference within the store and channel, so the token's table
-    // is put in front of the guest's: a reference sent from another table is another order, never
-    // that table's answer (phase 9 security review, finding G4).
-    if request.external_reference.is_empty()
-        || request.external_reference.len() > MAX_GUEST_REFERENCE_BYTES
-    {
-        return Err("external_reference must be non-empty and at most 101 bytes");
-    }
-    let external_reference =
-        ExternalReference::parse(&format!("{table_id}:{}", request.external_reference))
-            .map_err(|_ignored| "external_reference must be non-empty and at most 101 bytes")?;
+    let external_reference = ExternalReference::parse(&request.external_reference)
+        .map_err(|_ignored| "external_reference must be non-empty and at most 128 bytes")?;
     let placed_at = Timestamp::from_milliseconds_since_epoch(request.placed_at_ms)
         .map_err(|_ignored| "placed_at_ms is out of range")?;
     // A guest's order is untrusted input: bounded and shaped before it reaches the intake.

@@ -50,7 +50,7 @@ async function freePort() {
  * `log()` is that output so far, for a test that checks what the edge never logs. The
  * `"unstaffed"` store has no badge, so its `staffCode` and `staffPin` are `undefined`.
  */
-export async function startEdge(profile) {
+export async function startEdge(profile, extraEnv = {}) {
   if (!existsSync(BINARY)) {
     throw new Error(
       `${BINARY} is not built — run \`just build-replay-edge\` first (it embeds ui/dist, so build the UI before it), or set POS_EDGE_BIN`,
@@ -72,6 +72,9 @@ export async function startEdge(profile) {
       // what §10's counter preset actually does to the till, and `"unstaffed"` publishes nobody to
       // sign in as (`crates/pos-edge/src/demo.rs`).
       ...(profile === undefined ? {} : { POS_DEMO_PROFILE: profile }),
+      // What the demo card terminal concludes, card by card (`POS_DEMO_CARD`, ADR-0230), and any
+      // other knob one test turns.
+      ...extraEnv,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });

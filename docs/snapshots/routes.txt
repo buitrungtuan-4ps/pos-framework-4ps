@@ -4,6 +4,7 @@
 # /healthz and /ws are registered by the same router and are deliberately outside that rule.
 GET /api/activation
 GET /api/bills/settled
+GET /api/bills/{id}/card
 GET /api/bills/{id}/check
 GET /api/claim
 GET /api/custom-fields
@@ -39,6 +40,8 @@ GET /api/tables/{id}
 GET /api/tables/{id}/check
 GET /api/tabs
 POST /api/activate
+POST /api/bills/{id}/card
+POST /api/bills/{id}/card/{payment_id}/resolve
 POST /api/bills/{id}/check/print
 POST /api/bills/{id}/comp
 POST /api/bills/{id}/discount

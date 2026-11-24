@@ -309,6 +309,9 @@ pub enum AppError {
     /// piece, or one outside the line's bounds (ADR-0223).
     #[error("{0}")]
     Weighing(WeighError),
+    /// A card through the card terminal was refused (ADR-0230): which, in its own words.
+    #[error("{0}")]
+    Card(super::CardRefusal),
     /// A weight typed by hand where the store's `weighing.manual_entry` refuses one (ADR-0223).
     #[error("this store takes a weight from a scale or a label only")]
     ManualWeightNotAllowed,

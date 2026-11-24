@@ -17,7 +17,7 @@ The boundaries between the framework and every external system: database, broker
 ## Depends on / used by
 
 - **Depends on** (workspace crates): `pos-proto`; in tests, `pos-ports`.
-- **Used by** (workspace crates): `blob-garage`, `cloud-sync-http`, `erp-sap`, `key-vault-keyring`, `link-nats`, `metrics-vm`, `pos-cloud`, `pos-cloud-api`, `pos-cloud-config`, `pos-cloud-people`, `pos-cloud-reports`, `pos-contract-tests`, `pos-country`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-edge`, `pos-edge-app`, `pos-edge-printing`, `pos-fakes`, `pos-print-agent`, `pos-render`, `printer-escpos`, `shipping-ahamove`, `shipping-grabexpress`, `store-postgres`, `store-sqlite`, `updater-minisign`; in tests, `pos-ports`.
+- **Used by** (workspace crates): `blob-garage`, `cloud-sync-http`, `erp-sap`, `key-vault-keyring`, `link-nats`, `metrics-vm`, `minimal-edge`, `pos-cloud`, `pos-cloud-api`, `pos-cloud-config`, `pos-cloud-people`, `pos-cloud-reports`, `pos-contract-tests`, `pos-country`, `pos-country-in`, `pos-country-jp`, `pos-country-vn`, `pos-country-zz`, `pos-edge`, `pos-edge-app`, `pos-edge-printing`, `pos-fakes`, `pos-print-agent`, `pos-render`, `printer-escpos`, `shipping-ahamove`, `shipping-grabexpress`, `store-postgres`, `store-sqlite`, `updater-minisign`; in tests, `pos-ports`.
 
 ## Entry points
 

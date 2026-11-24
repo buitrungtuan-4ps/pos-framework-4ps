@@ -427,6 +427,50 @@ pub const CATALOGUE: &[Action] = &[
         ..BASE
     },
     Action {
+        action_id: "billing.card.take",
+        effect: Money,
+        frequency: Rare,
+        params: &[
+            required("bill_id", Id),
+            required("amount", Entered),
+            optional("tip", Entered),
+            optional("split_ways", Count),
+        ],
+        routes: &["POST /api/bills/{id}/card"],
+        permissions: &["billing.payment.take"],
+        refusals: &[
+            "CARD_TERMINAL_NONE",
+            "CARD_TERMINAL_UNAVAILABLE",
+            "CARD_RESULT_UNKNOWN",
+            "PAYMENT_EXCEEDS_REMAINING",
+            "PART_PAYMENTS_OFF",
+            "OPEN_SHIFT_REQUIRED",
+            "CHECK_REQUIRED",
+        ],
+        summary: "Take a card through the card terminal (ADR-0230)",
+        ..BASE
+    },
+    Action {
+        action_id: "billing.card.resolve",
+        effect: Money,
+        frequency: Rare,
+        params: &[
+            required("bill_id", Id),
+            required("payment_id", Id),
+            required("action", Token),
+        ],
+        routes: &["POST /api/bills/{id}/card/{payment_id}/resolve"],
+        permissions: &["billing.payment.take"],
+        refusals: &[
+            "CARD_NOT_PARKED",
+            "CARD_ALREADY_CAPTURED",
+            "CARD_TERMINAL_NONE",
+            "CARD_TERMINAL_UNAVAILABLE",
+        ],
+        summary: "Resolve a card whose result is unknown: ask the terminal, confirm or cancel",
+        ..BASE
+    },
+    Action {
         action_id: "billing.bill.discount",
         effect: Money,
         frequency: Rare,

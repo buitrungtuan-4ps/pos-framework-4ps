@@ -122,6 +122,36 @@ billing.bill.void_settled	refusal=SETTLED_VOID_WINDOW_CLOSED
 billing.bill.void_settled	refusal=VOID_REASON_NOT_VALID
 billing.bill.void_settled	route=POST /api/bills/{id}/void_settled
 billing.bill.void_settled	since=0.14.1
+billing.card.resolve
+billing.card.resolve	effect=ACTION_EFFECT_MONEY
+billing.card.resolve	frequency=ACTION_FREQUENCY_RARE
+billing.card.resolve	param=action:ACTION_PARAM_KIND_TOKEN:required
+billing.card.resolve	param=bill_id:ACTION_PARAM_KIND_ID:required
+billing.card.resolve	param=payment_id:ACTION_PARAM_KIND_ID:required
+billing.card.resolve	permission=billing.payment.take
+billing.card.resolve	refusal=CARD_ALREADY_CAPTURED
+billing.card.resolve	refusal=CARD_NOT_PARKED
+billing.card.resolve	refusal=CARD_TERMINAL_NONE
+billing.card.resolve	refusal=CARD_TERMINAL_UNAVAILABLE
+billing.card.resolve	route=POST /api/bills/{id}/card/{payment_id}/resolve
+billing.card.resolve	since=0.14.1
+billing.card.take
+billing.card.take	effect=ACTION_EFFECT_MONEY
+billing.card.take	frequency=ACTION_FREQUENCY_RARE
+billing.card.take	param=amount:ACTION_PARAM_KIND_ENTERED:required
+billing.card.take	param=bill_id:ACTION_PARAM_KIND_ID:required
+billing.card.take	param=split_ways:ACTION_PARAM_KIND_COUNT:optional
+billing.card.take	param=tip:ACTION_PARAM_KIND_ENTERED:optional
+billing.card.take	permission=billing.payment.take
+billing.card.take	refusal=CARD_RESULT_UNKNOWN
+billing.card.take	refusal=CARD_TERMINAL_NONE
+billing.card.take	refusal=CARD_TERMINAL_UNAVAILABLE
+billing.card.take	refusal=CHECK_REQUIRED
+billing.card.take	refusal=OPEN_SHIFT_REQUIRED
+billing.card.take	refusal=PART_PAYMENTS_OFF
+billing.card.take	refusal=PAYMENT_EXCEEDS_REMAINING
+billing.card.take	route=POST /api/bills/{id}/card
+billing.card.take	since=0.14.1
 billing.check.print
 billing.check.print	effect=ACTION_EFFECT_EDGE_WRITE
 billing.check.print	frequency=ACTION_FREQUENCY_COMMON

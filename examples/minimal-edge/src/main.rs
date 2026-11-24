@@ -10,6 +10,8 @@
 
 use std::sync::Arc;
 
+mod card;
+
 use pos_edge::config_client::session_from_config;
 use pos_edge::demo;
 use pos_edge::{
@@ -55,7 +57,9 @@ async fn main() -> Result<(), EdgeError> {
             Arc::new(InMemoryReceipts::new()),
         )
         .expect("seed the id generator")
-        .with_scale(demo_scale()),
+        .with_scale(demo_scale())
+        // The card terminal (ADR-0230): the fake, scripted by `POS_DEMO_CARD` for a browser test.
+        .with_card_terminal(card::DemoTerminal::from_env()),
     );
     // The `custom-data` profile's labels, as a tenant's grid would give them (ADR-0043): a real
     // store pulls them from its cloud, and this example has none.

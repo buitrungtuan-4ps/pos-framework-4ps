@@ -60,7 +60,10 @@ mod session;
 mod shifts;
 mod views;
 
-pub use bills::{CheckPrinted, PaymentTaken, TakenPayment, VoidedBill};
+pub use bills::{
+    CardAsk, CardOutcome, CardRefusal, CardResolution, CheckPrinted, ParkedCard, PaymentTaken,
+    TakenPayment, VoidedBill,
+};
 pub use config_wake::{ConfigDelivery, ConfigWakeReport, ConfigWakeStanding, WAKE_SAMPLES_MAX};
 pub use custom_data::{CONSENT_FIELD_PREFIX, CustomDataView};
 pub use device_reads::{DEVICE_READS_MAX, DeviceRead, DeviceReads};
@@ -176,6 +179,9 @@ struct Projection {
     /// The payments each bill that is still open has taken, for every till's read (ADR-0220
     /// decision 3). Dropped with `part_paid`, so it holds no more bills than are open.
     taken: HashMap<BillId, Vec<TakenPayment>>,
+    /// The card attempt each open bill is parked on, its outcome unknown (ADR-0230 decision 2):
+    /// one at most per bill, since a parked bill takes nothing else. Dropped with `taken`.
+    parked_cards: HashMap<BillId, ParkedCard>,
     /// What firing has consumed, folded from each fire's `stock_movements` (§8).
     ///
     /// Until roadmap B1.1 those movements were computed by `decide_line` and **thrown away**, so
@@ -333,6 +339,10 @@ pub struct Edge<S> {
     /// The scale beside the till (ADR-0223), read for a weighed line. One that never answers
     /// until a composition gives the edge one with [`Edge::with_scale`].
     scale: Arc<dyn orders::DynScale>,
+    /// The card terminal the edge takes a card through
+    /// ([ADR-0230](../../../../docs/adr/0230-a-card-is-taken-through-the-terminal-port-and-an-unknown-result-parks-the-bill.md)),
+    /// or none, where a card is recorded by hand. Given by [`Edge::with_card_terminal`].
+    card_terminal: Option<bills::CardTerminal>,
     /// Whether this binary's country pack forbids a weight typed by hand (ADR-0223 decision 3):
     /// the law, which holds whatever the store's `weighing.manual_entry` says, even a value set
     /// before the store's country was known. Set once at start by [`Edge::forbid_manual_weight`].

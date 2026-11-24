@@ -33,4 +33,12 @@ impl<S: EventStore> Edge<S> {
             .line(line_id)
             .map(|record| record.order_id)
     }
+
+    /// The order `bill_id` is for, if the store knows the bill.
+    #[must_use]
+    pub fn order_of_bill(&self, bill_id: pos_proto::ids::BillId) -> Option<OrderId> {
+        self.lock_projection()
+            .bill(bill_id)
+            .map(|record| record.order_id)
+    }
 }

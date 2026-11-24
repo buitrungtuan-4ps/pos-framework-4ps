@@ -45,7 +45,7 @@ use crate::ids;
 use crate::locale;
 use crate::money::{CurrencyCode, Money, Ratio};
 use crate::quantity::Quantity;
-use crate::text::{DisplayName, PermissionKey, ReleaseTag, TranslationKey};
+use crate::text::{DisplayName, PermissionKey, ReleaseTag, TerminalReference, TranslationKey};
 use crate::time::{BusinessDate, CalendarDate, Timestamp};
 use crate::ulid::Ulid;
 use crate::wire_enum::{Open, WireEnum};
@@ -88,7 +88,13 @@ no_pii!(
 // Product text. `GuestNote` is deliberately absent — see `crate::text`, which
 // explains why a free-text note stays on the local order record and never enters the
 // immutable log.
-no_pii!(DisplayName, TranslationKey, PermissionKey, ReleaseTag);
+no_pii!(
+    DisplayName,
+    TranslationKey,
+    PermissionKey,
+    ReleaseTag,
+    TerminalReference
+);
 
 // A fee's code names a charge, as a display name names a product, and a bill records it on each
 // fee it was charged ([ADR-0159](../../../docs/adr/0159-a-fee-is-configuration.md) decisions 3

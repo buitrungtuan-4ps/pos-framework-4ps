@@ -6,6 +6,7 @@ import { ApproverFields, createApprover } from "../components/ApproverFields";
 import { DISCOUNT, DiscountPanel, useDiscount } from "../components/DiscountPanel";
 import { VOID_BILL, VoidBillPanel, useVoidBill } from "../components/VoidBillPanel";
 import { BillEnded } from "../components/BillEnded";
+import { CardParked, useCardTerminal } from "../components/CardTerminal";
 import { CompPanel } from "../components/CompPanel";
 import { PendingSettle } from "../components/PendingSettle";
 import { RefusalPanel } from "../components/RefusalPanel";
@@ -451,7 +452,12 @@ export function Pay() {
     });
   };
 
-  const payCard = () =>
+  // The card terminal, and the card recorded by hand where the edge has none (ADR-0230).
+  const card = useCardTerminal({ billId: () => billId() ?? "", currency, amount: due, tip, ways,
+    onCaptured: (answer) => (answer.settled ? setDone(answer.settled) : void showBill(answer.bill_id)),
+    onByHand: () => cardByHand() });
+  const payCard = () => void card.take();
+  const cardByHand = () =>
     record({
       method: "PAYMENT_METHOD_CARD",
       // A card takes the sale plus whatever tip was added — there is no note to choose and no
@@ -1136,16 +1142,20 @@ export function Pay() {
               {t(paying.busy() === "PAYMENT_METHOD_CASH" ? "pay.paying" : "pay.take_cash")}
             </button>
             </Show>
+            {/* Through the card terminal where the edge has one, by hand where it has none (ADR-0230). */}
             <Show when={tenderAccepted("PAYMENT_METHOD_CARD")}>
+              <CardParked card={card} />
+              <Show when={card.parked() === null}>
               <button
                 type="button"
                 class="min-h-touch rounded-token border border-line bg-surface disabled:opacity-50"
-                disabled={check() === null || paying.busy() !== null}
+                disabled={check() === null || paying.busy() !== null || card.busy()}
                 data-step="payCard"
                 onClick={() => payCard()}
               >
-                {t(paying.busy() === "PAYMENT_METHOD_CARD" ? "pay.paying" : "pay.card")}
+                {t(paying.busy() === "PAYMENT_METHOD_CARD" || card.busy() ? "pay.paying" : "pay.card")}
               </button>
+              </Show>
             </Show>
             <Show when={tenderAccepted("PAYMENT_METHOD_QR")}>
               <button
