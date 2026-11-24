@@ -17,8 +17,7 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 - [ADR-0212](../adr/0212-the-heartbeat-names-the-version-each-till-last-read.md) The heartbeat names the package version each till last read
 - [ADR-0216](../adr/0216-integrations-come-in-three-tiers-and-functions-wait.md) Integrations come in three tiers, and WebAssembly functions wait for a real case
 - [ADR-0226](../adr/0226-a-japanese-receipt-is-a-qualified-invoice.md) A Japanese receipt is a simplified qualified invoice, taxed and rounded once per rate
-- [ADR-0227](../adr/0227-an-indian-invoice-is-registered-through-a-port-and-upi-is-confirmed.md) An Indian invoice is registered through the port, UPI is confirmed, GST returns are exported
-- [ADR-0229](../adr/0229-the-e-invoice-issue-moment-is-a-schedule.md) The e-invoice issue moment is a schedule, held to the country's legal limit
+- [ADR-0231](../adr/0231-a-phone-keeps-its-till-token-in-a-store-the-owner-chooses.md) A phone keeps its till token in a store the owner chooses
 
 ## Citations of ADRs that do not exist
 

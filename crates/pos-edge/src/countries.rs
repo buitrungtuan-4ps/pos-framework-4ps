@@ -43,4 +43,7 @@ pub(crate) fn apply_law<S: pos_ports::event_store::EventStore>(
     ) {
         edge.forbid_manual_weight();
     }
+    // The latest an e-invoice may be issued after its sale (ADR-0229 decision 2), which every
+    // schedule is clamped to.
+    edge.limit_invoice_issue(countries.einvoice_issue_limit());
 }

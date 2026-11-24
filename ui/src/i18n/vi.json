@@ -164,6 +164,7 @@
   "error.drawer_day_ended": "Ca của ngăn kéo tiền này bắt đầu từ ngày kinh doanh trước. Hãy kiểm đếm và đóng ca ở màn hình Ca trước khi nhận thêm tiền mặt. Vẫn thanh toán bằng thẻ được.",
   "error.drawer_not_a_till": "Máy POS đó không còn thuộc cửa hàng. Hãy xem lại danh sách.",
   "error.e_invoice_issued": "Hóa đơn này đã được xuất hóa đơn điện tử, nên không thể hủy tại đây. Cần hủy hóa đơn điện tử trước.",
+  "error.e_invoice_symbol_missing": "Cửa hàng chưa có ký hiệu hóa đơn điện tử, nên không thể thanh toán hóa đơn cần xuất hóa đơn điện tử. Hãy nhờ văn phòng chính phát hành ký hiệu hóa đơn cho cửa hàng.",
   "error.empty": "Chưa có gì để thực hiện — hãy thêm món hoặc thanh toán trước.",
   "error.internal": "Máy chủ cửa hàng gặp lỗi. Hãy thử lại; nếu lặp lại, gọi hỗ trợ.",
   "error.invalid_argument": "Yêu cầu không hợp lệ. Hãy tải lại và thử lại.",

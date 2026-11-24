@@ -169,6 +169,9 @@ struct Projection {
     /// Each settled bill's receipt as the settle recorded it, for printing a copy (ADR-0164). Folded
     /// from the log like the rest, so it holds what the log holds and no more.
     settled: HashMap<BillId, SettledReceipt>,
+    /// The last number issued under each e-invoice symbol, and the bills an invoice was issued for
+    /// (ADR-0225), folded from `fiscal.invoice.issued`. A store numbers under one symbol a year.
+    invoices: projection::Invoices,
     /// What each bill's tenders put on it and the shift its settle was stamped with (ADR-0184), so
     /// a void after payment gives back what was taken. Folded from the log, as `settled` is.
     paid: HashMap<BillId, PaidBill>,
@@ -336,6 +339,14 @@ pub struct Edge<S> {
     /// writes to one object cannot each start a subject for it (ADR-0206). It guards the record each
     /// person last saved, whose first slip is the save's own (ADR-0207 decision 5).
     custom_writes: tokio::sync::Mutex<record_slip::FreshSlips>,
+    /// Held by a settle that issues an e-invoice from reading its symbol's last number to folding
+    /// the new one, so two settles never take one number and a refused commit leaves no gap
+    /// ([ADR-0225](../../../../docs/adr/0225-a-vietnamese-store-issues-its-e-invoice-and-the-cloud-submits-it.md)
+    /// decision 2).
+    invoicing: tokio::sync::Mutex<()>,
+    /// The latest this binary's country lets an e-invoice be issued after its sale (ADR-0229
+    /// decision 2), which every schedule is clamped to. `None` until [`Edge::limit_invoice_issue`].
+    issue_limit: RwLock<Option<pos_proto::einvoice::IssueLimit>>,
     /// The scale beside the till (ADR-0223), read for a weighed line. One that never answers
     /// until a composition gives the edge one with [`Edge::with_scale`].
     scale: Arc<dyn orders::DynScale>,

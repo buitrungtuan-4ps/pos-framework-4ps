@@ -164,6 +164,7 @@
   "error.drawer_day_ended": "This drawer's shift began on an earlier business day. Count and close it on the Shift screen before it takes more cash. Cards still work.",
   "error.drawer_not_a_till": "That till is no longer one of the store's. Look at the list again.",
   "error.e_invoice_issued": "A legal invoice was issued for this bill, so it cannot be voided here. The invoice must be cancelled first.",
+  "error.e_invoice_symbol_missing": "This store has no e-invoice symbol yet, so a bill that needs an e-invoice cannot be settled. Ask head office to publish the store's invoice symbol.",
   "error.empty": "Nothing to do yet — add an item or a payment first.",
   "error.internal": "Something went wrong on the store PC. Try again; if it repeats, call support.",
   "error.invalid_argument": "The request was not understood. Reload and try again.",

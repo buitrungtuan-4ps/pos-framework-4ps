@@ -7,6 +7,7 @@
 mod card;
 mod checks;
 mod comp;
+mod invoice;
 
 pub(in crate::app) use card::CardTerminal;
 pub use card::{CardAsk, CardOutcome, CardRefusal, CardResolution, ParkedCard};

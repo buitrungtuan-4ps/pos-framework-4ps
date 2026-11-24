@@ -1,29 +1,29 @@
 // Copyright (c) 2026 Pizza 4P's. All rights reserved.
 // Proprietary and confidential. Internal use only. See LICENSE.
 
-//! The event catalogue: the single source for chain reporting, reconciliation, ERP
-//! posting and webhooks.
+//! The event catalogue: the single source for chain reporting, reconciliation, ERP posting and
+//! webhooks.
 //!
-//! Names are `domain.resource.action` with the action in the past tense, sharing one
-//! taxonomy with permission identifiers (`docs/naming-and-api.md` §5). Events already
-//! happened, so they are never named imperatively.
+//! Names are `domain.resource.action` with the action in the past tense, sharing one taxonomy with
+//! permission identifiers (`docs/naming-and-api.md` §5). Events already happened, so they are never
+//! named imperatively.
 //!
 //! # Why there are more than the specification lists
 //!
-//! `docs/pos-spec.md` §18 declares thirty-eight types. Sixteen more are declared here,
-//! each because a stated requirement had no event able to carry it — most sharply
-//! `security.permission.overridden`, since a manager-PIN override above a discount
-//! ceiling is a fraud control and had no auditable record at all.
+//! `docs/pos-spec.md` §18 declares thirty-eight types. Sixteen more are declared here, each because
+//! a stated requirement had no event able to carry it — most sharply `security.permission.overridden`,
+//! since a manager-PIN override above a discount ceiling is a fraud control and had no auditable
+//! record at all.
 //!
-//! The asymmetry is what makes adding them now correct rather than presumptuous:
-//! **adding an event type is additive and free; removing one is forbidden.** So the
-//! cost of declaring a type early is near zero, and the cost of discovering a missing
-//! one after a thousand stores hold offline data is a protocol version bump. Issue #13
-//! records the reasoning per event.
+//! The asymmetry is what makes adding them now correct rather than presumptuous: **adding an event
+//! type is additive and free; removing one is forbidden.** So the cost of declaring a type early is
+//! near zero, and the cost of discovering a missing one after a thousand stores hold offline data is
+//! a protocol version bump. Issue #13 records the reasoning per event.
 
 use serde::{Deserialize, Serialize};
 
 use crate::chain::ChainHash;
+use crate::einvoice::{FiscalInvoice, InvoiceSchedule};
 use crate::enums::{
     PaymentMethod, PaymentOutcome, ReductionKind, SalesChannel, ShipmentStatus,
     StockLedgerEntryKind,
@@ -410,36 +410,23 @@ event_catalogue! {
         /// The buyer this invoice was issued to, for a B2B tax invoice
         /// ([ADR-0107](../../../docs/adr/0107-the-buyer-is-a-subject.md)).
         ///
-        /// A Japanese qualified invoice and an Indian tax invoice both have to name their
-        /// buyer, and the buyer's name and registration number may not enter this log —
-        /// `crate::pii` makes that a compile error, and `docs/pos-spec.md` §15 explains
-        /// why: the log is immutable, so anything personal in it could never be erased.
+        /// An invoice names its buyer, and the buyer's name and registration number may not enter
+        /// this immutable log (`crate::pii`, `docs/pos-spec.md` §15). So the event carries the
+        /// **identifier**, and the details live in the subject store, written in the settle's own
+        /// transaction: erasing a buyer scrubs one row, and the figures still reconcile.
         ///
-        /// So the event carries the **identifier** and the details live in the store's
-        /// subject store keyed by it, written in the settle's own transaction. Erasing a
-        /// buyer is then scrubbing one row, and this event keeps its subtotal, its tax
-        /// lines and its total — the figures still reconcile with the person gone.
-        ///
-        /// `None` on every ordinary retail sale, which is nearly every bill.
-        /// `#[serde(default)]` for the same reason `modifier_menu_item_ids` carries one:
-        /// a store upgrading replays its own log at start-up, and every bill settled
-        /// before this release has no such key.
+        /// `None` on every ordinary retail sale. `#[serde(default)]` because a store upgrading
+        /// replays its own log at start-up, and a bill settled before this field has no such key.
         #[serde(default)]
         buyer_subject_id: Option<SubjectId>,
-        /// One line per fee the bill was charged, in the order of its rules (ADR-0159 decision 4).
-        /// `service_charge` keeps carrying their sum, so a reader of that one figure stays right
-        /// until it reads these.
-        ///
-        /// Left out when empty, and absent reads as empty: a bill settled before this field
-        /// existed, or charged no fee, has no fee lines.
+        /// One line per fee the bill was charged, in the order of its rules (ADR-0159 decision 4);
+        /// `service_charge` keeps carrying their sum. Left out when empty, and absent reads as
+        /// empty: a bill settled before this field existed, or charged no fee, has none.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         fee_lines: Vec<BillFeeLine>,
         /// The bill's tax per class, each rounded once on its class's whole base (ADR-0028), and
-        /// summing to `tax_total` (ADR-0159 decision 4, roadmap-v3 B4.1).
-        ///
-        /// Left out when empty. Absent means *not recorded*, not *no tax*: a bill settled before
-        /// this field existed has none, and a reader falls back to `tax_total`, as a reprinted
-        /// copy already does (ADR-0164).
+        /// summing to `tax_total` (ADR-0159 decision 4). Left out when empty, and absent means *not
+        /// recorded*: a reader falls back to `tax_total`, as a reprinted copy does (ADR-0164).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         tax_lines: Vec<BillTaxLine>,
     },
@@ -450,14 +437,26 @@ event_catalogue! {
         /// Why.
         reason_code_id: ReasonCodeId,
     },
+    /// A settled bill's e-invoice was issued, with its settle or when due (ADR-0225, ADR-0229).
+    FiscalInvoiceIssued => "fiscal.invoice.issued", version = 1 {
+        /// The settled bill.
+        bill_id: BillId,
+        /// The invoice: its symbol and sequence, date, total and buyer's subject id.
+        invoice: FiscalInvoice,
+    },
+    /// A settled bill's e-invoice will be issued when due, in the settle's transaction (ADR-0229).
+    FiscalInvoiceScheduled => "fiscal.invoice.scheduled", version = 1 {
+        /// The settled bill.
+        bill_id: BillId,
+        /// When it is due, and the buyer it will name.
+        schedule: InvoiceSchedule,
+    },
     /// A settled bill's receipt was printed again, as a copy marked COPY
     /// ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
     ///
-    /// One event per copy, so a reprint rate is a count: the envelope already names the employee
-    /// and the device, which is what `docs/pos-spec.md` §11 item 3 compares against peers. A copy is
-    /// printed under the receipt's own number and never takes a new one, so the gapless series
-    /// (ADR-0025) counts sales, not pieces of paper. No PII: a buyer's details stay in the subject
-    /// store, as they do for the original.
+    /// One event per copy, so a reprint rate is a count (the envelope names the employee and the
+    /// device, `docs/pos-spec.md` §11 item 3). A copy keeps the receipt's own number, so the gapless
+    /// series (ADR-0025) counts sales, not paper. No PII.
     BillingReceiptReprinted => "billing.receipt.reprinted", version = 1 {
         /// The settled bill whose receipt was printed again.
         bill_id: BillId,

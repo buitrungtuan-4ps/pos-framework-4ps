@@ -3176,5 +3176,16 @@
   "flow.step.offlineStep": "Step to go to",
   "provider.field.answer_url": "Answer URL (where the store's accept, reject, ready and busy go)",
   "provider.field.prep_minutes": "Minutes an accepted order takes (told to the vendor)",
-  "provider.field.staff_confirm": "Staff confirm each order before the kitchen sees it"
+  "provider.field.staff_confirm": "Staff confirm each order before the kitchen sees it",
+  "settings.item.einvoice.issue_moment.title": "When the e-invoice is issued",
+  "settings.item.einvoice.issue_moment.help": "When a paid bill's legal e-invoice is issued. Off issues none. Immediately issues it with the payment. After a delay waits the minutes set below. Daily batch issues every waiting invoice together at the batch time. Only on request issues one only when the guest gives buyer details. No invoice is issued later than the store's country allows.",
+  "settings.item.einvoice.delay_minutes.title": "E-invoice delay",
+  "settings.item.einvoice.delay_minutes.help": "How many minutes after payment a bill's e-invoice is issued, when it is issued after a delay. A delay longer than the country allows is refused.",
+  "settings.item.einvoice.batch_minute.title": "E-invoice batch time",
+  "settings.item.einvoice.batch_minute.help": "The time of day, in minutes after midnight, at which a daily batch issues every waiting e-invoice. 1320 is 22:00. A bill paid after it waits for the next batch, unless the country's limit comes first.",
+  "settings.value.EINVOICE_ISSUE_MOMENT_OFF": "Off",
+  "settings.value.EINVOICE_ISSUE_MOMENT_IMMEDIATE": "Immediately",
+  "settings.value.EINVOICE_ISSUE_MOMENT_SCHEDULED_PER_ORDER": "After a delay",
+  "settings.value.EINVOICE_ISSUE_MOMENT_BATCH_WINDOW": "Daily batch",
+  "settings.value.EINVOICE_ISSUE_MOMENT_ON_REQUEST": "Only on request"
 }

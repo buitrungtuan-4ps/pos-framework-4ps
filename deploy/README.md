@@ -4,7 +4,7 @@
 
 One country cell runs on **one VPS** as a Docker Compose stack ([ADR-0044](../docs/adr/0044-fork-and-deploy.md)).
 This directory holds the deployment artifacts; the store-side service unit lives under
-[`edge/`](edge/). The end-to-end fork-to-UI runbook is P8e; this README documents the stack
+[`edge/`](edge/), and the edge container image for a hosted store under [`edge-image/`](edge-image/README.md). The end-to-end fork-to-UI runbook is P8e; this README documents the stack
 itself so it is reviewable and operable on its own.
 
 ## Cells

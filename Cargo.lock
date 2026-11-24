@@ -2104,6 +2104,7 @@ name = "pos-country-vn"
 version = "0.1.0"
 dependencies = [
  "pos-contract-tests",
+ "pos-core",
  "pos-country",
  "pos-fakes",
  "pos-ports",

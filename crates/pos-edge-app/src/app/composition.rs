@@ -175,6 +175,8 @@ impl<S: EventStore> Edge<S> {
             device_reads: super::DeviceReads::default(),
             labels: RwLock::new(Arc::new(crate::labels::LabelGrid::default())),
             custom_writes: tokio::sync::Mutex::new(super::record_slip::FreshSlips::default()),
+            invoicing: tokio::sync::Mutex::new(()),
+            issue_limit: RwLock::new(None),
             scale: Arc::new(super::orders::NoScale),
             card_terminal: None,
             manual_weight_forbidden: std::sync::atomic::AtomicBool::new(false),
@@ -212,6 +214,14 @@ impl<S: EventStore> Edge<S> {
     pub fn forbid_manual_weight(&self) {
         self.manual_weight_forbidden
             .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Holds every e-invoice schedule to `limit`, the latest this binary's country lets an invoice
+    /// be issued after its sale (ADR-0229 decision 2), whatever the store's setting says.
+    pub fn limit_invoice_issue(&self, limit: Option<pos_proto::einvoice::IssueLimit>) {
+        if let Ok(mut held) = self.issue_limit.write() {
+            *held = limit;
+        }
     }
 
     /// Whether a weight may be typed by hand here: the store's `weighing.manual_entry`, unless the
