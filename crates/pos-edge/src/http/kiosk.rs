@@ -22,9 +22,10 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
 use pos_core::permission::Permission;
+use pos_ports::PortError;
 use pos_ports::event_store::EventStore;
 use pos_proto::ClockSource;
-use pos_proto::devices::{DeviceClass, PublishedDevice, PublishedDevices};
+use pos_proto::devices::{DeviceClass, PublishedDevices};
 use pos_proto::ids::{DeviceId, EmployeeId};
 
 use super::auth::{LOG_TARGET, SignInDeps, SignedIn};
@@ -39,28 +40,41 @@ async fn kiosk_terminal_of<S>(
     printers: Option<&Arc<Printers>>,
     device: DeviceId,
 ) -> Option<DeviceId> {
-    kiosk_terminal(|| deps.edge.session().devices.clone(), printers?, device).await
+    kiosk_terminal(|| deps.edge.session().devices.clone(), printers?, device)
+        .await
+        .ok()
+        .flatten()
 }
 
-/// The kiosk terminal `device` is bound to, reading the store's `devices` node from `devices`
-/// once the binding is known. Shared by the sign-in and by `/ws`, which a kiosk may not open.
+/// The kiosk terminal `device` is bound to, reading the store's `devices` node from `devices`.
+/// Shared by the sign-in and by `/ws`, which a kiosk may not open. A store whose node names no
+/// kiosk terminal has no kiosk, and its bindings are not read.
+///
+/// # Errors
+///
+/// The binding could not be read, on a store that has a kiosk terminal: whether `device` is a kiosk
+/// is then unknown, and each caller refuses what it guards rather than guess (phase 9 security
+/// review, finding K1).
 pub(crate) async fn kiosk_terminal(
     devices: impl FnOnce() -> PublishedDevices,
     printers: &Printers,
     device: DeviceId,
-) -> Option<DeviceId> {
+) -> Result<Option<DeviceId>, PortError> {
+    let kiosks: Vec<DeviceId> = published_terminals(&devices())
+        .filter(|entry| entry.device_class() == Some(DeviceClass::Kiosk))
+        .map(|entry| entry.device_id)
+        .collect();
+    if kiosks.is_empty() {
+        return Ok(None);
+    }
     let terminal = match printers.terminal_of(device).await {
-        Ok(terminal) => terminal?,
+        Ok(terminal) => terminal,
         Err(error) => {
             tracing::warn!(target: LOG_TARGET, %device, %error, "a kiosk's binding could not be read");
-            return None;
+            return Err(error);
         }
     };
-    published_terminals(&devices())
-        .find(|entry| entry.device_id == terminal)
-        .and_then(PublishedDevice::device_class)
-        .filter(|class| *class == DeviceClass::Kiosk)
-        .map(|_| terminal)
+    Ok(terminal.filter(|terminal| kiosks.contains(terminal)))
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(
