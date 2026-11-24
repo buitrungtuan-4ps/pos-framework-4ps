@@ -141,6 +141,43 @@ till's drawer, which springs at the receipt printer the console names for that t
 computer bound to no till takes cards but no cash. So bind each till before the store opens, and
 mark the drawer on its receipt printer.
 
+## Kiosk, on any Windows edition
+
+[ADR-0201](../adr/0201-the-till-runs-on-every-device-class.md) decision 2 asks for kiosk behaviour
+that does not depend on the Windows edition: Home and Pro have no Shell Launcher or Assigned Access.
+The app provides it itself when `station.json` (in the app's configuration directory,
+`%APPDATA%\com.pizza4ps.pos-station\` on Windows) says `"kiosk": true`:
+
+- the till's window is **full screen, frameless and always on top**, with no close or minimise
+  button, whatever `till_full_screen` says (`src/kiosk.rs`, applied in `station.rs`);
+- a request to close it — Alt+F4, the taskbar — is **refused** (`on_window_event`);
+- the tray offers **no Quit**, so the app is not left by accident;
+- the till's own exit, a manager's code and PIN (ADR-0224 decision 4, `device.kiosk.exit`), takes
+  a kiosk till back to the floor for staff.
+
+It starts at sign-in through the installer's autostart, under a **dedicated local Windows account**
+with automatic sign-in, which the person setting up the NUC configures (*Settings → Accounts*, or
+`netplwiz`). Off by default: a machine that also does other work keeps its window.
+
+**What it is not.** Someone who knows Windows can still leave through Ctrl+Alt+Del or the sign-in
+screen; on Home and Pro kiosk behaviour makes leaving deliberate, not impossible. On Enterprise and
+IoT Enterprise, Shell Launcher or Assigned Access are extra hardening, never required. **Not built:**
+bringing the app back after the process itself is killed or crashes (a watchdog: a scheduled task
+set to restart on failure is the documented stopgap), and leaving the native kiosk with a PIN from
+the app itself — today an administrator of the machine turns `kiosk` off.
+
+**Tested on Linux CI:** the decisions (`kiosk.rs`'s tests) and that the app builds with them.
+**Not verified on hardware:** the manual check below has not been run on a NUC.
+
+### The manual check on a NUC
+
+1. Install the app, pair it, set `"kiosk": true`, and set the dedicated account to sign in by itself.
+2. Restart the machine: the till opens full screen with no title bar, on top of everything.
+3. Press Alt+F4, right-click the taskbar entry and choose *Close*: the till stays.
+4. Open the tray menu: no *Quit*.
+5. On a `DEVICE_CLASS_KIOSK` device, the till's exit asks for a manager's code and PIN.
+6. Record the edition (Home, Pro, Enterprise, LTSC), the build, and the result in the exit record.
+
 ## Security
 
 - **Remote pages get no commands.** `capabilities/local-pages.json` grants the four commands
@@ -366,5 +403,15 @@ scrolling smooth.
 - **A persistent Linux credential store**: the Secret Service would survive a reboot but needs a
   desktop session running one — a decision, not a fix.
 - **Windows verification**: WebView2 on LTSC, the installer, the autostart hook and signing.
+- **Android and iOS** (ADR-0201 decision 1, roadmap-v4 phase 8): not built. A Tauri v2 mobile build
+  needs the app split into a library with a `#[tauri::mobile_entry_point]`, its desktop-only parts
+  (the tray, the print-agent sidecar, the OS keyring) behind `cfg(desktop)`, Terminal mode only, and
+  a token store on the Android Keystore or the iOS Keychain, which is a new dependency and needs its
+  ADR first. CI would then run `tauri android init` and `tauri android build --apk --debug` on an
+  Ubuntu runner (its Android SDK and NDK are preinstalled); an iOS build needs a macOS runner and a
+  signing identity, a release-owner cost. Until then a phone or tablet runs the till in its browser,
+  the fallback ADR-0201 decision 1 names.
+- **Camera scanning**: a camera needs a barcode plugin for the shell or a decoding library in the
+  webview, a new dependency either way; deferred. A keyboard-wedge scanner works.
 - **An agent that outlives a killed app**: a Job object on Windows and `PR_SET_PDEATHSIG` on Linux,
   both `unsafe` FFI this crate denies today.

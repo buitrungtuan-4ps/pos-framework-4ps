@@ -359,7 +359,8 @@ fn permission_ids(set: PermissionSet) -> Vec<&'static str> {
         (status = 401, description = "Refused: `outcome` is `wrong` or `locked_out`, with `remaining` attempts or \
                                       `locked_until_ms`. A wrong code and a wrong PIN answer the same; an unpaired \
                                       device also gets 401"),
-        (status = 503, description = "The sign-in could not be recorded"),
+        (status = 503, description = "The sign-in could not be recorded, or, on a store with a kiosk terminal, \
+                                      whether this device is a kiosk cannot be read"),
     ),
     tag = "session",
 ))]

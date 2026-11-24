@@ -137,13 +137,28 @@ where
 
 /// The refusal for a person whose PIN verified on a kiosk but who may not leave it, or `None` when
 /// the sign-in may go on: the device is no kiosk, or the person holds `admin.kiosk.exit` directly.
+/// On a store with a kiosk terminal, a binding that cannot be read refuses the sign-in `503` rather
+/// than let a person leave a kiosk on a guess (phase 9 security review, finding K4).
 pub(super) async fn refuse_kiosk_exit<S>(
     deps: &SignInDeps<S>,
     printers: Option<&Arc<Printers>>,
     device: DeviceId,
     employee_id: EmployeeId,
 ) -> Option<Response> {
-    kiosk_terminal_of(deps, printers, device).await?;
+    let printers = printers?;
+    match kiosk_terminal(|| deps.edge.session().devices.clone(), printers, device).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return None,
+        Err(_) => {
+            return Some(
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "whether this device is a kiosk cannot be read",
+                )
+                    .into_response(),
+            );
+        }
+    }
     if deps
         .edge
         .session()

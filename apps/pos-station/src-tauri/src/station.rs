@@ -47,7 +47,7 @@ use crate::health::{EdgeReading, Notice, PairingReading, Snapshot};
 use crate::i18n::{self, Key, Lang};
 use crate::monitor::{Monitor, Target};
 use crate::sidecar::{self, AgentStatus, Launch, Supervisor};
-use crate::{init_script, vault};
+use crate::{init_script, kiosk, vault};
 
 /// The window labels. The capability file grants commands to `connect` and `status` only.
 const CONNECT: &str = "connect";
@@ -263,7 +263,8 @@ fn begin(app: &AppHandle) {
             .as_ref()
             .map_or_else(|| "nothing".to_owned(), ToString::to_string)
     );
-    match build_tray(app, mode, lang) {
+    let is_kiosk = station.with(|inner| inner.settings.kiosk);
+    match build_tray(app, mode, lang, is_kiosk) {
         Ok(tray) => *guard(&station.tray) = Some(tray),
         Err(error) => log::error!("no tray icon: {error}"),
     }
@@ -276,7 +277,7 @@ fn begin(app: &AppHandle) {
     }
 }
 
-fn build_tray(app: &AppHandle, mode: Mode, lang: Lang) -> tauri::Result<Tray> {
+fn build_tray(app: &AppHandle, mode: Mode, lang: Lang, is_kiosk: bool) -> tauri::Result<Tray> {
     let item =
         |id: &str, key: Key| MenuItem::with_id(app, id, i18n::text(lang, key), true, None::<&str>);
     let summary = MenuItem::with_id(
@@ -296,18 +297,19 @@ fn build_tray(app: &AppHandle, mode: Mode, lang: Lang) -> tauri::Result<Tray> {
     ];
     let first = PredefinedMenuItem::separator(app)?;
     let last = PredefinedMenuItem::separator(app)?;
-    let menu = if mode == Mode::Station {
-        let pairing = item(MENU_PAIRING_QR, Key::MenuPairingQr)?;
+    let pairing = item(MENU_PAIRING_QR, Key::MenuPairingQr)?;
+    let mut items: Vec<&dyn tauri::menu::IsMenuItem<Wry>> =
+        vec![&summary, &first, &open_till, &status];
+    if mode == Mode::Station {
         labelled.push((pairing.clone(), Key::MenuPairingQr));
-        Menu::with_items(
-            app,
-            &[
-                &summary, &first, &open_till, &status, &pairing, &last, &quit,
-            ],
-        )?
-    } else {
-        Menu::with_items(app, &[&summary, &first, &open_till, &status, &last, &quit])?
-    };
+        items.push(&pairing);
+    }
+    // A kiosk offers no Quit (ADR-0201 decision 2).
+    if kiosk::offers_quit(is_kiosk) {
+        items.push(&last);
+        items.push(&quit);
+    }
+    let menu = Menu::with_items(app, &items)?;
     let icon = TrayIconBuilder::with_id("station")
         .icon(Image::from_bytes(TRAY_ICON)?)
         .tooltip(i18n::text(lang, Key::AppName))
@@ -392,14 +394,16 @@ fn open_remote(app: &AppHandle, label: &str, path: &str, title: Key, full_screen
     if focus_existing(app, label) {
         return;
     }
-    let (origin, token, lang, settings_full_screen) = app.state::<Station>().with(|inner| {
-        (
-            inner.origin.clone(),
-            inner.token.clone(),
-            inner.lang,
-            inner.settings.till_full_screen,
-        )
-    });
+    let (origin, token, lang, settings_full_screen, is_kiosk) =
+        app.state::<Station>().with(|inner| {
+            (
+                inner.origin.clone(),
+                inner.token.clone(),
+                inner.lang,
+                inner.settings.till_full_screen,
+                inner.settings.kiosk,
+            )
+        });
     let (Some(origin), Some(token)) = (origin, token) else {
         open_connect(app);
         return;
@@ -412,10 +416,15 @@ fn open_remote(app: &AppHandle, label: &str, path: &str, title: Key, full_screen
         }
     };
     let allowed = origin.to_string();
+    let chrome = kiosk::till_chrome(label == TILL, is_kiosk, settings_full_screen, full_screen);
     let built = WebviewWindowBuilder::new(app, label, WebviewUrl::External(url))
         .title(i18n::text(lang, title))
         .inner_size(1280.0, 800.0)
-        .fullscreen(full_screen.unwrap_or(settings_full_screen))
+        .fullscreen(chrome.full_screen)
+        .decorations(!chrome.locked)
+        .always_on_top(chrome.locked)
+        .closable(!chrome.locked)
+        .minimizable(!chrome.locked)
         .initialization_script(init_script::build(&origin, &token))
         .on_navigation(move |url| stays_on(&allowed, url))
         .build();
@@ -717,6 +726,20 @@ pub(crate) fn status_view(app: &AppHandle) -> StatusView {
 ///
 /// The state is looked up with `try_state`: a copy that found another one running exits before it
 /// manages any, and has nothing to stop.
+/// Refuses to close a kiosk's till (ADR-0201 decision 2): Alt+F4 and the taskbar do nothing.
+pub(crate) fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
+    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+        let is_kiosk = window
+            .app_handle()
+            .try_state::<Station>()
+            .is_some_and(|station| station.with(|inner| inner.settings.kiosk));
+        if kiosk::refuses_close(is_kiosk, window.label(), TILL) {
+            log::info!("a kiosk's till stays open");
+            api.prevent_close();
+        }
+    }
+}
+
 pub(crate) fn on_run_event(app: &AppHandle, event: &RunEvent) {
     let Some(station) = app.try_state::<Station>() else {
         return;
