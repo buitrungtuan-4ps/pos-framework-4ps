@@ -29,6 +29,8 @@
 //!   cloud is one process on one VPS (ADR-0003), so an in-process counter is the whole fleet's view;
 //!   it resets on restart, which for an anti-abuse nuisance guard (never the security boundary — the
 //!   signed token is) is an accepted trade rather than a durable-store slice.
+//!   A table with nothing left in its window is forgotten, and past a stated ceiling every table
+//!   idle for a day is too, so the counters are bounded explicitly.
 
 use core::time::Duration;
 use std::collections::HashMap;
@@ -64,6 +66,13 @@ const MAX_GUEST_LINES: usize = 30;
 const DEFAULT_PER_TABLE_LIMIT: u32 = 10;
 /// The default rate-limit window, in seconds, when config does not say.
 const DEFAULT_WINDOW_SECS: u64 = 60;
+
+/// Above this many tables tracked, a count first forgets every table with no submission inside
+/// [`SWEEP_HORIZON_MS`] (or the window asked for, if longer), so the counters have an explicit
+/// ceiling rather than one set by how many codes are printed.
+const SWEEP_TABLES: usize = 4_096;
+/// How long a table with no submission is remembered once the counters are over [`SWEEP_TABLES`].
+const SWEEP_HORIZON_MS: i64 = 86_400_000;
 
 /// A guest's QR submission. The store, table, and tenant are **not** on the wire — they come from the
 /// verified token, so a guest cannot name a table that is not theirs. The channel is always QR.
@@ -143,7 +152,8 @@ impl TableRateLimiter {
     }
 
     /// How many submissions this table has made within `window` ending at `now_ms`, pruning older
-    /// entries as it counts.
+    /// entries as it counts. A table left with none is forgotten, and past [`SWEEP_TABLES`] every
+    /// table idle for [`SWEEP_HORIZON_MS`] (or `window`, if longer) is too.
     fn count_in_window(
         &self,
         store: StoreId,
@@ -151,11 +161,29 @@ impl TableRateLimiter {
         now_ms: i64,
         window: Duration,
     ) -> u32 {
-        let cutoff = now_ms.saturating_sub(window.as_millis().try_into().unwrap_or(i64::MAX));
+        let window_ms: i64 = window.as_millis().try_into().unwrap_or(i64::MAX);
+        let cutoff = now_ms.saturating_sub(window_ms);
         let mut hits = self.hits.lock().expect("rate-limiter lock");
-        let entry = hits.entry((store, table)).or_default();
+        if hits.len() > SWEEP_TABLES {
+            let horizon = now_ms.saturating_sub(window_ms.max(SWEEP_HORIZON_MS));
+            hits.retain(|_key, times| times.last().is_some_and(|&last| last >= horizon));
+        }
+        let key = (store, table);
+        let Some(entry) = hits.get_mut(&key) else {
+            return 0;
+        };
         entry.retain(|&at| at >= cutoff);
-        u32::try_from(entry.len()).unwrap_or(u32::MAX)
+        let count = entry.len();
+        if count == 0 {
+            hits.remove(&key);
+        }
+        u32::try_from(count).unwrap_or(u32::MAX)
+    }
+
+    /// How many tables the counters hold.
+    #[cfg(test)]
+    fn tracked(&self) -> usize {
+        self.hits.lock().expect("rate-limiter lock").len()
     }
 
     /// Records that this table submitted at `now_ms`.
@@ -439,8 +467,8 @@ fn rejection_response(reason: QrRejection) -> Response {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_PER_TABLE_LIMIT, DEFAULT_WINDOW_SECS, TableRateLimiter, current_hour, is_open_at,
-        qr_config_from,
+        DEFAULT_PER_TABLE_LIMIT, DEFAULT_WINDOW_SECS, SWEEP_HORIZON_MS, SWEEP_TABLES,
+        TableRateLimiter, current_hour, is_open_at, qr_config_from,
     };
     use core::time::Duration;
     use pos_proto::ids::{StoreId, TableId};
@@ -591,5 +619,40 @@ mod tests {
         limiter.record(store(), table(), 0);
         assert_eq!(limiter.count_in_window(store(), other_table, 0, window), 0);
         assert_eq!(limiter.count_in_window(store(), table(), 0, window), 1);
+    }
+
+    /// A table whose window has emptied is forgotten, and a table that never submitted is never
+    /// remembered (phase 9 security review, finding G5).
+    #[test]
+    fn the_rate_limiter_forgets_a_table_with_nothing_in_its_window() {
+        let limiter = TableRateLimiter::new();
+        let window = Duration::from_secs(60);
+        assert_eq!(limiter.count_in_window(store(), table(), 0, window), 0);
+        assert_eq!(limiter.tracked(), 0, "counting stores nothing");
+        limiter.record(store(), table(), 0);
+        assert_eq!(limiter.tracked(), 1);
+        assert_eq!(limiter.count_in_window(store(), table(), 61_000, window), 0);
+        assert_eq!(limiter.tracked(), 0, "an empty window is forgotten");
+    }
+
+    /// Past the ceiling, every table idle for the horizon is forgotten at the next count, and a table
+    /// still inside it is kept with its hits.
+    #[test]
+    fn the_rate_limiter_has_a_ceiling() {
+        let limiter = TableRateLimiter::new();
+        let window = Duration::from_secs(60);
+        let idle = u128::try_from(SWEEP_TABLES).expect("fits") + 1;
+        for n in 0..idle {
+            limiter.record(store(), TableId::new(Ulid::from_u128(1_000 + n)), 0);
+        }
+        let now = SWEEP_HORIZON_MS + 1;
+        limiter.record(store(), table(), now);
+        assert!(limiter.tracked() > SWEEP_TABLES);
+        assert_eq!(limiter.count_in_window(store(), table(), now, window), 1);
+        assert_eq!(
+            limiter.tracked(),
+            1,
+            "only the table inside the horizon is kept"
+        );
     }
 }
