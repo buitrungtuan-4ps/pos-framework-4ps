@@ -278,10 +278,10 @@ fn case_13_an_invoice_states_each_rate_once_and_adds_up_to_the_bill() {
     );
 }
 
-/// Case 14: the recommended issue moment is every sale, buyer or not (ADR-0225 decision 3), an open
-/// owner decision.
+/// Case 14: the moment the pack seeds issues with every settle, buyer or not (ADR-0229 decision 1,
+/// the owner's choice).
 #[test]
-fn case_14_every_sale_issues_an_invoice_by_default() {
+fn case_14_every_settle_issues_an_invoice_by_default() {
     assert!(RECOMMENDED_ISSUE_MOMENT.issues(false));
     assert!(RECOMMENDED_ISSUE_MOMENT.issues(true));
 }

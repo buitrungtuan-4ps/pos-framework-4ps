@@ -39,6 +39,10 @@ beyond those is marked **to confirm by legal**. The line prices in the cases are
 | R15 | A comp lowers the taxable base, as a discount does | ADR-0228 decision 1; ADR-0219 decision 3 | covered by case 8; whether a giveaway is a deemed supply taxed at value instead is to confirm by the accountant |
 | R16 | The pack seeds no variable-measure (GS1 20–29) label layout | ADR-0228 decision 2 | covered by case 9; GS1 India's layout is to confirm by legal |
 | R17 | A weight typed by hand is forbidden; only a scale or its label sets a weight sold by it | `forbidden_settings`; ADR-0228 decision 3 | covered by case 10; whether a stamped scale is required under the Legal Metrology Act is to confirm by legal |
+| R18 | A sale is inter-state when the buyer's GSTIN names another state than the seller's; only a bill with a buyer can be | `gst::place_of_supply`; ADR-0227 decision 6 | covered by `src/gst/tests.rs` for the choice; charging IGST on the bill is not built (F1) |
+| R19 | An invoice is reported in GSTR-1 as B2B with a registered buyer, B2CL for an inter-state unregistered one above the threshold, else B2CS | `gst::gstr1_section`; ADR-0227 decision 3 | covered by `src/gst/tests.rs`; the threshold is a parameter and is to confirm by the accountant; the export itself is not built |
+| R20 | An HSN or SAC code is four, six or eight digits; a restaurant service is SAC 9963 | `gst::is_valid_hsn_sac`, `RESTAURANT_SAC`; ADR-0227 decision 4 | covered by `src/gst/tests.rs` for the shape; which digits a turnover needs, and the item field, are to confirm and not built (F2) |
+| R21 | A UPI payment request names the payee's address, the exact amount in rupees and the bill's reference | `gst::upi_intent`; ADR-0227 decision 2 | covered by `src/gst/tests.rs`; the format is NPCI's and is to confirm with the chosen gateway; the gateway's confirmation is not built |
 
 ## Findings: what the current model cannot express
 

@@ -303,6 +303,10 @@ pub struct EdgeSession {
     /// `weighing` node ([ADR-0223](../../../../docs/adr/0223-a-weighed-item-is-priced-by-its-weight.md)):
     /// no hand entry and one gram in the bootstrap and wherever the node sets none.
     pub weighing: pos_proto::weighing::PublishedWeighing,
+    /// The `einvoice` node
+    /// ([ADR-0225](../../../../docs/adr/0225-a-vietnamese-store-issues-its-e-invoice-and-the-cloud-submits-it.md)):
+    /// when a settle issues an e-invoice, and the symbol it numbers under.
+    pub einvoice: pos_proto::einvoice::PublishedEInvoice,
     /// How long an untouched kiosk order waits before the kiosk voids it, from the `kiosk` node
     /// ([ADR-0224](../../../../docs/adr/0224-self-order-is-a-guest-page-and-a-kiosk.md)): 120
     /// seconds in the bootstrap and wherever the node sets none.

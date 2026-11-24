@@ -9,6 +9,7 @@ mod bills;
 mod checks;
 mod custom;
 mod fold;
+mod invoices;
 mod lines;
 mod orders;
 mod paid;
@@ -18,6 +19,7 @@ mod tabs;
 
 pub(in crate::app) use checks::CheckMark;
 pub(in crate::app) use custom::{CustomData, HeldValues};
+pub(in crate::app) use invoices::Invoices;
 
 // The unit tests name these as `super::`, as they did beside them in `app/mod.rs`.
 #[cfg(test)]

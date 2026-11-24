@@ -98,7 +98,11 @@ async fn a_country_lists_the_settings_its_pack_gives_a_new_store() {
         .expect("the Vietnam pack is compiled in");
     assert_eq!(
         vietnam["setting_defaults"],
-        serde_json::json!([{ "setting_key": "shift.variance_reason_minor", "value": 20_000 }]),
+        serde_json::json!([
+            { "setting_key": "shift.variance_reason_minor", "value": 20_000 },
+            // ADR-0229 decision 1: the owner's seed, an e-invoice issued with every settle.
+            { "setting_key": "einvoice.issue_moment", "value": "EINVOICE_ISSUE_MOMENT_IMMEDIATE" },
+        ]),
     );
     assert!(
         list.iter()

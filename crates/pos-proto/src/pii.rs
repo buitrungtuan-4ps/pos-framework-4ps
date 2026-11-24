@@ -38,6 +38,7 @@
 //! the deliberate one visible.
 
 use crate::chain;
+use crate::einvoice;
 use crate::enums;
 use crate::events;
 use crate::fees;
@@ -194,6 +195,9 @@ no_pii!(
 // (`crate::envelope::payload_part!`), so the marker here cannot outlive the truth of it, and each
 // is placed in the snapshot (`crate::snapshot`), so its field names reach a reviewer.
 no_pii!(
+    einvoice::InvoiceSymbol,
+    einvoice::FiscalInvoice,
+    einvoice::InvoiceSchedule,
     fees::FrozenFee,
     events::BillFeeLine,
     events::BillTaxLine,
