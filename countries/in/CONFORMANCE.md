@@ -6,6 +6,11 @@ This lists the legal requirements a person must confirm for Indian stores, and w
 [`tests/conformance.rs`](tests/conformance.rs) exercises each one. The cases run on every
 `cargo test` through `pos_contract_tests::country_conformance`.
 
+**The legal acceptance suite** (roadmap-v4 phase 7) is everything this file maps:
+`tests/conformance.rs` (cases 1 to 10) and `tests/contract.rs`. It passes when `cargo test` on this
+crate does. Passing proves that the code does what each row says. It does not prove the law: every
+row marked *to confirm* still needs legal or the accountant.
+
 How to read the status:
 
 - **covered by case N**: the module's value is what case N computes with. The case proves what the
@@ -31,6 +36,13 @@ beyond those is marked **to confirm by legal**. The line prices in the cases are
 | R12 | Any other field a tax invoice must carry (for example HSN or SAC codes, place of supply) | none in the module | unconfirmed: to confirm by legal. See F2 |
 | R13 | Personal data retention, 365 days by default (DPDP Act 2023) | `default_retention_days` | unconfirmed: the module says somebody must confirm it against the notice and consent record |
 | R14 | A receipt template may not leave out the item rows' modifiers; it may leave out the payments, the change line and a second language | `receipt_required_sections`; ADR-0207 decision 3 | unconfirmed: to confirm by legal. The legal body (seller, receipt number, lines, totals, tax lines, a captured buyer) cannot be turned off by any template |
+| R15 | A comp lowers the taxable base, as a discount does | ADR-0228 decision 1; ADR-0219 decision 3 | covered by case 8; whether a giveaway is a deemed supply taxed at value instead is to confirm by the accountant |
+| R16 | The pack seeds no variable-measure (GS1 20–29) label layout | ADR-0228 decision 2 | covered by case 9; GS1 India's layout is to confirm by legal |
+| R17 | A weight typed by hand is forbidden; only a scale or its label sets a weight sold by it | `forbidden_settings`; ADR-0228 decision 3 | covered by case 10; whether a stamped scale is required under the Legal Metrology Act is to confirm by legal |
+| R18 | A sale is inter-state when the buyer's GSTIN names another state than the seller's; only a bill with a buyer can be | `gst::place_of_supply`; ADR-0227 decision 6 | covered by `src/gst/tests.rs` for the choice; charging IGST on the bill is not built (F1) |
+| R19 | An invoice is reported in GSTR-1 as B2B with a registered buyer, B2CL for an inter-state unregistered one above the threshold, else B2CS | `gst::gstr1_section`; ADR-0227 decision 3 | covered by `src/gst/tests.rs`; the threshold is a parameter and is to confirm by the accountant; the export itself is not built |
+| R20 | An HSN or SAC code is four, six or eight digits; a restaurant service is SAC 9963 | `gst::is_valid_hsn_sac`, `RESTAURANT_SAC`; ADR-0227 decision 4 | covered by `src/gst/tests.rs` for the shape; which digits a turnover needs, and the item field, are to confirm and not built (F2) |
+| R21 | A UPI payment request names the payee's address, the exact amount in rupees and the bill's reference | `gst::upi_intent`; ADR-0227 decision 2 | covered by `src/gst/tests.rs`; the format is NPCI's and is to confirm with the chosen gateway; the gateway's confirmation is not built |
 
 ## Findings: what the current model cannot express
 

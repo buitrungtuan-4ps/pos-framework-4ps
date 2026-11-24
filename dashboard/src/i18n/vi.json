@@ -3176,5 +3176,16 @@
   "flow.step.offlineStep": "Bước chuyển đến",
   "provider.field.answer_url": "URL nhận trả lời (nơi gửi chấp nhận, từ chối, sẵn sàng và bận của cửa hàng)",
   "provider.field.prep_minutes": "Số phút để làm một đơn đã nhận (báo cho đối tác)",
-  "provider.field.staff_confirm": "Nhân viên xác nhận từng đơn trước khi bếp nhận"
+  "provider.field.staff_confirm": "Nhân viên xác nhận từng đơn trước khi bếp nhận",
+  "settings.item.einvoice.issue_moment.title": "Thời điểm xuất hóa đơn điện tử",
+  "settings.item.einvoice.issue_moment.help": "Khi nào xuất hóa đơn điện tử cho hóa đơn đã thanh toán. Tắt thì không xuất. Ngay lập tức thì xuất cùng lúc thanh toán. Sau một khoảng chờ thì chờ số phút đặt bên dưới. Theo lô hằng ngày thì xuất cùng lúc mọi hóa đơn đang chờ vào giờ xuất lô. Chỉ khi khách yêu cầu thì chỉ xuất khi khách cung cấp thông tin người mua. Không hóa đơn nào được xuất muộn hơn mức pháp luật của quốc gia cho phép.",
+  "settings.item.einvoice.delay_minutes.title": "Thời gian chờ xuất hóa đơn điện tử",
+  "settings.item.einvoice.delay_minutes.help": "Bao nhiêu phút sau khi thanh toán thì xuất hóa đơn điện tử, khi xuất sau một khoảng chờ. Khoảng chờ dài hơn mức quốc gia cho phép sẽ bị từ chối.",
+  "settings.item.einvoice.batch_minute.title": "Giờ xuất lô hóa đơn điện tử",
+  "settings.item.einvoice.batch_minute.help": "Thời điểm trong ngày, tính bằng phút từ nửa đêm, để xuất cùng lúc mọi hóa đơn điện tử đang chờ. 1320 là 22:00. Hóa đơn thanh toán sau giờ này chờ lô kế tiếp, trừ khi đến giới hạn của quốc gia trước.",
+  "settings.value.EINVOICE_ISSUE_MOMENT_OFF": "Tắt",
+  "settings.value.EINVOICE_ISSUE_MOMENT_IMMEDIATE": "Ngay lập tức",
+  "settings.value.EINVOICE_ISSUE_MOMENT_SCHEDULED_PER_ORDER": "Sau một khoảng chờ",
+  "settings.value.EINVOICE_ISSUE_MOMENT_BATCH_WINDOW": "Theo lô hằng ngày",
+  "settings.value.EINVOICE_ISSUE_MOMENT_ON_REQUEST": "Chỉ khi khách yêu cầu"
 }

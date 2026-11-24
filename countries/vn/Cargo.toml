@@ -15,6 +15,7 @@ pos-proto   = { path = "../../crates/pos-proto" }
 
 [dev-dependencies]
 pos-contract-tests = { path = "../../crates/pos-contract-tests" }
+pos-core           = { path = "../../crates/pos-core" }
 pos-fakes          = { path = "../../crates/pos-fakes" }
 
 [lints]

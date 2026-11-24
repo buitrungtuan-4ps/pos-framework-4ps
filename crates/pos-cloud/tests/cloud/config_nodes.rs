@@ -768,3 +768,67 @@ async fn a_store_profile_is_refused_before_it_is_written_and_records_nothing() {
     );
     assert!(audit.entries.lock().expect("lock").is_empty());
 }
+
+/// ADR-0225 decision 2: HQ gives one store its e-invoice symbol, written on the store's own
+/// `einvoice` node beside its settings, and a value that is not a symbol is refused, naming it.
+#[tokio::test]
+async fn a_store_is_given_its_einvoice_symbol_beside_its_settings() {
+    let admin = provisioned_admin();
+    let trees = FakeConfigTrees::default();
+    let router = http::router(app_all(
+        Cloud::new(FakeStore::new()),
+        FakeRollups::default(),
+        FakeKeys::default(),
+        admin.clone(),
+        trees.clone(),
+        FakeWebhooks::default(),
+    ))
+    .merge(http::config_channels_router(
+        trees.clone(),
+        admin,
+        clock(),
+        Arc::new(NoopAuditRecorder),
+    ));
+    let cookie = admin_cookie(&router).await;
+    let publish = |symbol: &str| {
+        put_with_cookie(
+            "/admin/config/einvoice-symbol",
+            &serde_json::json!({
+                "tenant_id": tenant().as_ulid().to_string(),
+                "store_id": store_id().as_ulid().to_string(),
+                "symbol": symbol,
+            }),
+            &cookie,
+        )
+    };
+
+    for symbol in ["1C26MAA", "1C26MAB"] {
+        let published = router
+            .clone()
+            .oneshot(publish(symbol))
+            .await
+            .expect("route the publish");
+        assert_eq!(published.status(), StatusCode::OK, "{symbol}");
+    }
+    let state = trees
+        .load(tenant(), store_id())
+        .await
+        .expect("load")
+        .expect("a published tree");
+    assert_eq!(
+        state.record.layers[2]["einvoice"]["symbol"], "1C26MAB",
+        "the latest symbol replaces the last, on the Store layer"
+    );
+
+    for refused in ["", "a name", "1C26MAA/00000001x"] {
+        let response = router
+            .clone()
+            .oneshot(publish(refused))
+            .await
+            .expect("route the publish");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{refused:?}");
+        let body = json_body(response).await;
+        assert_eq!(body["error"]["details"][0]["field"], "symbol");
+        assert_eq!(body["error"]["details"][0]["reason"], "INVALID_FORMAT");
+    }
+}

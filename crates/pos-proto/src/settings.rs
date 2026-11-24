@@ -25,6 +25,7 @@
 use crate::wire_enum;
 use crate::wire_enum::WireEnum;
 
+mod einvoice_nodes;
 mod nodes;
 
 /// Where the rendered snapshot is committed, relative to the repository root.
@@ -384,6 +385,7 @@ pub fn register() -> Vec<Setting> {
         nodes::tabs_settings(),
         nodes::backup_settings(),
         nodes::billing_settings(),
+        einvoice_nodes::einvoice_settings(),
         nodes::package_settings(),
     ]
     .into_iter()

@@ -290,6 +290,11 @@ pub enum AppError {
     /// an order on a channel its published `channels` node leaves out.
     #[error("this store does not accept orders on that sales channel")]
     ChannelNotAccepted,
+    /// The store issues an e-invoice for this bill and the cloud has published no symbol to number
+    /// it under (ADR-0225 decision 2): the sale is not taken, because an invoice cannot be numbered
+    /// later.
+    #[error("this store has no e-invoice symbol to number the bill's invoice under")]
+    EInvoiceSymbolMissing,
     /// The item, or one of its modifiers, is not in the store's price book or is 86'd right now,
     /// so the edge cannot price the line (ADR-0146). Refused, never substituted.
     #[error("that item cannot be sold right now")]

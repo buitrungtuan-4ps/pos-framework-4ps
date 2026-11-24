@@ -7816,6 +7816,104 @@
         "x-permission": "console.config.publish"
       }
     },
+    "/admin/config/einvoice-symbol": {
+      "put": {
+        "tags": [
+          "config nodes"
+        ],
+        "summary": "HQ publishes the symbol one store numbers its e-invoices under. Checked against the store's\ncountry where it has published one, else against the shape every country shares.",
+        "operationId": "admin_publish_einvoice_symbol",
+        "requestBody": {
+          "description": "`tenant_id` and `store_id`, then the `symbol` the store numbers its e-invoices under, in its country's shape (ADR-0225 decision 2)",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishEInvoiceSymbolRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Published as the `symbol` of the store's `einvoice` node on its Store layer, the node's settings kept. Audited with the symbol",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedConfig"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "tenant_id or store_id is not a ULID, or the symbol is not one the store's country writes (`INVALID_FORMAT` on `symbol`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Every attempt to write the store's configuration lost a race with another publish: try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The store's configuration would not validate with the node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The configuration store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.config.publish"
+      }
+    },
     "/admin/config/integrations": {
       "put": {
         "tags": [
@@ -33735,6 +33833,27 @@
           "tenant_id": {
             "type": "string",
             "description": "The tenant that owns the store (a 26-character ULID)."
+          }
+        }
+      },
+      "PublishEInvoiceSymbolRequest": {
+        "type": "object",
+        "description": "A `PUT /admin/config/einvoice-symbol` body.",
+        "required": [
+          "tenant_id",
+          "store_id",
+          "symbol"
+        ],
+        "properties": {
+          "store_id": {
+            "type": "string"
+          },
+          "symbol": {
+            "type": "string",
+            "description": "The symbol, such as `1C26MAA`: the shape the store's country writes."
+          },
+          "tenant_id": {
+            "type": "string"
           }
         }
       },

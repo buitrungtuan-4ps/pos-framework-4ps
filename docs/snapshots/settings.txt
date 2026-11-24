@@ -71,6 +71,41 @@ counter.walk_in_channel	since=0.14.1
 counter.walk_in_channel	value=WALK_IN_CHANNEL_ASK
 counter.walk_in_channel	value=WALK_IN_CHANNEL_DINE_IN
 counter.walk_in_channel	value=WALK_IN_CHANNEL_TAKEAWAY
+einvoice.batch_minute
+einvoice.batch_minute	default=1320
+einvoice.batch_minute	kind=SETTING_KIND_INT
+einvoice.batch_minute	max=1439
+einvoice.batch_minute	min=0
+einvoice.batch_minute	scope=SETTING_SCOPE_BRAND
+einvoice.batch_minute	scope=SETTING_SCOPE_STORE
+einvoice.batch_minute	scope=SETTING_SCOPE_STORE_GROUP
+einvoice.batch_minute	scope=SETTING_SCOPE_TENANT
+einvoice.batch_minute	since=0.14.1
+einvoice.batch_minute	unit=SETTING_UNIT_MINUTES
+einvoice.delay_minutes
+einvoice.delay_minutes	default=0
+einvoice.delay_minutes	kind=SETTING_KIND_INT
+einvoice.delay_minutes	max=1440
+einvoice.delay_minutes	min=0
+einvoice.delay_minutes	scope=SETTING_SCOPE_BRAND
+einvoice.delay_minutes	scope=SETTING_SCOPE_STORE
+einvoice.delay_minutes	scope=SETTING_SCOPE_STORE_GROUP
+einvoice.delay_minutes	scope=SETTING_SCOPE_TENANT
+einvoice.delay_minutes	since=0.14.1
+einvoice.delay_minutes	unit=SETTING_UNIT_MINUTES
+einvoice.issue_moment
+einvoice.issue_moment	default=EINVOICE_ISSUE_MOMENT_OFF
+einvoice.issue_moment	kind=SETTING_KIND_CHOICE
+einvoice.issue_moment	scope=SETTING_SCOPE_BRAND
+einvoice.issue_moment	scope=SETTING_SCOPE_STORE
+einvoice.issue_moment	scope=SETTING_SCOPE_STORE_GROUP
+einvoice.issue_moment	scope=SETTING_SCOPE_TENANT
+einvoice.issue_moment	since=0.14.1
+einvoice.issue_moment	value=EINVOICE_ISSUE_MOMENT_BATCH_WINDOW
+einvoice.issue_moment	value=EINVOICE_ISSUE_MOMENT_IMMEDIATE
+einvoice.issue_moment	value=EINVOICE_ISSUE_MOMENT_OFF
+einvoice.issue_moment	value=EINVOICE_ISSUE_MOMENT_ON_REQUEST
+einvoice.issue_moment	value=EINVOICE_ISSUE_MOMENT_SCHEDULED_PER_ORDER
 kiosk.abandon_seconds
 kiosk.abandon_seconds	default=120
 kiosk.abandon_seconds	kind=SETTING_KIND_INT

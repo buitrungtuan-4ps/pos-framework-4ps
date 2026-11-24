@@ -1,0 +1,37 @@
+name: edge-image
+
+# The edge container image (ADR-0113, roadmap-v3 Program C): built around a pos_edge binary and
+# smoke-tested — it reads a store's configuration from its volume, answers /healthz, and exits 0 on
+# SIGTERM. Runs when the image, its smoke test or this file changes, and after every merge, because
+# an edge change can break it too. No registry push: the release owner publishes images.
+
+on:
+  pull_request:
+    paths:
+      - "deploy/edge-image/**"
+      - ".github/workflows/edge-image.yml"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: edge-image
+      # A debug build: the smoke proves the image, not the optimiser. The embedded till is the
+      # placeholder page, as in every Rust job that does not build the UI first.
+      - name: build the store binary
+        run: cargo build -p pos-edge --bin pos-edge --locked
+      - name: build the image and smoke-test it
+        run: deploy/edge-image/smoke.sh target/debug/pos-edge

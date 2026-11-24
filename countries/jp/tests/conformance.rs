@@ -9,8 +9,10 @@
 
 use core::num::NonZeroU32;
 
-use pos_contract_tests::country_conformance::{Case, Line, TaxLine, failures, totals};
-use pos_country::{CountryModule, tax_class};
+use pos_contract_tests::country_conformance::{
+    Case, Line, TaxLine, comp_failure, failures_with_scope, totals,
+};
+use pos_country::{CountryModule, SettingDefault, SettingDefaultValue, tax_class};
 use pos_country_jp::{Japan, fiscalization};
 use pos_fakes::executor::run_ready;
 use pos_ports::fiscalization::Fiscalization;
@@ -103,24 +105,25 @@ fn cases() -> Vec<Case> {
             lines: vec![line(food, 1_000)],
             expected: totals(vec![tax(food, 926, 800, 74)], 926, 74, 0, 1_000),
         },
-        // Food ¥1,005 and alcohol ¥1,005, both 10 %. Each class rounds once:
-        // 1,005 × 10/110 = 91.36 → 91, twice, so 182. Rounding the 10 % total once instead
-        // (2,010 × 10/110 = 182.73 → 183) gives 183. The framework does the first. This is a
-        // finding in CONFORMANCE.md, not a fix.
+        // Food ¥1,005 and alcohol ¥1,005, both 10 %. A qualified invoice rounds once per rate
+        // (ADR-0226 decision 1): 2,010 × 10/110 = 182.73 → 183, not 91 + 91 = 182 from rounding
+        // each class. The ¥183 is shared back by what each class contributed, half each, the odd
+        // yen on the last class: 91 and 92, on bases of 914 and 913.
         Case {
             number: 6,
-            title: "two classes at one rate round separately: two 10 % lines, not one",
+            title: "two classes at one rate round once, as one 10 % amount",
             cites: &[
                 "CONSUMPTION_STANDARD",
                 "rate_table: alcohol",
                 "prices_include_tax: true",
+                "tax_rounding_scope: PerRate",
             ],
             channel: SalesChannel::DineIn,
             lines: vec![line(food, 1_005), line(alcohol, 1_005)],
             expected: totals(
-                vec![tax(food, 914, 1_000, 91), tax(alcohol, 914, 1_000, 91)],
-                1_828,
-                182,
+                vec![tax(food, 914, 1_000, 91), tax(alcohol, 913, 1_000, 92)],
+                1_827,
+                183,
                 0,
                 2_010,
             ),
@@ -130,7 +133,7 @@ fn cases() -> Vec<Case> {
 
 #[test]
 fn every_bill_comes_out_as_the_case_says() {
-    let found = failures(&Japan.locale_pack(), &cases());
+    let found = failures_with_scope(&Japan.locale_pack(), Japan.tax_rounding_scope(), &cases());
     assert!(found.is_empty(), "{found:#?}");
 }
 
@@ -159,4 +162,47 @@ fn case_8_a_registration_number_is_checked_for_shape_only() {
     assert!(Japan.is_valid_tax_code("T1234567890123"));
     assert!(!Japan.is_valid_tax_code("1234567890123"));
     assert!(!Japan.is_valid_tax_code("T123456789012"));
+}
+
+/// Case 9: a comp lowers the taxable base, as a discount does (ADR-0228 decision 1).
+///
+/// 税込 ¥1,100 of dine-in food with ¥110 comped: ¥990 remains, whose 10 % is 990 × 10/110 = ¥90 on
+/// a base of ¥900. Whether a giveaway is taxed at market value instead is to confirm by the
+/// accountant.
+#[test]
+fn case_9_a_comp_lowers_the_taxable_base() {
+    let food = tax_class::food();
+    let case = Case {
+        number: 9,
+        title: "dine-in: a comp is taken off before the tax is extracted",
+        cites: &["CONSUMPTION_STANDARD", "ADR-0228 decision 1"],
+        channel: SalesChannel::DineIn,
+        lines: vec![line(food, 1_100)],
+        // 小計 is the quoted ¥1,100 net of the ¥90 tax, so 1,010 − 110 + 90 = ¥990 (ADR-0104).
+        expected: totals(vec![tax(food, 900, 1_000, 90)], 1_010, 90, 0, 990),
+    };
+    let found = comp_failure(&Japan.locale_pack(), &case, 110);
+    assert!(found.is_none(), "{found:?}");
+}
+
+/// Case 10: no scale-label layout is seeded, so a 20–29 code reads as a plain code until a store
+/// chooses one (ADR-0228 decision 2).
+#[test]
+fn case_10_no_variable_measure_layout_is_seeded() {
+    assert!(
+        Japan
+            .setting_defaults()
+            .iter()
+            .all(|seeded| seeded.setting_key != "scan.variable_measure_layout"),
+        "the national GS1 layout is to confirm by legal before the pack seeds one"
+    );
+}
+
+/// Case 11: a weight typed by hand is forbidden, as law (ADR-0228 decision 3, ADR-0223).
+#[test]
+fn case_11_a_weight_typed_by_hand_is_forbidden() {
+    assert!(Japan.forbidden_settings().contains(&SettingDefault {
+        setting_key: "weighing.manual_entry",
+        value: SettingDefaultValue::Bool(true),
+    }));
 }

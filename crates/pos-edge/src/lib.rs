@@ -57,6 +57,7 @@ pub mod grid_client;
 pub mod heartbeat_client;
 pub mod http;
 pub mod installer;
+pub mod invoice_loop;
 pub mod order_in;
 pub mod origins;
 pub mod ota;
