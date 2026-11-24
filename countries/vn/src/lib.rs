@@ -134,6 +134,12 @@ impl CountryModule for Vietnam {
     /// An e-invoice is issued by the end of the sale's calendar day, whatever the schedule
     /// (ADR-0229 decision 2): the conservative reading of when a sale's invoice is due, to be
     /// confirmed by legal (`CONFORMANCE.md` R24).
+    /// A form digit and six characters, such as `1C26MAA` (`einvoice::InvoiceSymbol`); the letters a
+    /// restaurant's cash-register invoices use are to be confirmed (`CONFORMANCE.md` R15).
+    fn is_valid_invoice_symbol(&self, symbol: &str) -> bool {
+        einvoice::InvoiceSymbol::parse(symbol).is_ok()
+    }
+
     fn einvoice_issue_limit(&self) -> Option<pos_proto::einvoice::IssueLimit> {
         Some(einvoice::ISSUE_LIMIT)
     }
