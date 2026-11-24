@@ -21,7 +21,7 @@ not regenerated.
 A suite passes when `cargo test` on its crate passes. Passing proves that the code does what each row
 says. **It does not prove the law.** Every row marked *to confirm* waits on legal or the accountant.
 
-## Where the criterion stands: met for Vietnam and Japan, not yet for India
+## Where the criterion stands: partial. Met for Vietnam and Japan, not yet for India
 
 | Country | Suite | Passes | What it covers | What it cannot cover yet |
 |---|---|---|---|---|
@@ -45,7 +45,24 @@ yet met for India.**
 | Vietnam: acceptance suite | Cases 8 to 14, and `comp_failure` | #1349 |
 | Vietnam: issued at the settle, on a schedule | The `einvoice` node and its three settings. `fiscal.invoice.issued` and `fiscal.invoice.scheduled`. The edge's issue loop. The legal limit, clamped on the edge and refused by the cloud. Each invoice names its connection. `E_INVOICE_SYMBOL_MISSING`, and `E_INVOICE_ISSUED` now in force. The VN schedule cases | #1355 |
 | Japan: tax once per rate, and the JP/IN carry-overs | `TaxRoundingScope`, and `billing/per_rate.rs`. Japan's case 6 comes to ¥183. Japan's cases 9–11 and India's cases 8–10 | `feat/jp-tax-per-rate-acceptance` (PR pending) |
-| India: GST facts | Place of supply, GSTR-1 section, HSN and SAC shape, and the UPI intent, in `pos-country-in::gst` | `feat/fiscal-in-gst` (PR pending) |
+| India: GST facts | Place of supply, GSTR-1 section, HSN and SAC shape, and the UPI intent, in `pos-country-in::gst` | #1359 |
+
+## Pilot blocker: how a symbol reaches a store
+
+**A Vietnamese store cannot settle until its invoice symbol is published.** The Vietnamese pack
+seeds `EINVOICE_ISSUE_MOMENT_IMMEDIATE` for every new store. A store that must issue an invoice
+refuses to settle, with `409 E_INVOICE_SYMBOL_MISSING`, until the cloud writes a symbol on its
+`einvoice` node (ADR-0225 decision 2). This is the safe behaviour, because an invoice cannot be
+numbered later.
+
+**The cloud does not yet allocate symbols.** Nothing gives each store's lease generation its own
+symbol, and the console cannot write one. Before the pilot, one of these is needed:
+
+- the cloud allocates a symbol per issuing point and publishes it; or
+- HQ is given a way to write a store's symbol.
+
+Until then, a pilot store must be set to `EINVOICE_ISSUE_MOMENT_OFF` and issue no e-invoice.
+**This is a pilot blocker.**
 
 ## Decisions taken
 
