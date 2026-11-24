@@ -16,7 +16,8 @@ use core::num::NonZeroU32;
 
 use pos_ports::PortName;
 use pos_ports::fiscalization::{
-    Fiscalization, InvoiceLine, InvoiceNumber, InvoiceRequest, ReconciliationReport,
+    CorrectionKind, Fiscalization, InvoiceCorrection, InvoiceLine, InvoiceNumber, InvoiceRequest,
+    ReconciliationReport,
 };
 use pos_proto::money::{CurrencyCode, Money};
 use pos_proto::{BillId, CalendarDate, ErrorStatus, Quantity, StoreId, Ulid};
@@ -43,6 +44,8 @@ macro_rules! fiscalization_suite {
                 warns_before_the_range_is_exhausted,
                 submits_queued_invoices_on_reconnect,
                 reconciles_in_both_directions,
+                submits_the_number_the_store_issued,
+                refuses_a_number_another_bill_holds,
             ]
         }
     };
@@ -83,6 +86,8 @@ fn request(store_id: StoreId, seed: u32) -> InvoiceRequest {
             tax_rate_basis_points: 1_000,
         }],
         total: Money::new(CurrencyCode::VND, 110_000),
+        issued_number: None,
+        correction: None,
     }
 }
 
@@ -315,5 +320,81 @@ pub async fn reconciles_in_both_directions<H: FiscalizationHarness>(
         after.unknown_locally.is_empty(),
         "an invoice this store issued is not unknown to it. A number the authority holds with no \
          local record is the finding that matters most, and a false positive here would bury it",
+    )
+}
+
+fn submission(store_id: StoreId, seed: u32, number: &str) -> InvoiceRequest {
+    InvoiceRequest {
+        issued_number: Some(InvoiceNumber::new(number)),
+        ..request(store_id, seed)
+    }
+}
+
+/// A store numbered the invoice in its sale; the submission carries that number, unchanged
+/// (ADR-0225 decision 8).
+///
+/// # Errors
+///
+/// [`CaseFailure`] if the obligation does not hold.
+pub async fn submits_the_number_the_store_issued<H: FiscalizationHarness>(
+    harness: &H,
+) -> Result<(), CaseFailure> {
+    // No range is allocated: a submission consumes none.
+    let fiscal = harness.fresh().await?;
+    let obligation = Obligation::new(
+        PortName::Fiscalization,
+        "a number the store issued is the number submitted",
+    );
+    let first = fiscal
+        .issue(&submission(harness.store_id(), 1, "1C26MAA/00000001"))
+        .await?;
+    obligation.require_eq(
+        &first.invoice_number.as_str(),
+        &"1C26MAA/00000001",
+        "the provider uses the store's number",
+    )?;
+    let again = fiscal
+        .issue(&submission(harness.store_id(), 1, "1C26MAA/00000001"))
+        .await?;
+    obligation.require_eq(&again, &first, "a retried submission is the same invoice")?;
+
+    let correction = InvoiceRequest {
+        correction: Some(InvoiceCorrection {
+            kind: CorrectionKind::Adjustment,
+            corrects: first.invoice_number.clone(),
+        }),
+        ..submission(harness.store_id(), 2, "1C26MZZ/00000001")
+    };
+    let adjusted = fiscal.issue(&correction).await?;
+    obligation.require_eq(
+        &adjusted.invoice_number.as_str(),
+        &"1C26MZZ/00000001",
+        "a correction is submitted under its own number",
+    )?;
+    let looked_up = fiscal.look_up(&first.invoice_number).await?;
+    obligation.require(
+        looked_up.is_some(),
+        "a submitted invoice can be looked up by its number",
+    )
+}
+
+/// The same number for two bills is a duplicated invoice; the provider refuses the second.
+///
+/// # Errors
+///
+/// [`CaseFailure`] if the obligation does not hold.
+pub async fn refuses_a_number_another_bill_holds<H: FiscalizationHarness>(
+    harness: &H,
+) -> Result<(), CaseFailure> {
+    let fiscal = harness.fresh().await?;
+    fiscal
+        .issue(&submission(harness.store_id(), 1, "1C26MAA/00000007"))
+        .await?;
+    uniqueness().require_error(
+        fiscal
+            .issue(&submission(harness.store_id(), 2, "1C26MAA/00000007"))
+            .await,
+        ErrorStatus::InvalidArgument,
+        "a number another bill holds is refused as invalid, never renumbered or accepted twice",
     )
 }

@@ -199,6 +199,28 @@ fn deep_brackets_are_refused_before_parsing() {
     assert_eq!(rules().compile(&hundred).err(), Some(RuleError::TooDeep));
 }
 
+/// Nesting that uses no bracket never reaches the parser's recursion limit either: on the default
+/// test stack, a long run of unary operators, a long chain of `||` and a long chain of member
+/// selections each compile and answer, or are refused, without overflowing (phase 9 security
+/// review, `docs/security-review-overhaul.md` §8).
+#[test]
+fn nesting_without_brackets_is_answered_or_refused_without_overflow() {
+    let nots = format!("{}true", "!".repeat(1_000));
+    assert_eq!(answer(&nots), Ok(true));
+    let minus = format!("{}1 == 1", "-".repeat(1_000));
+    assert_eq!(answer(&minus), Ok(true));
+    let ors = format!("{}false", "false || ".repeat(110));
+    assert!(ors.chars().count() <= SOURCE_CHARS_MAX);
+    assert_eq!(answer(&ors), Ok(false));
+    let members = format!("order{} == 1", ".a".repeat(400));
+    assert_eq!(rules().compile(&members).err(), Some(RuleError::TooDeep));
+    let ternaries = format!("{}true", "true ? true : ".repeat(70));
+    assert!(matches!(
+        rules().compile(&ternaries).err(),
+        Some(RuleError::FunctionNotAllowed(_))
+    ));
+}
+
 #[test]
 fn brackets_inside_a_string_are_text() {
     let brackets = "(".repeat(DEPTH_MAX + 1);
