@@ -628,6 +628,21 @@ pub struct LocalePack {
     pub cash_count_denominations: Vec<i64>,
 }
 
+/// Whether a bill's tax rounds once per tax class or once per rate
+/// ([ADR-0226](../../../docs/adr/0226-a-japanese-receipt-is-a-qualified-invoice.md) decision 1).
+///
+/// A country's law, from its pack: Japan's qualified invoice rounds the consumption tax once per
+/// rate per invoice, so two classes at 10 % make one rounding, not two. Every other country rounds
+/// per class (ADR-0028), the default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TaxRoundingScope {
+    /// Once per tax class: the framework's rule since ADR-0028.
+    #[default]
+    PerClass,
+    /// Once per rate, shared back across the classes at that rate.
+    PerRate,
+}
+
 impl LocalePack {
     /// The rate for a class on a channel, from this pack's default table.
     ///

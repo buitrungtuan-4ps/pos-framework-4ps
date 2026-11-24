@@ -22,7 +22,7 @@
 
 use pos_core::DomainError;
 use pos_core::billing::{BillInput, BillTotals, ClassBase, assemble};
-use pos_proto::locale::LocalePack;
+use pos_proto::locale::{LocalePack, TaxRoundingScope};
 use pos_proto::money::{Money, Rounding};
 use pos_proto::{SalesChannel, TaxClassId};
 
@@ -114,6 +114,18 @@ pub struct Case {
 /// `CONFORMANCE.md` cites cases by number.
 #[must_use]
 pub fn failures(pack: &LocalePack, cases: &[Case]) -> Vec<String> {
+    failures_with_scope(pack, TaxRoundingScope::PerClass, cases)
+}
+
+/// [`failures`] for a country whose law rounds tax once per rate, not once per class
+/// ([ADR-0226](../../../docs/adr/0226-a-japanese-receipt-is-a-qualified-invoice.md) decision 1):
+/// the pack's `CountryModule::tax_rounding_scope`.
+#[must_use]
+pub fn failures_with_scope(
+    pack: &LocalePack,
+    scope: TaxRoundingScope,
+    cases: &[Case],
+) -> Vec<String> {
     let mut found = Vec::new();
     for (index, case) in cases.iter().enumerate() {
         if cases
@@ -123,7 +135,7 @@ pub fn failures(pack: &LocalePack, cases: &[Case]) -> Vec<String> {
         {
             found.push(format!("case {} is numbered twice", case.number));
         }
-        if let Err(message) = check(pack, case, 0) {
+        if let Err(message) = check(pack, case, (0, scope)) {
             found.push(format!("case {} ({}): {message}", case.number, case.title));
         }
     }
@@ -137,13 +149,17 @@ pub fn failures(pack: &LocalePack, cases: &[Case]) -> Vec<String> {
 /// pin how its tax treats one.
 #[must_use]
 pub fn comp_failure(pack: &LocalePack, case: &Case, comps_minor: i64) -> Option<String> {
-    check(pack, case, comps_minor)
+    check(pack, case, (comps_minor, TaxRoundingScope::PerClass))
         .err()
         .map(|message| format!("case {} ({}): {message}", case.number, case.title))
 }
 
 /// Runs one case.
-fn check(pack: &LocalePack, case: &Case, comps_minor: i64) -> Result<(), String> {
+fn check(
+    pack: &LocalePack,
+    case: &Case,
+    (comps_minor, scope): (i64, TaxRoundingScope),
+) -> Result<(), String> {
     let currency = pack.currency_code;
     let bases = class_bases(pack, &case.lines)?;
     let input = BillInput {
@@ -158,6 +174,7 @@ fn check(pack: &LocalePack, case: &Case, comps_minor: i64) -> Result<(), String>
         sales_channel: case.channel,
         cash_rounding_increment: pack.cash_rounding_increment,
         tax_rounding: Rounding::HalfUp,
+        tax_rounding_scope: scope,
         prices_include_tax: pack.prices_include_tax,
         fee_rules: &[],
         waived_fee_ids: &[],

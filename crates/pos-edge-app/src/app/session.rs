@@ -117,6 +117,9 @@ pub struct EdgeSession {
     /// bill did before the setting existed. A bill is computed with the mode the session holds when
     /// it is computed; the cash rounding of its total is half-up whatever this says.
     pub tax_rounding: TaxRounding,
+    /// Whether tax rounds once per class or once per rate: the law of the country this binary
+    /// serves (ADR-0226), applied with the `locale` node.
+    pub tax_rounding_scope: pos_proto::locale::TaxRoundingScope,
     /// How long the store keeps a personal record before the retention sweep scrubs it, in days —
     /// the `default_retention_days` a `LocalePack` has carried since
     /// [ADR-0027](../../../../docs/adr/0027-country-modules.md) and which, until

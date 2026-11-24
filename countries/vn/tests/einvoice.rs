@@ -185,3 +185,12 @@ fn only_an_adjustment_may_go_down() {
         Ok(())
     );
 }
+
+#[test]
+fn the_pack_accepts_only_its_own_symbol_shape_for_the_cloud() {
+    use pos_country::CountryModule;
+    let vietnam = pos_country_vn::Vietnam;
+    assert!(vietnam.is_valid_invoice_symbol("1C26MAA"));
+    assert!(!vietnam.is_valid_invoice_symbol("1C26MA"));
+    assert!(!vietnam.is_valid_invoice_symbol("ZZ0001"));
+}
