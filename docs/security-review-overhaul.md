@@ -35,8 +35,8 @@ phase 8:
 | G1 | Guest page | The guest page is served on the console's origin | Medium | Tracked: a deployment choice before the pilot (§2) |
 | K2 | Kiosk | A kiosk's device token lives in a browser that members of the public touch | Medium | Tracked: hardware gate **P13**, phase 8's lockdown (§3) |
 
-The Low findings are G2 to G6, K1, K3, V1 to V3, N1 and T1, listed under each surface below. K1 and
-G5 are fixed in phase 9. The others are tracked here.
+The Low findings are G2 to G6, K1, K3, V1 to V3, N1 and T1, listed under each surface below. G5, K1
+and K3 are fixed in phase 9. The others are tracked here.
 
 One dependency finding, **D1**, came from CI's `cargo deny` gate during the review and is fixed (§11).
 
@@ -108,9 +108,9 @@ decision 4.
 
 | # | Finding | Severity | Status |
 |---|---|---|---|
-| K1 | **`/ws` failed open when the binding could not be read.** The sign-in refuses a device whose binding read fails. `/ws`, though, treated a read failure as "not a kiosk" and opened the whole stream | Low (a read failure on the store's own database, from a device already paired) | **Fixed in phase 9**: `/ws` answers `503` when the binding cannot be read |
+| K1 | **`/ws` failed open when the binding could not be read.** The sign-in refuses a device whose binding read fails. `/ws`, though, treated a read failure as "not a kiosk" and opened the whole stream | Low (a read failure on the store's own database, from a device already paired) | **Fixed in phase 9** (#1347): `/ws` answers `503` when the binding cannot be read, on a store that has a kiosk terminal |
 | K2 | **The kiosk's device token lives in a public browser.** Anyone who can open the kiosk browser's developer tools or storage can carry the token to another machine on the store's network. With it they reach the kiosk's own scope, `GET /api/pair/devices` (the paired devices' names), and code-and-PIN sign-in attempts, which the per-person lockout limits. They do not reach money, other orders or `/ws` | Medium | Tracked: phase 8's kiosk lockdown on Windows ([ADR-0201](adr/0201-the-till-runs-on-every-device-class.md)), proved on the NUC by hardware gate **P13**. Until then, a kiosk that has been tampered with is unpaired from the console |
-| K3 | **A kiosk may open an order on any channel, or as a tab.** `POST /api/orders` is on the kiosk's list with its whole body: `channel` and `tab`. The till sends only the store's accepted channels. A tampered kiosk could open a tab, or an order on another channel, which changes that order's tax. It still cannot take payment, so a person sees the order | Low | Tracked: narrow the kiosk's `POST /api/orders` to the store's kiosk channels and to `tab: false` |
+| K3 | **A kiosk may open an order on any channel, or as a tab.** `POST /api/orders` is on the kiosk's list with its whole body: `channel` and `tab`. The till sends only the store's accepted channels. A tampered kiosk could open a tab, or an order on another channel, which changes that order's tax. It still cannot take payment, so a person sees the order | Low | **Fixed in phase 9**: a kiosk's `POST /api/orders` is refused `403 KIOSK_NOT_ALLOWED` for a tab or for a channel other than eat-in or takeaway |
 
 ## 4. The cloud gateway (ADR-0198)
 
