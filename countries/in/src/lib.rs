@@ -29,6 +29,8 @@
 #![forbid(unsafe_code)]
 #![doc(test(attr(deny(warnings))))]
 
+pub mod gst;
+
 use pos_country::CountryModule;
 use pos_country::offline::OfflineFiscalization;
 use pos_country::tax_class;
@@ -185,7 +187,7 @@ fn rate_table() -> TaxRateTable {
 /// verified here for the same reason the format is checked at all: this is a typo guard, and a
 /// wrongly-rejected valid number would be worse than a wrongly-accepted invalid one, which the portal
 /// catches at filing.
-fn is_valid_gstin(tax_code: &str) -> bool {
+pub(crate) fn is_valid_gstin(tax_code: &str) -> bool {
     let bytes = tax_code.as_bytes();
     let Ok(code) = <&[u8; 15]>::try_from(bytes) else {
         return false;

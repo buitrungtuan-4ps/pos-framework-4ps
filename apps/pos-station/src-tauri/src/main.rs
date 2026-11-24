@@ -22,6 +22,7 @@ mod edge;
 mod health;
 mod i18n;
 mod init_script;
+mod kiosk;
 mod logging;
 mod monitor;
 mod sidecar;
@@ -38,6 +39,7 @@ fn main() -> ExitCode {
             commands::pair,
             commands::status,
         ])
+        .on_window_event(station::on_window_event)
         .setup(|app| {
             station::start(app.handle());
             Ok(())
