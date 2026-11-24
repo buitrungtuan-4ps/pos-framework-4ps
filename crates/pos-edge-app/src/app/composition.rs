@@ -175,7 +175,10 @@ impl<S: EventStore> Edge<S> {
             device_reads: super::DeviceReads::default(),
             labels: RwLock::new(Arc::new(crate::labels::LabelGrid::default())),
             custom_writes: tokio::sync::Mutex::new(super::record_slip::FreshSlips::default()),
+            invoicing: tokio::sync::Mutex::new(()),
+            issue_limit: RwLock::new(None),
             scale: Arc::new(super::orders::NoScale),
+            card_terminal: None,
             manual_weight_forbidden: std::sync::atomic::AtomicBool::new(false),
         })
     }
@@ -193,11 +196,32 @@ impl<S: EventStore> Edge<S> {
         self
     }
 
+    /// The same edge, taking a card through `terminal`
+    /// ([ADR-0230](../../../../docs/adr/0230-a-card-is-taken-through-the-terminal-port-and-an-unknown-result-parks-the-bill.md)
+    /// decision 1). Without one, `POST /api/bills/{id}/card` answers `CARD_TERMINAL_NONE` and a
+    /// card is recorded by hand, as before.
+    #[must_use]
+    pub fn with_card_terminal<T>(mut self, terminal: T) -> Self
+    where
+        T: pos_ports::payment::PaymentTerminal + 'static,
+    {
+        self.card_terminal = Some(super::bills::CardTerminal(Arc::new(terminal)));
+        self
+    }
+
     /// Refuses every weight typed by hand from now on, as this binary's country pack forbids one
     /// (ADR-0223 decision 3), whatever the store's setting says.
     pub fn forbid_manual_weight(&self) {
         self.manual_weight_forbidden
             .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Holds every e-invoice schedule to `limit`, the latest this binary's country lets an invoice
+    /// be issued after its sale (ADR-0229 decision 2), whatever the store's setting says.
+    pub fn limit_invoice_issue(&self, limit: Option<pos_proto::einvoice::IssueLimit>) {
+        if let Ok(mut held) = self.issue_limit.write() {
+            *held = limit;
+        }
     }
 
     /// Whether a weight may be typed by hand here: the store's `weighing.manual_entry`, unless the

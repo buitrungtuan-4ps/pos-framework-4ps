@@ -78,6 +78,10 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
   MANUAL_WEIGHT_NOT_ALLOWED: "error.manual_weight_not_allowed",
   SCALE_NOT_SETTLED: "error.scale_not_settled",
   SCALE_ABSENT: "error.scale_absent",
+  CARD_TERMINAL_UNAVAILABLE: "error.card_terminal_unavailable",
+  CARD_RESULT_UNKNOWN: "error.card_result_unknown",
+  CARD_NOT_PARKED: "error.card_not_parked",
+  CARD_ALREADY_CAPTURED: "error.card_already_captured",
   APPROVAL_REQUIRED: "error.approval_required",
   APPROVAL_REFUSED: "error.approval_refused",
   APPROVER_LOCKED_OUT: "error.approver_locked_out",
@@ -108,6 +112,7 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
   // invoiced. Neither changes on a second try, so each says where the correction is made.
   SETTLED_VOID_WINDOW_CLOSED: "error.settled_void_window_closed",
   E_INVOICE_ISSUED: "error.e_invoice_issued",
+  E_INVOICE_SYMBOL_MISSING: "error.e_invoice_symbol_missing",
   TRANSITION_REFUSED: "error.transition_refused",
   EMPTY: "error.empty",
   // `/setup`: the first screen a technician meets, and the one a store with no internet fails on.

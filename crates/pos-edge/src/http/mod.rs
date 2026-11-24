@@ -17,6 +17,7 @@
 pub mod assets;
 pub mod auth;
 pub mod bills;
+mod card;
 mod cash_movements;
 pub mod check;
 mod comp;
@@ -636,6 +637,7 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
         AppError::NotTheShiftHandedOver => "NOT_THE_SHIFT_HANDED_OVER",
         AppError::ModifierSelectionInvalid => "MODIFIER_SELECTION_INVALID",
         AppError::ChannelNotAccepted => "CHANNEL_NOT_ACCEPTED",
+        AppError::EInvoiceSymbolMissing => "E_INVOICE_SYMBOL_MISSING",
         AppError::ItemNotSellable => "ITEM_NOT_SELLABLE",
         AppError::UnknownCode => "UNKNOWN_CODE",
         AppError::PriceLabelNotOpenPrice => "PRICE_LABEL_NOT_OPEN_PRICE",
@@ -648,6 +650,7 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
         AppError::ManualWeightNotAllowed => "MANUAL_WEIGHT_NOT_ALLOWED",
         AppError::ScaleNotSettled => "SCALE_NOT_SETTLED",
         AppError::ScaleAbsent => "SCALE_ABSENT",
+        AppError::Card(refusal) => refusal.reason(),
         AppError::CustomEntryRefused(_) => "CUSTOM_ENTRY_REFUSED",
         AppError::UnknownObject => "UNKNOWN_OBJECT",
         AppError::UnknownCustomRecord => "UNKNOWN_CUSTOM_RECORD",
@@ -721,6 +724,7 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::NotTheShiftHandedOver
         | AppError::ModifierSelectionInvalid
         | AppError::ChannelNotAccepted
+        | AppError::EInvoiceSymbolMissing
         | AppError::ItemNotSellable
         | AppError::UnknownCode
         | AppError::PriceLabelNotOpenPrice
@@ -755,6 +759,7 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         AppError::CountDoesNotAddUp | AppError::CustomEntryRefused(_) => {
             refusal(StatusCode::UNPROCESSABLE_ENTITY, reason, error.to_string())
         }
+        AppError::Card(card) => card::refusal_response(*card, reason),
         AppError::Port(_) => refusal(
             StatusCode::SERVICE_UNAVAILABLE,
             reason,

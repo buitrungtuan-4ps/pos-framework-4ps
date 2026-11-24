@@ -111,3 +111,32 @@ test("a kiosk with no shift open says it is not taking orders", async ({ page })
     await edge.stop();
   }
 });
+
+test("a guest pays their own order by card at the kiosk, and an unknown card sends them to staff", async ({
+  page,
+}) => {
+  // ADR-0230 decision 7: the kiosk takes a card through the terminal for the whole of its own bill.
+  const edge = await startEdge("kiosk", { POS_DEMO_CARD: "CAPTURED,UNKNOWN" });
+  try {
+    await aKiosk(page, edge);
+    for (const outcome of ["kiosk-paid", "unknown"]) {
+      await page.locator('[data-step="kioskItem"]').first().click();
+      await expect(page.locator('[data-outcome="kiosk-line"]')).toHaveCount(1);
+      await page.locator('[data-step="kioskSend"]').click();
+      await expect(page.locator('[data-outcome="kiosk-done"]')).toBeVisible();
+      await page.locator('[data-step="kioskCard"]').click();
+      if (outcome === "kiosk-paid") {
+        await expect(page.locator('[data-outcome="kiosk-paid"]')).toBeVisible();
+      } else {
+        await expect(page.locator('[data-outcome="kiosk-done"]')).toContainText(
+          "We could not confirm your card. Please see a member of staff.",
+        );
+        await expect(page.locator('[data-step="kioskCard"]')).toHaveCount(0);
+      }
+      await page.getByRole("button", { name: "New order" }).click();
+      await expect(page.locator('[data-outcome="kiosk-menu"]')).toBeVisible();
+    }
+  } finally {
+    await edge.stop();
+  }
+});

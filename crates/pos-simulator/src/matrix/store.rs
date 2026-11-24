@@ -275,6 +275,11 @@ fn document(
             fields.insert(field.to_owned(), value);
         }
     }
+    // The symbol the cloud gives each issuing point (ADR-0225 decision 2), so a store whose
+    // country issues an e-invoice with every settle can settle at all.
+    if let Some(einvoice) = object.get_mut("einvoice").and_then(Value::as_object_mut) {
+        einvoice.insert("symbol".to_owned(), json!("1C26MAA"));
+    }
     Ok(document)
 }
 

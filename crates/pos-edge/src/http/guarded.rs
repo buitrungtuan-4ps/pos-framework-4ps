@@ -195,6 +195,15 @@ where
             "/api/bills/{id}/payments",
             post(super::payments::take_payment::<S>),
         )
+        // A card through the terminal, and the card a bill is parked on (ADR-0230).
+        .route(
+            "/api/bills/{id}/card",
+            post(super::card::take_card::<S>).get(super::card::parked_card::<S>),
+        )
+        .route(
+            "/api/bills/{id}/card/{payment_id}/resolve",
+            post(super::card::resolve_card::<S>),
+        )
         .route(
             "/api/bills/{id}/receipt/reprint",
             post(bills::reprint_receipt::<S>),

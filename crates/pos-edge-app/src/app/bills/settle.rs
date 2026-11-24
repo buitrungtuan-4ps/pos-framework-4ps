@@ -18,8 +18,11 @@ use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::events::{BillingBillSettled, BillingPaymentCaptured};
 use pos_proto::ids::{BillId, DeviceId, EmployeeId, PaymentId, ShiftId, SubjectId, TableId};
 use pos_proto::money::Money;
+use pos_proto::text::TerminalReference;
 use pos_proto::{BillState, Open, PaymentMethod, PaymentOutcome, TableState};
 
+use super::card::CardMark;
+use super::invoice::{InvoicePlan, SettleInvoice};
 use crate::app::records::tax_records;
 use crate::app::{
     AppError, Approval, BillView, BuyerDetails, Edge, OrderSnapshot, TillScope, fee_records,
@@ -105,8 +108,16 @@ impl<S: EventStore> Edge<S> {
     where
         S: SubjectStore,
     {
-        self.settle_shares(actor, scope, bill_id, (payments, None), buyer, approval)
-            .await
+        self.refuse_parked(bill_id)?;
+        self.settle_shares(
+            actor,
+            scope,
+            bill_id,
+            (payments, None, None),
+            buyer,
+            approval,
+        )
+        .await
     }
 
     /// [`Self::settle_bill_at`], each payment recorded as one of `split_ways` equal shares where an
@@ -117,7 +128,7 @@ impl<S: EventStore> Edge<S> {
         actor: Actor,
         scope: TillScope,
         bill_id: BillId,
-        (payments, split_ways): (Vec<Payment>, Option<u8>),
+        (payments, split_ways, card): (Vec<Payment>, Option<u8>, Option<&CardMark>),
         buyer: Option<&BuyerDetails>,
         approval: Option<&Approval>,
     ) -> Result<BillView, AppError>
@@ -125,11 +136,19 @@ impl<S: EventStore> Edge<S> {
         S: SubjectStore,
     {
         let mut ctx = self.decision_ctx(actor)?;
+        CardMark::admit(card, &mut ctx);
         // Before the bill is read: a store that refuses selling without a shift takes no money
         // outside one, so every payment's cash is in a shift's expected drawer (ADR-0160).
         let (drawer, shift, overrider) =
             self.settle_drawer(&mut ctx, scope, &payments, approval)?;
         let proved = self.prove_settle(&ctx, bill_id, &payments)?;
+        // The e-invoice's symbol, before any number is taken (ADR-0225), and the lock that keeps
+        // its sequence gapless until the settle has folded.
+        let plan = self.invoice_plan(buyer.is_some())?;
+        let _invoicing = match plan {
+            InvoicePlan::Now(_) => Some(self.invoicing.lock().await),
+            InvoicePlan::None | InvoicePlan::Later => None,
+        };
 
         // Allocate the gapless receipt number for this bill, then append the events that record it.
         let receipt_number = self
@@ -149,7 +168,7 @@ impl<S: EventStore> Edge<S> {
         // One `billing.payment.captured` per tender, then `billing.bill.settled`, all in one
         // transaction so a crash never leaves a receipt without its payments (or the reverse).
         let (captured, captured_messages) =
-            self.capture_payments(&ctx, bill_id, (&payments, split_ways), shift)?;
+            self.capture_payments(&ctx, bill_id, (&payments, split_ways, card), shift)?;
         envelopes.extend(captured);
         messages.extend(captured_messages);
         let settled = self.settled_event(
@@ -167,9 +186,26 @@ impl<S: EventStore> Edge<S> {
             &mut envelopes,
             &mut messages,
         )?;
+        let invoice = self.settle_invoice(&ctx, plan, &settled)?;
+        if let Some(record) = &invoice {
+            let (envelope, message) = match record {
+                SettleInvoice::Issued(issued) => self.prepare_on(&ctx, issued, shift)?,
+                SettleInvoice::Scheduled(scheduled) => self.prepare_on(&ctx, scheduled, shift)?,
+            };
+            envelopes.push(envelope);
+            messages.push(message);
+        }
         let buyer = settled.buyer_subject_id.zip(buyer);
         self.commit_settle(&ctx, &envelopes, &messages, buyer)
             .await?;
+        match &invoice {
+            Some(SettleInvoice::Issued(issued)) => self.lock_projection().invoices.fold(issued),
+            Some(SettleInvoice::Scheduled(scheduled)) => self
+                .lock_projection()
+                .invoices
+                .fold_scheduled(scheduled, ctx.actor),
+            None => {}
+        }
 
         let _fired = self.apply_fires(&ctx, fires);
         let table_state = self.fold_settled(&settled, (shift, &payments), &ctx, &proved)?;
@@ -406,7 +442,7 @@ impl<S: EventStore> Edge<S> {
         &self,
         ctx: &DecisionCtx,
         bill_id: BillId,
-        (payments, split_ways): (&[Payment], Option<u8>),
+        (payments, split_ways, card): (&[Payment], Option<u8>, Option<&CardMark>),
         shift: Option<ShiftId>,
     ) -> Result<(Vec<EventEnvelope<RawPayload>>, Vec<ServerMessage>), AppError> {
         let zero = Money::zero(self.session().currency);
@@ -420,7 +456,10 @@ impl<S: EventStore> Edge<S> {
             let change = payment.change().map_err(AppError::Domain)?;
             let captured = BillingPaymentCaptured {
                 bill_id,
-                payment_id: PaymentId::new(self.next_ulid()),
+                // A card the terminal took is its one payment, under the id minted before the
+                // terminal was asked (ADR-0230 decision 2).
+                payment_id: card
+                    .map_or_else(|| PaymentId::new(self.next_ulid()), |card| card.payment_id),
                 method: Open::from_known(payment.method),
                 outcome: Open::from_known(PaymentOutcome::Captured),
                 tendered: payment.tendered,
@@ -428,6 +467,8 @@ impl<S: EventStore> Edge<S> {
                 change_given: if change.is_negative() { zero } else { change },
                 tip_amount: payment.tip,
                 split_ways,
+                terminal_reference: card
+                    .map(|card| TerminalReference::new(card.reference.as_str())),
             };
             let (envelope, message) = self.prepare_on(ctx, &captured, shift)?;
             envelopes.push(envelope);

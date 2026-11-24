@@ -18,9 +18,11 @@ use pos_ports::subject_store::SubjectStore;
 use pos_proto::events::BillingPaymentCaptured;
 use pos_proto::ids::{BillId, DeviceId, EmployeeId, FeeId, OrderId, PaymentId, ShiftId};
 use pos_proto::money::{CurrencyCode, Money};
+use pos_proto::text::TerminalReference;
 use pos_proto::time::Timestamp;
 use pos_proto::{Open, PaymentMethod, PaymentOutcome};
 
+use super::card::CardMark;
 use crate::app::{AppError, Approval, BillRecord, BillView, Edge, TillScope};
 
 /// What came of one payment towards a bill.
@@ -95,6 +97,26 @@ impl<S: EventStore> Edge<S> {
     where
         S: SubjectStore,
     {
+        self.refuse_parked(bill_id)?;
+        self.take_tender(actor, scope, bill_id, (payment, None), split_ways, approval)
+            .await
+    }
+
+    /// [`Self::take_payment_at`] for a bill already known not to be parked, recording the payment
+    /// as `card`'s attempt where the card terminal took it (ADR-0230): its `payment_id`, its
+    /// reference, and for a kiosk the one payment its record may take.
+    pub(in crate::app) async fn take_tender(
+        &self,
+        actor: Actor,
+        scope: TillScope,
+        bill_id: BillId,
+        (payment, card): (Payment, Option<&CardMark>),
+        split_ways: Option<u8>,
+        approval: Option<&Approval>,
+    ) -> Result<PaymentTaken, AppError>
+    where
+        S: SubjectStore,
+    {
         let session = self.session();
         let bill = self
             .lock_projection()
@@ -117,7 +139,7 @@ impl<S: EventStore> Edge<S> {
                     actor,
                     scope,
                     bill_id,
-                    (vec![payment], split_ways),
+                    (vec![payment], split_ways, card),
                     None,
                     approval,
                 )
@@ -135,6 +157,7 @@ impl<S: EventStore> Edge<S> {
         }
 
         let mut ctx = self.decision_ctx(actor)?;
+        CardMark::admit(card, &mut ctx);
         let (drawer, shift, overrider) =
             self.settle_drawer(&mut ctx, scope, std::slice::from_ref(&payment), approval)?;
         // The checks a settle makes, for a payment that does not settle: the bill is open, the
@@ -154,7 +177,8 @@ impl<S: EventStore> Edge<S> {
 
         let captured = BillingPaymentCaptured {
             bill_id,
-            payment_id: PaymentId::new(self.next_ulid()),
+            payment_id: card
+                .map_or_else(|| PaymentId::new(self.next_ulid()), |card| card.payment_id),
             method: Open::from_known(payment.method),
             outcome: Open::from_known(PaymentOutcome::Captured),
             tendered: payment.tendered,
@@ -162,6 +186,7 @@ impl<S: EventStore> Edge<S> {
             change_given: change,
             tip_amount: payment.tip,
             split_ways,
+            terminal_reference: card.map(|card| TerminalReference::new(card.reference.as_str())),
         };
         self.commit_part_payment(&ctx, &captured, shift, overrider)
             .await?;

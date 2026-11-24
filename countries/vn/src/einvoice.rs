@@ -207,32 +207,19 @@ pub enum InvoiceKind {
     },
 }
 
-/// When a settled bill issues an invoice: the `einvoice.issue_moment` setting (ADR-0225 decision 3).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IssueMoment {
-    /// None is issued. The register's default.
-    Off,
-    /// Every settled bill, with a buyer or without. What the Vietnamese pack recommends.
-    EverySale,
-    /// Only a bill whose guest gave buyer details.
-    OnRequest,
-}
+/// When a settled bill issues an invoice: the `einvoice.issue_moment` schedule, which
+/// [ADR-0229](../../../docs/adr/0229-the-e-invoice-issue-moment-is-a-schedule.md) made the owner's
+/// flexible configuration in place of ADR-0225's three moments.
+pub use pos_proto::einvoice::EInvoiceIssueMoment as IssueMoment;
 
-impl IssueMoment {
-    /// Whether a bill settled under this moment issues an invoice.
-    #[must_use]
-    pub const fn issues(self, has_buyer: bool) -> bool {
-        match self {
-            Self::Off => false,
-            Self::EverySale => true,
-            Self::OnRequest => has_buyer,
-        }
-    }
-}
+/// The moment the Vietnamese pack seeds: issued with the settle (ADR-0229 decision 1, the owner's
+/// choice on 2026-11-24). The law behind it is to be confirmed.
+pub const RECOMMENDED_ISSUE_MOMENT: IssueMoment = IssueMoment::Immediate;
 
-/// The recommended moment for a new Vietnamese store. An open owner decision, and to be confirmed
-/// by legal against Decree 70/2025's cash-register invoices.
-pub const RECOMMENDED_ISSUE_MOMENT: IssueMoment = IssueMoment::EverySale;
+/// How late Vietnamese law lets an invoice be issued after its sale: the end of the sale's calendar
+/// day, the conservative reading, to be confirmed by legal (ADR-0229 decision 2).
+pub const ISSUE_LIMIT: pos_proto::einvoice::IssueLimit =
+    pos_proto::einvoice::IssueLimit::EndOfSaleDay;
 
 /// Why a buyer's details cannot go on an invoice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

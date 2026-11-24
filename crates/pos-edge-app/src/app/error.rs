@@ -290,6 +290,11 @@ pub enum AppError {
     /// an order on a channel its published `channels` node leaves out.
     #[error("this store does not accept orders on that sales channel")]
     ChannelNotAccepted,
+    /// The store issues an e-invoice for this bill and the cloud has published no symbol to number
+    /// it under (ADR-0225 decision 2): the sale is not taken, because an invoice cannot be numbered
+    /// later.
+    #[error("this store has no e-invoice symbol to number the bill's invoice under")]
+    EInvoiceSymbolMissing,
     /// The item, or one of its modifiers, is not in the store's price book or is 86'd right now,
     /// so the edge cannot price the line (ADR-0146). Refused, never substituted.
     #[error("that item cannot be sold right now")]
@@ -309,6 +314,9 @@ pub enum AppError {
     /// piece, or one outside the line's bounds (ADR-0223).
     #[error("{0}")]
     Weighing(WeighError),
+    /// A card through the card terminal was refused (ADR-0230): which, in its own words.
+    #[error("{0}")]
+    Card(super::CardRefusal),
     /// A weight typed by hand where the store's `weighing.manual_entry` refuses one (ADR-0223).
     #[error("this store takes a weight from a scale or a label only")]
     ManualWeightNotAllowed,

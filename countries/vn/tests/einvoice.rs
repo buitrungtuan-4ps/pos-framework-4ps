@@ -94,10 +94,10 @@ fn a_new_year_needs_a_new_symbol() {
 }
 
 #[test]
-fn the_recommended_moment_issues_for_every_sale() {
-    assert_eq!(RECOMMENDED_ISSUE_MOMENT, IssueMoment::EverySale);
-    assert!(IssueMoment::EverySale.issues(false));
-    assert!(IssueMoment::EverySale.issues(true));
+fn the_recommended_moment_issues_with_the_settle() {
+    assert_eq!(RECOMMENDED_ISSUE_MOMENT, IssueMoment::Immediate);
+    assert!(IssueMoment::Immediate.issues(false));
+    assert!(IssueMoment::Immediate.issues(true));
     assert!(!IssueMoment::OnRequest.issues(false));
     assert!(IssueMoment::OnRequest.issues(true));
     assert!(!IssueMoment::Off.issues(true));
@@ -184,4 +184,13 @@ fn only_an_adjustment_may_go_down() {
         check_totals(&InvoiceKind::Adjustment { corrects }, &down, 0, -11_000),
         Ok(())
     );
+}
+
+#[test]
+fn the_pack_accepts_only_its_own_symbol_shape_for_the_cloud() {
+    use pos_country::CountryModule;
+    let vietnam = pos_country_vn::Vietnam;
+    assert!(vietnam.is_valid_invoice_symbol("1C26MAA"));
+    assert!(!vietnam.is_valid_invoice_symbol("1C26MA"));
+    assert!(!vietnam.is_valid_invoice_symbol("ZZ0001"));
 }

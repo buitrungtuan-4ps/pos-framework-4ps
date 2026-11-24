@@ -41,6 +41,7 @@ pub mod cash_count;
 pub mod channels;
 pub mod decision;
 pub mod device_revocation;
+pub mod einvoice;
 pub mod error;
 pub mod floor;
 pub mod flow;

@@ -14,11 +14,12 @@ use pos_proto::events::{
     BillingCheckPrinted, BillingCompApplied, BillingDiscountApplied, BillingFeeWaived,
     BillingPaymentCaptured, BillingReceiptReprinted, CashDrawerDropped, CashDrawerPaidIn,
     CashDrawerPaidOut, CashShiftClosed, CashShiftCounted, CashShiftOpened, DataCustomFieldSet,
-    DataCustomRecordChanged, DataSubjectMasked, EventType, InventoryItemRestored,
-    InventoryItemSoldOut, KitchenTicketBumped, SalesOrderClosed, SalesOrderConfirmedByStaff,
-    SalesOrderLineAdded, SalesOrderLineFired, SalesOrderLineRepriced, SalesOrderLineUpdated,
-    SalesOrderLineVoided, SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed,
-    SalesTableMerged, SalesTableOpened, SalesTableTransferred,
+    DataCustomRecordChanged, DataSubjectMasked, EventType, FiscalInvoiceIssued,
+    FiscalInvoiceScheduled, InventoryItemRestored, InventoryItemSoldOut, KitchenTicketBumped,
+    SalesOrderClosed, SalesOrderConfirmedByStaff, SalesOrderLineAdded, SalesOrderLineFired,
+    SalesOrderLineRepriced, SalesOrderLineUpdated, SalesOrderLineVoided, SalesOrderOpened,
+    SalesOrderRejectedByStaff, SalesTableClosed, SalesTableMerged, SalesTableOpened,
+    SalesTableTransferred,
 };
 use pos_proto::time::Timestamp;
 use pos_proto::{BillState, OrderLineState, PaymentMethod, ShiftState, TableState};
@@ -178,6 +179,10 @@ impl<S: EventStore> Edge<S> {
             EventType::BillingPaymentCaptured => {
                 let event: BillingPaymentCaptured =
                     envelope.data.decode().map_err(AppError::Encode)?;
+                // Only a captured payment moves money (ADR-0230 decision 5).
+                if !projection.fold_card_outcome(&event) {
+                    return Ok(());
+                }
                 // Only cash reaches the drawer, and the roll-up is the reason payments are evented. The
                 // payment names its drawer's shift on its envelope (ADR-0167 decision 5); one
                 // written without one went to the store's drawer's.
@@ -439,7 +444,34 @@ impl<S: EventStore> Edge<S> {
                 let event: DataSubjectMasked = envelope.data.decode().map_err(AppError::Encode)?;
                 projection.fold_subject_masked(&event);
             }
+            EventType::FiscalInvoiceIssued | EventType::FiscalInvoiceScheduled => {
+                Self::fold_fiscal(projection, envelope, known)?;
+            }
             _ => {}
+        }
+        Ok(())
+    }
+
+    /// Folds an e-invoice issued or scheduled (ADR-0225, ADR-0229), lifted out of
+    /// [`Self::fold`] to keep that function inside its line budget.
+    fn fold_fiscal(
+        projection: &mut Projection,
+        envelope: &EventEnvelope<RawPayload>,
+        known: EventType,
+    ) -> Result<(), AppError> {
+        if known == EventType::FiscalInvoiceIssued {
+            let event: FiscalInvoiceIssued = envelope.data.decode().map_err(AppError::Encode)?;
+            projection.invoices.fold(&event);
+        } else {
+            let event: FiscalInvoiceScheduled = envelope.data.decode().map_err(AppError::Encode)?;
+            // Who settled the bill, whom its issue is recorded against when it falls due.
+            let settled_by = pos_core::decision::Actor {
+                employee_id: envelope
+                    .employee_id
+                    .unwrap_or(pos_proto::ids::EmployeeId::new(pos_proto::ulid::Ulid::NIL)),
+                device_id: envelope.device_id,
+            };
+            projection.invoices.fold_scheduled(&event, settled_by);
         }
         Ok(())
     }

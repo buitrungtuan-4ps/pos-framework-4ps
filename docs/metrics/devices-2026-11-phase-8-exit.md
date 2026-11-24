@@ -7,7 +7,7 @@ it is met, what could not be verified without real hardware, and the owner's ope
 [templates-2026-11-phase-6-exit.md](templates-2026-11-phase-6-exit.md), it records one moment and is
 not regenerated.
 
-**Measured at** `b8c9aa6e` on `main`.
+**Measured at** `5b08b316` on `main`, with #1339, #1354, #1356, #1357 and #1358 merged.
 
 ## The criterion
 

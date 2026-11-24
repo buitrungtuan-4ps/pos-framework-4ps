@@ -74,7 +74,8 @@ impl<S: EventStore> Edge<S> {
                 .as_ref()
                 .map_or(ctx.business_date, |receipt| receipt.business_date),
             taking_shift_open: record.taking_shift_open,
-            e_invoice_issued: false,
+            // A bill with an issued e-invoice is corrected in the console (ADR-0225 decision 7).
+            e_invoice_issued: self.lock_projection().invoices.issued_for(bill_id),
         };
         // The facts, decided as if the act were held, before anybody is asked to approve it.
         let mut probe = ctx.clone();

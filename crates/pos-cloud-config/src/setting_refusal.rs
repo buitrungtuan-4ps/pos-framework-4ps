@@ -47,6 +47,7 @@ pub fn setting_refusal_response(refusal: &SettingRefusal) -> Response {
         SettingRefusal::UnknownTranslationKey { .. } => ("value", "UNKNOWN_TRANSLATION_KEY"),
         SettingRefusal::SectionRequired { .. } => ("value", "SECTION_REQUIRED"),
         SettingRefusal::ForbiddenByCountry { .. } => ("value", "SETTING_FORBIDDEN_BY_COUNTRY"),
+        SettingRefusal::BeyondCountryLimit { .. } => ("value", "SETTING_BEYOND_COUNTRY_LIMIT"),
         SettingRefusal::LockedAbove { .. } => {
             return api_error_with_details(
                 ErrorStatus::FailedPrecondition,

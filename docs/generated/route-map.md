@@ -13,6 +13,9 @@ From [`docs/openapi-edge.json`](../openapi-edge.json).
 | POST | `/api/activate` | `activate_device` | public: an activation code from the store's setup sheet (ADR-0050) | — | [`crates/pos-edge/src/activation.rs`](../../crates/pos-edge/src/activation.rs) |
 | GET | `/api/activation` | `activation_standing` | public: nothing: it says only whether this box is activated yet | — | [`crates/pos-edge/src/activation.rs`](../../crates/pos-edge/src/activation.rs) |
 | GET | `/api/bills/settled` | `settled_bills` | `till_session` | — | [`crates/pos-edge/src/http/counter.rs`](../../crates/pos-edge/src/http/counter.rs) |
+| GET | `/api/bills/{id}/card` | `parked_card` | `till_session` | — | [`crates/pos-edge/src/http/card.rs`](../../crates/pos-edge/src/http/card.rs) |
+| POST | `/api/bills/{id}/card` | `take_card` | `till_session` | `billing.payment.take` | [`crates/pos-edge/src/http/card.rs`](../../crates/pos-edge/src/http/card.rs) |
+| POST | `/api/bills/{id}/card/{payment_id}/resolve` | `resolve_card` | `till_session` | `billing.payment.take` | [`crates/pos-edge/src/http/card.rs`](../../crates/pos-edge/src/http/card.rs) |
 | GET | `/api/bills/{id}/check` | `bill_check` | `till_session` | — | [`crates/pos-edge/src/http/check.rs`](../../crates/pos-edge/src/http/check.rs) |
 | POST | `/api/bills/{id}/check/print` | `print_bill_check` | `till_session` | `billing.bill.open` | [`crates/pos-edge/src/http/check.rs`](../../crates/pos-edge/src/http/check.rs) |
 | POST | `/api/bills/{id}/comp` | `comp_line` | `till_session` | `billing.comp.apply` | [`crates/pos-edge/src/http/comp.rs`](../../crates/pos-edge/src/http/comp.rs) |
@@ -202,6 +205,7 @@ From [`docs/openapi-admin.json`](../openapi-admin.json).
 | PUT | `/admin/config/capabilities` | `admin_publish_capabilities` | `session_cookie` | `console.config.publish` | [`crates/pos-cloud-people/src/routes/capabilities.rs`](../../crates/pos-cloud-people/src/routes/capabilities.rs) |
 | GET | `/admin/config/channels` | `admin_read_channels` | `session_cookie` | `console.data.read` | [`crates/pos-cloud/src/http/config_nodes/channels.rs`](../../crates/pos-cloud/src/http/config_nodes/channels.rs) |
 | PUT | `/admin/config/channels` | `admin_publish_channels` | `session_cookie` | `console.config.publish` | [`crates/pos-cloud/src/http/config_nodes/channels.rs`](../../crates/pos-cloud/src/http/config_nodes/channels.rs) |
+| PUT | `/admin/config/einvoice-symbol` | `admin_publish_einvoice_symbol` | `session_cookie` | `console.config.publish` | [`crates/pos-cloud/src/http/config_nodes/einvoice_symbol.rs`](../../crates/pos-cloud/src/http/config_nodes/einvoice_symbol.rs) |
 | PUT | `/admin/config/integrations` | `admin_publish_integrations` | `session_cookie` | `console.config.publish` | [`crates/pos-cloud/src/http/integrations/publish.rs`](../../crates/pos-cloud/src/http/integrations/publish.rs) |
 | PUT | `/admin/config/inventory` | `admin_publish_inventory` | `session_cookie` | `console.config.publish` | [`crates/pos-cloud-inventory/src/routes/publish.rs`](../../crates/pos-cloud-inventory/src/routes/publish.rs) |
 | GET | `/admin/config/lease` | `admin_get_lease` | `session_cookie` | `console.data.read` | [`crates/pos-cloud/src/http/ota_rollout/leases.rs`](../../crates/pos-cloud/src/http/ota_rollout/leases.rs) |

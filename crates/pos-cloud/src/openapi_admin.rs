@@ -257,6 +257,7 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::config_nodes::admin_read_qr,
         crate::http::config_nodes::admin_publish_qr,
         crate::http::config_nodes::admin_read_retention,
+        crate::http::config_nodes::admin_publish_einvoice_symbol,
         crate::http::config_nodes::admin_publish_retention,
         crate::http::config_nodes::admin_read_vendors,
         crate::http::config_nodes::admin_publish_vendors,

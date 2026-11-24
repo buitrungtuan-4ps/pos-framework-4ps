@@ -111,6 +111,12 @@ impl CountryModule for Japan {
 
     /// A weight typed by hand is refused (ADR-0223 decision 3): only a scale or a scale's label
     /// sets a weight sold by it until phase 7's legal suite decides the country's trade law.
+    /// A qualified invoice rounds the consumption tax once per rate per invoice (ADR-0226
+    /// decision 1), to be confirmed by legal (`CONFORMANCE.md` R9).
+    fn tax_rounding_scope(&self) -> pos_proto::locale::TaxRoundingScope {
+        pos_proto::locale::TaxRoundingScope::PerRate
+    }
+
     fn forbidden_settings(&self) -> Vec<pos_country::SettingDefault> {
         vec![pos_country::SettingDefault {
             setting_key: "weighing.manual_entry",

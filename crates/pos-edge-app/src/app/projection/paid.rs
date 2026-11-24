@@ -142,6 +142,8 @@ impl Projection {
             record.voided_bills = record.voided_bills.saturating_add(1);
         }
         self.void_bill_record(bill_id);
+        // An invoice still waiting is never issued, and so takes no number (ADR-0229 decision 3).
+        self.invoices.drop_pending(bill_id);
         Ok(())
     }
 
