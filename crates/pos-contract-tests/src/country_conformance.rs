@@ -123,22 +123,34 @@ pub fn failures(pack: &LocalePack, cases: &[Case]) -> Vec<String> {
         {
             found.push(format!("case {} is numbered twice", case.number));
         }
-        if let Err(message) = check(pack, case) {
+        if let Err(message) = check(pack, case, 0) {
             found.push(format!("case {} ({}): {message}", case.number, case.title));
         }
     }
     found
 }
 
+/// Runs one case whose bill carries a comp of `comps_minor` ([ADR-0228](../../../docs/adr/0228-comp-tax-scale-labels-and-hand-weighing-stay-conservative-per-country.md)
+/// decision 1), and says what did not hold, if anything.
+///
+/// A comp is given away after the lines are priced, as the till gives it, so a country's case can
+/// pin how its tax treats one.
+#[must_use]
+pub fn comp_failure(pack: &LocalePack, case: &Case, comps_minor: i64) -> Option<String> {
+    check(pack, case, comps_minor)
+        .err()
+        .map(|message| format!("case {} ({}): {message}", case.number, case.title))
+}
+
 /// Runs one case.
-fn check(pack: &LocalePack, case: &Case) -> Result<(), String> {
+fn check(pack: &LocalePack, case: &Case, comps_minor: i64) -> Result<(), String> {
     let currency = pack.currency_code;
     let bases = class_bases(pack, &case.lines)?;
     let input = BillInput {
         currency_code: currency,
         class_bases: &bases,
         bill_discount: Money::zero(currency),
-        comps: Money::zero(currency),
+        comps: Money::new(currency, comps_minor),
         service_charge: Money::zero(currency),
         service_charge_taxable: false,
         service_charge_tax_class: None,
