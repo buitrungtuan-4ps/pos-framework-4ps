@@ -62,6 +62,8 @@ To find the files a change touches, start from the **[repository map](repository
 | [gate-register.md](gate-register.md) | The gates only a person, a credential, hardware or an outside body can clear |
 | [production-readiness.md](production-readiness.md) | The open list between the tree and a shop that takes money |
 | [security-review.md](security-review.md) · [security-review-ws-d.md](security-review-ws-d.md) | The pre-production security review, and the ops-hardening pass |
+| [security-review-overhaul.md](security-review-overhaul.md) | Phase 9's security review of every surface roadmap-v4 added: the guest page, the kiosk, the gateway, webhooks, delivery intake, the NATS wake, CEL limits, personal custom data and the tab label |
+| [real-hardware-gates.md](real-hardware-gates.md) | The pilot's real-hardware gates (P13 to P17): the kiosk lockdown, 10 ms on the NUC and on phones, resource ceilings and peak load, with how to run each. Awaiting hardware |
 | [wcag-contrast-audit.md](wcag-contrast-audit.md) | The measured contrast ratio of every design token |
 | [metrics/baseline-2026-10.md](metrics/baseline-2026-10.md) | The size and shape of the code before the standardisation work |
 | [metrics/ci-2026-10-phase3.md](metrics/ci-2026-10-phase3.md) | What CI costs after phase 3 (CI runs what a change affects), against the baseline |

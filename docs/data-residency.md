@@ -1,6 +1,6 @@
 # Data residency: where the data rests, and when it crosses a border
 
-**Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-11-13
+**Status** Accepted · **Owner** @maintainers-architecture · **Last reviewed** 2026-11-24
 
 > **This is not legal advice.** This page describes what the code does: where each class of data
 > rests and when it leaves the country of the store it belongs to. Whether a given flow is a
@@ -104,6 +104,48 @@ the tenant's DPIA, not that assessment.
   store's own sweep; staff clear it at any time by saving an empty label, which is also how a
   guest's erasure request is met at the store.
 - **Crossing a border.** Only inside a sealed store archive.
+
+## B10.4: the decision the owner owes
+
+Roadmap-v3 B10.4 (data residency, legal and a pentest) is operations and law, not code. Phase 9
+of roadmap v4 records here what is decided and what is still the owner's to decide. **This is not
+legal advice.** Every legal requirement below is to be confirmed by legal counsel or the DPO.
+
+**Already decided.** On 2026-10-14 the owner decided that the cloud for Vietnamese stores is
+hosted in Vietnam, so their data does not leave the country of collection
+([`gate-register.md`](gate-register.md) **L6**). The pilot is in Vietnam. For the pilot, residency
+is therefore a deployment check, not an open decision: the pilot's cell must run on a VPS in
+Vietnam, and its `[cell]` section must say so. The *lawful basis*, the DPIA, the retention periods
+and consent (L1, L2, L6) are still owed by legal and the DPO.
+
+**Still open: three decisions.**
+
+1. **Where Japan's and India's stores are hosted** (gate **X3**). The choice is between:
+   - **(a) one cell per country** (Japan in Japan, India in India). Personal data stays in its
+     country of collection. This costs one more VPS and one more deploy per country. The framework
+     supports it today: each cell is one VPS, and an activation code names its cell;
+   - **(b) one regional cell** (for example Singapore) serving several countries. Each store's
+     personal data then crosses a border. Under APPI and under India's DPDP Act 2023 this needs
+     whatever those laws require for a transfer abroad, as legal confirms. The console warns
+     on each such store and records who accepted it (L3a);
+   - **(c) Japan's and India's stores in the Vietnamese cell.** The same crossing as (b), and
+     Vietnam's Decree 13/2023 then governs the cell's operator too, as legal confirms.
+
+   The recommendation, as AI-generated analysis for the owner and not a decision, is **(a)**. It
+   needs no transfer basis, and it uses the cell model the framework already has. Nothing has to be
+   decided before the Vietnam pilot. Japan and India go live only after their registrations (X1,
+   X2) anyway.
+2. **Which processors handle personal data abroad.** These are the e-invoice provider (not chosen
+   yet, roadmap-v4 phase 7), the delivery vendors and the couriers. Each connection records its
+   `processing_country`, and the console flags one outside the cell's country. For each one the
+   owner, with legal, confirms that a data processing agreement exists and, where the processor is
+   abroad, the transfer basis (L3).
+3. **The independent pentest** (gate **L5**). The owner chooses a firm and a date. The scope is
+   [`security-review.md`](security-review.md) §9 together with
+   [`security-review-overhaul.md`](security-review-overhaul.md) §12. The recommendation, as
+   AI-generated analysis for the owner and not a decision, is to run it on the pilot's own cell,
+   with the pilot's release and package, **before the first store takes real money**, and to fix
+   every High or Critical finding it reports before go-live.
 
 ## The mechanisms the framework gives
 

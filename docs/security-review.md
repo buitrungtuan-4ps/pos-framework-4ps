@@ -12,7 +12,7 @@ Scope is the **Vietnam pilot**: the cloud tier as `deploy/compose.yml` runs it, 
 (`pos_edge`), the two browser front-ends, and the rails between them. JP and IN are out of scope —
 their go-live is gated on registrations that do not exist yet (gate register **X1**/**X2**).
 
-Two earlier notes stay valid and are not repeated here: [`security-review-ws-d.md`](security-review-ws-d.md)
+Roadmap v4's new surfaces (the guest page, the kiosk, the gateway, delivery intake and the rest) are reviewed in [`security-review-overhaul.md`](security-review-overhaul.md). Two earlier notes stay valid and are not repeated here: [`security-review-ws-d.md`](security-review-ws-d.md)
 (the ops-hardening pass) and the per-phase reviews recorded in the ADRs it cites.
 
 ---
