@@ -4013,6 +4013,44 @@ async fn a_signed_qr_order_is_accepted_and_awaits_staff_confirmation() {
     );
 }
 
+/// The intake is idempotent on a reference within the store and channel, so a guest who sends
+/// another table's reference gets an order of their own, never the other table's order back (phase 9
+/// security review, finding G4).
+#[tokio::test]
+async fn one_reference_from_two_tables_is_two_orders() {
+    let secret = TableTokenSecret::new("qr-endpoint-secret");
+    let other_table = TableId::new(Ulid::from_u128(0x0E));
+    let (known, _price) = known_menu_item();
+    let trees = FakeConfigTrees::default();
+    seed_versions(
+        &trees,
+        tenant(),
+        order_store(),
+        &[(NOW_MS, serde_json::json!({ "qr_ordering_enabled": true }))],
+    );
+    let router = qr_router(secret.clone(), FakeIntake::new(), trees, clock());
+    for table in [qr_table(), other_table] {
+        let token = mint_table_token(&secret, tenant(), order_store(), table);
+        let response = router
+            .clone()
+            .oneshot(post_json(
+                "/v1/qr/orders",
+                &qr_body(&token, "qr-same", known),
+            ))
+            .await
+            .expect("route the QR order");
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
+        assert_eq!(value["created"].as_bool(), Some(true), "{table}");
+    }
+}
+
 #[tokio::test]
 async fn an_unsigned_qr_token_is_forbidden_and_never_reaches_intake() {
     let secret = TableTokenSecret::new("qr-endpoint-secret");
