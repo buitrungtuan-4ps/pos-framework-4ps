@@ -19,6 +19,8 @@
 #![forbid(unsafe_code)]
 #![doc(test(attr(deny(warnings))))]
 
+pub mod einvoice;
+
 use pos_country::offline::OfflineFiscalization;
 use pos_country::tax_class;
 use pos_country::{CountryModule, SettingDefault, SettingDefaultValue};

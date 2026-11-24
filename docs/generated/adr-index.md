@@ -16,7 +16,6 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 - [ADR-0205](../adr/0205-a-refusal-any-act-can-meet-is-not-listed-per-act.md) A refusal any act can meet is not listed per act
 - [ADR-0212](../adr/0212-the-heartbeat-names-the-version-each-till-last-read.md) The heartbeat names the package version each till last read
 - [ADR-0216](../adr/0216-integrations-come-in-three-tiers-and-functions-wait.md) Integrations come in three tiers, and WebAssembly functions wait for a real case
-- [ADR-0225](../adr/0225-a-vietnamese-store-issues-its-e-invoice-and-the-cloud-submits-it.md) A Vietnamese store numbers its e-invoice in the sale, and the cloud submits it
 - [ADR-0230](../adr/0230-a-card-is-taken-through-the-terminal-port-and-an-unknown-result-parks-the-bill.md) A card is taken through the terminal port, and an unknown result parks the bill
 
 ## Citations of ADRs that do not exist
