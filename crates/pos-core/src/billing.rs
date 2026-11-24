@@ -49,7 +49,7 @@
 //! every part of a split and every merge the bill joins ([`MergedFees::waived_fee_ids`]).
 
 use pos_proto::fees::{FeeCode, FeeKind, FeeTax, FrozenFee};
-use pos_proto::locale::{TaxComponent, TaxComponentName, TaxRateTable};
+use pos_proto::locale::{TaxComponent, TaxComponentName, TaxRateTable, TaxRoundingScope};
 use pos_proto::money::{Money, MoneyError, Ratio, Rounding, div_round};
 use pos_proto::quantity::Quantity;
 use pos_proto::text::DisplayName;
@@ -261,6 +261,8 @@ pub struct BillInput<'a> {
     /// rounding of the grand total, which is always [`CASH_ROUNDING`], nor anything the caller
     /// priced before the bill, such as a line's net or a campaign's reduction.
     pub tax_rounding: Rounding,
+    /// Whether tax rounds once per class or once per rate, the country's law (ADR-0226 decision 1).
+    pub tax_rounding_scope: TaxRoundingScope,
     /// Whether the class bases already contain their tax — the store's `locale.prices_include_tax`
     /// ([ADR-0104](../../../docs/adr/0104-multi-component-and-inclusive-tax.md)).
     ///
@@ -1023,6 +1025,10 @@ pub fn assemble(input: &BillInput<'_>) -> Result<BillTotals, DomainError> {
         lines_after_reductions,
         tax_total,
     } = class_tax(input, &discount_shares, &comp_shares, &fees.class_shares)?;
+    let (tax_lines, tax_total) = match input.tax_rounding_scope {
+        TaxRoundingScope::PerClass => (tax_lines, tax_total),
+        TaxRoundingScope::PerRate => per_rate::round_once_per_rate(input, tax_lines)?,
+    };
 
     // Under an inclusive posture the quoted amounts already contain every minor unit of `tax_total`,
     // so the reported subtotal is netted by it. That keeps *one* reconciliation formula true in both
@@ -1453,6 +1459,8 @@ pub fn split_by_weights(total_due: Money, weights: &[i64]) -> Result<Vec<Money>,
     Ok(total_due.allocate(weights)?)
 }
 
+mod per_rate;
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1510,6 +1518,7 @@ mod tests {
             sales_channel: SalesChannel::DineIn,
             cash_rounding_increment: None,
             tax_rounding: Rounding::HalfUp,
+            tax_rounding_scope: super::TaxRoundingScope::PerClass,
             prices_include_tax: false,
             fee_rules: &[],
             waived_fee_ids: &[],

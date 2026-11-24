@@ -9,8 +9,10 @@
 
 use core::num::NonZeroU32;
 
-use pos_contract_tests::country_conformance::{Case, Expected, Line, TaxLine, failures, totals};
-use pos_country::{CountryModule, tax_class};
+use pos_contract_tests::country_conformance::{
+    Case, Expected, Line, TaxLine, comp_failure, failures, totals,
+};
+use pos_country::{CountryModule, SettingDefault, SettingDefaultValue, tax_class};
 use pos_country_in::{India, fiscalization};
 use pos_fakes::executor::run_ready;
 use pos_ports::fiscalization::Fiscalization;
@@ -150,4 +152,47 @@ fn case_7_a_gstin_is_checked_for_shape_only() {
     assert!(India.is_valid_tax_code("29ABCDE1234F1Z5"));
     assert!(!India.is_valid_tax_code("29ABCDE1234F1Z"));
     assert!(!India.is_valid_tax_code("29ABCDE1234F1Y5"));
+}
+
+/// Case 8: a comp lowers the taxable base, as a discount does (ADR-0228 decision 1).
+///
+/// MRP ₹525.00 of dine-in food with ₹105.00 comped: ₹420.00 remains, whose 5 % is
+/// 42,000 × 5/105 = 2,000 paise on a base of 40,000, printed as CGST 1,000 and SGST 1,000. Already a
+/// whole rupee. Whether a giveaway is a deemed supply taxed at value instead is to confirm by the
+/// accountant.
+#[test]
+fn case_8_a_comp_lowers_the_taxable_base() {
+    let case = Case {
+        number: 8,
+        title: "dine-in: a comp is taken off before GST is extracted",
+        cites: &["GST_RESTAURANT", "GST_HALF", "ADR-0228 decision 1"],
+        channel: SalesChannel::DineIn,
+        lines: vec![line(tax_class::food(), 52_500)],
+        // The subtotal is the MRP net of the tax: 50,500 − 10,500 + 2,000 = 42,000 (ADR-0104).
+        expected: totals(vec![composed(40_000, 2_000)], 50_500, 2_000, 0, 42_000),
+    };
+    let found = comp_failure(&India.locale_pack(), &case, 10_500);
+    assert!(found.is_none(), "{found:?}");
+}
+
+/// Case 9: no scale-label layout is seeded, so a 20–29 code reads as a plain code until a store
+/// chooses one (ADR-0228 decision 2).
+#[test]
+fn case_9_no_variable_measure_layout_is_seeded() {
+    assert!(
+        India
+            .setting_defaults()
+            .iter()
+            .all(|seeded| seeded.setting_key != "scan.variable_measure_layout"),
+        "the national GS1 layout is to confirm by legal before the pack seeds one"
+    );
+}
+
+/// Case 10: a weight typed by hand is forbidden, as law (ADR-0228 decision 3, ADR-0223).
+#[test]
+fn case_10_a_weight_typed_by_hand_is_forbidden() {
+    assert!(India.forbidden_settings().contains(&SettingDefault {
+        setting_key: "weighing.manual_entry",
+        value: SettingDefaultValue::Bool(true),
+    }));
 }

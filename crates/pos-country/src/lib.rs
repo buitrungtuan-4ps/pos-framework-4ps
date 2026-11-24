@@ -120,6 +120,13 @@ pub trait CountryModule: Send + Sync + 'static {
         Vec::new()
     }
 
+    /// Whether this country's law rounds a bill's tax once per class (the default, ADR-0028) or
+    /// once per rate, as Japan's qualified invoice does
+    /// ([ADR-0226](../../../docs/adr/0226-a-japanese-receipt-is-a-qualified-invoice.md) decision 1).
+    fn tax_rounding_scope(&self) -> pos_proto::locale::TaxRoundingScope {
+        pos_proto::locale::TaxRoundingScope::PerClass
+    }
+
     /// The latest an e-invoice may be issued after its sale
     /// ([ADR-0229](../../../docs/adr/0229-the-e-invoice-issue-moment-is-a-schedule.md) decision 2):
     /// fixed law, which the cloud refuses a delay past and the edge clamps every schedule to. `None`
@@ -207,6 +214,19 @@ impl CountryRegistry {
     /// Every country in this build, in the order the features were listed.
     pub fn modules(&self) -> impl Iterator<Item = &dyn CountryModule> {
         self.modules.iter().map(Box::as_ref)
+    }
+
+    /// The tax rounding scope of the country this build serves: per rate where any module says so
+    /// (a cell serves one country), per class otherwise (ADR-0226).
+    #[must_use]
+    pub fn tax_rounding_scope(&self) -> pos_proto::locale::TaxRoundingScope {
+        if self.modules().any(|module| {
+            module.tax_rounding_scope() == pos_proto::locale::TaxRoundingScope::PerRate
+        }) {
+            pos_proto::locale::TaxRoundingScope::PerRate
+        } else {
+            pos_proto::locale::TaxRoundingScope::PerClass
+        }
     }
 
     /// The strictest e-invoice issue limit of the countries in this build (ADR-0229 decision 2), or

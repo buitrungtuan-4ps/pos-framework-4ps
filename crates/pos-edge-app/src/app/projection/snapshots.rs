@@ -196,6 +196,7 @@ impl<S: EventStore> Edge<S> {
             sales_channel: order.sales_channel,
             cash_rounding_increment: session.cash_rounding_increment,
             tax_rounding: session.tax_rounding.rounding(),
+            tax_rounding_scope: session.tax_rounding_scope,
             prices_include_tax: session.prices_include_tax,
             fee_rules,
             waived_fee_ids,
