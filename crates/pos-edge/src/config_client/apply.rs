@@ -581,6 +581,8 @@ pub(super) fn apply_locale(session: &mut EdgeSession, document: &serde_json::Val
         // A bool cannot fail to parse, so unlike its siblings this one applies unconditionally —
         // which is also what makes turning the posture back off a publish rather than a release.
         session.prices_include_tax = locale.prices_include_tax;
+        // How tax rounds is the law of the country this binary serves, not a setting (ADR-0226).
+        session.tax_rounding_scope = crate::countries::registry().tax_rounding_scope();
         // Likewise: both have a `serde(default)` that *is* the previous behaviour, so applying them
         // unconditionally is what lets a store turn cash rounding off, or clear its quick-cash keys,
         // by publishing — rather than by waiting for a build (ADR-0105). A non-positive increment is

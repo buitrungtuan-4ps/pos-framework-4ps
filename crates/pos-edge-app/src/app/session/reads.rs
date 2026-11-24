@@ -104,6 +104,7 @@ impl EdgeSession {
             cash_count_denominations: Vec::new(),
             // Half-up until the `locale` node says otherwise, as every bill was before the setting.
             tax_rounding: TaxRounding::HalfUp,
+            tax_rounding_scope: pos_proto::locale::TaxRoundingScope::PerClass,
             // A year, matching `LocalePack::default` — chosen rather than left unbounded, because
             // "forever until somebody publishes a locale" is the wrong default for personal data.
             retention_days: 365,

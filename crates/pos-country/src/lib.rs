@@ -120,6 +120,13 @@ pub trait CountryModule: Send + Sync + 'static {
         Vec::new()
     }
 
+    /// Whether this country's law rounds a bill's tax once per class (the default, ADR-0028) or
+    /// once per rate, as Japan's qualified invoice does
+    /// ([ADR-0226](../../../docs/adr/0226-a-japanese-receipt-is-a-qualified-invoice.md) decision 1).
+    fn tax_rounding_scope(&self) -> pos_proto::locale::TaxRoundingScope {
+        pos_proto::locale::TaxRoundingScope::PerClass
+    }
+
     /// The sections of a receipt a template may leave out that this country's law requires all the
     /// same ([ADR-0207](../../../docs/adr/0207-a-receipt-is-a-structured-template-per-store-and-channel.md)
     /// decision 3): the cloud refuses a `receipt` template that turns one of these off.
@@ -193,6 +200,19 @@ impl CountryRegistry {
     /// Every country in this build, in the order the features were listed.
     pub fn modules(&self) -> impl Iterator<Item = &dyn CountryModule> {
         self.modules.iter().map(Box::as_ref)
+    }
+
+    /// The tax rounding scope of the country this build serves: per rate where any module says so
+    /// (a cell serves one country), per class otherwise (ADR-0226).
+    #[must_use]
+    pub fn tax_rounding_scope(&self) -> pos_proto::locale::TaxRoundingScope {
+        if self.modules().any(|module| {
+            module.tax_rounding_scope() == pos_proto::locale::TaxRoundingScope::PerRate
+        }) {
+            pos_proto::locale::TaxRoundingScope::PerRate
+        } else {
+            pos_proto::locale::TaxRoundingScope::PerClass
+        }
     }
 
     /// Whether any country in this build forbids `setting_key` to be `value`

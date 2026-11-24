@@ -725,6 +725,7 @@ pub fn sample_bill(
         sales_channel: channel,
         cash_rounding_increment: facts.cash_rounding_increment,
         tax_rounding: facts.locale_settings.tax_rounding().rounding(),
+        tax_rounding_scope: pos_proto::locale::TaxRoundingScope::PerClass,
         prices_include_tax: facts.prices_include_tax,
         fee_rules: &fee_rules,
         // A sample bill is charged every fee: a waive is an act on one real bill.
