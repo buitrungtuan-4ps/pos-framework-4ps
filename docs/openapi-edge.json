@@ -3931,7 +3931,7 @@
             "description": "Refused: `outcome` is `wrong` or `locked_out`, with `remaining` attempts or `locked_until_ms`. A wrong code and a wrong PIN answer the same; an unpaired device also gets 401"
           },
           "503": {
-            "description": "The sign-in could not be recorded"
+            "description": "The sign-in could not be recorded, or, on a store with a kiosk terminal, whether this device is a kiosk cannot be read"
           }
         },
         "security": [
