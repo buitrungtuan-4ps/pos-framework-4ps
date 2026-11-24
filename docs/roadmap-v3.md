@@ -360,8 +360,8 @@ patch to the acceptance suite. Q1 asserts the reachable truth and records the ga
 > This section and **A·PF** below carried no status markers at all until 2026-09-04, which is why > "how much is left" was not answerable from this document. Two of the five here were already > delivered under other headings. The rest, and all of A·PF, are open.
 
 - **O1** — Alert delivery webhook. **Done** — the `AlertChannel` abstraction with a webhook channel over the existing TLS sender, plus the evaluator loop that fills it.
-- **O2** — TCP `:9100` printer transport + a "test print" button.
-- **O3** — Store-side WAL-shipping backup.
+- **O2** — TCP `:9100` printer transport + a "test print" button. **Done**, found so by roadmap-v4 phase 9's triage: the transport is `crates/adapters/printer-escpos/src/tcp.rs`, and the test page is `POST /api/printers/{id}/test`, which the till's printer list calls.
+- **O3** — Store-side WAL-shipping backup. *Half answered:* [ADR-0124](adr/0124-a-store-that-can-be-restored.md) ships a periodic sealed whole-database archive off the box, with a recovery point of one interval. Continuous WAL shipping waits on the A4 spike's verdict and is deferred past the pilot by roadmap-v4 phase 9.
 - **O4** — JetStream capacity probe. **Done** ([ADR-0087](adr/0087-edge-relay-and-event-publish.md) Amendment 2) — the ceiling is the cloud's `cloud.toml` `[nats] max_messages`/`max_bytes`, reconciled against the live stream on each alert pass, because `ensure_stream` is a create-or-get: until now the ceiling in force was whatever the *first* box that ever connected asked for, and no edge release could move it. The reading that pass takes is what finally gives `AlertKind::JetstreamCapacity` a producer. The edge constants stay, demoted to a first-boot floor.
 - **O5** — In-code auth for `/internal/*` (a shared-secret header; defence in depth over the network boundary). **Done** ([ADR-0097](adr/0097-internal-route-authentication.md)) — and it recorded what a fleet-wide secret cannot buy: attributability. The two routes a *store* called moved to `/sync` in R5 instead, where the tenant comes from the scoped key rather than from the body.
 
