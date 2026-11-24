@@ -115,11 +115,27 @@ impl CountryModule for Vietnam {
         vec![ReceiptSection::Modifiers]
     }
 
+    /// The drawer's reason threshold, and an e-invoice issued with each settle: the owner chose the
+    /// schedule and this seed on 2026-11-24 (ADR-0229 decision 1); the law behind it is to be
+    /// confirmed (`CONFORMANCE.md` R18).
     fn setting_defaults(&self) -> Vec<SettingDefault> {
-        vec![SettingDefault {
-            setting_key: "shift.variance_reason_minor",
-            value: SettingDefaultValue::Int(VARIANCE_REASON),
-        }]
+        vec![
+            SettingDefault {
+                setting_key: "shift.variance_reason_minor",
+                value: SettingDefaultValue::Int(VARIANCE_REASON),
+            },
+            SettingDefault {
+                setting_key: "einvoice.issue_moment",
+                value: SettingDefaultValue::Choice("EINVOICE_ISSUE_MOMENT_IMMEDIATE"),
+            },
+        ]
+    }
+
+    /// An e-invoice is issued by the end of the sale's calendar day, whatever the schedule
+    /// (ADR-0229 decision 2): the conservative reading of when a sale's invoice is due, to be
+    /// confirmed by legal (`CONFORMANCE.md` R24).
+    fn einvoice_issue_limit(&self) -> Option<pos_proto::einvoice::IssueLimit> {
+        Some(einvoice::ISSUE_LIMIT)
     }
 
     /// A weight typed by hand is refused (ADR-0223 decision 3): only a scale or a scale's label
@@ -214,10 +230,32 @@ mod tests {
         // checked for every compiled-in pack in `pos-cloud`, which holds them all.
         assert_eq!(
             Vietnam.setting_defaults(),
-            vec![pos_country::SettingDefault {
-                setting_key: "shift.variance_reason_minor",
-                value: pos_country::SettingDefaultValue::Int(20_000),
-            }]
+            vec![
+                pos_country::SettingDefault {
+                    setting_key: "shift.variance_reason_minor",
+                    value: pos_country::SettingDefaultValue::Int(20_000),
+                },
+                pos_country::SettingDefault {
+                    setting_key: "einvoice.issue_moment",
+                    value: pos_country::SettingDefaultValue::Choice(
+                        "EINVOICE_ISSUE_MOMENT_IMMEDIATE"
+                    ),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_new_store_issues_an_e_invoice_for_every_sale() {
+        assert!(
+            Vietnam
+                .setting_defaults()
+                .contains(&pos_country::SettingDefault {
+                    setting_key: "einvoice.issue_moment",
+                    value: pos_country::SettingDefaultValue::Choice(
+                        "EINVOICE_ISSUE_MOMENT_IMMEDIATE"
+                    ),
+                })
         );
     }
 

@@ -38,6 +38,7 @@ pub mod counter;
 pub mod determinism;
 pub mod devices;
 pub mod display;
+pub mod einvoice;
 pub mod enums;
 pub mod envelope;
 pub mod erasures;

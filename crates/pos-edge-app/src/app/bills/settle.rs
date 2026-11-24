@@ -20,6 +20,7 @@ use pos_proto::ids::{BillId, DeviceId, EmployeeId, PaymentId, ShiftId, SubjectId
 use pos_proto::money::Money;
 use pos_proto::{BillState, Open, PaymentMethod, PaymentOutcome, TableState};
 
+use super::invoice::{InvoicePlan, SettleInvoice};
 use crate::app::records::tax_records;
 use crate::app::{
     AppError, Approval, BillView, BuyerDetails, Edge, OrderSnapshot, TillScope, fee_records,
@@ -130,6 +131,13 @@ impl<S: EventStore> Edge<S> {
         let (drawer, shift, overrider) =
             self.settle_drawer(&mut ctx, scope, &payments, approval)?;
         let proved = self.prove_settle(&ctx, bill_id, &payments)?;
+        // The e-invoice's symbol, before any number is taken (ADR-0225), and the lock that keeps
+        // its sequence gapless until the settle has folded.
+        let plan = self.invoice_plan(buyer.is_some())?;
+        let _invoicing = match plan {
+            InvoicePlan::Now(_) => Some(self.invoicing.lock().await),
+            InvoicePlan::None | InvoicePlan::Later => None,
+        };
 
         // Allocate the gapless receipt number for this bill, then append the events that record it.
         let receipt_number = self
@@ -167,9 +175,26 @@ impl<S: EventStore> Edge<S> {
             &mut envelopes,
             &mut messages,
         )?;
+        let invoice = self.settle_invoice(&ctx, plan, &settled)?;
+        if let Some(record) = &invoice {
+            let (envelope, message) = match record {
+                SettleInvoice::Issued(issued) => self.prepare_on(&ctx, issued, shift)?,
+                SettleInvoice::Scheduled(scheduled) => self.prepare_on(&ctx, scheduled, shift)?,
+            };
+            envelopes.push(envelope);
+            messages.push(message);
+        }
         let buyer = settled.buyer_subject_id.zip(buyer);
         self.commit_settle(&ctx, &envelopes, &messages, buyer)
             .await?;
+        match &invoice {
+            Some(SettleInvoice::Issued(issued)) => self.lock_projection().invoices.fold(issued),
+            Some(SettleInvoice::Scheduled(scheduled)) => self
+                .lock_projection()
+                .invoices
+                .fold_scheduled(scheduled, ctx.actor),
+            None => {}
+        }
 
         let _fired = self.apply_fires(&ctx, fires);
         let table_state = self.fold_settled(&settled, (shift, &payments), &ctx, &proved)?;

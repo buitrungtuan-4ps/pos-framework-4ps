@@ -94,10 +94,10 @@ fn a_new_year_needs_a_new_symbol() {
 }
 
 #[test]
-fn the_recommended_moment_issues_for_every_sale() {
-    assert_eq!(RECOMMENDED_ISSUE_MOMENT, IssueMoment::EverySale);
-    assert!(IssueMoment::EverySale.issues(false));
-    assert!(IssueMoment::EverySale.issues(true));
+fn the_recommended_moment_issues_with_the_settle() {
+    assert_eq!(RECOMMENDED_ISSUE_MOMENT, IssueMoment::Immediate);
+    assert!(IssueMoment::Immediate.issues(false));
+    assert!(IssueMoment::Immediate.issues(true));
     assert!(!IssueMoment::OnRequest.issues(false));
     assert!(IssueMoment::OnRequest.issues(true));
     assert!(!IssueMoment::Off.issues(true));

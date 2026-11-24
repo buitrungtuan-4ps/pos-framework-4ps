@@ -18,6 +18,7 @@ use super::{
 
 use crate::origins::Origins;
 use pos_proto::billing::PublishedBilling;
+use pos_proto::einvoice::PublishedEInvoice;
 use pos_proto::kiosk::PublishedKiosk;
 use pos_proto::receipt::PublishedReceipt;
 use pos_proto::scan::PublishedScan;
@@ -426,7 +427,7 @@ pub(super) fn apply_bill_rules(session: &mut EdgeSession, document: &serde_json:
     }
 }
 
-/// The `tender_keys`, `counter`, `scan`, `weighing`, `kiosk`, `tabs` and `backup` nodes of settings
+/// The `tender_keys`, `counter`, `scan`, `weighing`, `einvoice`, `kiosk`, `tabs` and `backup` nodes of settings
 /// (ADR-0160).
 pub(super) fn apply_till_settings(session: &mut EdgeSession, document: &serde_json::Value) {
     // The `tender_keys` node (ADR-0160 decision 2): the keys the pay screen offers. A node of
@@ -476,6 +477,16 @@ pub(super) fn apply_till_settings(session: &mut EdgeSession, document: &serde_js
         Some(value) => {
             if let Ok(weighing) = serde_json::from_value::<PublishedWeighing>(value.clone()) {
                 session.weighing = weighing;
+            }
+        }
+    }
+    // The `einvoice` node (ADR-0225): when a settle issues an e-invoice and its symbol, read as
+    // `scan` is.
+    match document.get(PublishedEInvoice::NODE) {
+        None => session.einvoice = PublishedEInvoice::default(),
+        Some(value) => {
+            if let Ok(einvoice) = serde_json::from_value::<PublishedEInvoice>(value.clone()) {
+                session.einvoice = einvoice;
             }
         }
     }

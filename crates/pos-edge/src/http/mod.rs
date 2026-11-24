@@ -636,6 +636,7 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
         AppError::NotTheShiftHandedOver => "NOT_THE_SHIFT_HANDED_OVER",
         AppError::ModifierSelectionInvalid => "MODIFIER_SELECTION_INVALID",
         AppError::ChannelNotAccepted => "CHANNEL_NOT_ACCEPTED",
+        AppError::EInvoiceSymbolMissing => "E_INVOICE_SYMBOL_MISSING",
         AppError::ItemNotSellable => "ITEM_NOT_SELLABLE",
         AppError::UnknownCode => "UNKNOWN_CODE",
         AppError::PriceLabelNotOpenPrice => "PRICE_LABEL_NOT_OPEN_PRICE",
@@ -721,6 +722,7 @@ pub(crate) fn error_response(error: &AppError) -> Response {
         | AppError::NotTheShiftHandedOver
         | AppError::ModifierSelectionInvalid
         | AppError::ChannelNotAccepted
+        | AppError::EInvoiceSymbolMissing
         | AppError::ItemNotSellable
         | AppError::UnknownCode
         | AppError::PriceLabelNotOpenPrice

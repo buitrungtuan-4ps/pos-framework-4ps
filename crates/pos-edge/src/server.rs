@@ -1348,6 +1348,8 @@ fn spawn_retention_sweep<S>(edge: &Arc<Edge<S>>, shutdown_rx: &tokio::sync::watc
 where
     S: EventStore + SubjectStore + Send + Sync + 'static,
 {
+    // The store's other duty on its own clock, online or not: its deferred e-invoices (ADR-0229).
+    crate::invoice_loop::spawn_invoice_issuing(edge, shutdown_rx);
     let edge = Arc::clone(edge);
     let mut shutdown = shutdown_rx.clone();
     tokio::spawn(async move {

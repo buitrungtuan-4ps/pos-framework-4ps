@@ -588,6 +588,7 @@ fn read_back(node: &str, field: &str, value: Option<&Value>) -> Option<Value> {
         PublishedReceipt::NODE => read_back_receipt(field, document),
         PublishedBilling::NODE => read_back_billing(field, document),
         PublishedBackup::NODE => read_back_backup(field, document),
+        crate::einvoice::PublishedEInvoice::NODE => read_back_einvoice(field, document),
         _ => None,
     }
 }
@@ -600,6 +601,17 @@ fn read_back_billing(field: &str, document: Value) -> Option<Value> {
         "check_before_payment" => Some(json!(billing.check_before_payment())),
         "part_payments" => Some(json!(billing.part_payments())),
         "price_override_max_multiple" => Some(json!(billing.price_override_max_multiple())),
+        _ => None,
+    }
+}
+
+/// [`read_back`] for the `einvoice` node (ADR-0229): each field through its accessor.
+fn read_back_einvoice(field: &str, document: Value) -> Option<Value> {
+    let einvoice: crate::einvoice::PublishedEInvoice = serde_json::from_value(document).ok()?;
+    match field {
+        "issue_moment" => Some(json!(einvoice.issue_moment().as_wire())),
+        "delay_minutes" => Some(json!(einvoice.delay_minutes())),
+        "batch_minute" => Some(json!(einvoice.batch_minute())),
         _ => None,
     }
 }
