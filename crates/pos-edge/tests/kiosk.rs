@@ -573,6 +573,41 @@ async fn a_kiosk_works_its_own_order_and_is_refused_everything_else() {
     assert_eq!(status, StatusCode::OK);
 }
 
+/// A kiosk opens a plain eat-in or takeaway order, never a tab or another channel, which would
+/// change the order's tax (phase 9 security review, finding K3); a person on a till still may.
+#[tokio::test]
+async fn a_kiosk_opens_only_an_eat_in_or_takeaway_order() {
+    let store = store().await;
+    let (status, _, _) = send(&store.app, &store.kiosk, "POST", "/api/session/kiosk", None).await;
+    assert_eq!(status, StatusCode::OK);
+    for body in [
+        json!({ "tab": true }),
+        json!({ "channel": "SALES_CHANNEL_DELIVERY" }),
+    ] {
+        let (status, reason, _) = send(
+            &store.app,
+            &store.kiosk,
+            "POST",
+            "/api/orders",
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(reason.as_deref(), Some("KIOSK_NOT_ALLOWED"), "{body}");
+    }
+    for channel in ["SALES_CHANNEL_DINE_IN", "SALES_CHANNEL_TAKEAWAY"] {
+        let (status, _, opened) = send(
+            &store.app,
+            &store.kiosk,
+            "POST",
+            "/api/orders",
+            Some(json!({ "channel": channel })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{opened}");
+    }
+}
+
 /// A kiosk never opens the store's event stream, which carries every till's orders (ADR-0224
 /// decision 4); an ordinary till's device is not refused for it.
 #[tokio::test]

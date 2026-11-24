@@ -111,7 +111,10 @@ impl Start {
         (status = 101, description = "Upgraded: the device receives the store's live frames, resumed after the named \
                                       position where the fan-out can"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
-        (status = 403, description = "The request comes from an origin the edge does not permit"),
+        (status = 403, description = "The request comes from an origin the edge does not permit, or the device \
+                                      is bound to a kiosk terminal, which never opens the store's stream"),
+        (status = 503, description = "The store has a kiosk terminal and this device's binding cannot be read, \
+                                      so whether it is a kiosk is unknown"),
     ),
     tag = "status",
 ))]

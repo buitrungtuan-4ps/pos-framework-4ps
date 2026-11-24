@@ -2165,7 +2165,7 @@
             "description": "This device is not paired: no token, or one the edge does not accept"
           },
           "403": {
-            "description": "Nobody is signed in on this device, or the sign-in lapsed; or this box was superseded by a replacement that holds the store's lease (`SUPERSEDED`)"
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; or this box was superseded by a replacement that holds the store's lease (`SUPERSEDED`); or a kiosk asked for a tab or for a channel other than eat-in or takeaway (`KIOSK_NOT_ALLOWED`)"
           },
           "409": {
             "description": "Refused: the person lacks the permission, the store does not keep tabs (`CAPABILITY_DISABLED`), or the record is not in a state the command applies to. `pos-error-reason` names which"
@@ -5314,7 +5314,10 @@
             "description": "This device is not paired: no token, or one the edge does not accept"
           },
           "403": {
-            "description": "The request comes from an origin the edge does not permit"
+            "description": "The request comes from an origin the edge does not permit, or the device is bound to a kiosk terminal, which never opens the store's stream"
+          },
+          "503": {
+            "description": "The store has a kiosk terminal and this device's binding cannot be read, so whether it is a kiosk is unknown"
           }
         },
         "security": [
