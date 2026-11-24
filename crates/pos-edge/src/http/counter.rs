@@ -262,7 +262,8 @@ struct OpenedOrderResponse {
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
         (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \
                                       was superseded by a replacement that holds the store's lease \
-                                      (`SUPERSEDED`)"),
+                                      (`SUPERSEDED`); or a kiosk asked for a tab or for a channel other than \
+                                      eat-in or takeaway (`KIOSK_NOT_ALLOWED`)"),
         (status = 409, description = "Refused: the person lacks the permission, the store does not keep tabs \
                                       (`CAPABILITY_DISABLED`), or the record is not in a state the command \
                                       applies to. `pos-error-reason` names which"),
@@ -294,6 +295,17 @@ where
         // A token this build does not know: refused, never guessed, since the channel sets the tax.
         Some(Err(_)) => return bad_request("channel is not a sales channel this edge knows"),
     };
+    // A kiosk opens a plain eat-in or takeaway order (ADR-0224 decision 4): never a tab, and never
+    // another channel, which would change the order's tax (phase 9 security review, finding K3).
+    if deps.edge.is_kiosk(actor.employee_id)
+        && (request.tab || !matches!(channel, SalesChannel::DineIn | SalesChannel::Takeaway))
+    {
+        return super::refusal(
+            StatusCode::FORBIDDEN,
+            "KIOSK_NOT_ALLOWED",
+            "a kiosk opens an eat-in or takeaway order only".to_owned(),
+        );
+    }
     let opened = if request.tab {
         deps.edge.open_tab(actor, channel, &deps.queue).await
     } else {
