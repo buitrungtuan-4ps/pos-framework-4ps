@@ -7,7 +7,7 @@ how far the criterion is met, the decisions taken, and what is still open. Like
 [templates-2026-11-phase-6-exit.md](templates-2026-11-phase-6-exit.md), it records one moment and is
 not regenerated.
 
-**Measured at** `78044e04` on `main`, with the open pull requests named below applied.
+**Measured at** `b0478ecb` on `main`.
 
 ## The criterion
 
