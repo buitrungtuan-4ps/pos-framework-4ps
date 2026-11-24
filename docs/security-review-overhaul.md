@@ -27,7 +27,7 @@ explicit, or a defence-in-depth gap. *Info*: no finding; the control is recorded
 
 **No Critical or High finding.** Each new surface fails closed on its credential. Each bounds what
 an untrusted caller may send. None puts personal data in an event or a log. The findings are two
-Medium and twelve Low. Each Medium finding needs a person to act, or waits for the hardware of
+Medium and thirteen Low. Each Medium finding needs a person to act, or waits for the hardware of
 phase 8:
 
 | # | Surface | Finding | Severity | Status |
@@ -35,8 +35,8 @@ phase 8:
 | G1 | Guest page | The guest page is served on the console's origin | Medium | Tracked: a deployment choice before the pilot (§2) |
 | K2 | Kiosk | A kiosk's device token lives in a browser that members of the public touch | Medium | Tracked: hardware gate **P13**, phase 8's lockdown (§3) |
 
-The Low findings are G2 to G6, K1, K3, V1 to V3, N1 and T1, listed under each surface below. G5, K1
-and K3 are fixed in phase 9. The others are tracked here.
+The Low findings are G2 to G6, K1, K3, K4, V1 to V3, N1 and T1, listed under each surface below. G4, G5, K1,
+K3 and K4 are fixed in phase 9. The others are tracked here.
 
 One dependency finding, **D1**, came from CI's `cargo deny` gate during the review and is fixed (§11).
 
@@ -76,9 +76,9 @@ compiled into `pos_cloud` (`crates/pos-cloud/src/qr_http/page.rs`, `guest/`). Th
 | G1 | **The guest page shares the console's origin.** `/qr/` and `/admin/*` are served by one `pos_cloud` behind one host. The console's session cookie is `HttpOnly`, `Secure` and `SameSite=Strict`, so a script cannot read it. But a script running on the same origin can still *send* it: any script-injection bug in the guest page would be a console session for any admin who opens a guest link in the same browser. The strict CSP and the no-markup test make such a bug unlikely, which is why this is Medium and not High. It is one layer, though, on a page any stranger can open | Medium | **Tracked.** Before the pilot, serve `/qr/` and `/v1/qr/*` on a host of their own (for example `order.<domain>`) and refuse `/qr/` on the console's host. That is a Caddy site block and a printed-URL choice, so it is a deployment decision for the owner, not code |
 | G2 | **A table token never expires, and one secret signs them all.** A leaked photo of a table's code lets anyone, anywhere, send orders to that table within the guardrails, until the secret changes and every code is reprinted. [ADR-0057](adr/0057-qr-ordering.md) accepted this. It is bounded by staff confirmation, which is on by default, and by the per-table rate limit and business hours. A store that turns staff confirmation off sends such an order straight to the kitchen | Low | Tracked: a per-store secret with a key id, so one store's codes can be rotated alone. Keep staff confirmation on for the pilot |
 | G3 | **The menu's limit is the order limit.** Menu reads use `per_table_limit` (by default 10 a minute) on their own counter. A table of guests who each open and reload the page can be refused a menu. Anyone holding the code can also use up one table's menu and order budget, which locks out only that table | Low | Tracked: a menu read limit of its own, as a published setting |
-| G4 | **The idempotency key does not include the table.** Intake is idempotent on `(tenant, store, channel, external_reference)` (`crates/pos-cloud/src/relay.rs`). A guest who sent another table's reference would get that order's id and total back, and their own lines would be dropped. The page mints the reference with `crypto.randomUUID()`, so the reference cannot be guessed | Low | Tracked: put the token's table into the QR intake's reference |
+| G4 | **The idempotency key does not include the table.** Intake is idempotent on `(tenant, store, channel, external_reference)` (`crates/pos-cloud/src/relay.rs`). A guest who sent another table's reference would get that order's id and total back, and their own lines would be dropped. The page mints the reference with `crypto.randomUUID()`, so the reference cannot be guessed | Low | **Fixed in phase 9** (#1352): `POST /v1/qr/orders` puts the token's table and a `:` in front of the guest's reference |
 | G5 | **The per-table counters never forgot a table.** `TableRateLimiter` kept an empty entry for every table that had ever been counted. Only a validly signed token reaches it, so the map's size was bounded by the number of printed tables, not by an attacker. Still, `AGENTS.md` asks every in-memory structure for an explicit limit | Low | **Fixed in phase 9** (#1343): an entry is dropped once its window is empty, and the map has a stated ceiling |
-| G6 | **The menu read carries the token in its query string,** so a reverse proxy's access log records it. `pos_cloud`'s own trace records only the path. The token is printed on the table, so this discloses nothing that is not already on display | Low | Tracked: turn off query logging on the proxy, or move the token to a header in a later API version |
+| G6 | **The menu read carries the token in its query string,** so a reverse proxy's access log records it. `pos_cloud`'s own trace records only the path. The token is printed on the table, so this discloses nothing that is not already on display | Low | Tracked, and narrower than it reads: the shipped Caddy configuration (`deploy/Caddyfile.d/`) writes no access log, so this applies only to an operator's own proxy. Turn off query logging there, or move the token to a header in a later API version |
 
 ## 3. The kiosk session, its scope and `/ws`
 
@@ -110,7 +110,8 @@ decision 4.
 |---|---|---|---|
 | K1 | **`/ws` failed open when the binding could not be read.** The sign-in refuses a device whose binding read fails. `/ws`, though, treated a read failure as "not a kiosk" and opened the whole stream | Low (a read failure on the store's own database, from a device already paired) | **Fixed in phase 9** (#1347): `/ws` answers `503` when the binding cannot be read, on a store that has a kiosk terminal |
 | K2 | **The kiosk's device token lives in a public browser.** Anyone who can open the kiosk browser's developer tools or storage can carry the token to another machine on the store's network. With it they reach the kiosk's own scope, `GET /api/pair/devices` (the paired devices' names), and code-and-PIN sign-in attempts, which the per-person lockout limits. They do not reach money, other orders or `/ws` | Medium | Tracked: phase 8's kiosk lockdown on Windows ([ADR-0201](adr/0201-the-till-runs-on-every-device-class.md)), proved on the NUC by hardware gate **P13**. Until then, a kiosk that has been tampered with is unpaired from the console |
-| K3 | **A kiosk may open an order on any channel, or as a tab.** `POST /api/orders` is on the kiosk's list with its whole body: `channel` and `tab`. The till sends only the store's accepted channels. A tampered kiosk could open a tab, or an order on another channel, which changes that order's tax. It still cannot take payment, so a person sees the order | Low | **Fixed in phase 9**: a kiosk's `POST /api/orders` is refused `403 KIOSK_NOT_ALLOWED` for a tab or for a channel other than eat-in or takeaway |
+| K3 | **A kiosk may open an order on any channel, or as a tab.** `POST /api/orders` is on the kiosk's list with its whole body: `channel` and `tab`. The till sends only the store's accepted channels. A tampered kiosk could open a tab, or an order on another channel, which changes that order's tax. It still cannot take payment, so a person sees the order | Low | **Fixed in phase 9** (#1351): a kiosk's `POST /api/orders` is refused `403 KIOSK_NOT_ALLOWED` for a tab or for a channel other than eat-in or takeaway |
+| K4 | **Leaving a kiosk lets a person through when the binding cannot be read.** A person's PIN sign-in on a kiosk asks whether the device is a kiosk, to require `admin.kiosk.exit`. If the binding read fails, the sign-in goes on as on an ordinary till. Only a person with a valid PIN and an unexpired lockout budget gets this far, and only while the store's own database is failing | Low | **Fixed in phase 9** (#1353): the sign-in is refused `503` on a store that has a kiosk terminal, as `/ws` is since K1 |
 
 ## 4. The cloud gateway (ADR-0198)
 
@@ -158,7 +159,7 @@ and `POST /v1/orders` (`orders.rs`). [ADR-0215](adr/0215-a-delivery-order-names-
 and the answer is one `404` otherwise. The body is at most 64 KiB, and each connection may send 20
 a second. The vendor's signature is checked over the raw body in constant time, before the body is
 parsed. A recipient is kept apart as a subject record under the store's retention, and the order
-carries only its `subject_id`. A refusal logs the connection id and the reason, never the body. On
+carries only its `subject_id`. The store reads the recipient back through `GET /sync/stores/{store_id}/subjects/{subject_id}`, which needs `relay_orders`, binds the credential to the store in the path, and finds a record only under that store (`fetch_for_store`), so one store cannot read another's recipient even though a subject id is derived from the order's key and time. A refusal logs the connection id and the reason, never the body. On
 `/v1/orders` the key's scope is checked, the store is bound to the key's tenant (an unknown store
 and another tenant's store get the same `404`), and each tenant has a budget.
 
