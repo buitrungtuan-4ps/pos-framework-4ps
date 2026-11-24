@@ -20,6 +20,7 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 - [ADR-0227](../adr/0227-an-indian-invoice-is-registered-through-a-port-and-upi-is-confirmed.md) An Indian invoice is registered through the port, UPI is confirmed, GST returns are exported
 - [ADR-0229](../adr/0229-the-e-invoice-issue-moment-is-a-schedule.md) The e-invoice issue moment is a schedule, held to the country's legal limit
 - [ADR-0230](../adr/0230-a-card-is-taken-through-the-terminal-port-and-an-unknown-result-parks-the-bill.md) A card is taken through the terminal port, and an unknown result parks the bill
+- [ADR-0231](../adr/0231-a-phone-keeps-its-till-token-in-a-store-the-owner-chooses.md) A phone keeps its till token in a store the owner chooses
 
 ## Citations of ADRs that do not exist
 
