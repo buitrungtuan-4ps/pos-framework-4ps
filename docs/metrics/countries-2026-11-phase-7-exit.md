@@ -44,7 +44,8 @@ yet met for India.**
 | Vietnam: cloud submission and retry | A bounded submission queue in the cloud with retry, refusal and overdue handling | #1350 |
 | Vietnam: acceptance suite | Cases 8 to 14, and `comp_failure` | #1349 |
 | Vietnam: issued at the settle, on a schedule | The `einvoice` node and its three settings. `fiscal.invoice.issued` and `fiscal.invoice.scheduled`. The edge's issue loop. The legal limit, clamped on the edge and refused by the cloud. Each invoice names its connection. `E_INVOICE_SYMBOL_MISSING`, and `E_INVOICE_ISSUED` now in force. The VN schedule cases | #1355 |
-| Japan: tax once per rate, and the JP/IN carry-overs | `TaxRoundingScope`, and `billing/per_rate.rs`. Japan's case 6 comes to ¥183. Japan's cases 9–11 and India's cases 8–10 | `feat/jp-tax-per-rate-acceptance` (PR pending) |
+| Japan: tax once per rate, and the JP/IN carry-overs | `TaxRoundingScope`, and `billing/per_rate.rs`. Japan's case 6 comes to ¥183. Japan's cases 9–11 and India's cases 8–10 | #1361 |
+| Vietnam: a store's symbol | HQ gives one store its e-invoice symbol with `PUT /admin/config/einvoice-symbol`. The route checks the symbol against the store's country and is audited | #1360 |
 | India: GST facts | Place of supply, GSTR-1 section, HSN and SAC shape, and the UPI intent, in `pos-country-in::gst` | #1359 |
 
 ## Pilot blocker: how a symbol reaches a store
@@ -55,14 +56,14 @@ refuses to settle, with `409 E_INVOICE_SYMBOL_MISSING`, until the cloud writes a
 `einvoice` node (ADR-0225 decision 2). This is the safe behaviour, because an invoice cannot be
 numbered later.
 
-**The cloud does not yet allocate symbols.** Nothing gives each store's lease generation its own
-symbol, and the console cannot write one. Before the pilot, one of these is needed:
+**An HQ route exists; automatic allocation does not.** HQ gives each pilot store its symbol with
+`PUT /admin/config/einvoice-symbol` (#1360). Nothing yet allocates a symbol per lease generation by
+itself, so:
 
-- the cloud allocates a symbol per issuing point and publishes it; or
-- HQ is given a way to write a store's symbol.
+- each pilot store's symbol is set by hand before it trades; and
+- a replacement box needs a new symbol set by hand before it settles.
 
-Until then, a pilot store must be set to `EINVOICE_ISSUE_MOMENT_OFF` and issue no e-invoice.
-**This is a pilot blocker.**
+The console has no screen for this route yet.
 
 ## Decisions taken
 
@@ -134,8 +135,9 @@ Until then, a pilot store must be set to `EINVOICE_ISSUE_MOMENT_OFF` and issue n
   through the shared contract suite and the submission queue. No vendor's sandbox has been called.
 - **The submitter is not wired.** The queue is not yet fed from `fiscal.invoice.issued`, keeps no
   state in PostgreSQL, and raises no overdue alert through `AlertChannel`.
-- **The cloud does not yet allocate symbols.** It does not give each lease generation its own
-  symbol. A store gets its symbol only if one is written on its `einvoice` node.
+- **The cloud does not yet allocate symbols.** HQ writes each store's symbol through `PUT
+  /admin/config/einvoice-symbol` (#1360). Nothing gives each lease generation its own symbol
+  automatically, and the console has no screen for the route.
 - **Not built in the console**: the invoice list, the submission status, and correction by
   adjustment or replacement (`fiscal.invoice.correct`).
 - **Not built in the till**: the buyer form, and the invoice number on the receipt.
