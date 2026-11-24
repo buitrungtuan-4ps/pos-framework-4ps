@@ -1,0 +1,42 @@
+# One store's edge in a container (ADR-0113), as a host runs it: what the host agent will do per
+# store once it exists, written out so an operator can run one store by hand today.
+#
+#   STORE=store-a POS_EDGE_PORT=18787 POS_EDGE_UID=10002 docker compose -p "$STORE" up -d
+#
+# The store's config.toml goes in its volume before the first start (the console's activation
+# writes it on a store PC; a hosted store's is written by `pos-edge claim` run once in the same
+# container, ADR-0148). No secret is in this file or in the image.
+name: pos-edge
+
+services:
+  edge:
+    build:
+      context: .
+    image: ${POS_EDGE_IMAGE:-pos-edge:local}
+    # One uid per store: a compromised edge reads no other store's volume.
+    user: "${POS_EDGE_UID:-10002}:${POS_EDGE_UID:-10002}"
+    # The outcome is the exit code: 10 (a restart wanted) and 11 (stopped undrained) start it again;
+    # 0, a stop asked for, does not.
+    restart: on-failure
+    stop_signal: SIGTERM
+    # The edge drains its outbox before it stops (ADR-0113); give it the time the drain is bounded by.
+    stop_grace_period: 30s
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    # Loopback only: the host's reverse proxy is the one thing that reaches it.
+    ports:
+      - "127.0.0.1:${POS_EDGE_PORT:-18787}:8787"
+    volumes:
+      - state:/var/lib/pos-edge
+    tmpfs:
+      - /tmp
+    mem_limit: 256m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  state:
