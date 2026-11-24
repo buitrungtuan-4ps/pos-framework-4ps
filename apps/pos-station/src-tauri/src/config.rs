@@ -22,6 +22,10 @@ pub(crate) struct Settings {
     /// Whether the till opens full screen. It opens when the app starts, which the installer arranges
     /// at login; on by default, off for a machine that also does other work.
     pub(crate) till_full_screen: bool,
+    /// Whether this machine is a kiosk (ADR-0201 decision 2): the till locked full screen, no way
+    /// to close it, and no Quit in the tray. Off by default; an administrator of the machine turns it
+    /// on for a till nobody should leave.
+    pub(crate) kiosk: bool,
     /// The language the bundled pages last reported (`en`, `vi`), for the tray and notifications.
     pub(crate) language: Option<String>,
 }
@@ -31,6 +35,7 @@ impl Default for Settings {
         Self {
             edge_origin: None,
             till_full_screen: true,
+            kiosk: false,
             language: None,
         }
     }
@@ -79,6 +84,7 @@ mod tests {
         let settings = parse("{}").unwrap();
         assert_eq!(settings, Settings::default());
         assert!(settings.till_full_screen);
+        assert!(!settings.kiosk, "a kiosk is chosen, never the default");
         assert_eq!(settings.edge_origin, None);
     }
 
@@ -87,6 +93,7 @@ mod tests {
         let settings = Settings {
             edge_origin: Some("http://192.168.1.10:8080".to_owned()),
             till_full_screen: false,
+            kiosk: true,
             language: Some("vi".to_owned()),
         };
         let text = serde_json::to_string(&settings).unwrap();
