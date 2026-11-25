@@ -117,6 +117,7 @@ export function Shift() {
   // The float field holds the store's float until the cashier types, and what they typed from then
   // on, an emptied field included. Set back after each act, so the next opening fills it in again.
   const [floatTyped, setFloatTyped] = createSignal(false);
+  const [emptyAsked, setEmptyAsked] = createSignal(false);
   // The float or the count note by note, where the store counts so (ADR-0186): its total is sent.
   const [counted, setCounted] = createSignal(EMPTY_COUNT);
   // A paid in or out (ADR-0165 decision 1): the amount is typed first, then **Paid in** or **Paid
@@ -265,9 +266,15 @@ export function Shift() {
   const drawerReason = (reasonCodeId: string) => void openDrawer(reasonCodeId);
 
   // The taps the step budget counts on this till's own drawer.
+  // A float of nothing where the till has one to start with is asked again rather than recorded
+  // (found in the phase-10 demo): an untouched counter totals 0, and a drawer opened on 0 that holds
+  // its float closes over by the float. The second tap records 0, as the cashier then meant.
   const openShift = () => {
     const value = floatParsed();
-    if (value !== null) acts.open(value.minor, value.breakdown);
+    if (value === null) return;
+    if (value.minor === 0 && floatMinor() > 0 && !emptyAsked()) return setEmptyAsked(true);
+    setEmptyAsked(false);
+    acts.open(value.minor, value.breakdown);
   };
   const countShift = () => {
     const value = parsed();
@@ -588,12 +595,17 @@ export function Shift() {
         id="float"
         label={t("shift.float_label", { currency: storeCurrency() })}
         text={floatText()}
-        onText={typeFloat}
+        onText={(text) => { setEmptyAsked(false); typeFloat(text); }}
         count={counted()}
-        onCount={setCounted}
+        onCount={(count) => { setEmptyAsked(false); setCounted(count); }}
         step="floatKeypad"
         target={floatMinor() > 0 ? money(storeCurrency(), floatMinor()) : undefined}
       />
+      <Show when={emptyAsked()}>
+        <p class="mt-3 rounded-token border border-awaiting px-3 py-2 text-ink" role="alert" data-outcome="float-empty">
+          {t("shift.float_empty", { target: formatAmount(money(storeCurrency(), floatMinor())) })}
+        </p>
+      </Show>
       <button
         type="button"
         class="mt-3 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
@@ -601,7 +613,7 @@ export function Shift() {
         data-step="openShift"
         onClick={() => openShift()}
       >
-        {t("shift.open")}
+        {t(emptyAsked() ? "shift.open_empty" : "shift.open")}
       </button>
     </Show>
 

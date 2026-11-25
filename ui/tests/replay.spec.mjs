@@ -5158,6 +5158,47 @@ test("a till trading in đồng types thousands with one key, and adds a note wi
   }
 });
 
+// A float of nothing where the drawer starts with one is asked again, not recorded (found in the
+// phase-10 demo): an untouched note counter totals 0, and a shift opened on 0 that holds its float
+// closes over by the float. The second tap opens on 0, which the cashier then meant.
+test("opening a shift with nothing counted asks first, and the second tap opens on nothing", async ({ page }) => {
+  const edge = await startEdge("shift-settings");
+  try {
+    await page.route("**/api/locale", async (route) => {
+      const response = await fetchWhole(route);
+      const body = await response.json();
+      const counting = [1_000, 2_000, 5_000, 10_000, 20_000, 50_000, 100_000, 200_000, 500_000];
+      await route.fulfill({ response, json: { ...body, cash_count_denominations: counting } });
+    });
+    const sent = [];
+    page.on("request", (request) => {
+      if (request.method() === "POST" && /\/api\/shifts$/.test(request.url())) sent.push(request.postDataJSON());
+    });
+    await pair(page, edge);
+    await signIn(page, edge);
+    await navigateTo(page, "/shift");
+    await expect(page.locator('[data-outcome="denomination-counter"]')).toBeVisible();
+
+    await page.locator('[data-step="openShift"]').click();
+    await expect(page.locator('[data-outcome="float-empty"]')).toContainText("500,000₫");
+    await expect(page.locator('[data-outcome="shift-open"]')).toHaveCount(0);
+    expect(sent).toHaveLength(0);
+    // Counting clears the question.
+    await page.locator('[data-outcome="denomination-counter"]').getByRole("button", { name: "One more 500,000₫" }).click();
+    await expect(page.locator('[data-outcome="float-empty"]')).toHaveCount(0);
+    await page.locator('[data-outcome="denomination-counter"]').getByRole("button", { name: "One 500,000₫ fewer" }).click();
+
+    await page.locator('[data-step="openShift"]').click();
+    await expect(page.locator('[data-step="openShift"]')).toHaveText("Open with nothing counted");
+    await page.locator('[data-step="openShift"]').click();
+    await expect(page.locator('[data-outcome="shift-open"]')).toBeVisible();
+    expect(sent).toHaveLength(1);
+    expect(sent[0].opening_float.amount_minor).toBe(0);
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A store that counts by note (ADR-0186 decision 3) gets a counter on the float, the count and a drop
 // to the safe: − and + per note, the keypad into the row tapped, a loose amount, and the total,
 // which is what is sent with its rows. The sum is the till's, so it always adds up; the close card
