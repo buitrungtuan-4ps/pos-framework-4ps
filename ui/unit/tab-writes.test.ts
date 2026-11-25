@@ -1,12 +1,13 @@
 // `state/tabs.ts` (ADR-0221, ADR-0196 decision 1): an empty tab closed from the list leaves it at
 // once and comes back where it stood on a refusal; a label shows at once, a cleared one goes, and a
-// refusal puts the old one back. Labels here are fake.
+// refusal puts the old one back. Labels here are fake. A tab opened on the guest's answer sends it.
 
 import { describe, expect, it, vi } from "vitest";
 
 import { ApiError, api } from "../src/api/client";
-import type { Tab } from "../src/api/schemas";
-import { closeEmptyTab, labelTab, type TabList } from "../src/state/tabs";
+import type { OpenedOrder, Tab } from "../src/api/schemas";
+import { walkInOrderChannel } from "../src/state/store";
+import { closeEmptyTab, labelTab, openTab, type TabList } from "../src/state/tabs";
 
 function tabs(entries: readonly Partial<Tab>[]): TabList & { held: () => Tab[] } {
   let held = entries.map((entry, at) => ({ order_id: `o${at}`, tab_number: at + 1, ...entry }) as Tab);
@@ -53,5 +54,30 @@ describe("a tab's label", () => {
     await expect(labelTab(list, "o0", "Fake B", vi.fn())).rejects.toBe(refusal);
     expect(list.held()[0]?.label).toBe("Fake A");
     send.mockRestore();
+  });
+});
+
+describe("a tab opened on the guest's answer", () => {
+  it("sends the channel the cashier chose, and none where the store does not ask", async () => {
+    const send = vi.spyOn(api, "openTab").mockResolvedValue({ order_id: "o9" } as OpenedOrder);
+    await openTab(vi.fn(), "SALES_CHANNEL_DINE_IN");
+    expect(send).toHaveBeenLastCalledWith("SALES_CHANNEL_DINE_IN");
+    expect(walkInOrderChannel("o9")).toBe("SALES_CHANNEL_DINE_IN");
+    await openTab(vi.fn());
+    expect(send).toHaveBeenLastCalledWith(undefined);
+    send.mockRestore();
+  });
+
+  it("puts the channel in the request body only when there is one", async () => {
+    const fetched = vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ order_id: "o9" }), { status: 200, headers: { "content-type": "application/json" } }),
+      ),
+    );
+    await api.openTab("SALES_CHANNEL_DINE_IN");
+    expect(JSON.parse(String(fetched.mock.calls.at(-1)?.[1]?.body))).toEqual({ tab: true, channel: "SALES_CHANNEL_DINE_IN" });
+    await api.openTab();
+    expect(JSON.parse(String(fetched.mock.calls.at(-1)?.[1]?.body))).toEqual({ tab: true });
+    fetched.mockRestore();
   });
 });

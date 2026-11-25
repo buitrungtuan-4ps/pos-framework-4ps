@@ -7,7 +7,7 @@ import { ReadFailed } from "../components/StoreData";
 import { t } from "../i18n";
 import { clockTime } from "../lib/clock-time";
 import { errorMessage } from "../lib/errors";
-import { formatAmount, reasonsFor } from "../state/store";
+import { formatAmount, reasonsFor, walkInAsks } from "../state/store";
 import { createScreenRead } from "../state/screen-read";
 import { closeEmptyTab, labelTab, openTab, tabLabelsEnabled } from "../state/tabs";
 import { RegionsContext, type Regions } from "../../../packages/package-renderer/src/regions";
@@ -115,12 +115,17 @@ export function Tabs() {
     setError(null);
     void write.catch((caught: unknown) => setError(errorMessage(caught)));
   };
-  const open = () => {
+  const openOn = (channel?: string) => {
     setError(null);
-    void openTab(refresh)
+    setAsking(false);
+    void openTab(refresh, channel)
       .then((opened) => navigate(`/order/${opened.order_id}`))
       .catch((caught: unknown) => setError(errorMessage(caught)));
   };
+  // A store that asks each walk-in guest whether they eat in or take away asks a tab's guest too
+  // (ADR-0160 decision 2), as the counter's New order does: the channel sets the price and the tax.
+  const [asking, setAsking] = createSignal(false);
+  const open = () => (walkInAsks() ? setAsking(!asking()) : openOn());
   const saveLabel = (orderId: string) => {
     setLabelling(null);
     act(labelTab(list, orderId, draft(), refresh));
@@ -137,10 +142,20 @@ export function Tabs() {
     tabs_list: () => <>
       <div class="flex items-center justify-between gap-3">
         <p class="text-ink-muted">{t(tabLabelsEnabled() ? "tabs.subtitle_labels" : "tabs.subtitle")}</p>
-        <button type="button" class="min-h-touch rounded-token bg-primary px-4 font-semibold text-primary-ink" data-outcome="tab-open" onClick={open}>
+        <button type="button" class="min-h-touch rounded-token bg-primary px-4 font-semibold text-primary-ink" data-outcome="tab-open" aria-expanded={walkInAsks() ? asking() : undefined} onClick={open}>
           {t("tabs.open")}
         </button>
       </div>
+      <Show when={walkInAsks() && asking()}>
+        <div class="mt-2 grid grid-cols-2 gap-2">
+          <button type="button" class="min-h-money rounded-token border border-primary px-4 text-lg font-semibold text-ink" data-step="tabEatIn" onClick={() => openOn("SALES_CHANNEL_DINE_IN")}>
+            {t("counter.eat_in")}
+          </button>
+          <button type="button" class="min-h-money rounded-token border border-primary px-4 text-lg font-semibold text-ink" data-step="tabTakeAway" onClick={() => openOn("SALES_CHANNEL_TAKEAWAY")}>
+            {t("counter.take_away")}
+          </button>
+        </div>
+      </Show>
       <Show when={error()}>
         {(message) => <p class="mt-3 rounded-token border border-awaiting px-3 py-2 text-ink" role="status">{message()}</p>}
       </Show>

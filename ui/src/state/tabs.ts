@@ -9,6 +9,7 @@ import { createSignal } from "solid-js";
 import { api } from "../api/client";
 import type { MenuResponse, OpenedOrder, Tab } from "../api/schemas";
 import { editWrite } from "./edge-write";
+import { noteOrderChannel } from "./store";
 
 const [tabsOn, setTabsOn] = createSignal(false);
 const [labelsOn, setLabelsOn] = createSignal(false);
@@ -35,9 +36,18 @@ export interface TabList {
     readonly set: (tabs: Tab[]) => void;
 }
 
-/** Opens a tab numbered for the day; answers the order to take its first round on. */
-export function openTab(reread: () => void): Promise<OpenedOrder> {
-    return editWrite("sales.tab.open", { send: () => api.openTab(), reread });
+/**
+ * Opens a tab numbered for the day; answers the order to take its first round on. `channel` is the
+ * guest's answer where the store asks each walk-in whether they eat in or take away (ADR-0160
+ * decision 2): without it the edge opens the store's walk-in channel, which is takeaway under
+ * `WALK_IN_CHANNEL_ASK`, and a tab drunk at the bar would be priced and taxed as takeaway.
+ */
+export async function openTab(reread: () => void, channel?: string): Promise<OpenedOrder> {
+    const opened = await editWrite("sales.tab.open", { send: () => api.openTab(channel), reread });
+    if (channel !== undefined) {
+        noteOrderChannel(opened.order_id, channel);
+    }
+    return opened;
 }
 
 /** Writes `label` on a tab at once, or clears it with an empty one; a refusal puts the old one back. */
