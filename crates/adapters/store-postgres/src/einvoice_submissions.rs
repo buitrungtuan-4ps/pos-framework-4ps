@@ -311,6 +311,34 @@ impl PostgresEInvoiceSubmissions {
     }
 }
 
+impl PostgresEInvoiceSubmissions {
+    /// The corrections recorded against the invoice numbered `number`, oldest first (then by number), at most
+    /// 1,000: what the cloud reads to keep an adjustment from taking the invoice below zero.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn corrections_of(
+        &self,
+        tenant_id: &str,
+        number: &str,
+    ) -> Result<Vec<SubmissionRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let rows = connection
+            .query(
+                &format!(
+                    "SELECT {COLUMNS} FROM einvoice_submissions \
+                     WHERE tenant_id = $1 AND corrects_invoice_number = $2 \
+                     ORDER BY recorded_at_ms, invoice_number LIMIT 1000"
+                ),
+                &[&tenant_id, &number],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(rows.iter().map(from_row).collect())
+    }
+}
+
 impl crate::PostgresStore {
     /// The e-invoice submissions over this pool (ADR-0241, migration 0106). Here rather than in
     /// `store.rs`, which is at its size baseline.

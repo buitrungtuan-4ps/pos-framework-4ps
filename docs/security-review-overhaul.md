@@ -247,7 +247,7 @@ text, never as markup. Only `einvoice.sandbox` serves, so nothing reaches a tax 
 
 | # | Finding | Severity | Status |
 |---|---|---|---|
-| E1 | **A correction of nothing, or a replacement below zero, was accepted**, taking a number from the correction symbol for no change or invoicing a negative sale | Low | **Fixed in phase 10**: refused `400 OUT_OF_RANGE` on `total_minor` (`crates/pos-cloud/tests/cloud/einvoices.rs`) |
+| E1 | **A correction of nothing, or a replacement below zero, was accepted**, taking a number from the correction symbol for no change or invoicing a negative sale | Low | **Fixed in phase 10**: refused `400 OUT_OF_RANGE` on `total_minor` (`crates/pos-cloud/tests/cloud/einvoices.rs`). The phase-10 demo found an adjustment could still take an invoice below zero; that is refused too, counting every earlier correction |
 | E2 | **`POS_DEMO_EINVOICE` scripts the sandbox** to refuse or time out. It reaches only the sandbox, which is the only provider; once a vendor is built the variable must not reach it | Low | Tracked: the vendor adapter's review |
 
 ## 15. The e-invoice symbol and its allocation (ADR-0240)

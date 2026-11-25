@@ -73,6 +73,13 @@ pub trait SubmissionStore: Send + Sync + core::fmt::Debug {
     fn get(&self, tenant: TenantId, invoice_id: Ulid) -> FeedFuture<'_, Option<SubmissionRow>>;
     /// The highest number the tenant recorded under `symbol`.
     fn last_number(&self, tenant: TenantId, symbol: String) -> FeedFuture<'_, Option<String>>;
+    /// The corrections recorded against the invoice numbered `number`, oldest first: by when they were
+    /// recorded, then by number, which a correction symbol gives in order.
+    fn corrections_of(
+        &self,
+        tenant: TenantId,
+        number: String,
+    ) -> FeedFuture<'_, Vec<SubmissionRow>>;
 }
 
 fn text<E: core::fmt::Display>(error: E) -> FeedError {
@@ -147,6 +154,18 @@ impl SubmissionStore for store_postgres::PostgresEInvoiceSubmissions {
     fn last_number(&self, tenant: TenantId, symbol: String) -> FeedFuture<'_, Option<String>> {
         Box::pin(async move {
             Self::last_number(self, &tenant.to_string(), &symbol)
+                .await
+                .map_err(text)
+        })
+    }
+
+    fn corrections_of(
+        &self,
+        tenant: TenantId,
+        number: String,
+    ) -> FeedFuture<'_, Vec<SubmissionRow>> {
+        Box::pin(async move {
+            Self::corrections_of(self, &tenant.to_string(), &number)
                 .await
                 .map_err(text)
         })
@@ -271,6 +290,29 @@ impl SubmissionStore for InMemorySubmissions {
                 .max()
         });
         Box::pin(async move { last })
+    }
+
+    fn corrections_of(
+        &self,
+        tenant: TenantId,
+        number: String,
+    ) -> FeedFuture<'_, Vec<SubmissionRow>> {
+        let tenant = tenant.to_string();
+        let found = self.rows().map(|rows| {
+            let mut found: Vec<SubmissionRow> = rows
+                .values()
+                .filter(|row| {
+                    row.tenant_id == tenant
+                        && row.corrects_invoice_number.as_deref() == Some(number.as_str())
+                })
+                .cloned()
+                .collect();
+            found.sort_by(|a, b| {
+                (a.recorded_at_ms, &a.invoice_number).cmp(&(b.recorded_at_ms, &b.invoice_number))
+            });
+            found
+        });
+        Box::pin(async move { found })
     }
 }
 
