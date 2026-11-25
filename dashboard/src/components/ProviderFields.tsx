@@ -9,18 +9,41 @@
 // A secret is write-only. The input starts empty whatever the connection holds, because the cloud
 // never sends a stored value back; it says only that one is set, and leaving the input blank keeps
 // it. That is why a secret has its own two maps here rather than living in `values`.
+//
+// A text setting may hold more than one line: the demo delivery vendor's item map is one
+// `code=menu item id` per line, up to 64,000 characters. A single-line input turns each line break
+// into nothing, so such a map was saved as one line and refused at every order. A text setting
+// longer than `ONE_LINE_MAX` characters is therefore a multi-line box, which keeps its line breaks.
 
 import { For, Match, Show, Switch } from "solid-js";
 
 import type { SettingValue } from "../api/types";
 import { t, tFromServer } from "../i18n";
-import { CheckboxField, NumberField, SelectField, TextField } from "./ui";
+import { CheckboxField, NumberField, SelectField, TextArea, TextField } from "./ui";
 import type { ProviderField } from "../api/schemas";
+
+/** The longest text setting drawn as one line; a longer one is a multi-line box. */
+export const ONE_LINE_MAX = 256;
+
+/** Whether a text setting may hold more than one line, from the length its schema allows. */
+const multiLine = (field: ProviderField): boolean => (field.max_length ?? 0) > ONE_LINE_MAX;
 
 /** A field's label: its translation if this console ships one, else its key, marked if required. */
 function labelOf(field: ProviderField): string {
   const label = tFromServer(field.label_key, field.key);
   return field.required ? t("integrations.requiredLabel", { label }) : label;
+}
+
+/** A text setting: one line, or a box that keeps line breaks when it may be longer than a line. */
+function TextSetting(props: { field: ProviderField; value: string; onInput: (value: string) => void }) {
+  return (
+    <Show
+      when={multiLine(props.field)}
+      fallback={<TextField label={labelOf(props.field)} value={props.value} onInput={props.onInput} />}
+    >
+      <TextArea label={labelOf(props.field)} value={props.value} rows={6} onInput={props.onInput} />
+    </Show>
+  );
 }
 
 export function ProviderFields(props: {
@@ -51,11 +74,7 @@ export function ProviderFields(props: {
         {(field) => (
           <Switch>
             <Match when={field.kind === "SETTING_KIND_TEXT"}>
-              <TextField
-                label={labelOf(field)}
-                value={text(field.key)}
-                onInput={(value) => setText(field.key, value)}
-              />
+              <TextSetting field={field} value={text(field.key)} onInput={(value) => setText(field.key, value)} />
             </Match>
             <Match when={field.kind === "SETTING_KIND_URL"}>
               <TextField

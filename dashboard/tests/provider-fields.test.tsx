@@ -1,13 +1,14 @@
 // The connection form is the provider's own schema, drawn (ADR-0153): each of the six kinds gets
 // the input it implies, a value leaves as the JSON type the cloud checks it as, and a credential is
 // write-only — the input never holds a stored value, says when one is kept, and offers removal only
-// where the schema does not require one.
+// where the schema does not require one. A text setting longer than one line holds keeps its line
+// breaks, as a delivery vendor's item map needs.
 
 import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { SettingValue } from "../src/api/types";
-import { ProviderFields } from "../src/components/ProviderFields";
+import { ONE_LINE_MAX, ProviderFields } from "../src/components/ProviderFields";
 import type { ProviderField } from "../src/api/schemas";
 
 afterEach(cleanup);
@@ -22,6 +23,14 @@ function field(name: string): HTMLInputElement {
 }
 
 const FIELDS: readonly ProviderField[] = [
+  { key: "merchant_code", label_key: "provider.field.merchant_code", kind: "SETTING_KIND_TEXT", required: false, max_length: 32 },
+  {
+    key: "item_map",
+    label_key: "provider.field.item_map",
+    kind: "SETTING_KIND_TEXT",
+    required: true,
+    max_length: ONE_LINE_MAX + 1,
+  },
   { key: "base_url", label_key: "provider.field.base_url", kind: "SETTING_KIND_URL", required: true },
   {
     key: "timeout_seconds",
@@ -108,6 +117,17 @@ describe("a provider's settings form", () => {
     // Emptying a field removes the setting rather than sending an empty string.
     fireEvent.input(field("API address (required)"), { target: { value: "  " } });
     expect(values.base_url).toBeUndefined();
+  });
+
+  it("draws a text setting longer than one line holds as a box that keeps its line breaks", () => {
+    const { values } = renderFields();
+    // A short text setting stays one line.
+    expect(field("merchant_code").tagName).toBe("INPUT");
+    const map = field("Item map");
+    expect(map.tagName).toBe("TEXTAREA");
+    const typed = "CAESAR=01M88YEMS66TVQ3JFFKPKBNBB9\nSODA=01M88YEN1HAV65B6825MXVHG8F";
+    fireEvent.input(map, { target: { value: typed } });
+    expect(values.item_map).toBe(typed);
   });
 
   it("never shows a stored credential, says one is kept, and offers removal only where it is optional", () => {
