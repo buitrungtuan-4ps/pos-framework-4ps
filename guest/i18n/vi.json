@@ -12,6 +12,7 @@
   "guest.invalid": "Có món trong đơn không nhận được. Vui lòng kiểm tra rồi thử lại.",
   "guest.loading": "Đang tải thực đơn…",
   "guest.menu": "Thực đơn",
+  "guest.menu_empty": "Hiện chưa có món nào gọi được tại bàn. Vui lòng gọi nhân viên.",
   "guest.no_ordering": "Nơi này chưa nhận gọi món tại bàn.",
   "guest.no_table": "Không nhận ra mã bàn này. Vui lòng gọi nhân viên.",
   "guest.offline": "Nhà hàng hiện chưa nhận được đơn từ bàn. Vui lòng gọi nhân viên.",

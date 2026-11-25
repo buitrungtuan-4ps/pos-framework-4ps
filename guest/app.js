@@ -153,7 +153,9 @@
   function render() {
     const items = menu.items.filter((item) => !menu.modifier_groups.some((group) => group.member_menu_item_ids.includes(item.menu_item_id)));
     const languages = el("div", { class: "lang" }, menu.languages.map((language) =>
-      el("button", { text: language, "aria-pressed": String(language === menu.language), onClick: () => load(language) }),
+      // The menu answers in the language asked for, such as `en-US`, and offers bare ones, such as
+      // `en`: the button of the language the menu is in is the pressed one either way.
+      el("button", { text: language, "aria-pressed": String(language === menu.language.split("-")[0] || language === menu.language), onClick: () => load(language) }),
     ));
     const list = items.map((item) => {
       const row = el("div", { class: "item", "aria-disabled": String(!item.available) }, [
@@ -185,10 +187,11 @@
     const currency = menu.items[0]?.unit_price.currency_code;
     const send = el("button", { class: "primary", text: sending ? t("guest.sending") : t("guest.send"), onClick: submit });
     send.disabled = sending || cart.length === 0;
-    show(
+    // `null` stands for a part not shown, and is left out: `replaceChildren` would draw it as text.
+    show(...[
       languages,
       el("h1", { text: t("guest.menu") }),
-      ...list,
+      ...(list.length ? list : [el("p", { class: "muted", text: t("guest.menu_empty") })]),
       el("h2", { text: t("guest.cart") }),
       ...(lines.length ? lines : [el("p", { class: "muted", text: t("guest.cart_empty") })]),
       cart.length >= MAX_LINES ? el("p", { class: "muted", text: t("guest.cart_full") }) : null,
@@ -197,7 +200,7 @@
         el("span", { text: currency ? `${t("guest.estimated_total")}: ${price({ currency_code: currency, amount_minor: total })}` : "" }),
         send,
       ])]),
-    );
+    ].filter((node) => node !== null));
   }
 
   const REFUSALS = {
