@@ -8,20 +8,20 @@
 //! falls due, written as `fiscal.invoice.issued`, and submitted later by the cloud.
 
 use pos_core::business_date::{CutoffHour, derive_business_date};
-use pos_core::decision::DecisionCtx;
+use pos_core::decision::{Actor, DecisionCtx};
 use pos_core::einvoice::{IssueSchedule, due_time};
 use pos_ports::event_store::EventStore;
 use pos_proto::ClockSource;
 use pos_proto::einvoice::{EInvoiceKind, FiscalInvoice, InvoiceSchedule, InvoiceSymbol};
 use pos_proto::events::{BillingBillSettled, FiscalInvoiceIssued, FiscalInvoiceScheduled};
-use pos_proto::ids::{BillId, SubjectId};
+use pos_proto::ids::{BillId, EventId, SubjectId};
 use pos_proto::integrations::IntegrationFamily;
 use pos_proto::money::Money;
 use pos_proto::time::{CalendarDate, Timestamp};
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::Open;
 
-use crate::app::{AppError, Edge};
+use crate::app::{AppError, Edge, IssuedInvoiceRef};
 
 /// How many due invoices one tick issues, so a long queue never holds the lock for long.
 const ISSUED_PER_TICK: usize = 100;
@@ -197,12 +197,36 @@ impl<S: EventStore> Edge<S> {
             let issued =
                 self.issued_invoice(&ctx, symbol, (bill_id, total, waiting.buyer_subject_id))?;
             let (envelope, message) = self.prepare_on(&ctx, &issued, None)?;
+            let invoice_id = envelope.event_id;
             self.append_and_publish(vec![envelope], vec![message])
                 .await?;
-            self.lock_projection().invoices.fold(&issued);
+            self.lock_projection().invoices.fold(&issued, invoice_id);
             issued_count += 1;
         }
         Ok(issued_count)
+    }
+}
+
+impl<S: EventStore> Edge<S> {
+    /// Folds the invoice a settle committed, recorded by the event `invoice_id`, and answers the
+    /// number and lookup code of one issued there and then (ADR-0242 decisions 1 to 3).
+    pub(in crate::app) fn fold_settle_invoice(
+        &self,
+        record: &SettleInvoice,
+        invoice_id: EventId,
+        settled_by: Actor,
+    ) -> Option<IssuedInvoiceRef> {
+        let mut projection = self.lock_projection();
+        match record {
+            SettleInvoice::Issued(issued) => {
+                projection.invoices.fold(issued, invoice_id);
+                projection.invoices.issued(issued.bill_id).cloned()
+            }
+            SettleInvoice::Scheduled(scheduled) => {
+                projection.invoices.fold_scheduled(scheduled, settled_by);
+                None
+            }
+        }
     }
 }
 

@@ -163,7 +163,15 @@ impl Printers {
             buyer,
             second.as_ref(),
         );
-        let document = TemplatePrint::applied(template, document);
+        let mut document = TemplatePrint::applied(template, document);
+        // The copy prints the invoice as the receipt did (ADR-0242 decision 3).
+        if let Some(invoice) = &copy.invoice {
+            with_invoice(
+                &mut document,
+                self.receipt_labels_for(session, till),
+                invoice,
+            );
+        }
         self.dispatch(
             session,
             device,

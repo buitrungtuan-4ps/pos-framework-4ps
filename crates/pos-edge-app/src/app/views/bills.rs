@@ -239,6 +239,11 @@ pub struct ReceiptCopy {
     /// Whether the bill was voided after it was paid, so the copy is marked VOID (ADR-0184
     /// decision 5).
     pub voided: bool,
+    /// The bill's e-invoice, which the copy prints again under the totals as the receipt did
+    /// ([ADR-0242](../../../../../docs/adr/0242-a-receipt-prints-its-invoice-number-and-lookup-code.md)
+    /// decision 3). A deferred invoice issued since the settle is printed too; one still waiting is
+    /// `None`.
+    pub invoice: Option<IssuedInvoiceRef>,
 }
 
 /// How many of today's settled bills the till's list shows, newest first (ADR-0164). A bound, as
