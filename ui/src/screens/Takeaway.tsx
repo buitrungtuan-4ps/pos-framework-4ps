@@ -28,6 +28,7 @@ import { openCounterBill } from "../state/floor-writes";
 import { SendFirst } from "../components/SendFirst";
 import { counterKey, createSendFirst } from "../state/unsent";
 import { draftWalkIn } from "../state/draft-walk-in";
+import { invoiceLine } from "../state/settle-act";
 import { createPrint } from "../state/print-writes";
 import { Children } from "../../../packages/package-renderer/src/render";
 import { RegionsContext, type Regions } from "../../../packages/package-renderer/src/regions";
@@ -506,6 +507,10 @@ export function Takeaway() {
                   {(number) => (
                     <p class="tabular-nums">{t("pay.receipt", { number: number() })}</p>
                   )}
+                </Show>
+                {/* The e-invoice issued with it, as the table's paid panel shows it (ADR-0242). */}
+                <Show when={invoiceLine(settled())}>
+                  {(line) => <p class="mt-1 text-sm tabular-nums text-ink-muted" data-outcome="einvoice">{line()}</p>}
                 </Show>
                 {/* The change is what the cashier acts on next, so it is the largest figure (UX-15). */}
                 <Show when={change() > 0}>
