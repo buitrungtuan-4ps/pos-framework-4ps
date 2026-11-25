@@ -9,6 +9,7 @@
 //! vendor is chosen yet (an open owner decision), so [`sandbox`] is the provider every build carries.
 
 pub mod automatic;
+pub mod feed;
 pub mod sandbox;
 pub mod submitter;
 pub mod symbols;

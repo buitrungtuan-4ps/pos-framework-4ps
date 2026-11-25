@@ -11,6 +11,7 @@
 
 pub mod chain;
 pub mod channel;
+pub mod einvoice;
 pub mod eval;
 pub mod evaluator;
 pub mod model;

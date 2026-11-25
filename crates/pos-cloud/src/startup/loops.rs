@@ -39,6 +39,7 @@ pub(crate) struct Loops {
     people_republish: JoinHandle<()>,
     metrics: Option<JoinHandle<()>>,
     config_wake: Option<JoinHandle<()>>,
+    einvoice: JoinHandle<()>,
 }
 
 impl Loops {
@@ -63,6 +64,7 @@ impl Loops {
         let scheduled_publish = scheduled_publish_activator(config, store);
         let people_republish = people_republisher(store, audit);
         let metrics = metrics_heartbeat(config);
+        let einvoice = einvoice_submitter(store);
         Ok(Self {
             cursor,
             projector,
@@ -73,6 +75,7 @@ impl Loops {
             people_republish,
             metrics,
             config_wake,
+            einvoice,
         })
     }
 
@@ -110,7 +113,30 @@ impl Loops {
             task.abort();
             let _ = task.await;
         }
+        self.einvoice.abort();
+        let _ = self.einvoice.await;
     }
+}
+
+/// The e-invoice submitter (ADR-0241), which always runs: it reads each active store's log for
+/// issued invoices and submits them through the sandbox provider, the only one until the owner
+/// chooses a vendor. `POS_DEMO_EINVOICE=refuse` or `=timeout` scripts the sandbox for a demo.
+pub(crate) fn einvoice_submitter(store: &PostgresStore) -> JoinHandle<()> {
+    let provider = pos_cloud::einvoice::sandbox::SandboxEInvoice::new();
+    match std::env::var("POS_DEMO_EINVOICE").as_deref() {
+        Ok("refuse") => provider.set_mode(pos_cloud::einvoice::sandbox::SandboxMode::Refuse),
+        Ok("timeout") => provider.set_mode(pos_cloud::einvoice::sandbox::SandboxMode::TimeOut),
+        _ => {}
+    }
+    tracing::info!("e-invoice submitter started, through the sandbox provider");
+    tokio::spawn(pos_cloud::einvoice::feed::run(
+        store.clone(),
+        store.clone(),
+        Arc::new(store.einvoice_submissions()),
+        provider,
+        SystemClock,
+        shutdown_signal(),
+    ))
 }
 
 /// The production ingest feed, if configured, and the probe the alert evaluator reads the stream
@@ -305,6 +331,7 @@ pub(crate) async fn alert_evaluator(
             // The same ledger ingest files chain findings into (ADR-0132), so a finding raises its
             // alert on the next tick (ADR-0073 amendment 2026-10-31).
             chain_findings: Some(Arc::new(store.chain_anchors())),
+            einvoice_submissions: Some(Arc::new(store.einvoice_submissions())),
         },
         store.task_health(),
         store.alerts(),
@@ -521,6 +548,7 @@ mod tests {
             people_republish: stuck("people_republish", &stopped),
             metrics: Some(stuck("metrics", &stopped)),
             config_wake: Some(stuck("config_wake", &stopped)),
+            einvoice: stuck("einvoice", &stopped),
         };
         let archive_retention = Some(stuck("archive_retention", &stopped));
 
@@ -541,6 +569,7 @@ mod tests {
                 "people_republish",
                 "metrics",
                 "config_wake",
+                "einvoice",
             ]
         );
     }
@@ -558,6 +587,7 @@ mod tests {
             people_republish: stuck("people_republish", &stopped),
             metrics: None,
             config_wake: None,
+            einvoice: stuck("einvoice", &stopped),
         };
 
         tokio::time::timeout(Duration::from_secs(10), loops.wind_down(None))
@@ -572,6 +602,7 @@ mod tests {
                 "alert",
                 "scheduled_publish",
                 "people_republish",
+                "einvoice",
             ]
         );
     }

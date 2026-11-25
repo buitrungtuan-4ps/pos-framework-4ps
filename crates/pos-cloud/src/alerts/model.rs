@@ -69,6 +69,10 @@ pub enum AlertKind {
     /// The one kind that never clears by itself: a broken chain does not heal, so the alert stays
     /// open until a person acknowledges it ([`AlertKind::clears_itself`]).
     ChainBroken,
+    /// A store's e-invoice is not with the provider and its deadline is near or past
+    /// ([ADR-0241](../../../../docs/adr/0241-the-cloud-submits-each-issued-invoice-from-the-log-and-keeps-its-state.md)
+    /// decision 4). Clears once every such invoice is submitted.
+    EInvoiceOverdue,
 }
 
 impl AlertKind {
@@ -81,6 +85,7 @@ impl AlertKind {
         Self::JetstreamCapacity,
         Self::PrintAgentStalled,
         Self::ChainBroken,
+        Self::EInvoiceOverdue,
     ];
 
     /// The stable wire/storage token (matches the serde representation).
@@ -94,6 +99,7 @@ impl AlertKind {
             Self::JetstreamCapacity => "jetstream_capacity",
             Self::PrintAgentStalled => "print_agent_stalled",
             Self::ChainBroken => "chain_broken",
+            Self::EInvoiceOverdue => "einvoice_overdue",
         }
     }
 
@@ -123,7 +129,8 @@ impl AlertKind {
             Self::ProjectorUnhealthy
             | Self::JetstreamCapacity
             | Self::PrintAgentStalled
-            | Self::ChainBroken => AlertSeverity::Critical,
+            | Self::ChainBroken
+            | Self::EInvoiceOverdue => AlertSeverity::Critical,
         }
     }
 
