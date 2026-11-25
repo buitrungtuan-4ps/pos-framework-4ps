@@ -4671,6 +4671,31 @@ test("a counter tip on a bill that is not a round number still settles", async (
   }
 });
 
+// The counter's paid panel shows the e-invoice the settle issued, as the table's does (ADR-0242
+// decision 1; found in the phase-10 demo). The demo store issues none, so the edge's answer is given
+// an invoice here: a fake number and lookup code.
+test("the counter's paid panel shows the e-invoice number and lookup code", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await page.route("**/api/bills/*/settle", async (route) => {
+      const response = await fetchWhole(route);
+      const bill = await response.json();
+      await route.fulfill({ response, json: { ...bill, invoice_number: "1C26MAA/00000042", invoice_lookup_code: "FAKECODE01" } });
+    });
+    await pair(page, edge);
+    await signIn(page, edge);
+    await aWalkInToCharge(page);
+    await page.locator('[data-step="charge"]').first().click();
+    await page.locator('[data-step="setTender"]').first().click();
+    await page.locator('[data-step="payCash"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+    await expect(page.locator('[data-outcome="einvoice"]')).toContainText("1C26MAA/00000042");
+    await expect(page.locator('[data-outcome="einvoice"]')).toContainText("FAKECODE01");
+  } finally {
+    await edge.stop();
+  }
+});
+
 // The counter's pay pad offers the store's own tip keys, in its order, and no tip row where the store
 // hides every key (ADR-0160 decision 2), as the table pay screen does.
 //
