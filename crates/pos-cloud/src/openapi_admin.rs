@@ -259,6 +259,8 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::config_nodes::admin_read_retention,
         crate::http::config_nodes::admin_publish_einvoice_symbol,
         crate::http::config_nodes::admin_allocate_einvoice_symbol,
+        crate::http::einvoices::admin_list_einvoices,
+        crate::http::einvoices::admin_correct_einvoice,
         crate::http::config_nodes::admin_publish_retention,
         crate::http::config_nodes::admin_read_vendors,
         crate::http::config_nodes::admin_publish_vendors,
@@ -731,6 +733,12 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
             name = "openapi",
             description = "This document (ADR-0019), served without a session: it describes routes \
                            and carries no tenant data."
+        ),
+        (
+            name = "e-invoices",
+            description = "The invoices a tenant's stores issued, where each one's submission to the \
+                           provider stands, and their correction by an adjustment or a replacement \
+                           (ADR-0241). No buyer is named."
         ),
         (
             name = "config nodes",

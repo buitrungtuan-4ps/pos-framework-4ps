@@ -841,6 +841,15 @@ fn locale_routes(deps: &RouteDeps<'_>) -> Router {
             SystemClock,
             Arc::clone(audit),
         ))
+        // The invoices a tenant's stores issued and their corrections (ADR-0241).
+        .merge(http::einvoices_router(
+            store.config_trees(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(audit),
+            Arc::new(store.einvoice_submissions()),
+            Arc::new(store.einvoice_symbols()),
+        ))
         // A store's e-invoice symbol, by hand or allocated, recorded in the tenant's ledger
         // (ADR-0240).
         .merge(http::einvoice_symbol_router(

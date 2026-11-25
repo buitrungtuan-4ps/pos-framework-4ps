@@ -121,6 +121,14 @@ console_permissions! {
         roles: [Owner, Admin, Ops],
         description: "Publish configuration, catalog, and layout to stores",
     },
+    /// Correct an issued e-invoice by an adjustment or a replacement
+    /// ([ADR-0241](../../../../docs/adr/0241-the-cloud-submits-each-issued-invoice-from-the-log-and-keeps-its-state.md)
+    /// decision 5).
+    CorrectInvoices {
+        id: "console.einvoices.correct",
+        roles: [Owner, Admin],
+        description: "Correct an issued e-invoice by an adjustment or a replacement",
+    },
     /// Author the catalog, menus, and layout (edit, not publish).
     ManageCatalog {
         id: "console.catalog.manage",
@@ -341,6 +349,7 @@ mod tests {
             ConsolePermission::ManageInventory,
             ConsolePermission::ManagePackages,
             ConsolePermission::ReadRevenue,
+            ConsolePermission::CorrectInvoices,
             ConsolePermission::InviteAdmins,
             ConsolePermission::ManageAdmins,
         ] {

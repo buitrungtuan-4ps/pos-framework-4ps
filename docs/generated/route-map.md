@@ -247,6 +247,8 @@ From [`docs/openapi-admin.json`](../openapi-admin.json).
 | POST | `/admin/devices/proposals/{id}/reject` | `reject_device` | `session_cookie` | `console.devices.manage` | [`crates/pos-cloud-devices/src/routes/proposals.rs`](../../crates/pos-cloud-devices/src/routes/proposals.rs) |
 | POST | `/admin/devices/publish` | `admin_publish_devices` | `session_cookie` | `console.config.publish` | [`crates/pos-cloud-devices/src/routes/publish.rs`](../../crates/pos-cloud-devices/src/routes/publish.rs) |
 | POST | `/admin/devices/terminals` | `create_terminal` | `session_cookie` | `console.devices.manage` | [`crates/pos-cloud-devices/src/routes/terminals.rs`](../../crates/pos-cloud-devices/src/routes/terminals.rs) |
+| GET | `/admin/einvoices` | `admin_list_einvoices` | `session_cookie` | `console.data.read` | [`crates/pos-cloud/src/http/einvoices.rs`](../../crates/pos-cloud/src/http/einvoices.rs) |
+| POST | `/admin/einvoices/{invoice_id}/correct` | `admin_correct_einvoice` | `session_cookie` | `console.einvoices.correct` | [`crates/pos-cloud/src/http/einvoices.rs`](../../crates/pos-cloud/src/http/einvoices.rs) |
 | GET | `/admin/employees` | `admin_list_employees` | `session_cookie` | `console.people.read` | [`crates/pos-cloud-people/src/routes/employees.rs`](../../crates/pos-cloud-people/src/routes/employees.rs) |
 | POST | `/admin/employees` | `admin_create_employee` | `session_cookie` | `console.people.manage` | [`crates/pos-cloud-people/src/routes/employees.rs`](../../crates/pos-cloud-people/src/routes/employees.rs) |
 | GET | `/admin/employees/{employee_id}` | `admin_get_employee` | `session_cookie` | `console.people.read` | [`crates/pos-cloud-people/src/routes/employees.rs`](../../crates/pos-cloud-people/src/routes/employees.rs) |

@@ -19,6 +19,7 @@ import { storeId, tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, StatusBadge, TextField } from "../components/ui";
 import { AuditTrail } from "../components/AuditTrail";
 import { toast } from "../components/Toast";
+import { InvoiceList } from "./einvoices/InvoiceList";
 
 /** The `einvoice` node's published fields this screen reads, from the store's effective tree. */
 export type PublishedInvoicing = {
@@ -162,6 +163,9 @@ export function EInvoices() {
                 </div>
               )}
             </Show>
+          </Card>
+          <Card title={t("einvoices.listTitle")}>
+            <InvoiceList />
           </Card>
           <Card title={t("einvoices.historyTitle")}>
             <Show when={storeId()}>{(store) => <AuditTrail entityType="store" entityId={store()} />}</Show>
