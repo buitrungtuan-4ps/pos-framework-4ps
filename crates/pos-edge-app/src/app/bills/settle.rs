@@ -25,7 +25,8 @@ use super::card::CardMark;
 use super::invoice::{InvoicePlan, SettleInvoice};
 use crate::app::records::tax_records;
 use crate::app::{
-    AppError, Approval, BillView, BuyerDetails, Edge, OrderSnapshot, TillScope, fee_records,
+    AppError, Approval, BillView, BuyerDetails, Edge, IssuedInvoiceRef, OrderSnapshot, TillScope,
+    fee_records,
 };
 use crate::fanout::ServerMessage;
 
@@ -187,11 +188,19 @@ impl<S: EventStore> Edge<S> {
             &mut messages,
         )?;
         let invoice = self.settle_invoice(&ctx, plan, &settled)?;
+        let mut issued_ref = None;
         if let Some(record) = &invoice {
             let (envelope, message) = match record {
                 SettleInvoice::Issued(issued) => self.prepare_on(&ctx, issued, shift)?,
                 SettleInvoice::Scheduled(scheduled) => self.prepare_on(&ctx, scheduled, shift)?,
             };
+            if let SettleInvoice::Issued(issued) = record {
+                issued_ref = Some(IssuedInvoiceRef::new(
+                    issued.invoice.invoice_symbol.as_str(),
+                    issued.invoice.invoice_sequence,
+                    &envelope.event_id.to_string(),
+                ));
+            }
             envelopes.push(envelope);
             messages.push(message);
         }
@@ -211,7 +220,9 @@ impl<S: EventStore> Edge<S> {
         let table_state = self.fold_settled(&settled, (shift, &payments), &ctx, &proved)?;
         // The last part of a split settles the order off the boards, and its notes go with it.
         self.forget_notes_off_screen();
-        Ok(Self::settled_view(&proved, &settled, table_state, drawer))
+        let mut view = Self::settled_view(&proved, &settled, table_state, drawer);
+        view.invoice = issued_ref;
+        Ok(view)
     }
 
     /// Everything a settle proves before it allocates a receipt number, so a refused settle
@@ -325,6 +336,7 @@ impl<S: EventStore> Edge<S> {
             open_drawer: proved.cash_taken.amount_minor > 0,
             drawer_till: drawer,
             lines: Self::receipt_lines(&proved.order.lines),
+            invoice: None,
         }
     }
 

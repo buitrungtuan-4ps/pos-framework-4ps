@@ -6,12 +6,12 @@
 
 use pos_core::billing::BillTotals;
 use pos_core::business_date::local_time;
-use pos_ports::printer::{PrintDocument, PrintJob};
+use pos_ports::printer::{PrintBlock, PrintDocument, PrintJob, TextStyle};
 use pos_proto::ids::{DeviceId, EventId, StoreId};
 
 use crate::app::{
-    BuyerDetails, CombinedReport, EdgeSession, FiredLine, HandoverSlip, PreBill, ReceiptCopy,
-    ReceiptLine, ShiftReport,
+    BuyerDetails, CombinedReport, EdgeSession, FiredLine, HandoverSlip, IssuedInvoiceRef, PreBill,
+    ReceiptCopy, ReceiptLine, ShiftReport,
 };
 use crate::line_notes::NoteText;
 use crate::printing::blocks::{MoneyStyle, printed_totals};
@@ -58,6 +58,32 @@ impl Printers {
         totals: &BillTotals,
         (buyer, template): (Option<&BuyerDetails>, Option<&TemplatePrint>),
     ) -> PrintOutcome {
+        self.print_receipt_with_invoice(
+            session,
+            till,
+            (store_id, job_id),
+            (receipt_number, None),
+            lines,
+            totals,
+            (buyer, template),
+        )
+        .await
+    }
+
+    /// [`Self::print_receipt`], with the e-invoice the settle issued printed under the totals: its
+    /// number and the code a guest looks it up by
+    /// ([ADR-0242](../../../../docs/adr/0242-a-receipt-prints-its-invoice-number-and-lookup-code.md)
+    /// decision 3). The template cannot leave them out.
+    pub async fn print_receipt_with_invoice(
+        &self,
+        session: &EdgeSession,
+        till: &TillPrinting,
+        (store_id, job_id): (StoreId, EventId),
+        (receipt_number, invoice): (u64, Option<&IssuedInvoiceRef>),
+        lines: &[ReceiptLine],
+        totals: &BillTotals,
+        (buyer, template): (Option<&BuyerDetails>, Option<&TemplatePrint>),
+    ) -> PrintOutcome {
         let device = match guest_printer(&session.devices, till) {
             Ok(device) => device,
             Err(outcome) => return outcome,
@@ -79,7 +105,11 @@ impl Printers {
             buyer,
             second.as_ref(),
         );
-        let document = TemplatePrint::applied(template, document);
+        let mut document = TemplatePrint::applied(template, document);
+        if let Some(invoice) = invoice {
+            let labels = self.receipt_labels_for(session, till);
+            with_invoice(&mut document, labels, invoice);
+        }
         self.dispatch(
             session,
             device,
@@ -423,5 +453,71 @@ impl Printers {
             },
         )
         .await
+    }
+}
+
+/// Puts the e-invoice's number and lookup code before the document's closing feed and cut.
+fn with_invoice(
+    document: &mut PrintDocument,
+    labels: &crate::paper_labels::PaperLabels,
+    invoice: &IssuedInvoiceRef,
+) {
+    let at = document
+        .blocks
+        .iter()
+        .rposition(|block| !matches!(block, PrintBlock::Feed { .. } | PrintBlock::Cut))
+        .map_or(document.blocks.len(), |last| last + 1);
+    let line = |text: String| PrintBlock::Text {
+        line: text,
+        style: TextStyle::default(),
+    };
+    document.blocks.splice(
+        at..at,
+        [
+            line(format!("{}: {}", labels.einvoice_number, invoice.number)),
+            line(format!(
+                "{}: {}",
+                labels.einvoice_lookup, invoice.lookup_code
+            )),
+        ],
+    );
+}
+
+#[cfg(test)]
+mod invoice_lines {
+    use pos_ports::printer::{PrintBlock, PrintDocument, TextStyle};
+
+    use super::with_invoice;
+    use crate::app::IssuedInvoiceRef;
+    use crate::paper_labels::VIETNAMESE;
+
+    fn text(line: &str) -> PrintBlock {
+        PrintBlock::Text {
+            line: line.to_owned(),
+            style: TextStyle::default(),
+        }
+    }
+
+    #[test]
+    fn the_invoice_is_printed_before_the_closing_feed_and_cut() {
+        let mut document = PrintDocument {
+            blocks: vec![
+                text("TOTAL 165.000"),
+                PrintBlock::Feed { lines: 3 },
+                PrintBlock::Cut,
+            ],
+        };
+        let invoice = IssuedInvoiceRef::new("1C26MAA", 42, "01KABCDEFGH0123456789XYZWQ");
+        with_invoice(&mut document, &VIETNAMESE, &invoice);
+        assert_eq!(
+            document.blocks,
+            vec![
+                text("TOTAL 165.000"),
+                text("Số HĐĐT: 1C26MAA/00000042"),
+                text("Mã tra cứu: 56789XYZWQ"),
+                PrintBlock::Feed { lines: 3 },
+                PrintBlock::Cut,
+            ]
+        );
     }
 }

@@ -9,8 +9,8 @@ mod shifts;
 mod x_read;
 
 pub use bills::{
-    BillCheckView, BillView, BuyerDetails, MAX_SETTLED_LISTED, PreBill, ReceiptCopy, ReceiptLine,
-    SettledBillView, SettledVoidView, Takings,
+    BillCheckView, BillView, BuyerDetails, IssuedInvoiceRef, MAX_SETTLED_LISTED, PreBill,
+    ReceiptCopy, ReceiptLine, SettledBillView, SettledVoidView, Takings,
 };
 pub use orders::{
     BumpView, CounterOrderLine, CounterOrderOpened, CounterOrderView, FiredLine, LineDraft,

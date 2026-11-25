@@ -366,3 +366,64 @@ fn the_countrys_limit_clamps_a_late_schedule() {
         );
     });
 }
+
+/// ADR-0242 decisions 1 and 2: a settle that issues its invoice answers with the number and the
+/// last ten characters of the invoice event's id; a deferred invoice answers neither.
+#[test]
+fn a_settle_answers_with_the_invoice_number_and_its_lookup_code() {
+    pos_fakes::executor::run_ready(async {
+        let store = FakeStore::default();
+        let edge = a_store(
+            store.clone(),
+            EInvoiceIssueMoment::Immediate,
+            Some("1C26MAA"),
+        );
+        let table = TableId::new(Ulid::from_u128(7));
+        edge.seat_table(actor(), table, None).await.expect("seats");
+        edge.add_line(actor(), table, a_line()).await.expect("adds");
+        let opened = edge.open_bill(actor(), table).await.expect("opens");
+        let settled = edge
+            .settle_bill(actor(), opened.bill_id, vec![cash(165_000)], None)
+            .await
+            .expect("settles");
+        let invoice = settled
+            .invoice
+            .expect("an invoice was issued with the settle");
+        assert_eq!(invoice.number, "1C26MAA/00000001");
+        let event = store
+            .read(&EventQuery::first(
+                identity().store_id,
+                NonZeroU32::new(200).expect("200 is not zero"),
+            ))
+            .await
+            .expect("reads")
+            .into_iter()
+            .find(|envelope| {
+                envelope.event_type.as_str() == FiscalInvoiceIssued::EVENT_TYPE.as_str()
+            })
+            .expect("the invoice event");
+        let id = event.event_id.to_string();
+        assert_eq!(invoice.lookup_code.len(), 10);
+        assert!(id.ends_with(&invoice.lookup_code));
+
+        let later = a_store(
+            FakeStore::default(),
+            EInvoiceIssueMoment::BatchWindow,
+            Some("1C26MAA"),
+        );
+        later.seat_table(actor(), table, None).await.expect("seats");
+        later
+            .add_line(actor(), table, a_line())
+            .await
+            .expect("adds");
+        let opened = later.open_bill(actor(), table).await.expect("opens");
+        let settled = later
+            .settle_bill(actor(), opened.bill_id, vec![cash(165_000)], None)
+            .await
+            .expect("settles");
+        assert_eq!(
+            settled.invoice, None,
+            "a deferred invoice has no number yet"
+        );
+    });
+}
