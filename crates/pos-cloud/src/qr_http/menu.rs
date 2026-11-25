@@ -151,9 +151,13 @@ pub(crate) fn guest_menu(effective: &serde_json::Value, asked: Option<&str>) -> 
     GuestMenu {
         language,
         languages,
+        // An item sold by weight or at a price the cashier types is never offered to a guest, as
+        // the kiosk offers neither: nobody at the table weighs it or prices it, and the store would
+        // refuse the order (ADR-0223, ADR-0222). Found in the phase-10 demo.
         items: localized
             .items()
             .iter()
+            .filter(|entry| !entry.codes.sold_by_weight() && entry.codes.open_price.is_none())
             .map(|entry| GuestItem {
                 menu_item_id: entry.menu_item_id,
                 name: entry.display_name.clone(),
@@ -255,6 +259,42 @@ mod tests {
         let item = menu["items"][0].as_object().expect("an item");
         assert!(!item.contains_key("tax_class_id"));
         assert!(!item.contains_key("codes"));
+    }
+
+    #[test]
+    fn an_item_sold_by_weight_or_at_a_typed_price_is_not_offered() {
+        let mut effective = document();
+        let items = effective["menu"]["channels"][0]["catalog"]["items"]
+            .as_array_mut()
+            .expect("items");
+        for (id, codes) in [
+            (
+                "01HZ0000000000000000000003",
+                json!({ "sold_by": "SOLD_BY_WEIGHT" }),
+            ),
+            (
+                "01HZ0000000000000000000004",
+                json!({ "open_price": { "minimum": { "currency_code": "VND", "amount_minor": 1_000 }, "maximum": { "currency_code": "VND", "amount_minor": 500_000 } } }),
+            ),
+        ] {
+            items.push(json!({
+                "menu_item_id": id,
+                "display_name": "Fake by weight or typed price",
+                "unit_price": { "currency_code": "VND", "amount_minor": 450_000 },
+                "tax_class_id": "01HZ00000000000000000000T1",
+                "codes": codes
+            }));
+        }
+        let menu = guest_menu(&effective, None);
+        let offered: Vec<String> = menu
+            .items
+            .iter()
+            .map(|item| item.menu_item_id.to_string())
+            .collect();
+        assert_eq!(
+            offered,
+            ["01HZ0000000000000000000001", "01HZ0000000000000000000002"]
+        );
     }
 
     #[test]
