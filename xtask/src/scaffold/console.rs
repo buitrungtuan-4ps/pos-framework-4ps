@@ -491,8 +491,8 @@ mod tests {
                 .and_then(|edit| edit.added.get(1))
                 .map(String::as_str),
             Some(
-                "  { key: \"nav.group.compliance\", items: [\"audit\", \"subjects\", \
-                 \"chainFindings\", \"stockCount\"] },"
+                "  { key: \"nav.group.compliance\", items: [\"einvoices\", \"audit\", \
+                 \"subjects\", \"chainFindings\", \"stockCount\"] },"
             )
         );
         let wrapped = sources().screens.replace(
