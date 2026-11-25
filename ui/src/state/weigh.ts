@@ -37,6 +37,15 @@ export function askWeight(item: MenuItemResponse): boolean {
   return true;
 }
 
+/**
+ * Whether `line` is a weighed item's: its quantity is the weight the scale gave, shown and never
+ * stepped by whole units, which would sell a kilogram nobody weighed. A wrong weight is voided and
+ * weighed again.
+ */
+export function weighedLine(line: { readonly menuItemId?: string }, items: ReadonlyMap<string, MenuItemResponse>): boolean {
+  return line.menuItemId !== undefined && items.get(line.menuItemId)?.sold_by_weight === true;
+}
+
 /** The item being weighed, or `null`. */
 export function weighingItem(): MenuItemResponse | null {
   return weighing();

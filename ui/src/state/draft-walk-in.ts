@@ -83,3 +83,24 @@ export async function keyToAddTo(
   moveTo(`/order/${opened}`);
   return walkInKey(opened);
 }
+
+/**
+ * The counter order a weighed item is weighed onto (ADR-0223): a draft walk-in is opened first, as
+ * the first item tapped opens it, so a weighed item may be the first one sold; an open walk-in is
+ * itself; a table has none, and answers `undefined`.
+ */
+export async function openDraftOrder(
+  walkIn: boolean,
+  orderId: string,
+  key: string,
+  navigate: (path: string, options: { replace: boolean }) => void,
+): Promise<string | undefined> {
+  if (!walkIn) return undefined;
+  if (orderId !== DRAFT) return orderId;
+  let opened: string | undefined;
+  await keyToAddTo(orderId, key, (path) => {
+    opened = path.slice(path.lastIndexOf("/") + 1);
+    navigate(path, { replace: true });
+  });
+  return opened;
+}

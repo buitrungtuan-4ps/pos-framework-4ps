@@ -2,7 +2,8 @@
 // the till reads, read from the edge every half second while it is open, and weighs the item on the
 // scale's settled weight; where the store allows it, a weight may be typed in grams instead. The edge
 // takes the item's tare off, prices the net grams per kilogram and records where the weight came
-// from. A weight is taken on a counter order, which the order screen has once its first line is in.
+// from. A weight is taken on a counter order: on a draft walk-in, weighing opens the order first, so
+// a weighed item may be the first one sold.
 
 import { Show, createSignal, onCleanup } from "solid-js";
 
@@ -35,14 +36,17 @@ export function WeightDisplay() {
   const grams = () => (typed() === "" ? null : Number.parseInt(typed(), 10));
   const send = (typedGrams: number | null) => {
     const item = weighingItem();
-    const orderId = sell.orderId();
-    if (item === null || orderId === undefined) return;
+    if (item === null) return;
     setRefusal(null);
-    weigh(orderId, item, typedGrams, () => void loadLiveOrders()).then(
-      () => setTyped(""),
-      (caught: unknown) => setRefusal(errorMessage(caught)),
-    );
+    sell
+      .openOrder()
+      .then((orderId) => (orderId === undefined ? undefined : weigh(orderId, item, typedGrams, () => void loadLiveOrders())))
+      .then(
+        () => setTyped(""),
+        (caught: unknown) => setRefusal(errorMessage(caught)),
+      );
   };
+
   const close = () => {
     setTyped("");
     setRefusal(null);
@@ -56,7 +60,7 @@ export function WeightDisplay() {
           <p class="text-2xl font-semibold tabular-nums" data-outcome="scale-reading">
             {settled() ? kilograms(reading()?.net_grams ?? 0) : t(reading() === null ? "order.scale_none" : "order.scale_moving")}
           </p>
-          <Show when={sell.orderId() === undefined}>
+          <Show when={!sell.weighable()}>
             <p class="text-sm text-ink-muted">{t("order.weigh_needs_order")}</p>
           </Show>
           <Show when={refusal()}>{(message) => <p class="text-sm text-danger" role="status">{message()}</p>}</Show>
@@ -68,7 +72,7 @@ export function WeightDisplay() {
             <button
               type="button"
               class="min-h-touch rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
-              disabled={sell.disabled() || sell.orderId() === undefined || (grams() === null && !settled())}
+              disabled={sell.disabled() || !sell.weighable() || (grams() === null && !settled())}
               onClick={() => send(grams())}
             >
               {t(grams() === null ? "order.weigh_add" : "order.weigh_add_typed")}

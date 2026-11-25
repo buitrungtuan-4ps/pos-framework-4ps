@@ -59,10 +59,10 @@ import { printOutcomeKey } from "../lib/print";
 import { SendFirst } from "../components/SendFirst";
 import { PrintedCheck } from "../components/PrintedCheck";
 import { OpenPricePrompt } from "../components/OpenPricePrompt";
-import { SellContext, askOpenPrice, askWeight } from "../state/sell";
+import { SellContext, askOpenPrice, askWeight, weighedLine } from "../state/sell";
 import { RepriceLine } from "../components/RepriceLine";
 import { createSendFirst, waitingByCourse } from "../state/unsent";
-import { DRAFT, draftChannel, eatenIn, keyToAddTo } from "../state/draft-walk-in";
+import { DRAFT, draftChannel, eatenIn, keyToAddTo, openDraftOrder } from "../state/draft-walk-in";
 import { asksApprover, can } from "../state/permissions";
 
 // The action a void of one line cites, so the picker offers what the store holds *for voiding* and
@@ -784,7 +784,7 @@ export function Order() {
                     Minus stops at one rather than reaching zero. Zero is not a smaller order, it is
                     no order — that is a void, which carries a reason and, after a fire, a manager.
                     Letting the stepper walk into it would give that act a second, quieter spelling. */}
-                <Show when={line.state === "ORDER_LINE_STATE_ADDED" && can("sales.line.add") && !provisional(line)}>
+                <Show when={line.state === "ORDER_LINE_STATE_ADDED" && can("sales.line.add") && !provisional(line) && !weighedLine(line, menuItemMap())}>
                   <span class="inline-flex items-center gap-1">
                     <button
                       type="button"
@@ -813,7 +813,7 @@ export function Order() {
                     every line for a person who may not change one. */}
                 <Show
                   when={
-                    (line.state !== "ORDER_LINE_STATE_ADDED" || !can("sales.line.add")) &&
+                    (line.state !== "ORDER_LINE_STATE_ADDED" || !can("sales.line.add") || weighedLine(line, menuItemMap())) &&
                     line.quantityMilli !== 1000
                   }
                 >
@@ -1508,7 +1508,7 @@ export function Order() {
   });
 
   return (
-    <SellContext.Provider value={{ sell: onItem, disabled: () => billed() || !can("sales.line.add") || flowWait() !== null, orderId: () => (walkIn() && params.id !== DRAFT ? params.id : undefined) }}>
+    <SellContext.Provider value={{ sell: onItem, disabled: () => billed() || !can("sales.line.add") || flowWait() !== null, orderId: () => (walkIn() && params.id !== DRAFT ? params.id : undefined), openOrder: () => openDraftOrder(walkIn(), params.id, key(), navigate), weighable: walkIn }}>
     <RegionsContext.Provider value={regions}><PackageScreen screenId="order" host={orderHost(walkIn, params)} /></RegionsContext.Provider>
     </SellContext.Provider>
   );

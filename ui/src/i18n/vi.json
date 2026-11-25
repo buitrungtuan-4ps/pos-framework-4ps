@@ -384,7 +384,7 @@
   "order.sending": "Đang gửi…",
   "order.weigh_add": "Thêm theo cân nặng này",
   "order.weigh_add_typed": "Thêm theo cân nặng đã gõ",
-  "order.weigh_needs_order": "Thêm món đầu tiên vào đơn, rồi cân món này.",
+  "order.weigh_needs_order": "Món cân được bán trên đơn tại quầy: hãy cân món này ở quầy.",
   "order.weigh_title": "Cân {item}",
   "order.weigh_typed": "Cân nặng gõ tay: {grams} g (tối thiểu {least} g)",
   "order.writes_pending": "Đang chờ cửa hàng xác nhận thay đổi vừa rồi.",
