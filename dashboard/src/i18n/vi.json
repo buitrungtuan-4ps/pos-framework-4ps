@@ -3235,5 +3235,9 @@
   "einvoices.correctAmountRequired": "Hãy nhập số tiền trước.",
   "einvoices.correctSend": "Ghi nhận hóa đơn sửa",
   "einvoices.corrected": "Đã ghi nhận hóa đơn sửa {number}; hóa đơn sẽ được gửi trong vòng một phút.",
-  "einvoices.correctTitle": "Sửa hóa đơn điện tử"
+  "einvoices.correctTitle": "Sửa hóa đơn điện tử",
+  "settings.item.billing.card_confirm_approval.title": "Xác nhận thẻ chưa rõ kết quả bằng tay",
+  "settings.item.billing.card_confirm_approval.help": "Ai phải đồng ý trước khi một thẻ mà máy quẹt chưa trả kết quả được ghi là đã thanh toán theo phiếu của máy. Mặc định là quản lý, nhập mã nhân viên và mã PIN như khi hủy hóa đơn. Chọn không ai cho phép thu ngân tự xác nhận; nên đối chiếu hằng ngày với bảng kết toán của máy quẹt.",
+  "settings.value.CARD_CONFIRM_APPROVAL_MANAGER": "Quản lý",
+  "settings.value.CARD_CONFIRM_APPROVAL_NONE": "Không ai khác"
 }

@@ -50,6 +50,12 @@ pub(crate) struct CardRequest {
 pub(crate) struct ResolveRequest {
     /// `LOOK_UP`, `CONFIRM` or `CANCEL`.
     action: String,
+    /// A manager's badge code, for a `CONFIRM` the store asks a manager to approve (ADR-0243).
+    #[serde(default)]
+    approver_code: Option<String>,
+    /// That manager's PIN, sent once and never stored.
+    #[serde(default)]
+    approver_pin: Option<String>,
 }
 
 /// What came of a card.
@@ -193,7 +199,9 @@ where
         (status = 401, description = "This device is not paired"),
         (status = 403, description = "Nobody is signed in on this device"),
         (status = 409, description = "The bill is not parked on that card (`CARD_NOT_PARKED`), a cancel of a card the \
-                                      terminal took (`CARD_ALREADY_CAPTURED`), no terminal, or the refusals a payment makes"),
+                                      terminal took (`CARD_ALREADY_CAPTURED`), no terminal, a `CONFIRM` without the \
+                                      manager `billing.card_confirm_approval` asks for (`APPROVAL_REQUIRED`, \
+                                      `APPROVAL_REFUSED`, ADR-0243), or the refusals a payment makes"),
         (status = 503, description = "The terminal was not reached; nothing changed"),
     ),
     tag = "bills",
@@ -221,9 +229,19 @@ where
         "CANCEL" => CardResolution::Cancel,
         _ => return bad_request("the action is LOOK_UP, CONFIRM or CANCEL"),
     };
+    let approval = request
+        .approver_code
+        .zip(request.approver_pin)
+        .map(|(code, pin)| crate::app::Approval { code, pin });
     let scope = till_scope(&edge, printers.as_deref(), actor).await;
     match edge
-        .resolve_card_at(actor, scope, (bill_id, payment_id), resolution)
+        .resolve_card_with(
+            actor,
+            scope,
+            (bill_id, payment_id),
+            resolution,
+            approval.as_ref(),
+        )
         .await
     {
         Ok(outcome) => answer(&edge, printers.as_deref(), actor, bill_id, outcome).await,

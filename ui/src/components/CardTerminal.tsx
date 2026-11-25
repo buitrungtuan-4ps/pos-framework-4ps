@@ -12,6 +12,7 @@ import type { CardResponse } from "../api/schemas";
 import { t } from "../i18n";
 import { errorMessage } from "../lib/errors";
 import { money } from "../lib/money";
+import { ApproverFields } from "./ApproverFields";
 
 type Resolution = "LOOK_UP" | "CONFIRM" | "CANCEL";
 
@@ -35,6 +36,10 @@ export interface CardTerminal {
   readonly note: Accessor<string | null>;
   readonly take: () => Promise<void>;
   readonly resolve: (action: Resolution) => void;
+  /** Whether a confirm by hand waits for a manager's badge and PIN (ADR-0243). */
+  readonly needsApprover: Accessor<boolean>;
+  /** Confirms by hand with a manager's badge and PIN. */
+  readonly confirmWith: (code: string, pin: string) => void;
 }
 
 /** The card terminal's half of a pay screen: taking a card, and the park it may leave. */
@@ -42,12 +47,14 @@ export function useCardTerminal(options: CardTerminalOptions): CardTerminal {
   const [busy, setBusy] = createSignal(false);
   const [parked, setParked] = createSignal<string | null>(null);
   const [note, setNote] = createSignal<string | null>(null);
+  const [needsApprover, setNeedsApprover] = createSignal(false);
 
   // The park is the edge's: read it whenever the bill on screen changes, so a reload shows it.
   createEffect(
     on(options.billId, (billId) => {
       setParked(null);
       setNote(null);
+      setNeedsApprover(false);
       if (billId !== "") {
         api.parkedCard(billId).then(
           (card) => setParked(card.payment_id),
@@ -58,6 +65,7 @@ export function useCardTerminal(options: CardTerminalOptions): CardTerminal {
   );
 
   const answered = (answer: CardResponse) => {
+    setNeedsApprover(false);
     if (answer.outcome === "PAYMENT_OUTCOME_CAPTURED") {
       setParked(null);
       options.onCaptured(answer);
@@ -75,6 +83,10 @@ export function useCardTerminal(options: CardTerminalOptions): CardTerminal {
     if (caught instanceof ApiError) {
       if (caught.reason === "CARD_TERMINAL_NONE") {
         options.onByHand();
+      } else if (caught.reason === "APPROVAL_REQUIRED") {
+        // The store asks a manager to agree before a card is confirmed by hand (ADR-0243).
+        setNeedsApprover(true);
+        setNote(t("card.confirm_needs_manager"));
       } else {
         setNote(errorMessage(caught));
       }
@@ -115,7 +127,48 @@ export function useCardTerminal(options: CardTerminalOptions): CardTerminal {
     }
   };
 
-  return { busy, parked, note, take, resolve };
+  const confirmWith = (code: string, pin: string) => {
+    const paymentId = parked();
+    if (paymentId !== null) {
+      void run(() =>
+        api.resolveCard(options.billId(), paymentId, {
+          action: "CONFIRM",
+          approver_code: code,
+          approver_pin: pin,
+        }),
+      );
+    }
+  };
+
+  return { busy, parked, note, take, resolve, needsApprover, confirmWith };
+}
+
+/** The manager's badge and PIN a confirm by hand waits for (ADR-0243). */
+function ConfirmApprover(props: { readonly card: CardTerminal }) {
+  const [code, setCode] = createSignal("");
+  const [pin, setPin] = createSignal("");
+  return (
+    <div class="mt-2" data-outcome="card-confirm-approver">
+      <ApproverFields
+        id="card-confirm-approver"
+        code={code()}
+        pin={pin()}
+        onCode={setCode}
+        onPin={setPin}
+        codeLabel={t("card.approver_code")}
+        pinLabel={t("card.approver_pin")}
+      />
+      <button
+        type="button"
+        class="mt-2 min-h-touch w-full rounded-token bg-primary font-semibold text-primary-ink disabled:opacity-50"
+        disabled={props.card.busy() || code() === "" || pin() === ""}
+        data-step="cardConfirmApproved"
+        onClick={() => props.card.confirmWith(code(), pin())}
+      >
+        {t("card.confirm_approved")}
+      </button>
+    </div>
+  );
 }
 
 const EXIT = "min-h-touch rounded-token border border-line bg-surface disabled:opacity-50";
@@ -138,6 +191,9 @@ export function CardParked(props: { readonly card: CardTerminal }) {
               {t("card.cancel")}
             </button>
           </div>
+          <Show when={props.card.needsApprover()}>
+            <ConfirmApprover card={props.card} />
+          </Show>
         </div>
       </Show>
       <Show when={props.card.note()}>

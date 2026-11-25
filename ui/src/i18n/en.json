@@ -726,5 +726,9 @@
   "kiosk.card_paid": "Paid. Thank you!",
   "pay.buyer_email": "Email for the e-invoice",
   "pay.buyer_tax_code_shape": "This does not look like a tax number: 10 to 15 letters or digits.",
-  "pay.einvoice": "E-invoice {number} · lookup code {code}"
+  "pay.einvoice": "E-invoice {number} · lookup code {code}",
+  "card.confirm_needs_manager": "A manager must agree before a card is confirmed by hand. Ask a manager for their badge and PIN.",
+  "card.approver_code": "Manager's badge",
+  "card.approver_pin": "Manager's PIN",
+  "card.confirm_approved": "Confirm with the manager"
 }

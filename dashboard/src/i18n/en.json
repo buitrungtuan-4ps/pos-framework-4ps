@@ -3235,5 +3235,9 @@
   "einvoices.correctAmountRequired": "Type the amount first.",
   "einvoices.correctSend": "Record the correction",
   "einvoices.corrected": "Correction {number} recorded; it is submitted within a minute.",
-  "einvoices.correctTitle": "Correct an e-invoice"
+  "einvoices.correctTitle": "Correct an e-invoice",
+  "settings.item.billing.card_confirm_approval.title": "Confirming an unknown card by hand",
+  "settings.item.billing.card_confirm_approval.help": "Who must agree before a card the terminal left unknown is recorded as paid from the terminal's slip. A manager, the default, types their badge and PIN, as for a void. Nobody else lets the cashier confirm it alone; a daily check against the terminal's batch is recommended either way.",
+  "settings.value.CARD_CONFIRM_APPROVAL_MANAGER": "A manager",
+  "settings.value.CARD_CONFIRM_APPROVAL_NONE": "Nobody else"
 }
