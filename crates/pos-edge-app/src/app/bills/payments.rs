@@ -188,7 +188,7 @@ impl<S: EventStore> Edge<S> {
             split_ways,
             terminal_reference: card.map(|card| TerminalReference::new(card.reference.as_str())),
         };
-        self.commit_part_payment(&ctx, &captured, shift, overrider)
+        self.commit_part_payment(&ctx, &captured, shift, (overrider, card))
             .await?;
         let paid_total = paid.checked_add(applied).map_err(DomainError::from)?;
         Ok(PaymentTaken {
@@ -208,11 +208,17 @@ impl<S: EventStore> Edge<S> {
         ctx: &DecisionCtx,
         captured: &BillingPaymentCaptured,
         shift: Option<ShiftId>,
-        overrider: Option<EmployeeId>,
+        (overrider, card): (Option<EmployeeId>, Option<&CardMark>),
     ) -> Result<(), AppError> {
         let (envelope, message) = self.prepare_on(ctx, captured, shift)?;
         let mut envelopes = vec![envelope];
         let mut messages = vec![message];
+        // A card confirmed by hand names its manager in the same transaction (ADR-0243).
+        if let Some(record) = CardMark::approval_record(card) {
+            let (envelope, message) = self.prepare_on(ctx, &record, shift)?;
+            envelopes.push(envelope);
+            messages.push(message);
+        }
         if let Some(approver) = overrider {
             let record =
                 Self::override_record(Permission::OverrideDrawerAssignment, approver, None);

@@ -399,10 +399,18 @@ fn a_cancel_of_a_card_the_acquirer_took_is_refused_and_a_confirm_records_it() {
             ))
             .await
             .expect("reads");
+        let position = |wanted: EventType| {
+            logged
+                .iter()
+                .rposition(|event| event.event_type.as_str() == wanted.as_str())
+        };
+        let approved = position(EventType::SecurityPermissionOverridden)
+            .expect("the manager who agreed is recorded");
+        let settled = position(EventType::BillingBillSettled).expect("the bill settled");
         assert!(
-            logged.iter().any(|event| event.event_type.as_str()
-                == EventType::SecurityPermissionOverridden.as_str()),
-            "the manager who agreed is recorded beside the capture"
+            approved < settled,
+            "the manager is written in the capture's own transaction, before the settle that closes \
+             it, not after it in one of its own"
         );
     });
 }

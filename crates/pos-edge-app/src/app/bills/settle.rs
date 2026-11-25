@@ -486,6 +486,12 @@ impl<S: EventStore> Edge<S> {
             envelopes.push(envelope);
             messages.push(message);
         }
+        // A card confirmed by hand names its manager in the same transaction (ADR-0243).
+        if let Some(record) = CardMark::approval_record(card) {
+            let (envelope, message) = self.prepare_on(ctx, &record, shift)?;
+            envelopes.push(envelope);
+            messages.push(message);
+        }
         Ok((envelopes, messages))
     }
 }

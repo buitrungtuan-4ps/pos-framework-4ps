@@ -153,6 +153,24 @@ pub(in crate::app) struct CardMark {
     /// Whether a kiosk's own record takes it, which may take this one payment and no other
     /// (ADR-0230 decision 7).
     pub(in crate::app) kiosk: bool,
+    /// The manager who agreed to a card confirmed by hand (ADR-0243), recorded beside the capture
+    /// in the same transaction.
+    pub(in crate::app) confirmed_by: Option<pos_proto::ids::EmployeeId>,
+}
+
+impl CardMark {
+    /// The override event a hand-confirmed card's manager writes, in the capture's transaction.
+    pub(in crate::app) fn approval_record(
+        card: Option<&Self>,
+    ) -> Option<pos_proto::events::SecurityPermissionOverridden> {
+        card.and_then(|card| card.confirmed_by).map(|approver| {
+            pos_proto::events::SecurityPermissionOverridden {
+                permission_key: pos_proto::text::PermissionKey::new(Permission::VoidBill.meta().id),
+                approver_employee_id: approver,
+                exceeded_by: None,
+            }
+        })
+    }
 }
 
 impl CardMark {
@@ -346,6 +364,7 @@ impl<S: EventStore + SubjectStore> Edge<S> {
                 payment_id,
                 reference: parked.reference.clone(),
                 kiosk,
+                confirmed_by: None,
             };
             return self
                 .record_card_capture(actor, scope, bill_id, (&parked, &mark), ask.split_ways)
@@ -432,19 +451,13 @@ impl<S: EventStore + SubjectStore> Edge<S> {
                 payment_id,
                 reference: parked.reference.clone(),
                 kiosk: false,
+                // The manager who agreed, written in the capture's own transaction, as a void
+                // records its approver.
+                confirmed_by: approver,
             };
-            let outcome = self
+            return self
                 .record_card_capture(actor, scope, bill_id, (&parked, &mark), None)
-                .await?;
-            if let Some(approver) = approver {
-                // The manager who agreed, beside the capture, as a void records its approver.
-                let ctx = self.decision_ctx(actor)?;
-                let record = Self::override_record(Permission::VoidBill, approver, None);
-                let (envelope, message) = self.prepare_on(&ctx, &record, None)?;
-                self.append_and_publish(vec![envelope], vec![message])
-                    .await?;
-            }
-            return Ok(outcome);
+                .await;
         }
         self.record_card_attempt(actor, bill_id, &parked, PaymentOutcome::Declined)
             .await?;
