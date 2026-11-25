@@ -51,7 +51,7 @@ fn a_submission_is_recorded_once_and_moves_through_its_states() {
             ["I1"]
         );
 
-        let mut submitted = due[0].clone();
+        let mut submitted = due.first().expect("one invoice is due").clone();
         submitted.state = "SUBMITTED".to_owned();
         submitted.authority_reference = Some("SANDBOX-1".to_owned());
         submissions.settle(&submitted).await.expect("settle");
