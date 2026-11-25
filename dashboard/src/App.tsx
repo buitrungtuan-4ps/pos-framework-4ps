@@ -154,6 +154,9 @@ const Settings = lazy(() =>
 const StoreSettings = lazy(() =>
   import("./screens/StoreSettings").then((module) => ({ default: module.StoreSettings })),
 );
+const EInvoices = lazy(() =>
+  import("./screens/EInvoices").then((module) => ({ default: module.EInvoices })),
+);
 const StoreHub = lazy(() =>
   import("./screens/StoreHub").then((module) => ({ default: module.StoreHub })),
 );
@@ -220,6 +223,7 @@ const COMPONENTS: Record<ScreenId, Component> = {
   packageDesigner: PackageDesigner,
   settings: Settings,
   storeSettings: StoreSettings,
+  einvoices: EInvoices,
   taxRates: TaxRates,
   fees: Fees,
   translations: Translations,

@@ -3187,5 +3187,21 @@
   "settings.value.EINVOICE_ISSUE_MOMENT_IMMEDIATE": "Immediately",
   "settings.value.EINVOICE_ISSUE_MOMENT_SCHEDULED_PER_ORDER": "After a delay",
   "settings.value.EINVOICE_ISSUE_MOMENT_BATCH_WINDOW": "Daily batch",
-  "settings.value.EINVOICE_ISSUE_MOMENT_ON_REQUEST": "Only on request"
+  "settings.value.EINVOICE_ISSUE_MOMENT_ON_REQUEST": "Only on request",
+  "nav.einvoices": "E-invoices",
+  "einvoices.title": "E-invoices",
+  "einvoices.description": "The symbol this store numbers its legal e-invoices under. A store that issues e-invoices cannot take payment until it has one, and a replacement box needs a new one.",
+  "einvoices.symbolTitle": "Invoice symbol",
+  "einvoices.symbolNow": "Published now",
+  "einvoices.symbolNone": "No symbol",
+  "einvoices.symbolBlocks": "This store issues e-invoices and has no symbol, so it cannot take payment. Set a symbol before it trades.",
+  "einvoices.issueOff": "This store does not issue e-invoices now. A symbol set here is used once it does.",
+  "einvoices.country": "Checked against the store's country: {country}",
+  "einvoices.symbolField": "Symbol",
+  "einvoices.symbolHint": "In Vietnam a form digit and six characters, such as 1C26MAA. The letters to use are to be confirmed by legal or the accountant.",
+  "einvoices.symbolRequired": "Type a symbol first.",
+  "einvoices.symbolSet": "Set symbol",
+  "einvoices.symbolChange": "Change symbol",
+  "einvoices.symbolPublished": "Symbol {symbol} published to the store.",
+  "einvoices.historyTitle": "Store history"
 }

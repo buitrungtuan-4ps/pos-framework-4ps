@@ -3187,5 +3187,21 @@
   "settings.value.EINVOICE_ISSUE_MOMENT_IMMEDIATE": "Ngay lập tức",
   "settings.value.EINVOICE_ISSUE_MOMENT_SCHEDULED_PER_ORDER": "Sau một khoảng chờ",
   "settings.value.EINVOICE_ISSUE_MOMENT_BATCH_WINDOW": "Theo lô hằng ngày",
-  "settings.value.EINVOICE_ISSUE_MOMENT_ON_REQUEST": "Chỉ khi khách yêu cầu"
+  "settings.value.EINVOICE_ISSUE_MOMENT_ON_REQUEST": "Chỉ khi khách yêu cầu",
+  "nav.einvoices": "Hóa đơn điện tử",
+  "einvoices.title": "Hóa đơn điện tử",
+  "einvoices.description": "Ký hiệu cửa hàng dùng để đánh số hóa đơn điện tử. Cửa hàng phát hành hóa đơn điện tử không thể thu tiền khi chưa có ký hiệu, và máy thay thế cần một ký hiệu mới.",
+  "einvoices.symbolTitle": "Ký hiệu hóa đơn",
+  "einvoices.symbolNow": "Đang áp dụng",
+  "einvoices.symbolNone": "Chưa có ký hiệu",
+  "einvoices.symbolBlocks": "Cửa hàng này phát hành hóa đơn điện tử nhưng chưa có ký hiệu nên không thể thu tiền. Hãy đặt ký hiệu trước khi bán hàng.",
+  "einvoices.issueOff": "Cửa hàng này hiện không phát hành hóa đơn điện tử. Ký hiệu đặt ở đây sẽ được dùng khi bật lại.",
+  "einvoices.country": "Được kiểm tra theo quốc gia của cửa hàng: {country}",
+  "einvoices.symbolField": "Ký hiệu",
+  "einvoices.symbolHint": "Tại Việt Nam gồm một chữ số mẫu và sáu ký tự, ví dụ 1C26MAA. Các chữ cái cần dùng sẽ được bộ phận pháp lý hoặc kế toán xác nhận.",
+  "einvoices.symbolRequired": "Hãy nhập ký hiệu trước.",
+  "einvoices.symbolSet": "Đặt ký hiệu",
+  "einvoices.symbolChange": "Đổi ký hiệu",
+  "einvoices.symbolPublished": "Đã gửi ký hiệu {symbol} xuống cửa hàng.",
+  "einvoices.historyTitle": "Lịch sử cửa hàng"
 }
