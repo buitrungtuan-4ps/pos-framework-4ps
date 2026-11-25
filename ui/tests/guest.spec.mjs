@@ -47,7 +47,7 @@ function menu(language) {
   };
 }
 
-async function serve(page, orders) {
+async function serve(page, orders, answer = menu) {
   await page.route(`${ORIGIN}/**`, async (route) => {
     const url = new URL(route.request().url());
     const file = FILES[url.pathname];
@@ -60,7 +60,7 @@ async function serve(page, orders) {
     }
     if (url.pathname === "/v1/qr/menu") {
       expect(url.searchParams.get("table_token")).toBe(TOKEN);
-      return route.fulfill({ json: menu(url.searchParams.get("lang") ?? "en") });
+      return route.fulfill({ json: answer(url.searchParams.get("lang") ?? "en") });
     }
     if (url.pathname === "/v1/qr/orders" && route.request().method() === "POST") {
       orders.push(route.request().postDataJSON());
@@ -84,6 +84,10 @@ test.describe("guest page", () => {
 
     await expect(page.getByRole("heading", { name: "Menu" })).toBeVisible();
     await expect(page.getByText("Sold out")).toBeVisible();
+    // The menu answers in `en-US`; its language's button is the pressed one, and nothing stray is drawn.
+    await expect(page.getByRole("button", { name: "en", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("button", { name: "vi", exact: true })).toHaveAttribute("aria-pressed", "false");
+    await expect(page.locator("main")).not.toContainText("null");
     const pizza = page.locator(".item", { hasText: "Demo Pizza A" });
     await pizza.getByRole("button", { name: "Add" }).click();
     await page.getByLabel(/Extra cheese/).check();
@@ -100,6 +104,14 @@ test.describe("guest page", () => {
     expect(sent.lines).toEqual([{ menu_item_id: PIZZA, quantity_milli: 2000, modifier_menu_item_ids: [CHEESE] }]);
     expect(Object.keys(sent).sort()).toEqual(["external_reference", "lines", "placed_at_ms", "table_token"]);
     expect(violations).toEqual([]);
+  });
+
+  test("a menu with nothing a table can order says so, and draws nothing stray", async ({ page }) => {
+    await serve(page, [], (language) => ({ language, languages: ["en", "vi"], items: [], modifier_groups: [] }));
+    await page.goto(`${ORIGIN}/qr/#t=${TOKEN}`);
+    await expect(page.getByText("Nothing can be ordered from the table right now.")).toBeVisible();
+    await expect(page.locator("main")).not.toContainText("null");
+    await expect(page.getByRole("button", { name: "Send order" })).toBeDisabled();
   });
 
   test("a guest switches the menu's language, and a page with no table code says so", async ({ page }) => {

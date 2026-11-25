@@ -12,6 +12,7 @@
   "guest.invalid": "Something in your order could not be taken. Please check it and try again.",
   "guest.loading": "Loading the menu…",
   "guest.menu": "Menu",
+  "guest.menu_empty": "Nothing can be ordered from the table right now. Please ask a member of staff.",
   "guest.no_ordering": "Ordering from the table is not available here.",
   "guest.no_table": "This table code is not recognised. Please ask a member of staff.",
   "guest.offline": "The restaurant cannot take orders from the table right now. Please ask a member of staff.",
