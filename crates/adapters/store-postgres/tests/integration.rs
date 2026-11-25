@@ -875,6 +875,10 @@ mod gateway_calls_store;
 #[path = "integration/einvoice_symbols_store.rs"]
 mod einvoice_symbols_store;
 
+/// The e-invoice submissions (ADR-0241, migration 0106): recorded once, moved through their states.
+#[path = "integration/einvoice_submissions_store.rs"]
+mod einvoice_submissions_store;
+
 /// Tenant keys (ADR-0217, migration 0100): a version is stored once, read oldest first, kept
 /// apart per tenant, and out of reach of the tenant-scoped role.
 #[path = "integration/tenant_keys_store.rs"]

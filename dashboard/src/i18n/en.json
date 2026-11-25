@@ -3209,5 +3209,6 @@
   "settings.value.EINVOICE_SYMBOL_ALLOCATION_MANUAL": "By hand",
   "settings.value.EINVOICE_SYMBOL_ALLOCATION_AUTOMATIC": "Automatic",
   "einvoices.symbolAllocate": "Allocate the next symbol",
-  "einvoices.symbolAllocateHint": "Gives the store the next symbol of its country's rule that no store of yours has used. A store set to allocate automatically gets one when its box is activated, and a new one when its box is replaced."
+  "einvoices.symbolAllocateHint": "Gives the store the next symbol of its country's rule that no store of yours has used. A store set to allocate automatically gets one when its box is activated, and a new one when its box is replaced.",
+  "alerts.kind.einvoiceOverdue": "E-invoice near or past its deadline"
 }

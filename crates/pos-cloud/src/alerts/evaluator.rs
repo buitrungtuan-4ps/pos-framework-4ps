@@ -74,6 +74,9 @@ pub struct ReadModels<Rg, Fl, Wh> {
     /// The chain findings ([ADR-0132](../../../../docs/adr/0132-the-cloud-recomputes-the-chain-it-holds.md)),
     /// or `None` for a cloud that keeps no anchor ledger.
     pub chain_findings: Option<Arc<dyn AnchorLedger>>,
+    /// The e-invoice submissions whose overdue invoices raise `einvoice_overdue` (ADR-0241), or
+    /// `None` for a cloud that keeps none.
+    pub einvoice_submissions: Option<Arc<dyn crate::einvoice::feed::SubmissionStore>>,
 }
 
 /// Reconciles the firing set against the store: opens a new alert for each firing condition that has
@@ -233,6 +236,14 @@ where
             .map_err(|e| e.to_string())?,
     );
     let now_ms = now.as_milliseconds_since_epoch();
+    firing.extend(
+        super::einvoice::einvoice_alerts(
+            models.einvoice_submissions.as_deref(),
+            &tenant_ids,
+            now_ms,
+        )
+        .await,
+    );
     let mut salt = 0_u128;
     let (opened, resolved) = reconcile(alerts, now, &firing, || {
         salt += 1;

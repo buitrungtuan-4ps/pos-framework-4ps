@@ -44,6 +44,7 @@ const KIND_LABEL: Record<string, MessageKey> = {
   jetstream_capacity: "alerts.kind.jetstreamCapacity",
   print_agent_stalled: "alerts.kind.printAgentStalled",
   chain_broken: "alerts.kind.chainBroken",
+  einvoice_overdue: "alerts.kind.einvoiceOverdue",
 };
 
 /** A chain break is read on the Chain integrity screen (ADR-0132); its alert links there, in the
