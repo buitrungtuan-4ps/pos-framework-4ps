@@ -427,3 +427,65 @@ fn a_settle_answers_with_the_invoice_number_and_its_lookup_code() {
         );
     });
 }
+
+/// ADR-0242 decision 3: a copy of the receipt carries the invoice the receipt printed, the same
+/// number and lookup code, and still does after a restart rebuilds the store from its log.
+#[test]
+fn a_receipt_copy_carries_the_invoice_also_after_a_restart() {
+    pos_fakes::executor::run_ready(async {
+        let store = FakeStore::default();
+        let edge = a_store(
+            store.clone(),
+            EInvoiceIssueMoment::Immediate,
+            Some("1C26MAA"),
+        );
+        let table = TableId::new(Ulid::from_u128(7));
+        edge.seat_table(actor(), table, None).await.expect("seats");
+        edge.add_line(actor(), table, a_line()).await.expect("adds");
+        let opened = edge.open_bill(actor(), table).await.expect("opens");
+        let settled = edge
+            .settle_bill(actor(), opened.bill_id, vec![cash(165_000)], None)
+            .await
+            .expect("settles");
+        let printed = settled
+            .invoice
+            .expect("an invoice was issued with the settle");
+
+        let copy = edge
+            .reprint_receipt(actor(), opened.bill_id)
+            .await
+            .expect("copies");
+        assert_eq!(copy.invoice.as_ref(), Some(&printed));
+
+        edge.rebuild().await.expect("rebuilds from the log");
+        let again = edge
+            .reprint_receipt(actor(), opened.bill_id)
+            .await
+            .expect("copies after the restart");
+        assert_eq!(again.invoice, Some(printed));
+    });
+}
+
+/// A copy of a bill whose invoice is still waiting prints no number: it has none yet.
+#[test]
+fn a_receipt_copy_of_a_deferred_invoice_has_no_number_yet() {
+    pos_fakes::executor::run_ready(async {
+        let edge = a_store(
+            FakeStore::default(),
+            EInvoiceIssueMoment::BatchWindow,
+            Some("1C26MAA"),
+        );
+        let table = TableId::new(Ulid::from_u128(7));
+        edge.seat_table(actor(), table, None).await.expect("seats");
+        edge.add_line(actor(), table, a_line()).await.expect("adds");
+        let opened = edge.open_bill(actor(), table).await.expect("opens");
+        edge.settle_bill(actor(), opened.bill_id, vec![cash(165_000)], None)
+            .await
+            .expect("settles");
+        let copy = edge
+            .reprint_receipt(actor(), opened.bill_id)
+            .await
+            .expect("copies");
+        assert_eq!(copy.invoice, None);
+    });
+}

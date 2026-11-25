@@ -5,15 +5,17 @@
 //! ([ADR-0225](../../../../../docs/adr/0225-a-vietnamese-store-issues-its-e-invoice-and-the-cloud-submits-it.md),
 //! [ADR-0229](../../../../../docs/adr/0229-the-e-invoice-issue-moment-is-a-schedule.md)): the last
 //! number under each symbol, which the next invoice continues from; the bills with one, which a void
-//! after payment refuses; and the deferred invoices in due order.
+//! after payment refuses and a receipt's copy prints again; and the deferred invoices in due order.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 
 use pos_core::decision::Actor;
 use pos_proto::einvoice::InvoiceSymbol;
 use pos_proto::events::{FiscalInvoiceIssued, FiscalInvoiceScheduled};
-use pos_proto::ids::{BillId, SubjectId};
+use pos_proto::ids::{BillId, EventId, SubjectId};
 use pos_proto::time::Timestamp;
+
+use crate::app::IssuedInvoiceRef;
 
 /// The most deferred invoices a store holds at once (AGENTS.md §2). A settle that finds the queue
 /// full issues at once rather than refuse the sale or lose the invoice (ADR-0229 decision 4).
@@ -34,7 +36,10 @@ pub(in crate::app) struct Waiting {
 #[derive(Debug, Default)]
 pub(in crate::app) struct Invoices {
     last: HashMap<InvoiceSymbol, u32>,
-    invoiced: HashSet<BillId>,
+    /// Each invoiced bill's invoice number and lookup code, which a copy of its receipt prints
+    /// again ([ADR-0242](../../../../../docs/adr/0242-a-receipt-prints-its-invoice-number-and-lookup-code.md)
+    /// decision 3).
+    invoiced: HashMap<BillId, IssuedInvoiceRef>,
     /// Waiting bills by due time then bill.
     pending: BTreeMap<(Timestamp, BillId), Waiting>,
     /// Each waiting bill's due time, to find it in `pending`.
@@ -42,15 +47,23 @@ pub(in crate::app) struct Invoices {
 }
 
 impl Invoices {
-    /// Records an issued invoice. The highest number seen wins, so a replay in any order ends
-    /// where the live box did. An invoice that was waiting leaves the queue.
-    pub(in crate::app) fn fold(&mut self, issued: &FiscalInvoiceIssued) {
+    /// Records an issued invoice, recorded by the event `invoice_id`. The highest number seen wins,
+    /// so a replay in any order ends where the live box did. An invoice that was waiting leaves the
+    /// queue.
+    pub(in crate::app) fn fold(&mut self, issued: &FiscalInvoiceIssued, invoice_id: EventId) {
         let last = self
             .last
             .entry(issued.invoice.invoice_symbol.clone())
             .or_insert(0);
         *last = (*last).max(issued.invoice.invoice_sequence);
-        self.invoiced.insert(issued.bill_id);
+        self.invoiced.insert(
+            issued.bill_id,
+            IssuedInvoiceRef::new(
+                issued.invoice.invoice_symbol.as_str(),
+                issued.invoice.invoice_sequence,
+                &invoice_id.to_string(),
+            ),
+        );
         self.drop_pending(issued.bill_id);
     }
 
@@ -60,7 +73,7 @@ impl Invoices {
         scheduled: &FiscalInvoiceScheduled,
         settled_by: Actor,
     ) {
-        if self.invoiced.contains(&scheduled.bill_id) || self.pending.len() >= PENDING_LIMIT {
+        if self.invoiced.contains_key(&scheduled.bill_id) || self.pending.len() >= PENDING_LIMIT {
             return;
         }
         self.drop_pending(scheduled.bill_id);
@@ -108,6 +121,11 @@ impl Invoices {
 
     /// Whether an invoice was issued for `bill_id`.
     pub(in crate::app) fn issued_for(&self, bill_id: BillId) -> bool {
-        self.invoiced.contains(&bill_id)
+        self.invoiced.contains_key(&bill_id)
+    }
+
+    /// The number and lookup code of the invoice issued for `bill_id`, if one was.
+    pub(in crate::app) fn issued(&self, bill_id: BillId) -> Option<&IssuedInvoiceRef> {
+        self.invoiced.get(&bill_id)
     }
 }

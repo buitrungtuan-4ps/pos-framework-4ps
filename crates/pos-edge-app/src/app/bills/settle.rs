@@ -25,8 +25,7 @@ use super::card::CardMark;
 use super::invoice::{InvoicePlan, SettleInvoice};
 use crate::app::records::tax_records;
 use crate::app::{
-    AppError, Approval, BillView, BuyerDetails, Edge, IssuedInvoiceRef, OrderSnapshot, TillScope,
-    fee_records,
+    AppError, Approval, BillView, BuyerDetails, Edge, OrderSnapshot, TillScope, fee_records,
 };
 use crate::fanout::ServerMessage;
 
@@ -188,33 +187,25 @@ impl<S: EventStore> Edge<S> {
             &mut messages,
         )?;
         let invoice = self.settle_invoice(&ctx, plan, &settled)?;
-        let mut issued_ref = None;
+        let mut issued_id = None;
         if let Some(record) = &invoice {
             let (envelope, message) = match record {
                 SettleInvoice::Issued(issued) => self.prepare_on(&ctx, issued, shift)?,
                 SettleInvoice::Scheduled(scheduled) => self.prepare_on(&ctx, scheduled, shift)?,
             };
-            if let SettleInvoice::Issued(issued) = record {
-                issued_ref = Some(IssuedInvoiceRef::new(
-                    issued.invoice.invoice_symbol.as_str(),
-                    issued.invoice.invoice_sequence,
-                    &envelope.event_id.to_string(),
-                ));
-            }
+            issued_id = Some(envelope.event_id);
             envelopes.push(envelope);
             messages.push(message);
         }
         let buyer = settled.buyer_subject_id.zip(buyer);
         self.commit_settle(&ctx, &envelopes, &messages, buyer)
             .await?;
-        match &invoice {
-            Some(SettleInvoice::Issued(issued)) => self.lock_projection().invoices.fold(issued),
-            Some(SettleInvoice::Scheduled(scheduled)) => self
-                .lock_projection()
-                .invoices
-                .fold_scheduled(scheduled, ctx.actor),
-            None => {}
-        }
+        let issued_ref = invoice
+            .as_ref()
+            .zip(issued_id)
+            .and_then(|(record, invoice_id)| {
+                self.fold_settle_invoice(record, invoice_id, ctx.actor)
+            });
 
         let _fired = self.apply_fires(&ctx, fires);
         let table_state = self.fold_settled(&settled, (shift, &payments), &ctx, &proved)?;

@@ -108,11 +108,12 @@ impl<S: EventStore> Edge<S> {
     ) -> Result<ReceiptCopy, AppError> {
         let ctx = self.decision_ctx(actor)?;
         ctx.require(Permission::ReprintReceipt)?;
-        let (bill, receipt) = {
+        let (bill, receipt, invoice) = {
             let projection = self.lock_projection();
             let bill = projection.bill(bill_id).ok_or(AppError::UnknownBill)?;
             let receipt = projection.settled.get(&bill_id).cloned();
-            (bill, receipt)
+            let invoice = projection.invoices.issued(bill_id).cloned();
+            (bill, receipt, invoice)
         };
         // A settled bill's receipt, or a voided one's that was settled first: only a settle records
         // a receipt, so a bill voided unpaid has none.
@@ -160,6 +161,7 @@ impl<S: EventStore> Edge<S> {
             buyer_subject_id: receipt.buyer_subject_id,
             job_id,
             voided,
+            invoice,
         })
     }
 
