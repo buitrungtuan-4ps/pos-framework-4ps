@@ -723,5 +723,8 @@
   "card.unanswered": "The edge did not answer. Check this bill before taking payment again.",
   "kiosk.pay_card": "Pay by card",
   "kiosk.card_unknown": "We could not confirm your card. Please see a member of staff.",
-  "kiosk.card_paid": "Paid. Thank you!"
+  "kiosk.card_paid": "Paid. Thank you!",
+  "pay.buyer_email": "Email for the e-invoice",
+  "pay.buyer_tax_code_shape": "This does not look like a tax number: 10 to 15 letters or digits.",
+  "pay.einvoice": "E-invoice {number} · lookup code {code}"
 }

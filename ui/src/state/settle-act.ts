@@ -50,6 +50,27 @@ export function receiptLine(bill: BillResponse): string {
     : t("pay.receipt", { number: bill.receipt_number });
 }
 
+/**
+ * The settled panel's e-invoice line, when the settle issued one (ADR-0242): its number and the code
+ * a guest looks it up by. `null` for a deferred invoice, which has no number yet, and for none.
+ */
+export function invoiceLine(bill: BillResponse): string | null {
+  return bill.invoice_number
+    ? t("pay.einvoice", { number: bill.invoice_number, code: bill.invoice_lookup_code ?? "" })
+    : null;
+}
+
+/**
+ * Whether a buyer's tax number has a shape some country writes (ADR-0242 decision 4): 10 to 15
+ * letters, digits or `-`, which covers a Vietnamese MST (10 digits, or 10 and a 3-digit branch), a
+ * Japanese 登録番号 and an Indian GSTIN. Blank is fine: the number is optional. The edge checks the
+ * store's own country's shape and refuses the settle if it is wrong.
+ */
+export function taxCodeLooksValid(code: string): boolean {
+  const trimmed = code.trim();
+  return trimmed === "" || /^[A-Za-z0-9-]{10,15}$/.test(trimmed);
+}
+
 /** What the edge says now about a bill whose settle went unanswered. */
 export async function recheckSettle(billId: string): Promise<Recheck<BillResponse>> {
   const bill = await api.billCheck(billId);

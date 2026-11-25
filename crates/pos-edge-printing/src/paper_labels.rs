@@ -34,6 +34,10 @@ pub struct PaperLabels {
     pub reprint: &'static str,
     /// The corporate buyer's line on a B2B invoice, before their name.
     pub bill_to: &'static str,
+    /// The e-invoice number's line on a receipt whose settle issued one (ADR-0242).
+    pub einvoice_number: &'static str,
+    /// The line before the code a guest looks the e-invoice up by (ADR-0242).
+    pub einvoice_lookup: &'static str,
     /// The sum of the lines.
     pub subtotal: &'static str,
     /// Money taken off.
@@ -153,6 +157,8 @@ pub static ENGLISH: PaperLabels = PaperLabels {
     copy: "COPY",
     reprint: "Reprint",
     bill_to: "Bill to",
+    einvoice_number: "E-invoice no.",
+    einvoice_lookup: "Lookup code",
     subtotal: "Subtotal",
     discount: "Discount",
     comps: "Comps",
@@ -215,6 +221,8 @@ pub static VIETNAMESE: PaperLabels = PaperLabels {
     copy: "BẢN SAO",
     reprint: "In lại lần",
     bill_to: "Người mua",
+    einvoice_number: "Số HĐĐT",
+    einvoice_lookup: "Mã tra cứu",
     subtotal: "Tạm tính",
     discount: "Giảm giá",
     comps: "Miễn phí",

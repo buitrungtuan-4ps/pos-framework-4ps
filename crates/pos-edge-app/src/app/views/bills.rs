@@ -293,6 +293,33 @@ pub struct BillView {
     /// have to be the same records the totals above were assembled from or the document does not add
     /// up. Edge-local, like [`Self::totals`].
     pub lines: Vec<ReceiptLine>,
+    /// The e-invoice the settle issued with it, if it issued one there and then
+    /// ([ADR-0242](../../../../../docs/adr/0242-a-receipt-prints-its-invoice-number-and-lookup-code.md)).
+    /// A deferred invoice has no number yet, so it is `None`.
+    pub invoice: Option<IssuedInvoiceRef>,
+}
+
+/// The number of an e-invoice a settle issued and the code a guest looks it up by (ADR-0242).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IssuedInvoiceRef {
+    /// The symbol and sequence, `1C26MAA/00000042`.
+    pub number: String,
+    /// The last ten characters of the invoice's id: the store has it offline, and it says nothing
+    /// about the bill (ADR-0242 decision 2).
+    pub lookup_code: String,
+}
+
+impl IssuedInvoiceRef {
+    /// The reference of the invoice recorded by the event `invoice_id`, numbered `sequence` under
+    /// `symbol`.
+    #[must_use]
+    pub fn new(symbol: &str, sequence: u32, invoice_id: &str) -> Self {
+        let start = invoice_id.len().saturating_sub(10);
+        Self {
+            number: format!("{symbol}/{sequence:08}"),
+            lookup_code: invoice_id.get(start..).unwrap_or(invoice_id).to_owned(),
+        }
+    }
 }
 
 /// One bill as the till reads it back: where it has got to, the lines it covers, and what they come

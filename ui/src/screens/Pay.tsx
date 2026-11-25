@@ -11,7 +11,7 @@ import { CompPanel } from "../components/CompPanel";
 import { PendingSettle } from "../components/PendingSettle";
 import { RefusalPanel } from "../components/RefusalPanel";
 import { PrintedCheck } from "../components/PrintedCheck";
-import { receiptLine } from "../state/settle-act";
+import { invoiceLine, receiptLine, taxCodeLooksValid } from "../state/settle-act";
 import { usePayActs } from "../state/pay-acts";
 import { useWaiveAct, waiveRefusal } from "../state/reduction-acts";
 import { DrawerOwner } from "../components/DrawerOwner";
@@ -162,6 +162,7 @@ export function Pay() {
   const [buyerName, setBuyerName] = createSignal("");
   const [buyerTaxCode, setBuyerTaxCode] = createSignal("");
   const [buyerAddress, setBuyerAddress] = createSignal("");
+  const [buyerEmail, setBuyerEmail] = createSignal("");
   // What the guest owes, as the edge assembled it (E5). Null until it arrives; the screen shows no
   // amount rather than a guess, because the till no longer has the means to guess one.
   const [check, setCheck] = createSignal<CheckResponse | null>(null);
@@ -381,6 +382,7 @@ export function Pay() {
       name,
       tax_code: optional(buyerTaxCode()),
       address: optional(buyerAddress()),
+      email: optional(buyerEmail()),
     };
   };
 
@@ -499,6 +501,7 @@ export function Pay() {
     setBuyerName("");
     setBuyerTaxCode("");
     setBuyerAddress("");
+    setBuyerEmail("");
     discount.closeDiscount();
     voiding.closeVoid();
     setBillId(id);
@@ -1062,6 +1065,9 @@ export function Pay() {
                 onInput={(event) => setBuyerTaxCode(event.currentTarget.value)}
               />
             </label>
+            <Show when={!taxCodeLooksValid(buyerTaxCode())}>
+              <p class="mt-1 text-sm text-danger" data-outcome="buyer-tax-code-shape">{t("pay.buyer_tax_code_shape")}</p>
+            </Show>
             <label class="mt-2 block text-sm">
               {t("pay.buyer_address")}
               <input
@@ -1069,6 +1075,15 @@ export function Pay() {
                 class="mt-1 min-h-touch w-full rounded-token border border-line bg-surface px-2"
                 value={buyerAddress()}
                 onInput={(event) => setBuyerAddress(event.currentTarget.value)}
+              />
+            </label>
+            <label class="mt-2 block text-sm">
+              {t("pay.buyer_email")}
+              <input
+                type="email"
+                class="mt-1 min-h-touch w-full rounded-token border border-line bg-surface px-2"
+                value={buyerEmail()}
+                onInput={(event) => setBuyerEmail(event.currentTarget.value)}
               />
             </label>
           </details>
@@ -1226,6 +1241,9 @@ export function Pay() {
           <p class="mt-2 tabular-nums">
             {receiptLine(bill())}
           </p>
+          <Show when={invoiceLine(bill())}>
+            {(line) => <p class="mt-1 text-sm tabular-nums text-ink-muted" data-outcome="einvoice">{line()}</p>}
+          </Show>
           {/* The change is what the cashier acts on next, so it is the largest figure here (UX-15). */}
           <Show when={givenChange() > 0}>
             <p class="mt-3 text-sm text-ink-muted">{t("pay.change")}<span class="block text-4xl font-semibold text-ink tabular-nums" data-outcome="change-due">{formatAmount(money(currency(), givenChange()))}</span></p>
