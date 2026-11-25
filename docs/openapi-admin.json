@@ -11885,6 +11885,206 @@
         "x-permission": "console.devices.manage"
       }
     },
+    "/admin/einvoices": {
+      "get": {
+        "tags": [
+          "e-invoices"
+        ],
+        "summary": "The console's invoice list (ADR-0241 decision 5).",
+        "operationId": "admin_list_einvoices",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "store_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's invoices, or one store's, newest first, at most 1,000, each with where its submission stands. No buyer is named",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EInvoiceView"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "tenant_id or store_id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The submissions are unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
+      }
+    },
+    "/admin/einvoices/{invoice_id}/correct": {
+      "post": {
+        "tags": [
+          "e-invoices"
+        ],
+        "summary": "Records a correction of an issued invoice (ADR-0225 decision 7, ADR-0241 decision 5).",
+        "operationId": "admin_correct_einvoice",
+        "parameters": [
+          {
+            "name": "invoice_id",
+            "in": "path",
+            "description": "The invoice to correct (a ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The tenant, the kind (`ADJUSTMENT` or `REPLACEMENT`) and the total",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CorrectEInvoiceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The correction, numbered under the tenant's correction symbol, recorded as PENDING and audited. It is submitted by the next pass",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EInvoiceView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An id is not a ULID, or the kind is not one of the two (`INVALID_FORMAT` on `kind`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.einvoices.correct",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such invoice in the tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The store's country has no symbol rule for the correction symbol (`E_INVOICE_SYMBOL_NO_RULE` on `symbol`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The submissions or the ledger are unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.einvoices.correct"
+      }
+    },
     "/admin/employees": {
       "get": {
         "tags": [
@@ -28779,6 +28979,29 @@
           }
         }
       },
+      "CorrectEInvoiceRequest": {
+        "type": "object",
+        "description": "A `POST /admin/einvoices/{invoice_id}/correct` body.",
+        "required": [
+          "tenant_id",
+          "kind",
+          "total_minor"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "`ADJUSTMENT` (the amount up or down, a whole refund included) or `REPLACEMENT`."
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "total_minor": {
+            "type": "integer",
+            "format": "int64",
+            "description": "For an adjustment, the change in minor units, negative for down; for a replacement, the\nreplacement's total."
+          }
+        }
+      },
       "CountrySettingDefault": {
         "type": "object",
         "description": "One setting a country pack seeds: the register's key and the value, as the setting's node\ncarries it.",
@@ -30380,6 +30603,96 @@
         "type": "string",
         "description": "A `DisplaySubcategoryId`: a ULID, 26 Crockford base-32 characters",
         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "EInvoiceView": {
+        "type": "object",
+        "description": "One invoice and where its submission stands. No buyer is named.",
+        "required": [
+          "invoice_id",
+          "store_id",
+          "bill_id",
+          "invoice_number",
+          "kind",
+          "issued_on",
+          "total_minor",
+          "currency",
+          "state",
+          "failed_attempts",
+          "next_attempt_ms",
+          "authority_reference",
+          "refusal",
+          "corrects_invoice_number",
+          "recorded_at_ms",
+          "updated_at_ms"
+        ],
+        "properties": {
+          "authority_reference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "bill_id": {
+            "type": "string"
+          },
+          "corrects_invoice_number": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "currency": {
+            "type": "string"
+          },
+          "failed_attempts": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "invoice_id": {
+            "type": "string"
+          },
+          "invoice_number": {
+            "type": "string",
+            "description": "`1C26MAA/00000042`."
+          },
+          "issued_on": {
+            "type": "string",
+            "description": "`YYYY-MM-DD`."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`ORIGINAL`, `ADJUSTMENT` or `REPLACEMENT`."
+          },
+          "next_attempt_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "recorded_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "refusal": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "description": "`PENDING`, `RETRYING`, `SUBMITTED` or `REJECTED`."
+          },
+          "store_id": {
+            "type": "string"
+          },
+          "total_minor": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "updated_at_ms": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
       },
       "EdgePlacement": {
         "type": "string",
@@ -40804,6 +41117,10 @@
     {
       "name": "openapi",
       "description": "This document (ADR-0019), served without a session: it describes routes and carries no tenant data."
+    },
+    {
+      "name": "e-invoices",
+      "description": "The invoices a tenant's stores issued, where each one's submission to the provider stands, and their correction by an adjustment or a replacement (ADR-0241). No buyer is named."
     },
     {
       "name": "config nodes",

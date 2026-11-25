@@ -71,6 +71,8 @@ pub trait SubmissionStore: Send + Sync + core::fmt::Debug {
     ) -> FeedFuture<'_, Vec<SubmissionRow>>;
     /// One submission.
     fn get(&self, tenant: TenantId, invoice_id: Ulid) -> FeedFuture<'_, Option<SubmissionRow>>;
+    /// The highest number the tenant recorded under `symbol`.
+    fn last_number(&self, tenant: TenantId, symbol: String) -> FeedFuture<'_, Option<String>>;
 }
 
 fn text<E: core::fmt::Display>(error: E) -> FeedError {
@@ -137,6 +139,14 @@ impl SubmissionStore for store_postgres::PostgresEInvoiceSubmissions {
     fn get(&self, tenant: TenantId, invoice_id: Ulid) -> FeedFuture<'_, Option<SubmissionRow>> {
         Box::pin(async move {
             Self::get(self, &tenant.to_string(), &invoice_id.to_string())
+                .await
+                .map_err(text)
+        })
+    }
+
+    fn last_number(&self, tenant: TenantId, symbol: String) -> FeedFuture<'_, Option<String>> {
+        Box::pin(async move {
+            Self::last_number(self, &tenant.to_string(), &symbol)
                 .await
                 .map_err(text)
         })
@@ -250,6 +260,17 @@ impl SubmissionStore for InMemorySubmissions {
                 .cloned()
         });
         Box::pin(async move { row })
+    }
+
+    fn last_number(&self, tenant: TenantId, symbol: String) -> FeedFuture<'_, Option<String>> {
+        let (tenant, prefix) = (tenant.to_string(), format!("{symbol}/"));
+        let last = self.rows().map(|rows| {
+            rows.values()
+                .filter(|row| row.tenant_id == tenant && row.invoice_number.starts_with(&prefix))
+                .map(|row| row.invoice_number.clone())
+                .max()
+        });
+        Box::pin(async move { last })
     }
 }
 

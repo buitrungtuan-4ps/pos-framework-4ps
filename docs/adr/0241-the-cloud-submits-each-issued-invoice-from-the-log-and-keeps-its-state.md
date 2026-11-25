@@ -56,3 +56,10 @@ and an alert before the submission deadline. A queue in memory forgets all of it
 - A store that never comes back is still the known gap ADR-0225 names.
 - The cursor is per cell. A second cloud replica would read the same pages; the row's key makes that
   harmless, at the cost of a duplicate provider call that the provider's idempotency by invoice absorbs.
+
+## Amendment 1, 2026-11-25: the permission's id
+
+Decision 5 names the new permission `fiscal.invoice.correct`. Console permissions are namespaced
+`console.<resource>.<action>`, which a test of the catalogue enforces, so it is built as
+**`console.einvoices.correct`**, with the roles decision 5 gives it (OWNER and ADMIN). Nothing else
+in the decision changes.

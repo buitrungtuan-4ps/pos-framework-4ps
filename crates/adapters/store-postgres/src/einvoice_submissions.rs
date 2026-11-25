@@ -285,6 +285,32 @@ impl PostgresEInvoiceSubmissions {
     }
 }
 
+impl PostgresEInvoiceSubmissions {
+    /// The highest number the tenant recorded under `symbol`, such as `1C26MAA/00000042`.
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn last_number(
+        &self,
+        tenant_id: &str,
+        symbol: &str,
+    ) -> Result<Option<String>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let prefix = format!("{symbol}/%");
+        let row = connection
+            .query_opt(
+                "SELECT invoice_number FROM einvoice_submissions \
+                 WHERE tenant_id = $1 AND invoice_number LIKE $2 \
+                 ORDER BY invoice_number DESC LIMIT 1",
+                &[&tenant_id, &prefix],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(row.map(|row| row.get(0)))
+    }
+}
+
 impl crate::PostgresStore {
     /// The e-invoice submissions over this pool (ADR-0241, migration 0106). Here rather than in
     /// `store.rs`, which is at its size baseline.

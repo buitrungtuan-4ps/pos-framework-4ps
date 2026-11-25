@@ -113,6 +113,7 @@ pub(crate) mod config_nodes;
 pub(crate) mod config_publish;
 pub(crate) mod countries;
 mod custom_values;
+pub(crate) mod einvoices;
 pub(crate) mod fleet;
 mod grid_keys;
 mod grid_sync;
@@ -198,6 +199,7 @@ pub(crate) use devices::{
 pub use devices::{
     activation_router, claim_router, device_publish_router, device_revoke_router, device_router,
 };
+pub use einvoices::einvoices_router;
 pub use fees::fees_router;
 pub(crate) use fees::{
     __path_admin_create_fee, __path_admin_delete_fee, __path_admin_effective_fees,

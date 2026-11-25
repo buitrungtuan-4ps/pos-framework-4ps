@@ -37,3 +37,26 @@ export const allocateEInvoiceSymbol = (
     tenant_id: tenantId,
     store_id: storeId,
   });
+
+/** One invoice and where its submission stands (ADR-0241). No buyer is named. */
+export type EInvoiceView = components["schemas"]["EInvoiceView"];
+
+/** The tenant's invoices, or one store's, newest first. */
+export const listEInvoices = (tenantId: string, storeId: string): Promise<EInvoiceView[]> =>
+  requestJson<EInvoiceView[]>(
+    "GET",
+    `/admin/einvoices?tenant_id=${encodeURIComponent(tenantId)}&store_id=${encodeURIComponent(storeId)}`,
+  );
+
+/** Records an adjustment or a replacement of an issued invoice (ADR-0225 decision 7). */
+export const correctEInvoice = (
+  tenantId: string,
+  invoiceId: string,
+  kind: "ADJUSTMENT" | "REPLACEMENT",
+  totalMinor: number,
+): Promise<EInvoiceView> =>
+  requestJson<EInvoiceView>("POST", `/admin/einvoices/${encodeURIComponent(invoiceId)}/correct`, {
+    tenant_id: tenantId,
+    kind,
+    total_minor: totalMinor,
+  });

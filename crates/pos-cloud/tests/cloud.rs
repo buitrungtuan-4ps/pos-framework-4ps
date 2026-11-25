@@ -66,6 +66,8 @@ mod device_revoke;
 mod device_tills;
 #[path = "cloud/devices.rs"]
 mod devices;
+#[path = "cloud/einvoices.rs"]
+mod einvoices;
 #[path = "cloud/fake_floor.rs"]
 mod fake_floor;
 #[path = "cloud/fee_menu_publish.rs"]
