@@ -26,8 +26,8 @@ from the terminal. A cashier who took cash could settle the bill this way and ke
 
 **Option 3.**
 
-1. **A published setting** (ADR-0160), `card.unknown_confirm_approval`, at every scope:
-   `CARD_UNKNOWN_CONFIRM_APPROVAL_MANAGER`, the register's default, and `_NONE`. No country pack and no
+1. **A published setting** (ADR-0160) on the `billing` node, `billing.card_confirm_approval`, at every scope:
+   `CARD_CONFIRM_APPROVAL_MANAGER`, the register's default, and `CARD_CONFIRM_APPROVAL_NONE`. No country pack and no
    template changes it, so every store starts with `MANAGER`.
 2. **Under `MANAGER`, `CONFIRM` needs a manager**: the step-up a void of an open bill uses, checked
    against `billing.bill.void` (a manager's badge and PIN, unless the person confirming holds it
@@ -41,6 +41,6 @@ from the terminal. A cashier who took cash could settle the bill this way and ke
 ## Consequences accepted
 
 - A store with no manager on the floor cannot close a parked card by hand until one comes, or it sets
-  `_NONE`.
-- **Open owner decisions:** the owner may set `_NONE` per store. A daily check of hand-confirmed cards
+  `CARD_CONFIRM_APPROVAL_NONE`.
+- **Open owner decisions:** the owner may set `CARD_CONFIRM_APPROVAL_NONE` per store. A daily check of hand-confirmed cards
   against the terminal's batch is recommended either way.
