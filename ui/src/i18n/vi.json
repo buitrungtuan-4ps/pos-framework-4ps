@@ -726,5 +726,9 @@
   "kiosk.card_paid": "Đã thanh toán. Cảm ơn quý khách!",
   "pay.buyer_email": "Email nhận hóa đơn điện tử",
   "pay.buyer_tax_code_shape": "Mã số thuế không đúng dạng: 10 đến 15 chữ hoặc số.",
-  "pay.einvoice": "Hóa đơn điện tử {number} · mã tra cứu {code}"
+  "pay.einvoice": "Hóa đơn điện tử {number} · mã tra cứu {code}",
+  "card.confirm_needs_manager": "Cần quản lý đồng ý trước khi xác nhận thẻ bằng tay. Hãy nhờ quản lý nhập mã thẻ nhân viên và mã PIN.",
+  "card.approver_code": "Mã nhân viên của quản lý",
+  "card.approver_pin": "Mã PIN của quản lý",
+  "card.confirm_approved": "Xác nhận cùng quản lý"
 }

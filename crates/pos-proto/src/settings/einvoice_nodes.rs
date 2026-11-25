@@ -90,3 +90,26 @@ pub(super) fn einvoice_settings() -> Vec<Setting> {
         },
     ]
 }
+
+/// The `billing` node's card setting (ADR-0243), apart from `nodes.rs`, which is at its size limit.
+pub(super) fn card_confirm_settings() -> Vec<Setting> {
+    vec![Setting {
+        node: crate::billing::PublishedBilling::NODE,
+        field: "card_confirm_approval",
+        shape: SettingShape::Choice {
+            values: choices::<crate::billing::CardConfirmApproval>(),
+            default: crate::billing::PublishedBilling::default()
+                .card_confirm_approval()
+                .as_wire(),
+            // Money integrity: no pack and no template changes it (ADR-0243 decision 1).
+            preset: None,
+        },
+        scopes: STORE_WIDE,
+        since: NEXT_RELEASE,
+        confirm: None,
+        summary: "Who must agree before a card the terminal left unknown is confirmed as paid by \
+                  hand. `CARD_CONFIRM_APPROVAL_MANAGER`, the default, needs a manager's badge and \
+                  PIN, as a void does; `_NONE` lets the person who may take payment confirm it \
+                  alone. Looking the card up or cancelling it on the terminal needs neither.",
+    }]
+}

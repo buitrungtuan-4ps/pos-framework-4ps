@@ -601,6 +601,7 @@ fn read_back_billing(field: &str, document: Value) -> Option<Value> {
         "check_before_payment" => Some(json!(billing.check_before_payment())),
         "part_payments" => Some(json!(billing.part_payments())),
         "price_override_max_multiple" => Some(json!(billing.price_override_max_multiple())),
+        "card_confirm_approval" => Some(json!(billing.card_confirm_approval().as_wire())),
         _ => None,
     }
 }

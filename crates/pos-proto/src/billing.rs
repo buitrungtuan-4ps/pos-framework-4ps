@@ -15,7 +15,7 @@ use std::ops::RangeInclusive;
 use serde::{Deserialize, Serialize};
 
 use crate::wire_enum;
-use crate::wire_enum::{Open, is_absent};
+use crate::wire_enum::{Open, WireEnum, is_absent};
 
 wire_enum! {
     /// How long after it was paid a bill may still be voided at the till.
@@ -24,6 +24,16 @@ wire_enum! {
     BusinessDate = "BUSINESS_DATE",
     /// Only while the shift that took the money is open.
     Shift = "SHIFT",
+}
+
+wire_enum! {
+    /// Who must agree before a parked card is confirmed as paid by hand
+    /// ([ADR-0243](../../../docs/adr/0243-a-hand-confirmed-card-needs-a-manager.md)).
+    CardConfirmApproval, prefix = "CARD_CONFIRM_APPROVAL";
+    /// A manager, as a void needs. The default.
+    Manager = "MANAGER",
+    /// Nobody but the person confirming.
+    None = "NONE",
 }
 
 /// The `billing` node.
@@ -69,6 +79,10 @@ pub struct PublishedBilling {
         skip_serializing_if = "Option::is_none"
     )]
     pub price_override_max_multiple: Option<i64>,
+    /// Who must agree before a parked card is confirmed as paid by hand (ADR-0243). Read it
+    /// through [`PublishedBilling::card_confirm_approval`]: anything but `NONE` is a manager.
+    #[serde(default, deserialize_with = "token", skip_serializing_if = "is_absent")]
+    pub card_confirm_approval: Open<CardConfirmApproval>,
 }
 
 /// The multiples a store may publish as its price override's ceiling (ADR-0219).
@@ -101,6 +115,18 @@ impl PublishedBilling {
     #[must_use]
     pub fn check_before_payment(&self) -> bool {
         self.check_before_payment.unwrap_or(false)
+    }
+
+    /// Who must agree before a parked card is confirmed by hand: a manager unless the store says
+    /// [`CardConfirmApproval::None`] (ADR-0243), the safe default for money.
+    #[must_use]
+    pub fn card_confirm_approval(&self) -> CardConfirmApproval {
+        match self.card_confirm_approval.known() {
+            CardConfirmApproval::None => CardConfirmApproval::None,
+            CardConfirmApproval::Unspecified | CardConfirmApproval::Manager => {
+                CardConfirmApproval::Manager
+            }
+        }
     }
 
     /// Whether a bill may be paid in parts, one payment at a time (ADR-0220): on unless the store
@@ -141,9 +167,10 @@ where
 
 /// A window as the node carries it: a token, kept as it came where this release does not know it,
 /// and nothing for a value that is not a token, so the field reads as its default.
-fn token<'de, D>(deserializer: D) -> Result<Open<SettledVoidWindow>, D::Error>
+fn token<'de, D, T>(deserializer: D) -> Result<Open<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
+    T: WireEnum,
 {
     Ok(serde_json::Value::deserialize(deserializer)?
         .as_str()

@@ -18,6 +18,16 @@ backup.interval_hours	scope=SETTING_SCOPE_STORE_GROUP
 backup.interval_hours	scope=SETTING_SCOPE_TENANT
 backup.interval_hours	since=0.14.1
 backup.interval_hours	unit=SETTING_UNIT_HOURS
+billing.card_confirm_approval
+billing.card_confirm_approval	default=CARD_CONFIRM_APPROVAL_MANAGER
+billing.card_confirm_approval	kind=SETTING_KIND_CHOICE
+billing.card_confirm_approval	scope=SETTING_SCOPE_BRAND
+billing.card_confirm_approval	scope=SETTING_SCOPE_STORE
+billing.card_confirm_approval	scope=SETTING_SCOPE_STORE_GROUP
+billing.card_confirm_approval	scope=SETTING_SCOPE_TENANT
+billing.card_confirm_approval	since=0.14.1
+billing.card_confirm_approval	value=CARD_CONFIRM_APPROVAL_MANAGER
+billing.card_confirm_approval	value=CARD_CONFIRM_APPROVAL_NONE
 billing.check_before_payment
 billing.check_before_payment	default=false
 billing.check_before_payment	kind=SETTING_KIND_BOOL

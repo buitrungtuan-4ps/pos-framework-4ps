@@ -153,6 +153,24 @@ pub(in crate::app) struct CardMark {
     /// Whether a kiosk's own record takes it, which may take this one payment and no other
     /// (ADR-0230 decision 7).
     pub(in crate::app) kiosk: bool,
+    /// The manager who agreed to a card confirmed by hand (ADR-0243), recorded beside the capture
+    /// in the same transaction.
+    pub(in crate::app) confirmed_by: Option<pos_proto::ids::EmployeeId>,
+}
+
+impl CardMark {
+    /// The override event a hand-confirmed card's manager writes, in the capture's transaction.
+    pub(in crate::app) fn approval_record(
+        card: Option<&Self>,
+    ) -> Option<pos_proto::events::SecurityPermissionOverridden> {
+        card.and_then(|card| card.confirmed_by).map(|approver| {
+            pos_proto::events::SecurityPermissionOverridden {
+                permission_key: pos_proto::text::PermissionKey::new(Permission::VoidBill.meta().id),
+                approver_employee_id: approver,
+                exceeded_by: None,
+            }
+        })
+    }
 }
 
 impl CardMark {
@@ -346,6 +364,7 @@ impl<S: EventStore + SubjectStore> Edge<S> {
                 payment_id,
                 reference: parked.reference.clone(),
                 kiosk,
+                confirmed_by: None,
             };
             return self
                 .record_card_capture(actor, scope, bill_id, (&parked, &mark), ask.split_ways)
@@ -372,11 +391,34 @@ impl<S: EventStore + SubjectStore> Edge<S> {
         (bill_id, payment_id): (BillId, PaymentId),
         resolution: CardResolution,
     ) -> Result<CardOutcome, AppError> {
+        self.resolve_card_with(actor, scope, (bill_id, payment_id), resolution, None)
+            .await
+    }
+
+    /// [`Self::resolve_card_at`], with the manager's `approval` a `CONFIRM` needs where the store's
+    /// `billing.card_confirm_approval` is `MANAGER`, the default
+    /// ([ADR-0243](../../../../../docs/adr/0243-a-hand-confirmed-card-needs-a-manager.md)). The
+    /// approval is checked as a void's is, against `billing.bill.void`, and recorded beside the
+    /// capture with the manager's id. A look-up and a cancel need none.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::resolve_card_at`], and [`AppError::ApprovalRequired`] or
+    /// [`AppError::ApprovalRefused`] for a `CONFIRM` without a manager who may approve it.
+    pub async fn resolve_card_with(
+        &self,
+        actor: Actor,
+        scope: TillScope,
+        (bill_id, payment_id): (BillId, PaymentId),
+        resolution: CardResolution,
+        approval: Option<&crate::app::Approval>,
+    ) -> Result<CardOutcome, AppError> {
         let parked = self
             .parked_card(bill_id)
             .filter(|card| card.payment_id == payment_id)
             .ok_or(AppError::Card(CardRefusal::NotParked))?;
         self.decision_ctx(actor)?.require(Permission::TakePayment)?;
+        let approver = self.confirm_approver(actor, resolution, approval)?;
         let reference = PaymentReference::new(parked.reference.as_str());
         let total = parked
             .amount
@@ -409,6 +451,9 @@ impl<S: EventStore + SubjectStore> Edge<S> {
                 payment_id,
                 reference: parked.reference.clone(),
                 kiosk: false,
+                // The manager who agreed, written in the capture's own transaction, as a void
+                // records its approver.
+                confirmed_by: approver,
             };
             return self
                 .record_card_capture(actor, scope, bill_id, (&parked, &mark), None)
@@ -421,6 +466,25 @@ impl<S: EventStore + SubjectStore> Edge<S> {
 
     /// Records a capture as a payment. Where the bill refuses it now (it changed while the terminal
     /// was asked), the money has still moved, so the bill parks on the attempt for a person.
+    /// The manager who approves a `CONFIRM` where the store asks for one (ADR-0243), `None` where
+    /// it does not or the act is not a `CONFIRM`.
+    fn confirm_approver(
+        &self,
+        actor: Actor,
+        resolution: CardResolution,
+        approval: Option<&crate::app::Approval>,
+    ) -> Result<Option<pos_proto::ids::EmployeeId>, AppError> {
+        let manager = self.session().billing.card_confirm_approval()
+            == pos_proto::billing::CardConfirmApproval::Manager;
+        if resolution != CardResolution::Confirm || !manager {
+            return Ok(None);
+        }
+        let mut ctx = self.decision_ctx(actor)?;
+        let approver = self.resolve_step_up(&mut ctx, Permission::VoidBill, approval)?;
+        ctx.require(Permission::VoidBill)?;
+        Ok(approver)
+    }
+
     async fn record_card_capture(
         &self,
         actor: Actor,

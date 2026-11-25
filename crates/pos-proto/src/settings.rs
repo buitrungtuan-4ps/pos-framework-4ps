@@ -386,6 +386,7 @@ pub fn register() -> Vec<Setting> {
         nodes::backup_settings(),
         nodes::billing_settings(),
         einvoice_nodes::einvoice_settings(),
+        einvoice_nodes::card_confirm_settings(),
         nodes::package_settings(),
     ]
     .into_iter()

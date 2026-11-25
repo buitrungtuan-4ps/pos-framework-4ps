@@ -299,7 +299,7 @@
             "description": "Nobody is signed in on this device"
           },
           "409": {
-            "description": "The bill is not parked on that card (`CARD_NOT_PARKED`), a cancel of a card the terminal took (`CARD_ALREADY_CAPTURED`), no terminal, or the refusals a payment makes"
+            "description": "The bill is not parked on that card (`CARD_NOT_PARKED`), a cancel of a card the terminal took (`CARD_ALREADY_CAPTURED`), no terminal, a `CONFIRM` without the manager `billing.card_confirm_approval` asks for (`APPROVAL_REQUIRED`, `APPROVAL_REFUSED`, ADR-0243), or the refusals a payment makes"
           },
           "503": {
             "description": "The terminal was not reached; nothing changed"
@@ -9281,6 +9281,20 @@
           "action": {
             "type": "string",
             "description": "`LOOK_UP`, `CONFIRM` or `CANCEL`."
+          },
+          "approver_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A manager's badge code, for a `CONFIRM` the store asks a manager to approve (ADR-0243)."
+          },
+          "approver_pin": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "That manager's PIN, sent once and never stored."
           }
         }
       },

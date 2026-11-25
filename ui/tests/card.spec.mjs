@@ -94,3 +94,24 @@ test("an unknown card cancelled on the terminal frees the bill for cash", async 
     await edge.stop();
   }
 });
+
+test("a card confirmed from the terminal's slip waits for a manager (ADR-0243)", async ({ page }) => {
+  const edge = await startEdge(undefined, { POS_DEMO_CARD: "UNKNOWN" });
+  try {
+    await aBillToPay(page, edge);
+    await page.locator('[data-step="payCard"]').click();
+    await expect(page.locator('[data-outcome="card-unknown"]')).toBeVisible();
+    await page.locator('[data-step="cardConfirm"]').click();
+    // The edge asks for a manager; nothing is settled meanwhile.
+    const approver = page.locator('[data-outcome="card-confirm-approver"]');
+    await expect(approver).toBeVisible();
+    await expect(page.locator('[data-outcome="settled"]')).toHaveCount(0);
+    // The demo employee holds every permission, so they approve, as the void replays do.
+    await page.locator("#card-confirm-approver-code").fill(edge.staffCode);
+    await page.locator("#card-confirm-approver-pin").fill(edge.staffPin);
+    await page.locator('[data-step="cardConfirmApproved"]').click();
+    await expect(page.locator('[data-outcome="settled"]')).toBeVisible();
+  } finally {
+    await edge.stop();
+  }
+});

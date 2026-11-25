@@ -32,6 +32,31 @@ fn edge_over(store: FakeStore, terminal: &FakePaymentTerminal) -> Edge<FakeStore
     .with_card_terminal(terminal.clone())
 }
 
+/// The bootstrap session with a manager, `MGR-1` (PIN `4417`), who may void a bill: the approver a
+/// confirm by hand needs (ADR-0243).
+fn with_a_manager() -> EdgeSession {
+    use argon2::Argon2;
+    use argon2::password_hash::PasswordHasher as _;
+    use pos_core::permission::{Permission, PermissionSet};
+
+    let pin_phc = Argon2::default()
+        .hash_password_with_salt(b"4417", b"a-fixed-test-slt")
+        .expect("hash")
+        .to_string();
+    let mut session = EdgeSession::bootstrap();
+    session.staff.insert(
+        "MGR-1",
+        crate::app::StaffAuth {
+            employee_id: Some(pos_proto::ids::EmployeeId::new(Ulid::from_u128(11))),
+            permissions: PermissionSet::EMPTY.with(Permission::VoidBill),
+            permissions_with_approval: PermissionSet::EMPTY,
+            discount_ceiling: None,
+            pin_phc: Some(pin_phc),
+        },
+    );
+    session
+}
+
 /// Seats a table, sells one line and opens its bill: the bill and what it owes.
 async fn an_open_bill(edge: &Edge<FakeStore>, table: u128) -> (BillId, Money) {
     let table = TableId::new(Ulid::from_u128(table));
@@ -335,17 +360,58 @@ fn a_cancel_of_a_card_the_acquirer_took_is_refused_and_a_confirm_records_it() {
         );
         assert!(edge.parked_card(bill_id).is_some());
 
-        let confirmed = edge
+        // ADR-0243: by default a confirm by hand needs a manager, as a void does.
+        let alone = edge
             .resolve_card_at(
                 actor(),
                 TillScope::default(),
                 (bill_id, payment_id),
                 CardResolution::Confirm,
             )
+            .await;
+        assert!(
+            matches!(alone, Err(AppError::ApprovalRequired)),
+            "{alone:?}"
+        );
+        assert!(edge.parked_card(bill_id).is_some(), "nothing changed");
+
+        edge.apply_session(with_a_manager());
+        let manager = crate::app::Approval {
+            code: "MGR-1".to_owned(),
+            pin: "4417".to_owned(),
+        };
+        let confirmed = edge
+            .resolve_card_with(
+                actor(),
+                TillScope::default(),
+                (bill_id, payment_id),
+                CardResolution::Confirm,
+                Some(&manager),
+            )
             .await
-            .expect("confirms");
+            .expect("confirms with a manager");
         assert!(matches!(confirmed, CardOutcome::Captured { .. }));
         assert_eq!(bill_state(&edge, bill_id), BillState::Settled);
+        let logged = store
+            .read(&EventQuery::first(
+                identity().store_id,
+                NonZeroU32::new(200).expect("200 is not zero"),
+            ))
+            .await
+            .expect("reads");
+        let position = |wanted: EventType| {
+            logged
+                .iter()
+                .rposition(|event| event.event_type.as_str() == wanted.as_str())
+        };
+        let approved = position(EventType::SecurityPermissionOverridden)
+            .expect("the manager who agreed is recorded");
+        let settled = position(EventType::BillingBillSettled).expect("the bill settled");
+        assert!(
+            approved < settled,
+            "the manager is written in the capture's own transaction, before the settle that closes \
+             it, not after it in one of its own"
+        );
     });
 }
 
@@ -398,5 +464,38 @@ fn a_card_for_more_than_the_bill_owes_never_reaches_the_terminal() {
             "{refused:?}"
         );
         assert_eq!(terminal.authorisation_count(), 0);
+    });
+}
+
+/// ADR-0243 decision 1: a store that sets `CARD_CONFIRM_APPROVAL_NONE` confirms by hand alone.
+#[test]
+fn a_store_that_asks_no_manager_confirms_a_card_alone() {
+    pos_fakes::executor::run_ready(async {
+        let store = FakeStore::default();
+        let terminal = FakePaymentTerminal::new();
+        let edge = edge_over(store.clone(), &terminal);
+        let mut session = EdgeSession::bootstrap();
+        session.billing.card_confirm_approval =
+            pos_proto::Open::from_known(pos_proto::billing::CardConfirmApproval::None);
+        edge.apply_session(session);
+        let (bill_id, owed) = an_open_bill(&edge, 7).await;
+        terminal.stage_outcome(PaymentOutcome::Unknown);
+        let CardOutcome::Unknown { payment_id } = edge
+            .take_card_at(actor(), TillScope::default(), bill_id, ask(owed))
+            .await
+            .expect("asks")
+        else {
+            panic!("staged unknown");
+        };
+        let confirmed = edge
+            .resolve_card_at(
+                actor(),
+                TillScope::default(),
+                (bill_id, payment_id),
+                CardResolution::Confirm,
+            )
+            .await
+            .expect("confirms alone");
+        assert!(matches!(confirmed, CardOutcome::Captured { .. }));
     });
 }
