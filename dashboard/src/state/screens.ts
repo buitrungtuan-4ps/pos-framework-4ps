@@ -313,6 +313,16 @@ export const SCREENS = {
     tenantScoped: true,
     icon: "settings",
   },
+  // E-invoices (ADR-0225, ADR-0240): the store's invoice symbol, before it trades and after its box
+  // is replaced.
+  einvoices: {
+    path: "/einvoices",
+    key: "nav.einvoices",
+    scope: "store",
+    tenantScoped: true,
+    inPalette: true,
+    icon: "receipt",
+  },
   taxRates: { path: "/tax-rates", key: "nav.taxRates", scope: "tenant", tenantScoped: true, icon: "percent" },
   // Fees (ADR-0159): the service charges and other fees a bill carries, written for every store, a
   // brand or one store. Owner and admin only, as the server's reads are: a fee's rate and amount
@@ -504,7 +514,7 @@ export const NAV_GROUPS: readonly {
   // may be made to do (ADR-0076, Decree 13), and whether the trading record itself is intact
   // (ADR-0131, ADR-0132). Chain integrity sits here rather than under the estate because it is not
   // a fact about a box — it is the question an auditor asks of the books.
-  { key: "nav.group.compliance", items: ["audit", "subjects", "chainFindings"] },
+  { key: "nav.group.compliance", items: ["einvoices", "audit", "subjects", "chainFindings"] },
   // The signed-in admin's own account, which belongs to no tenant.
   { key: "nav.group.account", items: ["mySessions", "mySecurity"] },
 ];

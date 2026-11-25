@@ -17,7 +17,6 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 - [ADR-0212](../adr/0212-the-heartbeat-names-the-version-each-till-last-read.md) The heartbeat names the package version each till last read
 - [ADR-0216](../adr/0216-integrations-come-in-three-tiers-and-functions-wait.md) Integrations come in three tiers, and WebAssembly functions wait for a real case
 - [ADR-0231](../adr/0231-a-phone-keeps-its-till-token-in-a-store-the-owner-chooses.md) A phone keeps its till token in a store the owner chooses
-- [ADR-0240](../adr/0240-the-cloud-allocates-each-issuing-points-invoice-symbol.md) The cloud allocates each issuing point's invoice symbol from a ledger
 - [ADR-0241](../adr/0241-the-cloud-submits-each-issued-invoice-from-the-log-and-keeps-its-state.md) The cloud submits each issued invoice from the log, keeps its state, and warns before the limit
 - [ADR-0242](../adr/0242-a-receipt-prints-its-invoice-number-and-lookup-code.md) A receipt prints its e-invoice number and a lookup code, and the till asks for the buyer's email
 
