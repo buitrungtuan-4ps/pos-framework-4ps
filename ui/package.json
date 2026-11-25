@@ -21,6 +21,7 @@
     "replay": "playwright test",
     "screens": "playwright test --config playwright.screens.config.mjs",
     "perf": "playwright test --config playwright.perf.config.mjs",
+    "load:p17": "node perf/load-p17.mjs",
     "classes": "node scripts/device-classes.mjs"
   },
   "dependencies": {
