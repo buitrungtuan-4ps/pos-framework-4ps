@@ -384,7 +384,7 @@
   "order.sending": "Sending…",
   "order.weigh_add": "Add at this weight",
   "order.weigh_add_typed": "Add the typed weight",
-  "order.weigh_needs_order": "Add the first item to the order, then weigh this one.",
+  "order.weigh_needs_order": "A weighed item is sold on a counter order: weigh it at the counter.",
   "order.weigh_title": "Weigh {item}",
   "order.weigh_typed": "Typed weight: {grams} g (at least {least} g)",
   "order.writes_pending": "Waiting for the store to confirm the last change.",

@@ -9,7 +9,7 @@ import type { MenuItemResponse } from "../api/schemas";
 import type { Money } from "../lib/money";
 
 // A weighed item asks its weight rather than its price (ADR-0223); the order screen asks both here.
-export { askWeight } from "./weigh";
+export { askWeight, weighedLine } from "./weigh";
 
 /** The order screen's selling, as `scan_field` and `plu_keypad` use it. */
 export interface Sell {
@@ -17,9 +17,19 @@ export interface Sell {
   readonly disabled: () => boolean;
   /** The counter order on screen, once it exists; a table's order or a draft has none. */
   readonly orderId: () => string | undefined;
+  /** The counter order, opening a draft walk-in first; `undefined` where there is none to open. */
+  readonly openOrder: () => Promise<string | undefined>;
+  /** Whether a weighed item can be sold here: on a walk-in, drafted or open, and not on a table. */
+  readonly weighable: () => boolean;
 }
 
-export const SellContext = createContext<Sell>({ sell: () => undefined, disabled: () => true, orderId: () => undefined });
+export const SellContext = createContext<Sell>({
+  sell: () => undefined,
+  disabled: () => true,
+  orderId: () => undefined,
+  openOrder: () => Promise.resolve(undefined),
+  weighable: () => false,
+});
 
 export function useSell(): Sell {
   return useContext(SellContext);
