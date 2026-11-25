@@ -683,6 +683,31 @@ test("a send whose answer is lost is read again, and the lines show fired, sent 
   }
 });
 
+// A void changes what the table owes, and the figure follows once the edge has made it (found in the
+// phase-10 demo): the paint read the figure before the void reached the edge, and nothing read it
+// again, so the total kept the voided line until the screen was reloaded.
+test("a voided line leaves the table's figure once the edge has made the void", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await seatTable(page);
+    await addStarter(page);
+    await addByName(page, "Iced tea");
+    const total = page.locator('[data-outcome="check-total"]');
+    await expect(total).toContainText("141,350₫");
+    const held = await holdPost(page, "**/api/lines/*/void");
+    await page.locator('[data-step="askVoid"]').last().click();
+    await page.locator('[data-step="voidReason"]').first().click();
+    await held.sent;
+    held.release();
+    await expect(page.locator('[data-outcome="line-voided"]')).toHaveCount(1);
+    await expect(total).toContainText("97,900₫");
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A void paints first too: the line shows voided at once. A void that never reached the edge is put
 // back, read again and found not made; a refusal (substituted: this unsent line needs no manager, so
 // the real edge would not refuse it) puts it back with the refusal's sentence.
