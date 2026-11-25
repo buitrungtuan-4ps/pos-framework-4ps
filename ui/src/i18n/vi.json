@@ -723,5 +723,8 @@
   "card.unanswered": "Máy chủ cửa hàng không phản hồi. Kiểm tra hóa đơn trước khi thu lại.",
   "kiosk.pay_card": "Thanh toán bằng thẻ",
   "kiosk.card_unknown": "Chưa xác nhận được thẻ của quý khách. Vui lòng gặp nhân viên.",
-  "kiosk.card_paid": "Đã thanh toán. Cảm ơn quý khách!"
+  "kiosk.card_paid": "Đã thanh toán. Cảm ơn quý khách!",
+  "pay.buyer_email": "Email nhận hóa đơn điện tử",
+  "pay.buyer_tax_code_shape": "Mã số thuế không đúng dạng: 10 đến 15 chữ hoặc số.",
+  "pay.einvoice": "Hóa đơn điện tử {number} · mã tra cứu {code}"
 }

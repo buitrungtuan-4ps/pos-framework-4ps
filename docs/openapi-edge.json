@@ -5735,6 +5735,14 @@
             "$ref": "#/components/schemas/DrawerOutcomeSchema",
             "description": "What came of opening the cash drawer on a settle that took cash: `OPENED`, `NO_DRAWER` or\n`DRAWER_UNAVAILABLE` ([ADR-0165](../../../../docs/adr/0165-cash-paid-in-and-out-is-counted-in-the-drawer-and-a-no-sale-opening-needs-a-manager.md)). Absent when no cash was taken, because nothing\nwas asked of the drawer."
           },
+          "invoice_lookup_code": {
+            "type": "string",
+            "description": "The code a guest looks that e-invoice up by: the last ten characters of its id."
+          },
+          "invoice_number": {
+            "type": "string",
+            "description": "The e-invoice the settle issued with it, `1C26MAA/00000042`, when it issued one there and\nthen ([ADR-0242](../../../../docs/adr/0242-a-receipt-prints-its-invoice-number-and-lookup-code.md)\ndecision 1). Absent for a deferred invoice, which has no number yet."
+          },
           "print_receipt": {
             "type": "boolean"
           },

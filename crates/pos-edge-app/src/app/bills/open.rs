@@ -114,6 +114,7 @@ impl<S: EventStore> Edge<S> {
             print_receipt: false,
             open_drawer: false,
             drawer_till: None,
+            invoice: None,
         })
     }
 

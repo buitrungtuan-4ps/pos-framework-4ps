@@ -168,6 +168,16 @@ pub(crate) struct BillResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(nullable = false, value_type = Option<cash_movements::DrawerOutcomeSchema>))]
     pub(crate) drawer_open: Option<String>,
+    /// The e-invoice the settle issued with it, `1C26MAA/00000042`, when it issued one there and
+    /// then ([ADR-0242](../../../../docs/adr/0242-a-receipt-prints-its-invoice-number-and-lookup-code.md)
+    /// decision 1). Absent for a deferred invoice, which has no number yet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    invoice_number: Option<String>,
+    /// The code a guest looks that e-invoice up by: the last ten characters of its id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    invoice_lookup_code: Option<String>,
 }
 
 impl From<BillView> for BillResponse {
@@ -181,6 +191,8 @@ impl From<BillView> for BillResponse {
             print_receipt: view.print_receipt,
             receipt_print: None,
             drawer_open: None,
+            invoice_number: view.invoice.as_ref().map(|invoice| invoice.number.clone()),
+            invoice_lookup_code: view.invoice.map(|invoice| invoice.lookup_code),
         }
     }
 }
@@ -522,15 +534,14 @@ where
         .bill_template(edge, (&session, &till), view.bill_id, buyer.is_some(), None)
         .await;
     printers
-        .print_receipt(
+        .print_receipt_with_invoice(
             &session,
             &till,
-            edge.store_id(),
             // The bill's own id as the idempotency key: a settle retried after an ambiguous failure
             // reuses it and the adapter prints once, which is the same promise the receipt number
             // itself makes (ADR-0025).
-            EventId::new(view.bill_id.as_ulid()),
-            receipt_number,
+            (edge.store_id(), EventId::new(view.bill_id.as_ulid())),
+            (receipt_number, view.invoice.as_ref()),
             &view.lines,
             totals,
             (buyer, template.as_ref()),
