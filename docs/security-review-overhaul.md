@@ -1,6 +1,6 @@
 # Security review of the overhaul's new surfaces
 
-**Status** Accepted · **Owner** @maintainers-security · **Last reviewed** 2026-11-24
+**Status** Accepted · **Owner** @maintainers-security · **Last reviewed** 2026-11-25
 **Classification** T3 Internal — the framework's posture, not a store's data
 **Relates to** [`security-review.md`](security-review.md) (the pre-production review this extends) ·
 [`gate-register.md`](gate-register.md) (L5, the independent pentest, which this does not replace) ·
@@ -39,6 +39,11 @@ The Low findings are G2 to G6, K1, K3, K4, V1 to V3, N1 and T1, listed under eac
 K3 and K4 are fixed in phase 9. The others are tracked here.
 
 One dependency finding, **D1**, came from CI's `cargo deny` gate during the review and is fixed (§11).
+
+**Phase 10 added §14 to §18**, on the surfaces phases 7, 8 and 10 added, reviewed the same way on
+2026-11-25 at `0b53151b`: one more **Medium**, **C1** (a parked card is confirmed as paid on one
+person's word), which needs an ADR amending ADR-0230 and is tracked as an owner decision; and the
+Lows E1 (fixed), E2, S1, C2 and I1.
 
 ## 2. The guest page `/qr/` and `/v1/qr/*`
 
@@ -229,6 +234,62 @@ request:
 
 The gate did its job: no change merged while the advisory was open.
 
+## 14. The cloud's e-invoice submission and corrections (ADR-0225, ADR-0241)
+
+**Checked.** The submitter reads each store's log as the trusted role, as the projector does, and
+keeps each invoice's state in `einvoice_submissions` under row-level security by tenant. A row holds
+the buyer's `subject_id` and nothing personal; nothing is submitted but the store's own number, the
+date and the total until a vendor's field set is chosen. The list (`GET /admin/einvoices`) needs
+`console.data.read` and names no buyer. A correction needs `console.einvoices.correct` (OWNER, ADMIN),
+is audited as `einvoice.correct`, and takes its number under a correction symbol no store holds, with
+a number unique per tenant (migration 0107). A provider's refusal text is shown in the console as
+text, never as markup. Only `einvoice.sandbox` serves, so nothing reaches a tax authority.
+
+| # | Finding | Severity | Status |
+|---|---|---|---|
+| E1 | **A correction of nothing, or a replacement below zero, was accepted**, taking a number from the correction symbol for no change or invoicing a negative sale | Low | **Fixed in phase 10**: refused `400 OUT_OF_RANGE` on `total_minor` (`crates/pos-cloud/tests/cloud/einvoices.rs`) |
+| E2 | **`POS_DEMO_EINVOICE` scripts the sandbox** to refuse or time out. It reaches only the sandbox, which is the only provider; once a vendor is built the variable must not reach it | Low | Tracked: the vendor adapter's review |
+
+## 15. The e-invoice symbol and its allocation (ADR-0240)
+
+**Checked.** Setting and allocating a symbol needs `console.config.publish`, and both are audited
+with the symbol. The ledger refuses a symbol another store of the tenant holds
+(`409 E_INVOICE_SYMBOL_IN_USE`) and never forgets one. The unauthenticated `/activate` allocates only
+after a valid, single-use code is spent, so a stranger cannot exhaust a tenant's 676 symbols; a
+failed allocation never fails the activation.
+
+| # | Finding | Severity | Status |
+|---|---|---|---|
+| S1 | **Ops may set a store's legal symbol**, because the routes reuse `console.config.publish`, which Ops holds. The ledger stops a collision and the trail names who did it | Low | Tracked: an owner who wants it narrower asks for a permission of its own |
+
+## 16. The card through the terminal, its park and resolve (ADR-0230)
+
+**Checked.** `POST /api/bills/{id}/card` and `.../resolve` need `billing.payment.take` and a signed-in
+person. The edge mints the payment's id before it asks the terminal, so a retry cannot charge twice.
+An unknown result parks the bill, across a restart. A kiosk reaches the card route for the whole of
+its own bill only, with no tip (`ui/tests/kiosk.spec.mjs`). `billing.payment.captured` gains
+`terminal_reference`, the fake terminal's reference.
+
+| # | Finding | Severity | Status |
+|---|---|---|---|
+| C1 | **`CONFIRM` records a parked card as captured on one person's word.** Anyone who may take payment can turn an unknown card into a paid bill without the terminal agreeing; a cashier who took cash could settle the bill this way and keep the cash. ADR-0230 decision 3 chose this on purpose, for a terminal that answers nothing while its slip says approved | **Medium** | **Tracked: owner decision.** Changing it needs an ADR amending ADR-0230. The recommended option is a manager's badge and PIN on `CONFIRM`, as a void needs, and a line for hand-confirmed cards on the drawer's close. Until then, a store's manager reviews hand-confirmed cards against the terminal's batch each day |
+| C2 | **`terminal_reference` travels in an event to the cloud.** The fake's is an opaque id; a real vendor's could carry a masked card number or an authorisation code | Low | Tracked: B10.3's adapter must pass only an opaque reference, checked in its review |
+
+## 17. The edge's container image (Program C, #1356)
+
+**Checked.** The image wraps the released binary rather than building one, runs as uid 10002 and not
+as root, keeps its state in one volume, and exposes one port.
+
+| # | Finding | Severity | Status |
+|---|---|---|---|
+| I1 | **The base image `debian:trixie-slim` is named by tag, not digest**, so a rebuild may take a different base | Low | Tracked: pin it by digest in `deploy/edge-image/Dockerfile` with the release that first ships the image |
+
+## 18. POS Station's kiosk mode (ADR-0201 decision 2, #1357)
+
+**Checked** in code: full screen, frameless, on top, not closable and without Quit. Not verified on
+a NUC; finding **K2** (§3) and hardware gate **P13** cover leaving it. A crash watchdog and a native
+PIN exit are not built.
+
 ## 12. What the pentest (gate L5) should add to its scope
 
 These go on top of [`security-review.md`](security-review.md) §9:
@@ -242,6 +303,9 @@ These go on top of [`security-review.md`](security-review.md) §9:
    IPv6 zone ids, NAT64, a redirect, and DNS that answers differently on its second lookup.
 4. **Connector intake.** Try forged signatures, oversized bodies and a connection of another
    tenant.
+5. **Phase 7 to 10's surfaces.** With an Ops session, try the symbol routes against another tenant's
+   store; with a cashier's session, try to resolve another bill's parked card and to settle by
+   `CONFIRM` (C1); try `/activate` with a spent code to see that no symbol is allocated.
 
 ## 13. Keeping this page honest
 

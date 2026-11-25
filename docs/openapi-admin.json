@@ -12017,7 +12017,7 @@
             }
           },
           "400": {
-            "description": "An id is not a ULID, or the kind is not one of the two (`INVALID_FORMAT` on `kind`)",
+            "description": "An id is not a ULID, the kind is not one of the two (`INVALID_FORMAT` on `kind`), or an adjustment of zero or a negative replacement (`OUT_OF_RANGE` on `total_minor`)",
             "content": {
               "application/json": {
                 "schema": {

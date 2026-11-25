@@ -153,6 +153,17 @@ async fn an_invoice_is_listed_and_corrected_under_the_correction_symbol() {
         .await
         .expect("route");
     assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    // Security review E1: no correction of nothing, and no negative replacement.
+    for (kind, total) in [("ADJUSTMENT", 0), ("REPLACEMENT", -1)] {
+        let refused = router
+            .clone()
+            .oneshot(correct(kind, total))
+            .await
+            .expect("route");
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{kind} {total}");
+        let body = json_body(refused).await;
+        assert_eq!(body["error"]["details"][0]["field"], "total_minor");
+    }
 }
 
 /// Correcting is for the owner and the admin; ops may read the list.
