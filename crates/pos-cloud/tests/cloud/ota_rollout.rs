@@ -699,3 +699,82 @@ async fn the_placement_routes_require_a_session() {
         .expect("route the placement read");
     assert_eq!(read.status(), StatusCode::UNAUTHORIZED);
 }
+
+/// ADR-0240 decision 4: where a store allocates automatically, each lease bump publishes the
+/// replacement box a new symbol in the same version as its lease, and a store that allocates by
+/// hand is given none.
+#[tokio::test]
+async fn a_lease_bump_gives_an_automatic_store_a_new_symbol_with_its_lease() {
+    let config_trees = FakeConfigTrees::default();
+    config_trees.seed_store_layer(
+        tenant(),
+        store_id(),
+        serde_json::json!({
+            "locale": { "country_code": "VN" },
+            "einvoice": {
+                "symbol_allocation": "EINVOICE_SYMBOL_ALLOCATION_AUTOMATIC",
+                "issue_moment": "EINVOICE_ISSUE_MOMENT_IMMEDIATE",
+            },
+        }),
+    );
+    let router = ota_app(provisioned_admin(), config_trees.clone());
+    let cookie = admin_cookie(&router).await;
+    let body = serde_json::json!({
+        "tenant_id": tenant().as_ulid().to_string(),
+        "store_id": store_id().as_ulid().to_string(),
+    });
+    let mut symbols = Vec::new();
+    for if_match in ["*", "\"0\""] {
+        let bumped = router
+            .clone()
+            .oneshot(bump_with_if_match(&body, &cookie, if_match))
+            .await
+            .expect("route the bump");
+        assert_eq!(bumped.status(), StatusCode::OK);
+        let state = config_trees
+            .load(tenant(), store_id())
+            .await
+            .expect("load")
+            .expect("a published tree");
+        let effective = &state
+            .record
+            .history
+            .last()
+            .expect("a published version")
+            .effective;
+        assert_eq!(
+            effective["einvoice"]["issue_moment"], "EINVOICE_ISSUE_MOMENT_IMMEDIATE",
+            "the node's settings are kept"
+        );
+        symbols.push(effective["einvoice"]["symbol"].clone());
+    }
+    // The test clock is in 2023; each box has a symbol of its own.
+    assert_eq!(symbols, ["1C23MAA", "1C23MAB"]);
+}
+
+#[tokio::test]
+async fn a_lease_bump_gives_a_manual_store_no_symbol() {
+    let config_trees = FakeConfigTrees::default();
+    config_trees.seed_store_layer(
+        tenant(),
+        store_id(),
+        serde_json::json!({ "locale": { "country_code": "VN" } }),
+    );
+    let router = ota_app(provisioned_admin(), config_trees.clone());
+    let cookie = admin_cookie(&router).await;
+    let body = serde_json::json!({
+        "tenant_id": tenant().as_ulid().to_string(),
+        "store_id": store_id().as_ulid().to_string(),
+    });
+    let bumped = router
+        .oneshot(bump_with_if_match(&body, &cookie, "*"))
+        .await
+        .expect("route the bump");
+    assert_eq!(bumped.status(), StatusCode::OK);
+    let state = config_trees
+        .load(tenant(), store_id())
+        .await
+        .expect("load")
+        .expect("a published tree");
+    assert!(state.record.layers[2].get("einvoice").is_none());
+}

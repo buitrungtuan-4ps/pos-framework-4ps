@@ -241,7 +241,14 @@ fn device_routes(deps: &RouteDeps<'_>) -> Router {
         // A named cell issues codes with its id as their prefix, and answers a prefix naming
         // another cell from its directory (ADR-0181).
         .merge(pos_cloud_devices::routes::activation_router_in_cell(
-            store.activation_codes(),
+            // A redeemed code allocates a store with none its e-invoice symbol (ADR-0240).
+            pos_cloud::einvoice::automatic::AllocatingActivations::new(
+                store.activation_codes(),
+                store.config_trees(),
+                SystemClock,
+                Arc::clone(audit),
+                Arc::new(store.einvoice_symbols()),
+            ),
             store.admin(),
             SystemClock,
             Arc::clone(cell) as Arc<dyn pos_cloud_devices::routes::ActivationCell>,
@@ -756,6 +763,8 @@ fn config_node_routes(deps: &RouteDeps<'_>) -> Router {
             // The promote guard's source of truth: a rollout naming a version nobody hosts is
             // refused here rather than discovered as a fleet-wide `404` (ADR-0088 Amendment 2).
             store.ota_artifacts(),
+            // A lease bump allocates the replacement box its e-invoice symbol (ADR-0240).
+            Arc::new(store.einvoice_symbols()),
         ))
 }
 

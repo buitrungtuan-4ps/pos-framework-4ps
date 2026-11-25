@@ -199,7 +199,7 @@ pub(super) fn add_country_pack_facts(
 ///
 /// Read by the fleet's region warning, a store's cell standing, and the new-store values, which
 /// take the country's own (ADR-0183).
-pub(in crate::http) fn published_country(tree: &ConfigTreeState) -> Option<CountryCode> {
+pub(crate) fn published_country(tree: &ConfigTreeState) -> Option<CountryCode> {
     tree.effective()
         .get("locale")?
         .get("country_code")?

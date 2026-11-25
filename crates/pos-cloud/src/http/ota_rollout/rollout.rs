@@ -164,6 +164,7 @@ where
             action: "config.ota.publish",
             detail: audit_detail,
             companions: Vec::new(),
+            einvoice_symbol: None,
         },
     )
     .await
@@ -256,6 +257,7 @@ where
             action: "config.ota.halt",
             detail: serde_json::json!({ "halted": halted }),
             companions: Vec::new(),
+            einvoice_symbol: None,
         },
     )
     .await
@@ -322,6 +324,9 @@ pub(super) struct OtaNodeWrite<'a, F> {
     /// other. Only the lease bump has one: the receipt floor a replacement box must number above
     /// (ADR-0149).
     pub(super) companions: Vec<(&'a str, serde_json::Value)>,
+    /// An e-invoice symbol published on the store's `einvoice` node in the **same** version, its
+    /// settings kept: the lease bump's newly allocated symbol (ADR-0240 decision 4).
+    pub(super) einvoice_symbol: Option<String>,
 }
 
 /// The shared load→set-node→publish→save→audit tail behind every OTA lever.
@@ -353,9 +358,14 @@ where
         key,
         mut node,
         action,
-        detail,
+        mut detail,
         companions,
+        einvoice_symbol,
     } = write;
+    // The trail names a symbol published with the node (ADR-0240).
+    if let (Some(symbol), Some(fields)) = (&einvoice_symbol, detail.as_object_mut()) {
+        fields.insert("einvoice_symbol".to_owned(), serde_json::json!(symbol));
+    }
     let id = match publish_config_nodes_with(
         &state.config_trees,
         &state.clock,
@@ -369,6 +379,9 @@ where
                     .iter()
                     .map(|(companion, value)| ((*companion).to_owned(), value.clone())),
             );
+            if let Some(symbol) = einvoice_symbol.as_deref() {
+                nodes.push(crate::http::config_nodes::symbol_node(tree, symbol));
+            }
             Ok(nodes)
         },
     )

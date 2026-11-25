@@ -54,6 +54,7 @@ pub use einvoice_symbol::einvoice_symbol_router;
 pub(crate) use einvoice_symbol::{
     __path_admin_allocate_einvoice_symbol, __path_admin_publish_einvoice_symbol,
 };
+pub(crate) use einvoice_symbol::{symbol_node, utc_year};
 pub(crate) use locale::__path_admin_publish_locale;
 pub(crate) use qr::{__path_admin_publish_qr, __path_admin_read_qr};
 pub(crate) use retention::{__path_admin_publish_retention, __path_admin_read_retention};
