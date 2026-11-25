@@ -206,7 +206,8 @@ pub(crate) struct CorrectEInvoiceRequest {
     responses(
         (status = 201, body = EInvoiceView, description = "The correction, numbered under the tenant's correction symbol, \
                                       recorded as PENDING and audited. It is submitted by the next pass"),
-        (status = 400, description = "An id is not a ULID, or the kind is not one of the two (`INVALID_FORMAT` on `kind`)", body = crate::openapi_admin::ErrorResponse),
+        (status = 400, description = "An id is not a ULID, the kind is not one of the two (`INVALID_FORMAT` on `kind`), \
+                                      or an adjustment of zero or a negative replacement (`OUT_OF_RANGE` on `total_minor`)", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
         (status = 403, description = "The role lacks console.einvoices.correct", body = crate::openapi_admin::ErrorResponse),
         (status = 404, description = "No such invoice in the tenant", body = crate::openapi_admin::ErrorResponse),
@@ -240,13 +241,7 @@ where
         ("invoice_id", &invoice_id),
     ])?;
     let tenant = TenantId::new(tenant);
-    if !matches!(request.kind.as_str(), "ADJUSTMENT" | "REPLACEMENT") {
-        return Err(api_error_with_details(
-            ErrorStatus::InvalidArgument,
-            "kind is ADJUSTMENT or REPLACEMENT",
-            &[("kind", "INVALID_FORMAT")],
-        ));
-    }
+    check_correction(&request)?;
     let original = state
         .submissions
         .get(tenant, invoice)
@@ -311,6 +306,33 @@ where
     )
     .await;
     Ok((StatusCode::CREATED, Json(EInvoiceView::from(correction))).into_response())
+}
+
+/// Refuses a correction that is not one: an unknown kind, an adjustment of nothing, or a negative
+/// replacement (security review E1).
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is the axum Response the handler returns"
+)]
+fn check_correction(request: &CorrectEInvoiceRequest) -> Result<(), Response> {
+    if !matches!(request.kind.as_str(), "ADJUSTMENT" | "REPLACEMENT") {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "kind is ADJUSTMENT or REPLACEMENT",
+            &[("kind", "INVALID_FORMAT")],
+        ));
+    }
+    // An adjustment of nothing and a replacement below zero are not corrections (security review
+    // E1): the first would take a number for no change, the second would invoice a negative sale.
+    let empty = request.kind == "ADJUSTMENT" && request.total_minor == 0;
+    if empty || (request.kind == "REPLACEMENT" && request.total_minor < 0) {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "an adjustment changes the amount, and a replacement's total is not negative",
+            &[("total_minor", "OUT_OF_RANGE")],
+        ));
+    }
+    Ok(())
 }
 
 /// The tenant's correction symbol for this year: the ledger's, or a new one allocated from the
