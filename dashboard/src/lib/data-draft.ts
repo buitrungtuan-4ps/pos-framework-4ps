@@ -34,21 +34,24 @@ export const DATA_OBJECTS: readonly { readonly value: string; readonly key: Mess
   { value: "DATA_OBJECT_SHIFT", key: "data.object.shift" },
 ];
 
-/** A new text field `id`, on `object` when it is a field of an existing object; personal unanswered. */
-export function newField(id: string, object?: string): CustomField {
+/**
+ * A new text field `id` (a ULID), on `object` when it is a field of an existing object; personal
+ * unanswered. Its label key starts as `field.<name>`, from the readable `name` it was added under.
+ */
+export function newField(id: string, name: string, object?: string): CustomField {
   return {
     custom_field_id: id,
     field_type: "CUSTOM_FIELD_TYPE_TEXT",
-    label_key: `field.${id}`,
+    label_key: `field.${name}`,
     ...(object === undefined ? {} : { object }),
   };
 }
 
-/** A new list `id` with no entries. */
-export const newList = (id: string): CustomList => ({ custom_list_id: id, label_key: `list.${id}`, entries: [] });
+/** A new list `id` (a ULID) with no entries, its label key `list.<name>`. */
+export const newList = (id: string, name: string): CustomList => ({ custom_list_id: id, label_key: `list.${name}`, entries: [] });
 
-/** A new object type `id` with no fields. */
-export const newObjectType = (id: string): ObjectType => ({ object_type_id: id, label_key: `object.${id}`, fields: [] });
+/** A new object type `id` (a ULID) with no fields, its label key `object.<name>`. */
+export const newObjectType = (id: string, name: string): ObjectType => ({ object_type_id: id, label_key: `object.${name}`, fields: [] });
 
 /**
  * `field` with `change`, keeping its shape consistent: a field that is not personal keeps no

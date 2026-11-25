@@ -10,6 +10,7 @@ import { Button, Card, TextField } from "../../../components/ui";
 import { t, type MessageKey } from "../../../i18n";
 import { newField, newList, newObjectType, type ObjectType } from "../../../lib/data-draft";
 import { idFrom } from "../../../lib/flow-graph";
+import { newUlid } from "../../../lib/ulid";
 import type { PartProps } from "../designer/parts";
 import { RefusalList } from "../designer/refusals";
 import { FieldEditor } from "./FieldEditor";
@@ -33,7 +34,7 @@ function AddByName(props: { label: MessageKey; button: MessageKey; onAdd: (name:
 
 /** Fields, each in its editor, and a way to add one. */
 function Fields(props: { fields: readonly CustomField[]; lists: readonly CustomList[]; object?: string; onChange: (fields: CustomField[]) => void }) {
-  const ids = () => props.fields.map((field) => field.custom_field_id);
+  const names = () => props.fields.map((field) => field.label_key.replace(/^field\./u, ""));
   return (
     <div class="flex flex-col gap-2">
       <Index each={props.fields}>
@@ -47,26 +48,26 @@ function Fields(props: { fields: readonly CustomField[]; lists: readonly CustomL
           />
         )}
       </Index>
-      <AddByName label="data.newField" button="data.addField" onAdd={(name) => props.onChange([...props.fields, newField(idFrom(name, ids(), "field"), props.object)])} />
+      <AddByName label="data.newField" button="data.addField" onAdd={(name) => props.onChange([...props.fields, newField(newUlid(), idFrom(name, names(), "field"), props.object)])} />
     </div>
   );
 }
 
 /** A list and its entries. */
 function ListEditor(props: { list: CustomList; onChange: (list: CustomList) => void }) {
-  const ids = () => props.list.entries.map((entry) => entry.list_entry_id);
+  const names = () => props.list.entries.map((entry) => entry.label_key.slice(props.list.label_key.length + 1));
   return (
     <div class="flex flex-col gap-2 rounded-token border border-line p-3" data-custom-list={props.list.custom_list_id}>
       <TextField label={t("data.labelKey")} hint={t("data.keyHint")} value={props.list.label_key} onInput={(label_key) => props.onChange({ ...props.list, label_key })} />
       <ul class="flex flex-wrap gap-2 text-sm">
-        <For each={props.list.entries}>{(entry) => <li class="rounded-token border border-line px-2">{entry.list_entry_id}</li>}</For>
+        <For each={props.list.entries}>{(entry) => <li class="rounded-token border border-line px-2">{entry.label_key}</li>}</For>
       </ul>
       <AddByName
         label="data.newEntry"
         button="data.addEntry"
         onAdd={(name) => {
-          const list_entry_id = idFrom(name, ids(), "entry");
-          props.onChange({ ...props.list, entries: [...props.list.entries, { list_entry_id, label_key: `${props.list.label_key}.${list_entry_id}` }] });
+          const entry = idFrom(name, names(), "entry");
+          props.onChange({ ...props.list, entries: [...props.list.entries, { list_entry_id: newUlid(), label_key: `${props.list.label_key}.${entry}` }] });
         }}
       />
     </div>
@@ -97,19 +98,19 @@ export function DataPanel(props: PartProps) {
         <Index each={lists()}>
           {(list, index) => <ListEditor list={list()} onChange={(next) => set({ lists: lists().map((old, at) => (at === index ? next : old)) })} />}
         </Index>
-        <AddByName label="data.newList" button="data.addList" onAdd={(name) => set({ lists: [...lists(), newList(idFrom(name, lists().map((list) => list.custom_list_id), "list"))] })} />
+        <AddByName label="data.newList" button="data.addList" onAdd={(name) => set({ lists: [...lists(), newList(newUlid(), idFrom(name, lists().map((list) => list.label_key.replace(/^list\./u, "")), "list"))] })} />
       </Section>
       <Section title={t("data.objectTypes")}>
         <Index each={types()}>
           {(type, index) => (
             <div class="flex flex-col gap-2" data-object-type={type().object_type_id}>
-              <p class="font-medium text-ink">{type().object_type_id}</p>
+              <p class="font-medium text-ink">{type().label_key}</p>
               <TextField label={t("data.labelKey")} hint={t("data.keyHint")} value={type().label_key} onInput={(label_key) => setType(index, { ...type(), label_key })} />
               <Fields fields={type().fields} lists={lists()} onChange={(fields) => setType(index, { ...type(), fields })} />
             </div>
           )}
         </Index>
-        <AddByName label="data.newObjectType" button="data.addObjectType" onAdd={(name) => set({ object_types: [...types(), newObjectType(idFrom(name, types().map((type) => type.object_type_id), "object"))] })} />
+        <AddByName label="data.newObjectType" button="data.addObjectType" onAdd={(name) => set({ object_types: [...types(), newObjectType(newUlid(), idFrom(name, types().map((type) => type.label_key.replace(/^object\./u, "")), "object"))] })} />
       </Section>
       <RefusalList refusals={props.refusals} draft={props.draft()} />
     </div>

@@ -59,7 +59,7 @@ export function FieldEditor(props: {
   const problem = () => fieldProblem(props.field);
   return (
     <div class="flex flex-col gap-2 rounded-token border border-line p-3" data-custom-field={props.field.custom_field_id}>
-      <p class="font-medium text-ink">{props.field.custom_field_id}</p>
+      <p class="font-medium text-ink">{props.field.label_key}</p>
       <div class="grid gap-2 sm:grid-cols-3">
         <SelectField label={t("data.fieldType")} value={props.field.field_type} options={FIELD_TYPES.map((type) => ({ value: type.value, label: t(type.key) }))} onChange={(field_type) => set({ field_type })} />
         <Show when={props.withObject}>
@@ -68,7 +68,7 @@ export function FieldEditor(props: {
         <TextField label={t("data.labelKey")} hint={t("data.keyHint")} value={props.field.label_key} onInput={(label_key) => set({ label_key })} />
       </div>
       <Show when={props.field.field_type === "CUSTOM_FIELD_TYPE_CHOICE"}>
-        <SelectField label={t("data.list")} value={props.field.custom_list_id ?? ""} placeholder={t("rule.pick")} options={props.lists.map((list) => ({ value: list.custom_list_id, label: list.custom_list_id }))} onChange={(custom_list_id) => set({ custom_list_id })} />
+        <SelectField label={t("data.list")} value={props.field.custom_list_id ?? ""} placeholder={t("rule.pick")} options={props.lists.map((list) => ({ value: list.custom_list_id, label: list.label_key }))} onChange={(custom_list_id) => set({ custom_list_id })} />
       </Show>
       <Show when={props.field.field_type === "CUSTOM_FIELD_TYPE_QUANTITY"}>
         <TextField label={t("data.unitKey")} hint={t("data.keyHint")} value={props.field.unit_key ?? ""} onInput={(unit_key) => set({ unit_key })} />
