@@ -7,11 +7,22 @@
 // state — so the figure refreshes on every act without polling. A line still sending is left out:
 // the edge has not priced it, and its confirmation re-reads.
 
-import { createMemo, createResource, untrack, type Accessor } from "solid-js";
+import { createMemo, createResource, createSignal, untrack, type Accessor } from "solid-js";
 
 import type { CheckResponse } from "../api/schemas";
 import { afterPaint } from "../lib/after-paint";
 import { linesForTable, loadCheck } from "./store";
+
+// Edge confirmations that change what a table owes without changing its lines' fingerprint: a void
+// paints its line voided before it is sent, so the read the paint starts prices the void not yet
+// made, and the confirmation, which leaves the line as painted, must read again (found in the
+// phase-10 demo: the total kept the voided line until the screen was reloaded).
+const [confirmations, setConfirmations] = createSignal(0);
+
+/** Says the edge has confirmed a write that changes a table's figure: every check reads again. */
+export function checkChanged(): void {
+  setConfirmations((count) => count + 1);
+}
 
 /** A table's check, as the order screen shows it. */
 export interface TableCheck {
@@ -38,7 +49,7 @@ export function createTableCheck(
   reads: Accessor<boolean>,
 ): TableCheck {
   const priceable = createMemo(() =>
-    linesForTable(key())
+    `${confirmations()}|` + linesForTable(key())
       .filter((line) => line.pending !== true)
       .map(
         (line) =>

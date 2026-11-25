@@ -10,6 +10,7 @@
 
 import { api } from "../api/client";
 import type { ApproverRequest, LineResponse } from "../api/schemas";
+import { checkChanged } from "./table-check";
 import { editWrite } from "./edge-write";
 import { loadLiveOrders, state, updateStore } from "./store";
 
@@ -124,7 +125,10 @@ export async function voidLine(lineId: string, reasonCodeId: string, approval?: 
   await editWrite("sales.line.void", {
     paint: () => paintLines(was, [lineId], "ORDER_LINE_STATE_VOIDED"),
     send: () => api.voidLine(lineId, { reason_code_id: reasonCodeId, ...approval }),
-    confirmed: (voided) => answerLines([voided]),
+    confirmed: (voided) => {
+      answerLines([voided]);
+      checkChanged();
+    },
     reread: rereadOrders,
   });
 }
