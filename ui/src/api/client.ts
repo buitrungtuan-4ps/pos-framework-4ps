@@ -486,8 +486,10 @@ export const api = {
   weighLine: (orderId: string, body: WeighRequest) => request<LineResponse>("POST", `/api/orders/${orderId}/weigh`, body),
   readScale: () => request<ScaleResponse>("GET", "/api/scale"),
   // Bar tabs (ADR-0221): open one, numbered for the day; list the open ones; label one where the
-  // store keeps labels; and close one nothing was sold on, with the store's reason.
-  openTab: () => request<OpenedOrder>("POST", "/api/orders", { tab: true }),
+  // store keeps labels; and close one nothing was sold on, with the store's reason. A tab opens on
+  // `channel` where the cashier asked the guest, and on the store's walk-in channel without one.
+  openTab: (channel?: string) =>
+    request<OpenedOrder>("POST", "/api/orders", channel === undefined ? { tab: true } : { tab: true, channel }),
   openTabs: () => request<Tab[]>("GET", "/api/tabs"),
   labelTab: (orderId: string, label: string) =>
     request<unknown>("POST", `/api/tabs/${orderId}/label`, { label }),

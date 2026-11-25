@@ -1236,6 +1236,12 @@ export async function startWalkIn(channel?: string): Promise<string> {
   return opened.order_id;
 }
 
+// Records the channel the cashier opened a tableless order on, so its order screen shows that
+// channel's book: a tab opened on the guest's answer, as a walk-in is above.
+export function noteOrderChannel(orderId: string, channel: string): void {
+  setState("walkInChannels", orderId, channel);
+}
+
 // A line on a walk-in: the guest's choice goes to the edge, which prices it itself (ADR-0146). The
 // line drawn here carries the menu's price until the order screen next reads the check, which is the
 // edge's figure; the counter shows the book of the channel its walk-ins open on (`walkInMenu`), the
