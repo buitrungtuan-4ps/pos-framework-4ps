@@ -358,10 +358,14 @@ where
         key,
         mut node,
         action,
-        detail,
+        mut detail,
         companions,
         einvoice_symbol,
     } = write;
+    // The trail names a symbol published with the node (ADR-0240).
+    if let (Some(symbol), Some(fields)) = (&einvoice_symbol, detail.as_object_mut()) {
+        fields.insert("einvoice_symbol".to_owned(), serde_json::json!(symbol));
+    }
     let id = match publish_config_nodes_with(
         &state.config_trees,
         &state.clock,

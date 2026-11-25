@@ -49,11 +49,8 @@ pub(super) fn bump_audit_detail(
     requested_placement: Option<EdgePlacement>,
     acknowledged: Option<LeaseGeneration>,
     receipt_floor: Option<u64>,
-    einvoice_symbol: Option<&str>,
 ) -> serde_json::Value {
     serde_json::json!({
-        // The symbol allocated for the new box with the lease, where one was (ADR-0240).
-        "einvoice_symbol": einvoice_symbol,
         "generation": bump.generation.value(),
         "edge_placement": bump.edge_placement.as_wire(),
         "edge_placement_moved": requested_placement.is_some(),
