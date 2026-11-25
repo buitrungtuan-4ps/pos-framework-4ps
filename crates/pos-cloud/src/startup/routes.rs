@@ -832,6 +832,15 @@ fn locale_routes(deps: &RouteDeps<'_>) -> Router {
             SystemClock,
             Arc::clone(audit),
         ))
+        // A store's e-invoice symbol, by hand or allocated, recorded in the tenant's ledger
+        // (ADR-0240).
+        .merge(http::einvoice_symbol_router(
+            store.config_trees(),
+            store.admin(),
+            SystemClock,
+            Arc::clone(audit),
+            Arc::new(store.einvoice_symbols()),
+        ))
 }
 
 /// The order intake and the relay's store-facing order routes.

@@ -36,6 +36,7 @@ mod connections;
 mod custom_values;
 mod data_migrations;
 mod devices;
+mod einvoice_symbols;
 mod fee_rules;
 mod fleet;
 mod floor;
@@ -97,6 +98,7 @@ pub use custom_values::{
 };
 pub use data_migrations::PostgresDataMigrations;
 pub use devices::{DeviceProposalRow, PostgresDeviceProposals};
+pub use einvoice_symbols::{EInvoiceSymbolRow, PostgresEInvoiceSymbols, SYMBOL_LIST_LIMIT};
 pub use fee_rules::{FeeRuleRow, FeeRuleSlot, FeeRuleWrite, PostgresFeeRules};
 pub use fleet::{FleetStoreRow, PostgresFleet};
 pub use floor::{

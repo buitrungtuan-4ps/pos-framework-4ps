@@ -18,7 +18,6 @@ use channels::{
     admin_publish_channels, admin_publish_origins, admin_publish_tender, admin_read_channels,
     admin_read_origins, admin_read_tender,
 };
-use einvoice_symbol::admin_publish_einvoice_symbol;
 use pos_cloud_api::console::audit_action;
 use pos_proto::determinism::ClockSource;
 use pos_proto::ids::{StoreId, TenantId};
@@ -51,7 +50,10 @@ pub(crate) use channels::{
     __path_admin_publish_channels, __path_admin_publish_origins, __path_admin_publish_tender,
     __path_admin_read_channels, __path_admin_read_origins, __path_admin_read_tender,
 };
-pub(crate) use einvoice_symbol::__path_admin_publish_einvoice_symbol;
+pub use einvoice_symbol::einvoice_symbol_router;
+pub(crate) use einvoice_symbol::{
+    __path_admin_allocate_einvoice_symbol, __path_admin_publish_einvoice_symbol,
+};
 pub(crate) use locale::__path_admin_publish_locale;
 pub(crate) use qr::{__path_admin_publish_qr, __path_admin_read_qr};
 pub(crate) use retention::{__path_admin_publish_retention, __path_admin_read_retention};
@@ -224,10 +226,6 @@ where
         .route(
             "/admin/config/qr",
             get(admin_read_qr::<Cfg, A, C>).put(admin_publish_qr::<Cfg, A, C>),
-        )
-        .route(
-            "/admin/config/einvoice-symbol",
-            axum::routing::put(admin_publish_einvoice_symbol::<Cfg, A, C>),
         )
         .route(
             "/admin/config/retention",

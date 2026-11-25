@@ -106,6 +106,16 @@ einvoice.issue_moment	value=EINVOICE_ISSUE_MOMENT_IMMEDIATE
 einvoice.issue_moment	value=EINVOICE_ISSUE_MOMENT_OFF
 einvoice.issue_moment	value=EINVOICE_ISSUE_MOMENT_ON_REQUEST
 einvoice.issue_moment	value=EINVOICE_ISSUE_MOMENT_SCHEDULED_PER_ORDER
+einvoice.symbol_allocation
+einvoice.symbol_allocation	default=EINVOICE_SYMBOL_ALLOCATION_MANUAL
+einvoice.symbol_allocation	kind=SETTING_KIND_CHOICE
+einvoice.symbol_allocation	scope=SETTING_SCOPE_BRAND
+einvoice.symbol_allocation	scope=SETTING_SCOPE_STORE
+einvoice.symbol_allocation	scope=SETTING_SCOPE_STORE_GROUP
+einvoice.symbol_allocation	scope=SETTING_SCOPE_TENANT
+einvoice.symbol_allocation	since=0.14.1
+einvoice.symbol_allocation	value=EINVOICE_SYMBOL_ALLOCATION_AUTOMATIC
+einvoice.symbol_allocation	value=EINVOICE_SYMBOL_ALLOCATION_MANUAL
 kiosk.abandon_seconds
 kiosk.abandon_seconds	default=120
 kiosk.abandon_seconds	kind=SETTING_KIND_INT

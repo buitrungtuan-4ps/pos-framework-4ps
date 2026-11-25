@@ -169,6 +169,7 @@ pub(crate) use chain::__path_admin_chain_findings;
 pub use chain::chain_router;
 pub use config_nodes::{
     config_channels_router, config_locale_router, config_store_profile_router, config_tax_router,
+    einvoice_symbol_router,
 };
 pub(crate) use config_publish::{
     __path_admin_cancel_release, __path_admin_config_nodes, __path_admin_create_release,

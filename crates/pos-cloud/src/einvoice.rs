@@ -10,3 +10,4 @@
 
 pub mod sandbox;
 pub mod submitter;
+pub mod symbols;

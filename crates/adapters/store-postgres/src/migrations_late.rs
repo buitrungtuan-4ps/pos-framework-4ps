@@ -26,6 +26,7 @@ const MIGRATION_0101: &str = include_str!("../migrations/0101_subject_store_and_
 const MIGRATION_0102: &str = include_str!("../migrations/0102_order_queue_by_store_order.sql");
 const MIGRATION_0103: &str = include_str!("../migrations/0103_catalog_item_codes.sql");
 const MIGRATION_0104: &str = include_str!("../migrations/0104_roles_can_leave_a_kiosk.sql");
+const MIGRATION_0105: &str = include_str!("../migrations/0105_einvoice_symbols.sql");
 
 /// Applies 0089 onwards on `connection`, one `batch_execute` each, as `store.rs`'s wiring tests read.
 pub(crate) async fn migrate_from_0089(connection: &Object) -> Result<(), PortError> {
@@ -91,6 +92,10 @@ pub(crate) async fn migrate_from_0089(connection: &Object) -> Result<(), PortErr
         .map_err(unavailable)?;
     connection
         .batch_execute(MIGRATION_0104)
+        .await
+        .map_err(unavailable)?;
+    connection
+        .batch_execute(MIGRATION_0105)
         .await
         .map_err(unavailable)
 }

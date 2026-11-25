@@ -102,6 +102,11 @@ async fn a_country_lists_the_settings_its_pack_gives_a_new_store() {
             { "setting_key": "shift.variance_reason_minor", "value": 20_000 },
             // ADR-0229 decision 1: the owner's seed, an e-invoice issued with every settle.
             { "setting_key": "einvoice.issue_moment", "value": "EINVOICE_ISSUE_MOMENT_IMMEDIATE" },
+            // ADR-0240 decision 4: the cloud gives each new box its own symbol.
+            {
+                "setting_key": "einvoice.symbol_allocation",
+                "value": "EINVOICE_SYMBOL_ALLOCATION_AUTOMATIC",
+            },
         ]),
     );
     assert!(

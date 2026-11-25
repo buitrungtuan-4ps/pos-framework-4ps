@@ -3203,5 +3203,9 @@
   "einvoices.symbolSet": "Set symbol",
   "einvoices.symbolChange": "Change symbol",
   "einvoices.symbolPublished": "Symbol {symbol} published to the store.",
-  "einvoices.historyTitle": "Store history"
+  "einvoices.historyTitle": "Store history",
+  "settings.item.einvoice.symbol_allocation.title": "E-invoice symbol allocation",
+  "settings.item.einvoice.symbol_allocation.help": "Whether the cloud gives each store its e-invoice symbol by itself. By hand leaves it to HQ, on the E-invoices screen. Automatic gives one when a store's box is activated with none, and a new one when its box is replaced.",
+  "settings.value.EINVOICE_SYMBOL_ALLOCATION_MANUAL": "By hand",
+  "settings.value.EINVOICE_SYMBOL_ALLOCATION_AUTOMATIC": "Automatic"
 }

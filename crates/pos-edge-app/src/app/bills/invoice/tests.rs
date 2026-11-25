@@ -36,6 +36,7 @@ fn a_scheduled_store(
             symbol: symbol.map(str::to_owned),
             delay_minutes: Some(delay_minutes),
             batch_minute: Some(batch_minute),
+            ..PublishedEInvoice::default()
         },
         ..EdgeSession::bootstrap()
     };
