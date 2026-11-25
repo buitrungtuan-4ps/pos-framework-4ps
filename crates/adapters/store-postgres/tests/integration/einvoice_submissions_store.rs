@@ -99,3 +99,43 @@ fn a_submission_is_recorded_once_and_moves_through_its_states() {
         );
     });
 }
+
+/// The corrections of one invoice are read oldest first, then by number, and of its tenant only.
+#[test]
+fn the_corrections_of_an_invoice_are_read_in_order() {
+    block_on(async {
+        let (store, _admin) = prepared().await.expect("prepare the database");
+        let submissions = store.einvoice_submissions();
+        submissions
+            .record(&row("00000001", 10))
+            .await
+            .expect("records");
+        for (id, number, at, kind) in [
+            ("00000003", "1C26MAB/00000002", 30, "ADJUSTMENT"),
+            ("00000002", "1C26MAB/00000001", 30, "REPLACEMENT"),
+            ("00000004", "1C26MAB/00000003", 20, "ADJUSTMENT"),
+        ] {
+            let correction = SubmissionRow {
+                invoice_number: number.to_owned(),
+                kind: kind.to_owned(),
+                corrects_invoice_number: Some("1C26MAA/00000001".to_owned()),
+                ..row(id, at)
+            };
+            submissions.record(&correction).await.expect("records");
+        }
+        let read = submissions
+            .corrections_of(TENANT_A, "1C26MAA/00000001")
+            .await
+            .expect("reads");
+        let numbers: Vec<&str> = read.iter().map(|row| row.invoice_number.as_str()).collect();
+        assert_eq!(
+            numbers,
+            ["1C26MAB/00000003", "1C26MAB/00000001", "1C26MAB/00000002"]
+        );
+        let other = submissions
+            .corrections_of(TENANT_B, "1C26MAA/00000001")
+            .await
+            .expect("reads");
+        assert!(other.is_empty(), "another tenant's are not read");
+    });
+}

@@ -207,7 +207,7 @@ pub(crate) struct CorrectEInvoiceRequest {
         (status = 201, body = EInvoiceView, description = "The correction, numbered under the tenant's correction symbol, \
                                       recorded as PENDING and audited. It is submitted by the next pass"),
         (status = 400, description = "An id is not a ULID, the kind is not one of the two (`INVALID_FORMAT` on `kind`), \
-                                      or an adjustment of zero or a negative replacement (`OUT_OF_RANGE` on `total_minor`)", body = crate::openapi_admin::ErrorResponse),
+                                      or an adjustment of zero, a negative replacement, or an adjustment that takes the invoice below zero (`OUT_OF_RANGE` on `total_minor`)", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
         (status = 403, description = "The role lacks console.einvoices.correct", body = crate::openapi_admin::ErrorResponse),
         (status = 404, description = "No such invoice in the tenant", body = crate::openapi_admin::ErrorResponse),
@@ -248,6 +248,12 @@ where
         .await
         .map_err(|_| service_unavailable("e-invoice submissions"))?
         .ok_or_else(|| api_error(ErrorStatus::NotFound, "no such invoice"))?;
+    let earlier = state
+        .submissions
+        .corrections_of(tenant, original.invoice_number.clone())
+        .await
+        .map_err(|_| service_unavailable("e-invoice submissions"))?;
+    check_standing(&request, standing_total(&original, &earlier))?;
     let now = state.clock.now();
     let symbol = correction_symbol(&state, tenant, &original, now).await?;
     let last = state
@@ -329,6 +335,37 @@ fn check_correction(request: &CorrectEInvoiceRequest) -> Result<(), Response> {
         return Err(api_error_with_details(
             ErrorStatus::InvalidArgument,
             "an adjustment changes the amount, and a replacement's total is not negative",
+            &[("total_minor", "OUT_OF_RANGE")],
+        ));
+    }
+    Ok(())
+}
+
+/// What the invoice stands at after its corrections so far: its total, replaced by each replacement
+/// and moved by each adjustment, in the order they were recorded.
+fn standing_total(original: &SubmissionRow, earlier: &[SubmissionRow]) -> i64 {
+    earlier.iter().fold(original.total_minor, |total, row| {
+        if row.kind == "REPLACEMENT" {
+            row.total_minor
+        } else {
+            total.saturating_add(row.total_minor)
+        }
+    })
+}
+
+/// Refuses an adjustment that would take the invoice below zero: a correction may take a sale back
+/// to nothing, never further (found in the phase-10 demo, after security review E1). Whether an
+/// adjustment may exceed what was sold is to be confirmed by legal or the accountant; this keeps to
+/// the conservative reading.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is the axum Response the handler returns"
+)]
+fn check_standing(request: &CorrectEInvoiceRequest, standing: i64) -> Result<(), Response> {
+    if request.kind == "ADJUSTMENT" && standing.saturating_add(request.total_minor) < 0 {
+        return Err(api_error_with_details(
+            ErrorStatus::InvalidArgument,
+            "an adjustment cannot take the invoice below zero",
             &[("total_minor", "OUT_OF_RANGE")],
         ));
     }

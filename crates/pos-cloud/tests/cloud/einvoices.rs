@@ -153,6 +153,36 @@ async fn an_invoice_is_listed_and_corrected_under_the_correction_symbol() {
         .await
         .expect("route");
     assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+    // The replacement stands the invoice at 150,000: an adjustment may take it to nothing, never
+    // below, counting every correction recorded so far.
+    for total in [-150_001, -200_000] {
+        let refused = router
+            .clone()
+            .oneshot(correct("ADJUSTMENT", total))
+            .await
+            .expect("route");
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "{total}");
+        assert_eq!(
+            json_body(refused).await["error"]["details"][0]["field"],
+            "total_minor"
+        );
+    }
+    let to_nothing = router
+        .clone()
+        .oneshot(correct("ADJUSTMENT", -150_000))
+        .await
+        .expect("route");
+    assert_eq!(to_nothing.status(), StatusCode::CREATED);
+    let below = router
+        .clone()
+        .oneshot(correct("ADJUSTMENT", -1))
+        .await
+        .expect("route");
+    assert_eq!(
+        below.status(),
+        StatusCode::BAD_REQUEST,
+        "already at nothing"
+    );
     // Security review E1: no correction of nothing, and no negative replacement.
     for (kind, total) in [("ADJUSTMENT", 0), ("REPLACEMENT", -1)] {
         let refused = router
