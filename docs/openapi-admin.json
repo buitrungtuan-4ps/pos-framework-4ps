@@ -7821,7 +7821,7 @@
         "tags": [
           "config nodes"
         ],
-        "summary": "HQ publishes the symbol one store numbers its e-invoices under. Checked against the store's\ncountry where it has published one, else against the shape every country shares.",
+        "summary": "HQ publishes the symbol one store numbers its e-invoices under. Checked against the store's\ncountry where it has published one, else against the shape every country shares, and against\nthe tenant's ledger.",
         "operationId": "admin_publish_einvoice_symbol",
         "requestBody": {
           "description": "`tenant_id` and `store_id`, then the `symbol` the store numbers its e-invoices under, in its country's shape (ADR-0225 decision 2)",
@@ -7836,7 +7836,7 @@
         },
         "responses": {
           "200": {
-            "description": "Published as the `symbol` of the store's `einvoice` node on its Store layer, the node's settings kept. Audited with the symbol",
+            "description": "Recorded in the tenant's symbol ledger and published as the `symbol` of the store's `einvoice` node on its Store layer, the node's settings kept. Audited with the symbol",
             "content": {
               "application/json": {
                 "schema": {
@@ -7875,6 +7875,16 @@
               }
             }
           },
+          "409": {
+            "description": "The ledger gives the symbol to another store of the tenant (`E_INVOICE_SYMBOL_IN_USE` on `symbol`, ADR-0240 decision 2)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "412": {
             "description": "Every attempt to write the store's configuration lost a race with another publish: try again",
             "content": {
@@ -7896,7 +7906,115 @@
             }
           },
           "503": {
-            "description": "The configuration store is unreachable",
+            "description": "The configuration store or the ledger is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.config.publish"
+      }
+    },
+    "/admin/config/einvoice-symbol/allocate": {
+      "post": {
+        "tags": [
+          "config nodes"
+        ],
+        "summary": "HQ gives one store the next free symbol of its country's rule (ADR-0240 decision 3).",
+        "operationId": "admin_allocate_einvoice_symbol",
+        "requestBody": {
+          "description": "The store to give the next free symbol of its country's rule (ADR-0240 decision 3)",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AllocateEInvoiceSymbolRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The next symbol of the current year the tenant's ledger does not hold, recorded for the store and published as its `einvoice` node's `symbol`. Audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AllocatedEInvoiceSymbol"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "tenant_id or store_id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.config.publish",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Every symbol of the year's rule is in the ledger (`E_INVOICE_SYMBOL_EXHAUSTED` on `symbol`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Every attempt to write the store's configuration lost a race with another publish: try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The store's country has no allocation rule, or the store has published no country: type the symbol by hand (`E_INVOICE_SYMBOL_NO_RULE` on `symbol`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The configuration store or the ledger is unreachable",
             "content": {
               "application/json": {
                 "schema": {
@@ -27111,6 +27229,40 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "AllocateEInvoiceSymbolRequest": {
+        "type": "object",
+        "description": "A `POST /admin/config/einvoice-symbol/allocate` body: the store to give its next symbol.",
+        "required": [
+          "tenant_id",
+          "store_id"
+        ],
+        "properties": {
+          "store_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "AllocatedEInvoiceSymbol": {
+        "type": "object",
+        "description": "The symbol allocated and the config version that published it.",
+        "required": [
+          "symbol",
+          "config_version_id"
+        ],
+        "properties": {
+          "config_version_id": {
+            "type": "string",
+            "description": "The config version that published it."
+          },
+          "symbol": {
+            "type": "string",
+            "description": "The symbol the store now numbers under, such as `1C26MAA`."
           }
         }
       },

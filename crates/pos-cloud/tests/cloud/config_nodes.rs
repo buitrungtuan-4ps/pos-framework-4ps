@@ -10,6 +10,7 @@ use axum::http::StatusCode;
 use pos_cloud::audit::{AuditRecorder, AuditSink, NoopAuditRecorder};
 use pos_cloud::auth::admin::AdminRole;
 use pos_cloud::config_tree::ConfigTreeStore;
+use pos_cloud::einvoice::symbols::InMemorySymbolLedger;
 use pos_cloud::tax::TaxRateEntry;
 use pos_cloud::{Cloud, http};
 use pos_fakes::FakeStore;
@@ -21,8 +22,8 @@ use tower::ServiceExt;
 
 use crate::{
     FakeAdmin, FakeAudit, FakeConfigTrees, FakeKeys, FakeRollups, FakeTaxRates, FakeWebhooks,
-    admin_cookie, app_all, clock, get_with_cookie, json_body, provisioned_admin, put_with_cookie,
-    role_session_cookie, store_id, tenant,
+    admin_cookie, app_all, clock, get_with_cookie, json_body, post_with_cookie, provisioned_admin,
+    put_with_cookie, role_session_cookie, store_id, tenant,
 };
 
 fn tax_publish_app(
@@ -769,13 +770,10 @@ async fn a_store_profile_is_refused_before_it_is_written_and_records_nothing() {
     assert!(audit.entries.lock().expect("lock").is_empty());
 }
 
-/// ADR-0225 decision 2: HQ gives one store its e-invoice symbol, written on the store's own
-/// `einvoice` node beside its settings, and a value that is not a symbol is refused, naming it.
-#[tokio::test]
-async fn a_store_is_given_its_einvoice_symbol_beside_its_settings() {
+/// The e-invoice symbol routes over a fresh tree and ledger (ADR-0240).
+fn symbol_router(trees: &FakeConfigTrees) -> axum::Router {
     let admin = provisioned_admin();
-    let trees = FakeConfigTrees::default();
-    let router = http::router(app_all(
+    http::router(app_all(
         Cloud::new(FakeStore::new()),
         FakeRollups::default(),
         FakeKeys::default(),
@@ -783,26 +781,42 @@ async fn a_store_is_given_its_einvoice_symbol_beside_its_settings() {
         trees.clone(),
         FakeWebhooks::default(),
     ))
-    .merge(http::config_channels_router(
+    .merge(http::einvoice_symbol_router(
         trees.clone(),
         admin,
         clock(),
         Arc::new(NoopAuditRecorder),
-    ));
+        Arc::new(InMemorySymbolLedger::default()),
+    ))
+}
+
+fn symbol_body(store: pos_proto::ids::StoreId, symbol: Option<&str>) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "tenant_id": tenant().as_ulid().to_string(),
+        "store_id": store.as_ulid().to_string(),
+    });
+    if let Some(symbol) = symbol {
+        body["symbol"] = serde_json::json!(symbol);
+    }
+    body
+}
+
+/// ADR-0225 decision 2: HQ gives one store its e-invoice symbol, written on the store's own
+/// `einvoice` node beside its settings, and a value that is not a symbol is refused, naming it.
+#[tokio::test]
+async fn a_store_is_given_its_einvoice_symbol_beside_its_settings() {
+    let trees = FakeConfigTrees::default();
+    let router = symbol_router(&trees);
     let cookie = admin_cookie(&router).await;
     let publish = |symbol: &str| {
         put_with_cookie(
             "/admin/config/einvoice-symbol",
-            &serde_json::json!({
-                "tenant_id": tenant().as_ulid().to_string(),
-                "store_id": store_id().as_ulid().to_string(),
-                "symbol": symbol,
-            }),
+            &symbol_body(store_id(), Some(symbol)),
             &cookie,
         )
     };
 
-    for symbol in ["1C26MAA", "1C26MAB"] {
+    for symbol in ["1C26MAA", "1C26MAB", "1C26MAA"] {
         let published = router
             .clone()
             .oneshot(publish(symbol))
@@ -816,8 +830,9 @@ async fn a_store_is_given_its_einvoice_symbol_beside_its_settings() {
         .expect("load")
         .expect("a published tree");
     assert_eq!(
-        state.record.layers[2]["einvoice"]["symbol"], "1C26MAB",
-        "the latest symbol replaces the last, on the Store layer"
+        state.record.layers[2]["einvoice"]["symbol"], "1C26MAA",
+        "the latest symbol replaces the last, on the Store layer, and a store may be given its own \
+         symbol again"
     );
 
     for refused in ["", "a name", "1C26MAA/00000001x"] {
@@ -831,4 +846,101 @@ async fn a_store_is_given_its_einvoice_symbol_beside_its_settings() {
         assert_eq!(body["error"]["details"][0]["field"], "symbol");
         assert_eq!(body["error"]["details"][0]["reason"], "INVALID_FORMAT");
     }
+}
+
+/// ADR-0240 decisions 2 and 3: a symbol another store of the tenant was given is refused by hand,
+/// and allocation gives each Vietnamese store the next symbol no store of the tenant held.
+#[tokio::test]
+async fn each_vietnamese_store_is_allocated_a_symbol_of_its_own() {
+    let trees = FakeConfigTrees::default();
+    let other_store = pos_proto::ids::StoreId::new(Ulid::from_u128(0x5707_e002));
+    for store in [store_id(), other_store] {
+        trees.seed_store_layer(
+            tenant(),
+            store,
+            serde_json::json!({ "locale": { "country_code": "VN" } }),
+        );
+    }
+    let router = symbol_router(&trees);
+    let cookie = admin_cookie(&router).await;
+
+    let by_hand = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/config/einvoice-symbol",
+            &symbol_body(other_store, Some("1C23MAA")),
+            &cookie,
+        ))
+        .await
+        .expect("route");
+    assert_eq!(by_hand.status(), StatusCode::OK);
+
+    let taken = router
+        .clone()
+        .oneshot(put_with_cookie(
+            "/admin/config/einvoice-symbol",
+            &symbol_body(store_id(), Some("1C23MAA")),
+            &cookie,
+        ))
+        .await
+        .expect("route");
+    assert_eq!(taken.status(), StatusCode::CONFLICT);
+    let body = json_body(taken).await;
+    assert_eq!(
+        body["error"]["details"][0]["reason"],
+        "E_INVOICE_SYMBOL_IN_USE"
+    );
+
+    let allocated = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/config/einvoice-symbol/allocate",
+            &symbol_body(store_id(), None),
+            &cookie,
+        ))
+        .await
+        .expect("route");
+    assert_eq!(allocated.status(), StatusCode::OK);
+    let body = json_body(allocated).await;
+    let symbol = body["symbol"].as_str().expect("a symbol").to_owned();
+    assert_eq!(
+        symbol, "1C23MAB",
+        "the test clock's year, and the first index after the hand-typed AA"
+    );
+    let state = trees
+        .load(tenant(), store_id())
+        .await
+        .expect("load")
+        .expect("a published tree");
+    assert_eq!(
+        state.record.layers[2]["einvoice"]["symbol"],
+        symbol.as_str()
+    );
+}
+
+/// ADR-0240 decision 3: a store with no country, or one with no rule, is told to type it by hand.
+#[tokio::test]
+async fn a_store_whose_country_has_no_rule_is_not_allocated_a_symbol() {
+    let trees = FakeConfigTrees::default();
+    trees.seed_store_layer(
+        tenant(),
+        store_id(),
+        serde_json::json!({ "locale": { "country_code": "JP" } }),
+    );
+    let router = symbol_router(&trees);
+    let cookie = admin_cookie(&router).await;
+    let refused = router
+        .oneshot(post_with_cookie(
+            "/admin/config/einvoice-symbol/allocate",
+            &symbol_body(store_id(), None),
+            &cookie,
+        ))
+        .await
+        .expect("route");
+    assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = json_body(refused).await;
+    assert_eq!(
+        body["error"]["details"][0]["reason"],
+        "E_INVOICE_SYMBOL_NO_RULE"
+    );
 }

@@ -871,6 +871,10 @@ mod gateway_endpoints_store;
 #[path = "integration/gateway_calls_store.rs"]
 mod gateway_calls_store;
 
+/// The e-invoice symbol ledger (ADR-0240, migration 0105): a symbol stays with its first store.
+#[path = "integration/einvoice_symbols_store.rs"]
+mod einvoice_symbols_store;
+
 /// Tenant keys (ADR-0217, migration 0100): a version is stored once, read oldest first, kept
 /// apart per tenant, and out of reach of the tenant-scoped role.
 #[path = "integration/tenant_keys_store.rs"]

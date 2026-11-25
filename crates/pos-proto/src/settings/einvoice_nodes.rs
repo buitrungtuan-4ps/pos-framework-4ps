@@ -5,13 +5,13 @@
 //! ([ADR-0229](../../../../docs/adr/0229-the-e-invoice-issue-moment-is-a-schedule.md)), apart from
 //! `nodes.rs`, which is at its size limit.
 
-use crate::einvoice::{self, EInvoiceIssueMoment, PublishedEInvoice};
+use crate::einvoice::{self, EInvoiceIssueMoment, EInvoiceSymbolAllocation, PublishedEInvoice};
 use crate::wire_enum::WireEnum;
 
 use super::{NEXT_RELEASE, STORE_WIDE, Setting, SettingShape, SettingUnit, choices};
 
-/// The settings on the `einvoice` node (ADR-0229 decision 1). The node's `symbol` is the cloud's
-/// to give each issuing point and is not a setting.
+/// The settings on the `einvoice` node (ADR-0229 decision 1, ADR-0240 decision 4). The node's
+/// `symbol` is the cloud's to give each issuing point and is not a setting.
 pub(super) fn einvoice_settings() -> Vec<Setting> {
     vec![
         Setting {
@@ -69,6 +69,24 @@ pub(super) fn einvoice_settings() -> Vec<Setting> {
                       `EINVOICE_ISSUE_MOMENT_BATCH_WINDOW` issues every invoice waiting. `1320`, \
                       the default, is 22:00. A bill settled after it waits for the next day's \
                       batch, unless the country's legal limit comes first.",
+        },
+        Setting {
+            node: PublishedEInvoice::NODE,
+            field: "symbol_allocation",
+            shape: SettingShape::Choice {
+                values: choices::<EInvoiceSymbolAllocation>(),
+                default: PublishedEInvoice::default().symbol_allocation().as_wire(),
+                // Seeded by the country pack (ADR-0183), and no template sets it.
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            confirm: None,
+            summary: "Whether the cloud allocates the store's e-invoice symbol by itself. \
+                      `EINVOICE_SYMBOL_ALLOCATION_MANUAL`, the default, leaves it to HQ, by hand \
+                      or with the console's allocate button; `_AUTOMATIC`, which the Vietnamese \
+                      pack seeds, allocates one when a box is activated for a store with none and \
+                      with each lease bump. The cloud reads it; the edge does not.",
         },
     ]
 }

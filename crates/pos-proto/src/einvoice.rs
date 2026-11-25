@@ -19,7 +19,7 @@ use crate::money::Money;
 use crate::time::{CalendarDate, Timestamp};
 use crate::ulid::Ulid;
 use crate::wire_enum;
-use crate::wire_enum::Open;
+use crate::wire_enum::{Open, WireEnum};
 
 wire_enum! {
     /// When a settled bill issues an e-invoice (ADR-0229 decision 1).
@@ -52,6 +52,18 @@ impl EInvoiceIssueMoment {
     pub const fn is_deferred(self) -> bool {
         matches!(self, Self::ScheduledPerOrder | Self::BatchWindow)
     }
+}
+
+wire_enum! {
+    /// Whether the cloud allocates a store's invoice symbol by itself
+    /// ([ADR-0240](../../../docs/adr/0240-the-cloud-allocates-each-issuing-points-invoice-symbol.md)
+    /// decision 4). The cloud reads it; the edge does not.
+    EInvoiceSymbolAllocation, prefix = "EINVOICE_SYMBOL_ALLOCATION";
+    /// HQ gives each symbol, by hand or with the console's allocate button. The default.
+    Manual = "MANUAL",
+    /// The cloud allocates one when a box is activated for a store with none, and with each lease
+    /// bump. What the Vietnamese pack seeds.
+    Automatic = "AUTOMATIC",
 }
 
 /// The latest a country's law lets an invoice be issued after its sale (ADR-0229 decision 2): fixed
@@ -175,6 +187,10 @@ pub struct PublishedEInvoice {
         skip_serializing_if = "Option::is_none"
     )]
     pub symbol: Option<String>,
+    /// Whether the cloud allocates the symbol by itself. Read it through
+    /// [`Self::symbol_allocation`].
+    #[serde(default, deserialize_with = "token", skip_serializing_if = "is_absent")]
+    pub symbol_allocation: Open<EInvoiceSymbolAllocation>,
 }
 
 impl PublishedEInvoice {
@@ -210,6 +226,18 @@ impl PublishedEInvoice {
             .filter(|minute| BATCH_MINUTE.contains(minute))
             .and_then(|minute| u32::try_from(minute).ok())
             .unwrap_or(1_320)
+    }
+
+    /// Whether the cloud allocates the symbol by itself: [`EInvoiceSymbolAllocation::Automatic`]
+    /// only when the node says so, and [`EInvoiceSymbolAllocation::Manual`] otherwise.
+    #[must_use]
+    pub fn symbol_allocation(&self) -> EInvoiceSymbolAllocation {
+        match self.symbol_allocation.known() {
+            EInvoiceSymbolAllocation::Automatic => EInvoiceSymbolAllocation::Automatic,
+            EInvoiceSymbolAllocation::Unspecified | EInvoiceSymbolAllocation::Manual => {
+                EInvoiceSymbolAllocation::Manual
+            }
+        }
     }
 
     /// The symbol to number under, or `None` while the cloud has published none, or one that is
@@ -262,9 +290,10 @@ pub struct InvoiceSchedule {
     pub buyer_subject_id: Option<SubjectId>,
 }
 
-fn token<'de, D>(deserializer: D) -> Result<Open<EInvoiceIssueMoment>, D::Error>
+fn token<'de, D, T>(deserializer: D) -> Result<Open<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
+    T: WireEnum,
 {
     Ok(serde_json::Value::deserialize(deserializer)?
         .as_str()
@@ -287,7 +316,7 @@ where
     Ok(serde_json::Value::deserialize(deserializer)?.as_i64())
 }
 
-fn is_absent(moment: &Open<EInvoiceIssueMoment>) -> bool {
+fn is_absent<T: WireEnum + PartialEq>(moment: &Open<T>) -> bool {
     *moment == Open::default()
 }
 

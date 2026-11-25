@@ -128,6 +128,11 @@ impl CountryModule for Vietnam {
                 setting_key: "einvoice.issue_moment",
                 value: SettingDefaultValue::Choice("EINVOICE_ISSUE_MOMENT_IMMEDIATE"),
             },
+            // ADR-0240 decision 4: the cloud gives each new box its own symbol.
+            SettingDefault {
+                setting_key: "einvoice.symbol_allocation",
+                value: SettingDefaultValue::Choice("EINVOICE_SYMBOL_ALLOCATION_AUTOMATIC"),
+            },
         ]
     }
 
@@ -138,6 +143,15 @@ impl CountryModule for Vietnam {
     /// restaurant's cash-register invoices use are to be confirmed (`CONFORMANCE.md` R15).
     fn is_valid_invoice_symbol(&self, symbol: &str) -> bool {
         einvoice::InvoiceSymbol::parse(symbol).is_ok()
+    }
+
+    /// Form `1`, code `C`, the year, kind `M` (an invoice generated from a cash register) and the
+    /// seller pair of `index`, `AA` to `ZZ` (ADR-0240 decision 3). All three letters are the
+    /// recommended reading, to be confirmed by legal or the accountant (`CONFORMANCE.md` R15).
+    fn allocate_invoice_symbol(&self, year: i16, index: u32) -> Option<String> {
+        einvoice::InvoiceSymbol::for_issuing_point(1, 'C', year, 'M', index)
+            .ok()
+            .map(|symbol| symbol.as_str().to_owned())
     }
 
     fn einvoice_issue_limit(&self) -> Option<pos_proto::einvoice::IssueLimit> {
@@ -247,8 +261,31 @@ mod tests {
                         "EINVOICE_ISSUE_MOMENT_IMMEDIATE"
                     ),
                 },
+                pos_country::SettingDefault {
+                    setting_key: "einvoice.symbol_allocation",
+                    value: pos_country::SettingDefaultValue::Choice(
+                        "EINVOICE_SYMBOL_ALLOCATION_AUTOMATIC"
+                    ),
+                },
             ]
         );
+    }
+
+    #[test]
+    fn each_issuing_point_is_allocated_its_own_symbol_for_the_year() {
+        assert_eq!(
+            Vietnam.allocate_invoice_symbol(2026, 0).as_deref(),
+            Some("1C26MAA")
+        );
+        assert_eq!(
+            Vietnam.allocate_invoice_symbol(2026, 27).as_deref(),
+            Some("1C26MBB")
+        );
+        assert_eq!(
+            Vietnam.allocate_invoice_symbol(2027, 675).as_deref(),
+            Some("1C27MZZ")
+        );
+        assert_eq!(Vietnam.allocate_invoice_symbol(2026, 676), None);
     }
 
     #[test]

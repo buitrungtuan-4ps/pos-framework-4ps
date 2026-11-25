@@ -141,6 +141,16 @@ pub trait CountryModule: Send + Sync + 'static {
         pos_proto::einvoice::InvoiceSymbol::parse(symbol).is_some()
     }
 
+    /// The symbol issuing point `index` of a seller is given in `year`, by this country's rule
+    /// ([ADR-0240](../../../docs/adr/0240-the-cloud-allocates-each-issuing-points-invoice-symbol.md)
+    /// decision 3), or `None` past the rule's last index or for a country with no rule. The cloud
+    /// tries indexes in order and skips one its ledger already holds. `None` by default: a country
+    /// with no rule has its symbols typed by hand.
+    fn allocate_invoice_symbol(&self, year: i16, index: u32) -> Option<String> {
+        let _ = (year, index);
+        None
+    }
+
     /// The sections of a receipt a template may leave out that this country's law requires all the
     /// same ([ADR-0207](../../../docs/adr/0207-a-receipt-is-a-structured-template-per-store-and-channel.md)
     /// decision 3): the cloud refuses a `receipt` template that turns one of these off.
