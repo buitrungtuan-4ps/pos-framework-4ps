@@ -106,6 +106,7 @@ where
             action: "config.ota.placement",
             detail: node,
             companions: Vec::new(),
+            einvoice_symbol: None,
         },
     )
     .await

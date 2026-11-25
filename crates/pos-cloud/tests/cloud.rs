@@ -7538,6 +7538,7 @@ fn ota_app_hosting(
         clock(),
         Arc::new(NoopAuditRecorder),
         releases,
+        Arc::new(pos_cloud::einvoice::symbols::InMemorySymbolLedger::default()),
     ))
 }
 
@@ -7562,6 +7563,7 @@ fn ota_app_with_audit(
         clock(),
         audit,
         FakeOtaArtifacts::default(),
+        Arc::new(pos_cloud::einvoice::symbols::InMemorySymbolLedger::default()),
     ))
 }
 

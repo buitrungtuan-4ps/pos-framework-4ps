@@ -9,7 +9,7 @@
 import { createEffect, createSignal, Show } from "solid-js";
 
 import { api } from "../api/client";
-import { publishEInvoiceSymbol } from "../api/einvoices";
+import { allocateEInvoiceSymbol, publishEInvoiceSymbol } from "../api/einvoices";
 import type { Json } from "../api/types";
 import { t } from "../i18n";
 import { RequireContext } from "../lib/scoped";
@@ -90,16 +90,11 @@ function SymbolForm(props: { current: string | null; onPublished: () => Promise<
   // The field starts from what is published, so changing a symbol starts from the one in force.
   createEffect(() => setDraft(props.current ?? ""));
 
-  const save = async () => {
-    const symbol = draft().trim().toUpperCase();
-    if (symbol === "") {
-      setError(t("einvoices.symbolRequired"));
-      return;
-    }
+  const run = async (act: () => Promise<string>) => {
     setBusy(true);
     setError("");
     try {
-      await publishEInvoiceSymbol(tenantId(), storeId(), symbol);
+      const symbol = await act();
       toast.ok(t("einvoices.symbolPublished", { symbol }));
       await props.onPublished();
     } catch (caught) {
@@ -108,6 +103,21 @@ function SymbolForm(props: { current: string | null; onPublished: () => Promise<
       setBusy(false);
     }
   };
+
+  const save = async () => {
+    const symbol = draft().trim().toUpperCase();
+    if (symbol === "") {
+      setError(t("einvoices.symbolRequired"));
+      return;
+    }
+    await run(async () => {
+      await publishEInvoiceSymbol(tenantId(), storeId(), symbol);
+      return symbol;
+    });
+  };
+
+  const allocateNext = () =>
+    run(async () => (await allocateEInvoiceSymbol(tenantId(), storeId())).symbol);
 
   return (
     <>
@@ -118,11 +128,15 @@ function SymbolForm(props: { current: string | null; onPublished: () => Promise<
         hint={t("einvoices.symbolHint")}
       />
       <Show when={error()}>{(message) => <Banner tone="danger" message={message()} />}</Show>
-      <div>
+      <div class="flex flex-wrap gap-2">
         <Button onClick={() => void save()} disabled={busy()}>
           {props.current ? t("einvoices.symbolChange") : t("einvoices.symbolSet")}
         </Button>
+        <Button variant="secondary" onClick={() => void allocateNext()} disabled={busy()}>
+          {t("einvoices.symbolAllocate")}
+        </Button>
       </div>
+      <p class="text-sm text-ink-muted">{t("einvoices.symbolAllocateHint")}</p>
     </>
   );
 }

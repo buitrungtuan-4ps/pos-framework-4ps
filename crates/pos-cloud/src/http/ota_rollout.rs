@@ -51,6 +51,8 @@ struct OtaConfigState<Cfg, A, C, L> {
     clock: C,
     audit: Arc<dyn AuditRecorder>,
     releases: L,
+    /// The tenant's e-invoice symbol ledger, which a lease bump allocates from (ADR-0240).
+    symbols: Arc<dyn crate::einvoice::symbols::SymbolLedger>,
 }
 
 /// A `PUT /admin/config/ota` body: the `(tenant, store)` and the rollout to publish. There is no
@@ -155,6 +157,7 @@ pub fn ota_config_router<Cfg, A, C, L>(
     clock: C,
     audit: Arc<dyn AuditRecorder>,
     releases: L,
+    symbols: Arc<dyn crate::einvoice::symbols::SymbolLedger>,
 ) -> Router
 where
     Cfg: ConfigTreeStore + LeaseStore + Clone + Send + Sync + 'static,
@@ -201,6 +204,7 @@ where
             clock,
             audit,
             releases,
+            symbols,
         })
 }
 

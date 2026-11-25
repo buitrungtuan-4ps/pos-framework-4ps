@@ -304,3 +304,59 @@ async fn a_prefix_naming_another_cell_is_answered_from_the_directory() {
     assert_eq!(status, StatusCode::CREATED);
     assert_eq!(activations.minted(), 1);
 }
+
+/// ADR-0240 decision 4: a redeemed code allocates an automatic store with no symbol its first one,
+/// audited as the system, and a store that already has one keeps it.
+#[tokio::test]
+async fn activating_a_box_allocates_an_automatic_store_its_symbol() {
+    use pos_cloud::config_tree::ConfigTreeStore as _;
+    use pos_cloud::einvoice::automatic::AllocatingActivations;
+    use pos_cloud::einvoice::symbols::InMemorySymbolLedger;
+
+    for (layer, expected) in [
+        (
+            serde_json::json!({
+                "locale": { "country_code": "VN" },
+                "einvoice": { "symbol_allocation": "EINVOICE_SYMBOL_ALLOCATION_AUTOMATIC" },
+            }),
+            "1C23MAA",
+        ),
+        (
+            serde_json::json!({
+                "locale": { "country_code": "VN" },
+                "einvoice": {
+                    "symbol_allocation": "EINVOICE_SYMBOL_ALLOCATION_AUTOMATIC",
+                    "symbol": "1C23MKK",
+                },
+            }),
+            "1C23MKK",
+        ),
+    ] {
+        let trees = crate::FakeConfigTrees::default();
+        trees.seed_store_layer(tenant(), store_id(), layer);
+        let code = ActivationCode::from_entropy([17; pos_core::activation::PAYLOAD_LEN]);
+        let device = DeviceId::new(Ulid::from_u128(0xBEEF));
+        let activations = AllocatingActivations::new(
+            FakeActivations::with_issued(hash_code(&code), tenant(), store_id(), device),
+            trees.clone(),
+            clock(),
+            Arc::new(pos_cloud::audit::NoopAuditRecorder),
+            Arc::new(InMemorySymbolLedger::default()),
+        );
+        let router = http::activation_router(activations, FakeAdmin::default(), clock());
+        let redeemed = router
+            .oneshot(post_json(
+                "/activate",
+                &serde_json::json!({ "code": code.as_str() }),
+            ))
+            .await
+            .expect("route the exchange");
+        assert_eq!(redeemed.status(), StatusCode::CREATED);
+        let state = trees
+            .load(tenant(), store_id())
+            .await
+            .expect("load")
+            .expect("a tree");
+        assert_eq!(state.record.layers[2]["einvoice"]["symbol"], expected);
+    }
+}

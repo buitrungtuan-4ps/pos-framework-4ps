@@ -21,3 +21,19 @@ export const publishEInvoiceSymbol = (
     store_id: storeId,
     symbol,
   });
+
+/** What an allocation answers: the symbol given and the config version that published it. */
+export type AllocatedSymbolView = components["schemas"]["AllocatedEInvoiceSymbol"];
+
+/**
+ * Gives the store the next free symbol of its country's rule (ADR-0240 decision 3). The cloud
+ * records it in the tenant's ledger, publishes it and audits it.
+ */
+export const allocateEInvoiceSymbol = (
+  tenantId: string,
+  storeId: string,
+): Promise<AllocatedSymbolView> =>
+  requestJson<AllocatedSymbolView>("POST", "/admin/config/einvoice-symbol/allocate", {
+    tenant_id: tenantId,
+    store_id: storeId,
+  });

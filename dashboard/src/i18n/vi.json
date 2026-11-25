@@ -3207,5 +3207,7 @@
   "settings.item.einvoice.symbol_allocation.title": "Cấp ký hiệu hóa đơn điện tử",
   "settings.item.einvoice.symbol_allocation.help": "Hệ thống đám mây có tự cấp ký hiệu hóa đơn điện tử cho từng cửa hàng hay không. Thủ công để trụ sở tự đặt trên màn hình Hóa đơn điện tử. Tự động cấp một ký hiệu khi máy của cửa hàng được kích hoạt mà chưa có, và cấp ký hiệu mới khi thay máy.",
   "settings.value.EINVOICE_SYMBOL_ALLOCATION_MANUAL": "Thủ công",
-  "settings.value.EINVOICE_SYMBOL_ALLOCATION_AUTOMATIC": "Tự động"
+  "settings.value.EINVOICE_SYMBOL_ALLOCATION_AUTOMATIC": "Tự động",
+  "einvoices.symbolAllocate": "Cấp ký hiệu tiếp theo",
+  "einvoices.symbolAllocateHint": "Cấp cho cửa hàng ký hiệu tiếp theo theo quy tắc của quốc gia mà chưa cửa hàng nào của bạn dùng. Cửa hàng đặt chế độ tự động sẽ được cấp khi kích hoạt máy, và được cấp ký hiệu mới khi thay máy."
 }

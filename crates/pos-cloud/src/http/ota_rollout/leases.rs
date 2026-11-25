@@ -179,6 +179,19 @@ where
         Err(error) => return Err(lease_store_error_response(&error)),
     };
     let node = lease_node(bump.generation);
+    // A replacement box numbers under a symbol of its own, published with the lease that makes it
+    // the store, where the store allocates automatically (ADR-0240 decision 4).
+    let allocated = crate::einvoice::automatic::allocate_if_automatic(
+        &state.config_trees,
+        state.symbols.as_ref(),
+        tenant_id,
+        store_id,
+        i64::try_from(bump.generation.value()).ok(),
+        state.clock.now(),
+        crate::einvoice::automatic::Trigger::LeaseBump,
+    )
+    .await
+    .map(|record| record.symbol);
     let receipt_floor = receipt_floor(&state.config_trees, tenant_id, store_id).await;
     let companions = receipt_floor
         .map(|number| ("receipt_floor", serde_json::json!({ "number": number })))
@@ -203,8 +216,10 @@ where
                 requested_placement,
                 acknowledged,
                 receipt_floor,
+                allocated.as_deref(),
             ),
             companions,
+            einvoice_symbol: allocated.clone(),
         },
     )
     .await;
