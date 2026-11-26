@@ -125,6 +125,7 @@ export type ProviderField = Schemas["FieldView"];
 export type Provider = Schemas["ProviderView"];
 export type ProviderCatalogue = Schemas["CatalogueView"];
 export type Connection = Schemas["Versioned_ConnectionView"];
+export type IntegrationsPublished = Schemas["IntegrationsPublished"];
 /** A tenant's gateway endpoint (ADR-0198) as read, with the version it was read at. */
 export type GatewayEndpoint = Schemas["Versioned_GatewayEndpointView"];
 /** What a create or an edit of a gateway endpoint sends. */

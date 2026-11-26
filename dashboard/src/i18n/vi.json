@@ -3248,5 +3248,11 @@
   "flow.scope.warnAll": "Kiểm tra: bước cửa hàng kiểm tra sẽ chặn mọi đơn có thao tác này, kể cả đơn không bắt đầu bằng flow này như đơn quầy, mang về và giao hàng.",
   "flow.scope.warnChannels": "Kiểm tra: bước cửa hàng kiểm tra sẽ chặn mọi đơn thuộc các kênh đã chọn, kể cả đơn không bắt đầu bằng flow này.",
   "flow.scope.warnNoChannel": "Kiểm tra: hãy chọn ít nhất một kênh, nếu không kiểm tra của cửa hàng không áp dụng cho đơn nào.",
-  "flow.scope.warnTillOnly": "Kiểm tra: flow này bắt đầu bằng thao tác không mở đơn, nên cửa hàng không biết đơn nào đã vào flow. Các bước kiểm tra chỉ hướng dẫn trên máy bán hàng, cửa hàng không bắt buộc."
+  "flow.scope.warnTillOnly": "Kiểm tra: flow này bắt đầu bằng thao tác không mở đơn, nên cửa hàng không biết đơn nào đã vào flow. Các bước kiểm tra chỉ hướng dẫn trên máy bán hàng, cửa hàng không bắt buộc.",
+  "integrations.publishTitle": "Publish cho cửa hàng",
+  "integrations.publishHint": "Một kết nối, hoặc cài đặt của app giao hàng, chỉ đến cửa hàng sau khi được publish. Publish gửi các kết nối phục vụ cửa hàng và các app giao hàng cửa hàng nhận đơn.",
+  "integrations.publishTo": "Tích hợp cho {store}",
+  "integrations.publish": "Publish tích hợp",
+  "integrations.publishNeedsStore": "Hãy chọn cửa hàng trước.",
+  "integrations.published": "Đã publish: {connections} kết nối và {vendors} app giao hàng."
 }
