@@ -17,7 +17,7 @@ use pos_core::business_date::local_time;
 use pos_ports::event_store::EventStore;
 use pos_ports::subject_store::SubjectStore;
 use pos_proto::ClockSource;
-use pos_proto::ids::{OrderId, ReasonCodeId};
+use pos_proto::ids::{EventId, OrderId, ReasonCodeId};
 use pos_proto::vendors::PublishedVendor;
 
 use crate::app::Edge;
@@ -88,6 +88,7 @@ where
             order_id,
         )
         .await;
+        let _printed = print_sent_tickets(&self.printers, &self.edge, order_id).await;
     }
 }
 
@@ -156,4 +157,39 @@ where
         .await?;
     tracing::info!(%order_id, print = outcome.as_wire(), "a delivery slip was sent to print");
     Some(outcome)
+}
+
+/// Prints a kitchen ticket for each line of `order_id` already sent: an order the store accepted and
+/// sent on arrival under `KITCHEN_RELEASE_AUTO_ACCEPT_AND_FIRE`
+/// ([ADR-0247](../../../docs/adr/0247-a-guest-or-vendor-order-reaches-the-kitchen-as-the-store-chooses.md)),
+/// whose lines no person's send printed, so a kitchen with printers and no screen sees it. After the
+/// order's commit, as for any send; each ticket's job id is its line's, so a second call prints
+/// nothing new. What came of each print, in line order.
+pub async fn print_sent_tickets<S>(
+    printers: &Printers,
+    edge: &Edge<S>,
+    order_id: OrderId,
+) -> Vec<PrintOutcome>
+where
+    S: EventStore,
+{
+    let session = edge.session();
+    let mut outcomes = Vec::new();
+    for view in edge.sent_lines(order_id) {
+        let Some(fired) = view.fired.as_ref() else {
+            continue;
+        };
+        let outcome = printers
+            .print_ticket(
+                &session,
+                edge.store_id(),
+                EventId::new(view.order_line_id.as_ulid()),
+                &crate::printing::short_reference(&view.order_id.to_string()),
+                fired,
+                edge.line_note(view.order_line_id).as_ref(),
+            )
+            .await;
+        outcomes.push(outcome);
+    }
+    outcomes
 }
