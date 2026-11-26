@@ -3257,5 +3257,11 @@
   "flow.scope.warnAll": "Check: a step the store checks will hold back every order that takes its act, including orders this flow never started, such as counter, takeaway and delivery orders.",
   "flow.scope.warnChannels": "Check: a step the store checks will hold back every order on the chosen channels, including orders this flow never started.",
   "flow.scope.warnNoChannel": "Check: choose at least one channel, or the store checks apply to no order.",
-  "flow.scope.warnTillOnly": "Check: this flow starts with an act that opens no order, so the store cannot tell which orders started it. Its checks guide the till but the store does not enforce them."
+  "flow.scope.warnTillOnly": "Check: this flow starts with an act that opens no order, so the store cannot tell which orders started it. Its checks guide the till but the store does not enforce them.",
+  "integrations.publishTitle": "Publish to the store",
+  "integrations.publishHint": "A connection, or a delivery app's settings, reach a store only once they are published to it. Publishing sends the connections that serve the store and the delivery apps it takes orders from.",
+  "integrations.publishTo": "Integrations for {store}",
+  "integrations.publish": "Publish integrations",
+  "integrations.publishNeedsStore": "Choose a store first.",
+  "integrations.published": "Published: {connections} connections and {vendors} delivery apps."
 }

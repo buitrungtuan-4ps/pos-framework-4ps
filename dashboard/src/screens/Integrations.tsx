@@ -48,6 +48,7 @@ import { ConnectionSettings } from "../components/ConnectionSettings";
 import { processingHint } from "../lib/cell-country";
 import { useEntityCrud } from "../lib/entity-crud";
 import { toast } from "../components/Toast";
+import { PublishIntegrations } from "./integrations/PublishIntegrations";
 import type { Connection, Provider } from "../api/schemas";
 
 /** The families in the order the screen lists them, each with its name and what it is for. */
@@ -134,9 +135,7 @@ export function Integrations() {
     scope: "tenant",
   });
   const providers = () => catalogue.value()?.providers ?? [];
-  const providerById = createMemo(
-    () => new Map(providers().map((provider) => [provider.provider_id, provider])),
-  );
+  const providerById = createMemo(() => new Map(providers().map((p) => [p.provider_id, p])));
 
   const editor = useEntityCrud<Connection>();
   const deletion = useEntityCrud<Connection>();
@@ -514,6 +513,7 @@ export function Integrations() {
           onConfirm={remove}
           onCancel={deletion.close}
         />
+        <PublishIntegrations connections={connections.value()} />
       </RequireContext>
     </div>
   );
