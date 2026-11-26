@@ -191,3 +191,27 @@ fn a_bills_original_invoice_is_found_by_its_bill() {
         }
     });
 }
+
+/// An invoice the store issued "number pending" takes the vendor's number with its outcome
+/// (ADR-0251 decision 3).
+#[test]
+fn a_pending_invoice_takes_the_vendors_number_when_it_is_settled() {
+    block_on(async {
+        let (store, _admin) = prepared().await.expect("prepare the database");
+        let submissions = store.einvoice_submissions();
+        let mut pending = row("I9", 10);
+        pending.invoice_number = "PENDING/I9".to_owned();
+        assert!(submissions.record(&pending).await.expect("record"));
+        pending.state = "SUBMITTED".to_owned();
+        pending.invoice_number = "1C26MAA/00000077".to_owned();
+        submissions.settle(&pending).await.expect("settle");
+        assert_eq!(
+            submissions
+                .get(TENANT_A, "I9")
+                .await
+                .expect("get")
+                .map(|read| read.invoice_number),
+            Some("1C26MAA/00000077".to_owned())
+        );
+    });
+}

@@ -23,9 +23,11 @@ use crate::wire_enum;
 use crate::wire_enum::{Open, WireEnum};
 
 mod correction;
+mod vendor;
 pub use correction::{
     CORRECTION_DECISIONS_MAX, CorrectionDecision, CorrectionRequest, DecidedCorrection,
 };
+pub use vendor::{VENDOR_NUMBERS_MAX, VendorNumber};
 
 wire_enum! {
     /// When a settled bill issues an e-invoice (ADR-0229 decision 1).
@@ -275,6 +277,16 @@ pub struct PublishedEInvoice {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub correction_decisions: Vec<DecidedCorrection>,
+    /// The numbers the vendor gave this store's invoices issued "number pending", newest last, at
+    /// most [`VENDOR_NUMBERS_MAX`]. Written by the cloud on the Store layer alone, and not a setting
+    /// ([ADR-0251](../../../docs/adr/0251-a-vendor-numbered-invoice-waits-for-its-number-and-the-store-learns-it.md)
+    /// decision 4).
+    #[serde(
+        default,
+        deserialize_with = "vendor::numbers",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub vendor_numbers: Vec<VendorNumber>,
     /// Who numbers this store's invoices (ADR-0251). Read it through [`Self::number_source`].
     #[serde(default, deserialize_with = "token", skip_serializing_if = "is_absent")]
     pub number_source: Open<EInvoiceNumberSource>,

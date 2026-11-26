@@ -203,7 +203,8 @@ impl PostgresEInvoiceSubmissions {
         Ok(rows.iter().map(from_row).collect())
     }
 
-    /// Writes a submission's outcome.
+    /// Writes a submission's outcome, and the number a vendor gave an invoice the store issued
+    /// "number pending" (ADR-0251).
     ///
     /// # Errors
     ///
@@ -214,7 +215,8 @@ impl PostgresEInvoiceSubmissions {
             .execute(
                 "UPDATE einvoice_submissions SET state = $3, failed_attempts = $4, \
                  next_attempt_ms = $5, authority_reference = $6, refusal = $7, \
-                 updated_at_ms = $8 WHERE tenant_id = $1 AND invoice_id = $2",
+                 updated_at_ms = $8, invoice_number = $9 \
+                 WHERE tenant_id = $1 AND invoice_id = $2",
                 &[
                     &row.tenant_id,
                     &row.invoice_id,
@@ -224,6 +226,7 @@ impl PostgresEInvoiceSubmissions {
                     &row.authority_reference,
                     &row.refusal,
                     &row.updated_at_ms,
+                    &row.invoice_number,
                 ],
             )
             .await

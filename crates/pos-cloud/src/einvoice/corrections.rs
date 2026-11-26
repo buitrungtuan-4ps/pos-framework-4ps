@@ -230,6 +230,8 @@ pub struct Corrector {
     pub ledger: Arc<dyn SymbolLedger>,
     /// The correction requests waiting for HQ.
     pub requests: Arc<dyn super::requests::CorrectionRequests>,
+    /// Where a vendor's number for a pending invoice is written for the store (ADR-0251).
+    pub numbers: Arc<dyn super::vendor_numbers::VendorNumbers>,
 }
 
 impl core::fmt::Debug for Corrector {
@@ -261,6 +263,11 @@ pub async fn correct_voided_bill(
     else {
         return Ok(false);
     };
+    if super::vendor_numbers::is_pending(&original.invoice_number) {
+        // A correction names the number it corrects, so it waits for the vendor's (ADR-0251
+        // decision 3): the feed keeps its cursor, and the submitter numbers the original first.
+        return Err("the voided bill's invoice waits for the vendor's number".to_owned());
+    }
     let earlier = submissions
         .corrections_of(tenant, original.invoice_number.clone())
         .await?;
