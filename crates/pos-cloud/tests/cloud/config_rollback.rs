@@ -518,3 +518,105 @@ async fn a_form_read_leaves_out_the_settings_on_its_node() {
         "and the form does not show it"
     );
 }
+
+// --- A rollback is a write: a later settings publish keeps it (ADR-0246 decision 1) ------------
+
+/// A `PUT /admin/settings` body for one tenant-wide value.
+fn tenant_value(setting_key: &str, value: &str) -> serde_json::Value {
+    serde_json::json!({
+        "tenant_id": tenant().as_ulid().to_string(),
+        "setting_key": setting_key,
+        "scope": "SETTING_SCOPE_TENANT",
+        "scope_id": tenant().as_ulid().to_string(),
+        "value": value,
+    })
+}
+
+/// The config version a settings write answered with for `store_id`.
+fn written_version(body: &serde_json::Value, store_id: StoreId) -> String {
+    body["stores"]
+        .as_array()
+        .expect("a list of stores")
+        .iter()
+        .find(|row| row["store_id"] == store_id.as_ulid().to_string())
+        .and_then(|row| row["config_version_id"].as_str())
+        .expect("the store was published")
+        .to_owned()
+}
+
+/// The issue moment `store_id` runs, read from its tree's layers as they merge.
+async fn issue_moment(config_trees: &FakeConfigTrees, store_id: StoreId) -> Option<String> {
+    let tree = config_trees.load(tenant(), store_id).await.expect("load")?;
+    tree.record.effective()["einvoice"]["issue_moment"]
+        .as_str()
+        .map(str::to_owned)
+}
+
+#[tokio::test]
+async fn a_later_publish_keeps_what_a_rollback_restored() {
+    let (router, config_trees, _) = settings_app();
+    let cookie = admin_cookie(&router).await;
+    let [store_id, other, _] = settings_stores();
+    let write = |body: serde_json::Value| {
+        let router = router.clone();
+        let cookie = cookie.clone();
+        async move {
+            let response = router
+                .oneshot(put_with_cookie("/admin/settings", &body, &cookie))
+                .await
+                .expect("route the write");
+            assert_eq!(response.status(), StatusCode::OK);
+            json_body(response).await
+        }
+    };
+
+    let immediate = write(tenant_value(
+        "einvoice.issue_moment",
+        "EINVOICE_ISSUE_MOMENT_IMMEDIATE",
+    ))
+    .await;
+    let ran_immediate = written_version(&immediate, store_id);
+    let on_request = write(tenant_value(
+        "einvoice.issue_moment",
+        "EINVOICE_ISSUE_MOMENT_ON_REQUEST",
+    ))
+    .await;
+    let current = written_version(&on_request, store_id);
+
+    let rollback = router
+        .clone()
+        .oneshot(crate::post_config_with_etag(
+            &format!(
+                "/admin/stores/{}/config/rollback?tenant_id={}",
+                store_id.as_ulid(),
+                tenant().as_ulid()
+            ),
+            &serde_json::json!({ "version_id": ran_immediate }),
+            &cookie,
+            &current,
+        ))
+        .await
+        .expect("route the rollback");
+    assert_eq!(rollback.status(), StatusCode::OK);
+    assert_eq!(
+        issue_moment(&config_trees, store_id).await.as_deref(),
+        Some("EINVOICE_ISSUE_MOMENT_IMMEDIATE")
+    );
+
+    // An unrelated setting, published to every store, must not undo the rollback.
+    write(tenant_value(
+        "shift.no_shift_selling",
+        "NO_SHIFT_SELLING_REFUSE",
+    ))
+    .await;
+    assert_eq!(
+        issue_moment(&config_trees, store_id).await.as_deref(),
+        Some("EINVOICE_ISSUE_MOMENT_IMMEDIATE"),
+        "the rolled-back store keeps the value its rollback restored"
+    );
+    assert_eq!(
+        issue_moment(&config_trees, other).await.as_deref(),
+        Some("EINVOICE_ISSUE_MOMENT_ON_REQUEST"),
+        "a store the rollback did not touch keeps the tenant's value"
+    );
+}

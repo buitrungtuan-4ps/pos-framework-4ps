@@ -21,7 +21,7 @@ use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::{CapabilityValidator, ConfigTree, ConfigTreeStore};
 use crate::http::setting_refusal::save_if_confirmed;
 use crate::http::{
-    CloudApp, Json, PublishedConfig, config_store_error_response, mint_version_id,
+    CloudApp, HeldSettings, Json, PublishedConfig, config_store_error_response, mint_version_id,
     no_published_configuration, not_found,
 };
 
@@ -355,9 +355,11 @@ where
 )]
 /// Rolls a store's config back to a past version (super-admin only). Append-only: the chosen version's
 /// effective document is re-published as a *new* current version, so nothing in the history is altered
-/// or removed and the store pulls the restored config on its next sync. The action is audited as
-/// `config.rollback` ([ADR-0069](../../../docs/adr/0069-audit-trail.md)). `404` if the store or the
-/// named version is unknown.
+/// or removed and the store pulls the restored config on its next sync. The setting values the
+/// restored version runs differently from what the settings give the store are written back as the
+/// store's own, so a later settings publish keeps them (ADR-0246 decision 1). The action is audited
+/// as `config.rollback` ([ADR-0069](../../../docs/adr/0069-audit-trail.md)) with the settings held
+/// and those the store's scope cannot hold. `404` if the store or the named version is unknown.
 pub(in crate::http) async fn admin_config_rollback<S, R, K, C, A, T, W>(
     State(app): State<CloudApp<S, R, K, C, A, T, W>>,
     headers: HeaderMap,
@@ -432,6 +434,10 @@ where
     if let Err(refusal) = save_if_confirmed(&app.config_trees, saved, &before, &tree).await {
         return refusal;
     }
+    let held = match hold_settings(&app, tenant_id, store_id, tree.current_effective()).await {
+        Ok(held) => held,
+        Err(refusal) => return refusal,
+    };
     audit_action(
         &app.audit,
         &app.clock,
@@ -441,10 +447,7 @@ where
         "config",
         &store_id.to_string(),
         None,
-        Some(serde_json::json!({
-            "restored_from": version_id.to_string(),
-            "config_version_id": new_id.to_string(),
-        })),
+        Some(rollback_detail(version_id, new_id, &held)),
     )
     .await;
     (
@@ -454,4 +457,41 @@ where
         }),
     )
         .into_response()
+}
+
+/// Writes the setting values a rollback restored as the store's own, where the application was
+/// given somewhere to write them: a rollback is a write (ADR-0246 decision 1), or the next settings
+/// publish would recompile the old values over it.
+async fn hold_settings<S, R, K, C, A, T, W>(
+    app: &CloudApp<S, R, K, C, A, T, W>,
+    tenant_id: TenantId,
+    store_id: StoreId,
+    restored: Option<&serde_json::Value>,
+) -> Result<HeldSettings, Response>
+where
+    C: ClockSource,
+{
+    let (Some(settings), Some(restored)) = (&app.rollback_settings, restored) else {
+        return Ok(HeldSettings::default());
+    };
+    settings
+        .hold(tenant_id, store_id, restored, app.clock.now())
+        .await
+        .inspect_err(|_refusal| {
+            tracing::error!(%store_id, "a rollback's settings could not be held");
+        })
+}
+
+/// The `config.rollback` audit detail: both versions, and the settings held and not held.
+fn rollback_detail(
+    restored_from: ConfigVersionId,
+    config_version_id: ConfigVersionId,
+    held: &HeldSettings,
+) -> serde_json::Value {
+    serde_json::json!({
+        "restored_from": restored_from.to_string(),
+        "config_version_id": config_version_id.to_string(),
+        "settings_held": held.written,
+        "settings_not_held": held.not_held,
+    })
 }

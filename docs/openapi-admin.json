@@ -22970,7 +22970,7 @@
         "tags": [
           "config"
         ],
-        "summary": "Rolls a store's config back to a past version (super-admin only). Append-only: the chosen version's\neffective document is re-published as a *new* current version, so nothing in the history is altered\nor removed and the store pulls the restored config on its next sync. The action is audited as\n`config.rollback` ([ADR-0069](../../../docs/adr/0069-audit-trail.md)). `404` if the store or the\nnamed version is unknown.",
+        "summary": "Rolls a store's config back to a past version (super-admin only). Append-only: the chosen version's\neffective document is re-published as a *new* current version, so nothing in the history is altered\nor removed and the store pulls the restored config on its next sync. The setting values the\nrestored version runs differently from what the settings give the store are written back as the\nstore's own, so a later settings publish keeps them (ADR-0246 decision 1). The action is audited\nas `config.rollback` ([ADR-0069](../../../docs/adr/0069-audit-trail.md)) with the settings held\nand those the store's scope cannot hold. `404` if the store or the named version is unknown.",
         "operationId": "admin_config_rollback",
         "parameters": [
           {

@@ -271,7 +271,8 @@ pub(crate) use settings::{
     __path_admin_put_setting, __path_admin_settings_catalogue, __path_admin_store_package,
 };
 pub use settings::{
-    CATCH_UP_QUEUE, PackageCatchUp, SettingsRules, package_catch_up, settings_router,
+    CATCH_UP_QUEUE, HeldSettings, HoldFuture, PackageCatchUp, RollbackSettings, SettingsRules,
+    package_catch_up, rollback_settings, settings_router,
 };
 use store_groups::unknown_batch_node;
 pub(crate) use store_groups::{
@@ -459,6 +460,9 @@ pub struct CloudApp<S, R, K, C, A, T, W> {
     /// When QR ordering got one switch ([`crate::qr_ordering::OneSwitch::since`]): a rollback to a
     /// version published before then is settled. `None` restores every version as it is.
     qr_switch_since: Option<pos_proto::Timestamp>,
+    /// Where a rollback writes back the setting values it restored, so a later settings publish
+    /// keeps them (ADR-0246 decision 1). `None` restores the tree alone.
+    rollback_settings: Option<Arc<dyn RollbackSettings>>,
 }
 
 impl<S, R, K, C, A, T, W> fmt::Debug for CloudApp<S, R, K, C, A, T, W> {
@@ -499,6 +503,7 @@ where
             trusted_proxy_hops: self.trusted_proxy_hops,
             audit: Arc::clone(&self.audit),
             qr_switch_since: self.qr_switch_since,
+            rollback_settings: self.rollback_settings.clone(),
         }
     }
 }
@@ -544,6 +549,7 @@ impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
             trusted_proxy_hops: DEFAULT_TRUSTED_PROXY_HOPS,
             audit: Arc::new(NoopAuditRecorder),
             qr_switch_since: None,
+            rollback_settings: None,
         }
     }
 
@@ -692,6 +698,14 @@ impl<S, R, K, C, A, T, W> CloudApp<S, R, K, C, A, T, W> {
     #[must_use]
     pub const fn with_qr_switch_since(mut self, since: pos_proto::Timestamp) -> Self {
         self.qr_switch_since = Some(since);
+        self
+    }
+
+    /// Sets where a rollback writes back the setting values it restored ([`rollback_settings`]),
+    /// so a later settings publish cannot undo it (ADR-0246 decision 1).
+    #[must_use]
+    pub fn with_rollback_settings(mut self, settings: Arc<dyn RollbackSettings>) -> Self {
+        self.rollback_settings = Some(settings);
         self
     }
 }

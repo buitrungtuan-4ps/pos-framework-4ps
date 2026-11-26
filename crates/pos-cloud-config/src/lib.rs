@@ -42,6 +42,7 @@ pub mod publish;
 pub mod qr_ordering;
 pub mod receipt_template;
 pub mod registry;
+pub mod rollback_hold;
 pub mod route;
 pub mod setting_refusal;
 pub mod settings;

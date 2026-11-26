@@ -11331,6 +11331,9 @@ fn settings_app_with_packages(
         packages,
         releases,
     );
+    // A rollback writes back the setting values it restored, as the binary wires it (ADR-0246).
+    let rollback = http::rollback_settings(settings.clone(), registry.clone(), groups.clone());
+    let app = app.with_rollback_settings(rollback);
     // The package catch-up over the very same fakes, handed to the OTA report route below
     // (ADR-0189 decision 5); its worker runs on the test's runtime.
     let (catch_up, worker) = http::package_catch_up(
