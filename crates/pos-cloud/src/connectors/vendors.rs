@@ -16,7 +16,7 @@ use pos_proto::integrations::SettingValue;
 use pos_proto::text::DisplayName;
 use pos_proto::vendors::{
     MAX_PREP_MINUTES, MAX_PRICE_DIFFERENCE_BPS, MIN_PREP_MINUTES, PublishedVendor,
-    PublishedVendors, VendorPriceSource,
+    PublishedVendors, VendorPayment, VendorPriceSource,
 };
 use pos_proto::wire_enum::Open;
 use pos_providers::Family;
@@ -50,6 +50,14 @@ pub const PRICE_SOURCE_OPTIONS: &[&str] = &["VENDOR_PRICE_SOURCE_APP", "VENDOR_P
 /// The optional setting that says how far, in basis points, the app's price may differ from the
 /// store's menu before the order is flagged. Absent, `0`: any difference.
 pub const PRICE_DIFFERENCE_BPS: &str = "price_difference_bps";
+
+/// The optional setting that says where the vendor's guest pays
+/// ([ADR-0248](../../../../docs/adr/0248-a-delivery-order-is-priced-paid-and-reconciled-as-the-app-sold-it.md)
+/// decision 2): a `VENDOR_PAYMENT_*` token. Absent, in the app.
+pub const PAYMENT: &str = "payment";
+
+/// The tokens [`PAYMENT`] takes, the default first.
+pub const PAYMENT_OPTIONS: &[&str] = &["VENDOR_PAYMENT_IN_APP", "VENDOR_PAYMENT_AT_STORE"];
 
 /// Why a store's vendors cannot be published.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -115,6 +123,7 @@ pub fn vendors_for_store(
             kitchen_release,
             price_source,
             price_difference_bps,
+            payment: payment_of(connection),
         });
     }
     vendors.sort_by_key(|vendor| vendor.vendor_id);
@@ -145,6 +154,17 @@ fn price_terms(connection: &Connection) -> (Open<VendorPriceSource>, u32) {
     (source, tolerance)
 }
 
+/// Where a connection's guest pays (ADR-0248 decision 2), optional and already checked by the
+/// provider's schema: anything else reads as absent, in the app.
+fn payment_of(connection: &Connection) -> Open<VendorPayment> {
+    match connection.settings.get(PAYMENT) {
+        Some(SettingValue::Text(token)) if PAYMENT_OPTIONS.contains(&token.as_str()) => {
+            Open::parse(token)
+        }
+        _ => Open::default(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -153,10 +173,10 @@ mod tests {
 
     use pos_proto::kitchen_release::KitchenRelease;
 
-    use pos_proto::vendors::VendorPriceSource;
+    use pos_proto::vendors::{VendorPayment, VendorPriceSource};
 
     use super::{
-        KITCHEN_RELEASE, PREP_MINUTES, PRICE_DIFFERENCE_BPS, PRICE_SOURCE, STAFF_CONFIRM,
+        KITCHEN_RELEASE, PAYMENT, PREP_MINUTES, PRICE_DIFFERENCE_BPS, PRICE_SOURCE, STAFF_CONFIRM,
         VendorsRefusal, vendors_for_store,
     };
     use crate::connections::{Connection, ScopeLevel};
@@ -273,6 +293,29 @@ mod tests {
             terms,
             [(VendorPriceSource::App, 0), (VendorPriceSource::Menu, 500)]
         );
+    }
+
+    /// A connection's payment rides its vendor's entry (ADR-0248 decision 2); one that never set
+    /// it is paid in the app.
+    #[test]
+    fn a_connection_says_where_its_guest_pays() {
+        let mut settings = vec![
+            (STAFF_CONFIRM, SettingValue::Flag(true)),
+            (PREP_MINUTES, SettingValue::Number(20)),
+        ];
+        let plain = delivery("01J0000000000000000000CNN1", Some(STORE), &settings);
+        settings.push((
+            PAYMENT,
+            SettingValue::Text("VENDOR_PAYMENT_AT_STORE".to_owned()),
+        ));
+        let at_store = delivery("01J0000000000000000000CNN2", Some(STORE), &settings);
+        let node = vendors_for_store(&[plain, at_store], &registry(), STORE).expect("publishes");
+        let payments: Vec<VendorPayment> = node
+            .vendors()
+            .iter()
+            .map(|vendor| VendorPayment::read(&vendor.payment))
+            .collect();
+        assert_eq!(payments, [VendorPayment::InApp, VendorPayment::AtStore]);
     }
 
     #[test]

@@ -57,6 +57,41 @@ where
         .map_or_else(Open::default, Open::parse))
 }
 
+wire_enum! {
+    /// Where a vendor's guest pays
+    /// ([ADR-0248](../../../docs/adr/0248-a-delivery-order-is-priced-paid-and-reconciled-as-the-app-sold-it.md)
+    /// decision 2).
+    VendorPayment, prefix = "VENDOR_PAYMENT";
+    /// In the vendor's app: the store settles the order's bill "Paid via <vendor>" when it accepts
+    /// the order. The default.
+    InApp = "IN_APP",
+    /// At the store: the bill is left for the till to take, as before the setting.
+    AtStore = "AT_STORE",
+}
+
+impl VendorPayment {
+    /// A node's value as the store runs it: [`Self::InApp`] for an absent value and for one this
+    /// release does not know.
+    #[must_use]
+    pub fn read(value: &Open<Self>) -> Self {
+        match value.known() {
+            Self::AtStore => Self::AtStore,
+            Self::Unspecified | Self::InApp => Self::InApp,
+        }
+    }
+}
+
+/// A payment token as a node carries it, read leniently: one this release does not know, or not a
+/// string at all, is kept as absent rather than refusing the node.
+fn payment_token<'de, D>(deserializer: D) -> Result<Open<VendorPayment>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(serde_json::Value::deserialize(deserializer)?
+        .as_str()
+        .map_or_else(Open::default, Open::parse))
+}
+
 /// The most a price difference may be tolerated by: 100%, in basis points.
 pub const MAX_PRICE_DIFFERENCE_BPS: u32 = 10_000;
 
@@ -112,6 +147,14 @@ pub struct PublishedVendor {
     /// menu before the order is flagged; `0` (the default) flags any difference.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub price_difference_bps: u32,
+    /// Where the vendor's guest pays (ADR-0248 decision 2). Absent, from a cloud before the
+    /// setting or a connection that never set it, reads as [`VendorPayment::InApp`].
+    #[serde(
+        default,
+        deserialize_with = "payment_token",
+        skip_serializing_if = "crate::wire_enum::is_absent"
+    )]
+    pub payment: Open<VendorPayment>,
 }
 
 /// The `vendors` config node: the vendors a store takes orders from.
@@ -184,7 +227,7 @@ impl PublishedVendors {
 
 #[cfg(test)]
 mod tests {
-    use super::{PublishedVendor, PublishedVendors, VendorPriceSource};
+    use super::{PublishedVendor, PublishedVendors, VendorPayment, VendorPriceSource};
     use crate::ids::VendorId;
     use crate::text::DisplayName;
     use crate::ulid::Ulid;
@@ -199,6 +242,7 @@ mod tests {
             kitchen_release: Open::default(),
             price_source: Open::default(),
             price_difference_bps: 0,
+            payment: Open::default(),
         }
     }
 
@@ -262,5 +306,22 @@ mod tests {
             VendorPriceSource::read(&vendor(1, false, 20).price_source),
             VendorPriceSource::App
         );
+    }
+
+    /// ADR-0248 decision 2: absent or unknown, a vendor's guest paid in the app; at the store only
+    /// where the node says so.
+    #[test]
+    fn a_vendor_s_guest_pays_in_the_app_unless_the_node_says_at_the_store() {
+        let json = r#"{"vendors":[{"vendor_id":"00000000000000000000000001","display_name":"A",
+            "staff_confirm":false,"prep_minutes":20,"payment":"VENDOR_PAYMENT_BARTER"},
+            {"vendor_id":"00000000000000000000000002","display_name":"B","staff_confirm":false,
+            "prep_minutes":20,"payment":"VENDOR_PAYMENT_AT_STORE"}]}"#;
+        let node: PublishedVendors = serde_json::from_str(json).expect("lenient");
+        let payments: Vec<_> = node
+            .vendors()
+            .iter()
+            .map(|vendor| VendorPayment::read(&vendor.payment))
+            .collect();
+        assert_eq!(payments, [VendorPayment::InApp, VendorPayment::AtStore]);
     }
 }

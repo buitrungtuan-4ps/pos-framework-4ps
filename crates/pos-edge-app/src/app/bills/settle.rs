@@ -137,6 +137,31 @@ impl<S: EventStore> Edge<S> {
     {
         let mut ctx = self.decision_ctx(actor)?;
         CardMark::admit(card, &mut ctx);
+        self.settle_in(
+            ctx,
+            scope,
+            bill_id,
+            (payments, split_ways, card),
+            buyer,
+            approval,
+        )
+        .await
+    }
+
+    /// [`Self::settle_shares`] in `ctx`, which the box's own settle of an order paid in a vendor's
+    /// app builds for itself (ADR-0248 decision 2).
+    pub(in crate::app) async fn settle_in(
+        &self,
+        mut ctx: DecisionCtx,
+        scope: TillScope,
+        bill_id: BillId,
+        (payments, split_ways, card): (Vec<Payment>, Option<u8>, Option<&CardMark>),
+        buyer: Option<&BuyerDetails>,
+        approval: Option<&Approval>,
+    ) -> Result<BillView, AppError>
+    where
+        S: SubjectStore,
+    {
         // Before the bill is read: a store that refuses selling without a shift takes no money
         // outside one, so every payment's cash is in a shift's expected drawer (ADR-0160).
         let (drawer, shift, overrider) =

@@ -14,9 +14,12 @@ const TENDERS: readonly (readonly [string, MessageKey])[] = [
   ["PAYMENT_METHOD_CASH", "reports.tenderCash"],
   ["PAYMENT_METHOD_CARD", "reports.tenderCard"],
   ["PAYMENT_METHOD_QR", "reports.tenderQr"],
+  // Paid in a delivery vendor's app and settled on accept (ADR-0248 decision 2): the vendor pays it
+  // out, so a cash-up reads it apart from the tenders the store took.
+  ["PAYMENT_METHOD_VENDOR", "reports.tenderVendor"],
 ];
 
-/** The day's captured amounts in four kinds: cash, card, a wallet, and every other tender. */
+/** The day's captured amounts: cash, card, a wallet, paid via delivery apps, and every other tender. */
 export function tenderSplit(report: XzReport): readonly (readonly [MessageKey, number])[] {
   const byTender = report.revenue.by_tender ?? {};
   const named = TENDERS.map(([token, key]) => [key, byTender[token] ?? 0] as const);
