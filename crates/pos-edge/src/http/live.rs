@@ -129,6 +129,11 @@ struct LiveOrderResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(nullable = false))]
     guest_count: Option<u16>,
+    /// What the store calls the delivery vendor the order came through, for the kitchen's badge
+    /// (ADR-0248 decision 5). Absent for any other order.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    vendor_name: Option<String>,
     lines: Vec<LiveLineResponse>,
 }
 
@@ -196,6 +201,7 @@ fn respond(orders: Vec<crate::app::LiveOrderView>) -> Response {
                 .collect(),
             sales_channel: order.sales_channel.map(WireEnum::as_wire),
             guest_count: order.guest_count,
+            vendor_name: order.vendor_name.map(|name| name.as_str().to_owned()),
             lines: order
                 .lines
                 .into_iter()

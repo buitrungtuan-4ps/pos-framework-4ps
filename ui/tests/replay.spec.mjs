@@ -4571,6 +4571,32 @@ test("a counter order on the kitchen board and the pass is called by the guest's
   }
 });
 
+// A delivery order is badged with its vendor on the counter and the kitchen board (ADR-0248
+// decision 5). The edge names the vendor on its reads; minimal-edge takes no delivery order, so the
+// reads are answered with the vendor's name added to the counter order the test opened.
+test("a delivery order shows its vendor on the counter list and the kitchen board", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await startWalkIn(page);
+    await addItem(page);
+    await sendOrder(page);
+    await page.route(/\/api\/orders\/(open|live|kitchen)$/, async (route) => {
+      const answer = await route.fetch();
+      const orders = (await answer.json()).map((order) => ({ ...order, vendor_name: "Sandbox delivery" }));
+      await route.fulfill({ response: answer, json: orders });
+    });
+
+    await navigateTo(page, "/counter");
+    await expect(page.locator('[data-step="charge"]').first()).toContainText("Delivery: Sandbox delivery");
+    await navigateTo(page, "/kds");
+    await expect(page.locator('[data-step="onBump"]').first()).toContainText("Delivery: Sandbox delivery");
+  } finally {
+    await edge.stop();
+  }
+});
+
 // A guest note reaches the kitchen board, and the next dish does not inherit it (ADR-0157).
 //
 // The note is typed before the tap and rides with that one add. The board reads it from the frame the

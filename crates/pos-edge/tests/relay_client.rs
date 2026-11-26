@@ -507,3 +507,52 @@ fn a_store_rejects_and_readies_only_orders_of_its_vendors() {
     );
     assert_eq!(posted[0]["reason_code_id"], reason.to_string());
 }
+
+/// ADR-0248 decision 5: the counter's list and the kitchen's read name the vendor a delivery order
+/// came through, by the store's name for it, and name none on any other order.
+#[test]
+fn a_delivery_order_is_badged_with_its_vendor_on_the_counter_and_the_board() {
+    let edge = edge_taking(fake_vendor(false));
+    let transport = FakeTransport::with(vec![
+        pending_vendor_order("q-v", "relay-v"),
+        pending_delivery_order("q-n", "relay-n"),
+    ]);
+    let client = RelayClient::new(transport.clone(), intake_over(Arc::clone(&edge)));
+    assert_eq!(run_ready(client.pump_once()).expect("pump"), 2);
+    let id_of = |index: usize| match &transport.acks()[index].1 {
+        StoreOutcome::Accepted(record) => record.order_id.parse::<OrderId>().expect("an order id"),
+        StoreOutcome::Rejected { message, .. } => panic!("refused: {message}"),
+    };
+    let (badged, plain) = (id_of(0), id_of(1));
+
+    let counter = run_ready(edge.open_counter_orders(&InMemoryQueueNumbers::default()))
+        .expect("the counter list");
+    let counter_badge = |order_id: OrderId| {
+        counter
+            .iter()
+            .find(|order| order.order_id == order_id)
+            .expect("listed")
+            .vendor_name
+            .clone()
+    };
+    assert_eq!(
+        counter_badge(badged),
+        Some(DisplayName::new("Sandbox delivery"))
+    );
+    assert_eq!(counter_badge(plain), None);
+
+    let board = edge.kitchen_orders();
+    let board_badge = |order_id: OrderId| {
+        board
+            .iter()
+            .find(|order| order.order_id == order_id)
+            .expect("on the board")
+            .vendor_name
+            .clone()
+    };
+    assert_eq!(
+        board_badge(badged),
+        Some(DisplayName::new("Sandbox delivery"))
+    );
+    assert_eq!(board_badge(plain), None);
+}

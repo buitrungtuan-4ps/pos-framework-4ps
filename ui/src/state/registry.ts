@@ -28,6 +28,7 @@ import type {
 } from "../api/schemas";
 import { configApplied, load, loadAll, register, type Entry } from "./engine";
 import { readLiveOrders, type LiveOrdersRead } from "./live-orders-read";
+import { noteLiveVendors } from "./order-vendors";
 import { takeSession } from "./session";
 import { applyPackage } from "./flows";
 import { applyScreens } from "./package-screens";
@@ -185,7 +186,10 @@ const ENTRIES: readonly Entry[] = [
     kind: "live",
     path: () => "/api/orders/live",
     read: readLiveOrders,
-    apply: (body) => applyLiveOrders(body as LiveOrdersRead),
+    apply: (body) => {
+      applyLiveOrders(body as LiveOrdersRead);
+      noteLiveVendors(body as LiveOrdersRead);
+    },
     required: true,
     nodes: [],
   },

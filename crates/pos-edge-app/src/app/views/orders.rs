@@ -199,6 +199,9 @@ pub struct CounterOrderView {
     /// reloaded. The screen settles **this** bill rather than opening a second one, which the
     /// domain would refuse ([`AppError::BillAlreadyOpen`](crate::app::AppError::BillAlreadyOpen)).
     pub bill_id: Option<BillId>,
+    /// What the store calls the delivery vendor the order came through, for the counter's badge
+    /// (ADR-0248 decision 5). `None` for any other order.
+    pub vendor_name: Option<DisplayName>,
 }
 
 /// One line of an open order, as a device rebuilding its screens reads it.
@@ -288,6 +291,10 @@ pub struct LiveOrderView {
     /// How many guests it was opened for, or `None` when whoever opened it gave no count: what a
     /// flow's guest-count step reads (ADR-0192), so a till that reloads knows it as the edge does.
     pub guest_count: Option<u16>,
+    /// What the store calls the delivery vendor the order came through, for the kitchen's badge
+    /// ([ADR-0248](../../../../../docs/adr/0248-a-delivery-order-is-priced-paid-and-reconciled-as-the-app-sold-it.md)
+    /// decision 5). `None` for any other order, or a vendor the store no longer lists.
+    pub vendor_name: Option<DisplayName>,
     /// Its lines, in id order.
     pub lines: Vec<LiveOrderLine>,
 }

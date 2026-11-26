@@ -76,6 +76,11 @@ struct CounterOrderResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(nullable = false))]
     bill_id: Option<String>,
+    /// What the store calls the delivery vendor the order came through, for its badge (ADR-0248
+    /// decision 5). Absent for any other order.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    vendor_name: Option<String>,
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(
@@ -116,6 +121,7 @@ where
                         .collect(),
                     total_due: order.total_due,
                     bill_id: order.bill_id.map(|id| id.to_string()),
+                    vendor_name: order.vendor_name.map(|name| name.as_str().to_owned()),
                 })
                 .collect();
             (StatusCode::OK, Json(body)).into_response()
