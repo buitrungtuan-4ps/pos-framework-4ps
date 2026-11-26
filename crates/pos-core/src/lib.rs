@@ -46,6 +46,7 @@ pub mod error;
 pub mod floor;
 pub mod flow;
 pub mod inventory;
+pub mod kitchen_hours;
 pub mod lease;
 pub mod machines;
 pub mod menu;

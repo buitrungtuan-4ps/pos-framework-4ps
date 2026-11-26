@@ -554,6 +554,11 @@ fn read_back(node: &str, field: &str, value: Option<&Value>) -> Option<Value> {
             match field {
                 "table_order" => Some(json!(qr.table_order().as_wire())),
                 "kitchen_release" => Some(json!(qr.kitchen_release().as_wire())),
+                "auto_fire_from_minute" => Some(json!(qr.auto_fire_window().0)),
+                "auto_fire_until_minute" => Some(json!(qr.auto_fire_window().1)),
+                "kitchen_release_outside_hours" => {
+                    Some(json!(qr.kitchen_release_outside_hours().as_wire()))
+                }
                 _ => None,
             }
         }

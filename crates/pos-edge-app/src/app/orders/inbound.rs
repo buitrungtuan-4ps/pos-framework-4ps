@@ -84,12 +84,14 @@ impl<S: EventStore> Edge<S> {
         // two; recomputing would reintroduce the disagreement this replaces, just more rarely.
         let vendor_id = intake.as_ref().and_then(|intent| intent.vendor_id);
         let price_differs = intake.as_ref().is_some_and(|intent| intent.repriced);
+        // Minted first: its time is the minute the order arrived, which the store's hours for an
+        // automatic send read (ADR-0255), here and whenever the hold is derived again.
+        let order_id = self.next_order_id();
         let holds_for_staff =
-            session.holds_for_staff_confirmation(order_channel, table_id, vendor_id);
+            session.holds_for_staff_confirmation(order_channel, table_id, vendor_id, order_id);
         let joins =
             self.order_joined_on_arrival(&session, order_channel, table_id, holds_for_staff);
 
-        let order_id = self.next_order_id();
         let package_version_id = self.opening_package_version();
         let opened = SalesOrderOpened {
             order_id,
@@ -114,7 +116,7 @@ impl<S: EventStore> Edge<S> {
             intent
         });
         // Accepted on arrival and sent with itself where the store says so (ADR-0247).
-        let fires = (session.kitchen_release(order_channel, vendor_id)
+        let fires = (session.kitchen_release(order_channel, vendor_id, order_id)
             == KitchenRelease::AutoAcceptAndFire)
             .then(|| self.splice_intake_fires(stamp, &mut prepared, joins.is_some()))
             .flatten();

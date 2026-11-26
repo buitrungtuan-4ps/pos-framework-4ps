@@ -7,10 +7,11 @@
 
 use std::collections::BTreeMap;
 
-use pos_core::business_date::{CutoffHour, StoreTimeZone};
+use pos_core::business_date::{CutoffHour, StoreTimeZone, local_time};
 use pos_core::campaign::{Campaign, Connectivity};
 use pos_core::capability::{Capability, CapabilityContext};
 use pos_core::inventory::{RecipeBook, StockProjection};
+use pos_core::kitchen_hours::release_at;
 use pos_core::permission::{Permission, PermissionSet};
 use pos_proto::backup::PublishedBackup;
 use pos_proto::billing::PublishedBilling;
@@ -19,7 +20,7 @@ use pos_proto::devices::PublishedDevices;
 use pos_proto::display::DisplayPlan;
 use pos_proto::fees::PublishedFees;
 use pos_proto::floor::{FloorPlan, StationPlan};
-use pos_proto::ids::{CourseId, FeeId, MenuItemId, StationId, TableId, TaxClassId};
+use pos_proto::ids::{CourseId, FeeId, MenuItemId, OrderId, StationId, TableId, TaxClassId};
 use pos_proto::integrations::PublishedIntegrations;
 use pos_proto::kitchen_release::KitchenRelease;
 use pos_proto::locale::{NumberFormat, TaxRate, TaxRateTable, TaxRounding};
@@ -345,10 +346,11 @@ impl EdgeSession {
         channel: Option<SalesChannel>,
         table_id: Option<TableId>,
         vendor_id: Option<pos_proto::ids::VendorId>,
+        order_id: OrderId,
     ) -> bool {
         // An order the store accepts and sends on arrival waits for nobody (ADR-0247 decision 3).
         let automatic =
-            self.kitchen_release(channel, vendor_id) == KitchenRelease::AutoAcceptAndFire;
+            self.kitchen_release(channel, vendor_id, order_id) == KitchenRelease::AutoAcceptAndFire;
         let qr = channel == Some(SalesChannel::Qr)
             && table_id.is_some()
             && self.qr_staff_confirmation_required;
@@ -364,14 +366,42 @@ impl EdgeSession {
     /// ([ADR-0247](../../../../../docs/adr/0247-a-guest-or-vendor-order-reaches-the-kitchen-as-the-store-chooses.md)):
     /// the `qr` node's choice for a QR order, its vendor's for a delivery order, and two steps for
     /// any other order, which no one confirms.
+    ///
+    /// A QR order's automatic send keeps the store's hours
+    /// ([ADR-0255](../../../../../docs/adr/0255-a-qr-orders-automatic-send-keeps-the-hours-the-store-sets.md)):
+    /// the minute it arrived, read from its id (a ULID minted from the edge's clock) in the store's
+    /// own time zone, decides, so the answer for an order never changes while it is open. A minute
+    /// that cannot be read is outside the window: a person sees the order.
     #[must_use]
     pub fn kitchen_release(
         &self,
         channel: Option<SalesChannel>,
         vendor_id: Option<pos_proto::ids::VendorId>,
+        order_id: OrderId,
     ) -> KitchenRelease {
         match channel {
-            Some(SalesChannel::Qr) => self.qr.kitchen_release(),
+            Some(SalesChannel::Qr) => {
+                let outside = self.qr.kitchen_release_outside_hours();
+                let minute = i64::try_from(order_id.as_ulid().timestamp_ms())
+                    .ok()
+                    .and_then(|millis| {
+                        pos_proto::time::Timestamp::from_milliseconds_since_epoch(millis).ok()
+                    })
+                    .and_then(|arrived| local_time(arrived, &self.timezone).ok())
+                    .map(|at| at.minute_of_day());
+                match minute {
+                    Some(minute) => release_at(
+                        self.qr.kitchen_release(),
+                        self.qr.auto_fire_window(),
+                        outside,
+                        minute,
+                    ),
+                    None if self.qr.kitchen_release() == KitchenRelease::AutoAcceptAndFire => {
+                        outside
+                    }
+                    None => self.qr.kitchen_release(),
+                }
+            }
             Some(SalesChannel::Delivery) => self.vendors.kitchen_release(vendor_id),
             _ => KitchenRelease::ConfirmThenSend,
         }
