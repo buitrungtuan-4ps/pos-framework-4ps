@@ -3050,6 +3050,32 @@ test("a store that sets nothing, and an edge too old to send the settings, offer
   }
 });
 
+/**
+ * Scans `code` as a keyboard-wedge scanner does: its digits and Enter, each key stamped with the
+ * time the scanner sent it, 5 ms apart. The till tells a scan from typing by those stamps
+ * (`src/state/scan-reader.ts`). `page.keyboard.type` stamps each key when the browser receives it,
+ * so under parallel workers a busy machine could space two keys past the store's 50 ms window and
+ * the till rightly read the rest as typing, losing the first digits; a hardware scanner's keys keep
+ * the times they were sent.
+ */
+async function scanCode(page, code) {
+  const cdp = await page.context().newCDPSession(page);
+  const sent = Date.now() / 1000;
+  const keys = [...code, "Enter"];
+  for (const [index, key] of keys.entries()) {
+    const enter = key === "Enter";
+    const stamp = {
+      key,
+      code: enter ? "Enter" : `Digit${key}`,
+      windowsVirtualKeyCode: enter ? 13 : key.charCodeAt(0),
+      timestamp: sent + index * 0.005,
+    };
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", text: enter ? "\r" : key, ...stamp });
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", ...stamp });
+  }
+  await cdp.detach();
+}
+
 // A barcode scan adds the item (ADR-0222 decisions 2 and 7). The edge here sells by no barcode, so
 // its menu read is given one, as a bakery's would carry: the scanner's digits and Enter, typed
 // faster than a person, add the item whose barcode it is, and a code the menu does not carry says so.
@@ -3068,12 +3094,10 @@ test("a scan adds the item whose barcode it is, and an unknown code says so", as
     await seatTable(page);
     await expect(page.locator('[data-outcome="line-added"]')).toHaveCount(0);
     await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
-    await page.keyboard.type("40000015");
-    await page.keyboard.press("Enter");
+    await scanCode(page, "40000015");
     await expectLineAdded(page);
 
-    await page.keyboard.type("40000022");
-    await page.keyboard.press("Enter");
+    await scanCode(page, "40000022");
     await expect(page.locator('[data-outcome="scan-unknown"]')).toContainText("40000022");
   } finally {
     await edge.stop();
