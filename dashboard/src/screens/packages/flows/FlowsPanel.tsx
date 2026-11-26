@@ -16,6 +16,7 @@ import { addStep, FLOWS_MAX, GUARD_CHANNELS, GUARD_SCOPES, idFrom, localProblems
 import type { PartProps } from "../designer/parts";
 import { FlowGraph } from "./FlowGraph";
 import { StepEditor } from "./StepEditor";
+import { actionName } from "../screens/names";
 
 /** What a flow refusal's reason says, in the console's words. */
 const FLOW_REASON: Readonly<Record<string, MessageKey>> = {
@@ -110,7 +111,7 @@ function FlowCard(props: {
         <SelectField
           label={t("flow.startsWith")}
           value={flow().start_action_id}
-          options={CATALOGUE.map((action) => ({ value: action.action_id, label: action.action_id }))}
+          options={CATALOGUE.map((action) => ({ value: action.action_id, label: actionName(action.action_id) }))}
           onChange={(start_action_id) => props.onChange({ ...flow(), start_action_id })}
         />
         <GuardScope flow={flow()} onChange={props.onChange} />

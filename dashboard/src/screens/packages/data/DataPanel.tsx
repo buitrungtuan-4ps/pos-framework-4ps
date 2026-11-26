@@ -53,6 +53,32 @@ function Fields(props: { fields: readonly CustomField[]; lists: readonly CustomL
   );
 }
 
+type Entry = CustomList["entries"][number];
+
+/**
+ * `list` with `entry` replaced by `next`, or taken out when `next` is `null` (O9). Removing is for an
+ * entry no published version declares; the cloud refuses removing one that is, and such an entry is
+ * retired instead, kept for reading and no longer offered.
+ */
+export function withEntry(list: CustomList, entry: Entry, next: Entry | null): CustomList {
+  const entries = list.entries.flatMap((held) => (held.list_entry_id === entry.list_entry_id ? (next ? [next] : []) : [held]));
+  return { ...list, entries };
+}
+
+/** One entry: its key, Retire or Restore, and Remove. */
+function EntryChip(props: { entry: Entry; onChange: (next: Entry | null) => void }) {
+  const retired = () => props.entry.deprecated === true;
+  return (
+    <li class="flex items-center gap-1 rounded-token border border-line px-2" data-list-entry={props.entry.list_entry_id}>
+      <span class={retired() ? "line-through text-ink-muted" : ""}>{props.entry.label_key}</span>
+      <Button variant="ghost" size="sm" onClick={() => props.onChange({ ...props.entry, deprecated: !retired() })}>
+        {retired() ? t("data.restoreEntry") : t("data.retireEntry")}
+      </Button>
+      <Button variant="danger-ghost" size="sm" onClick={() => props.onChange(null)}>{t("data.remove")}</Button>
+    </li>
+  );
+}
+
 /** A list and its entries. */
 function ListEditor(props: { list: CustomList; onChange: (list: CustomList) => void }) {
   const names = () => props.list.entries.map((entry) => entry.label_key.slice(props.list.label_key.length + 1));
@@ -60,7 +86,7 @@ function ListEditor(props: { list: CustomList; onChange: (list: CustomList) => v
     <div class="flex flex-col gap-2 rounded-token border border-line p-3" data-custom-list={props.list.custom_list_id}>
       <TextField label={t("data.labelKey")} hint={t("data.keyHint")} value={props.list.label_key} onInput={(label_key) => props.onChange({ ...props.list, label_key })} />
       <ul class="flex flex-wrap gap-2 text-sm">
-        <For each={props.list.entries}>{(entry) => <li class="rounded-token border border-line px-2">{entry.label_key}</li>}</For>
+        <For each={props.list.entries}>{(entry) => <EntryChip entry={entry} onChange={(next) => props.onChange(withEntry(props.list, entry, next))} />}</For>
       </ul>
       <AddByName
         label="data.newEntry"

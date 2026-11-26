@@ -98,6 +98,44 @@ function pretty(value: unknown): string {
     : JSON.stringify(value, null, 2);
 }
 
+/** Names of the tenants and stores an alert may be about, by id (upper case). */
+export type ScopeNames = ReadonlyMap<string, string>;
+
+/**
+ * Where an alert applies, in words: the store's name where the alert is about one store, else its
+ * tenant's name, else "Fleet-wide". An id with no name known falls back to the id, never to nothing.
+ */
+export function scopeWords(alert: Pick<Alert, "tenant_id" | "detail">, names: ScopeNames): string {
+  const detail = alert.detail;
+  const store =
+    detail !== null && typeof detail === "object" && !Array.isArray(detail)
+      ? (detail as Record<string, unknown>)["store_id"]
+      : undefined;
+  if (typeof store === "string" && store !== "") {
+    return t("alerts.scopeStore", { name: names.get(store.toUpperCase()) ?? store });
+  }
+  if (alert.tenant_id) {
+    return names.get(alert.tenant_id.toUpperCase()) ?? alert.tenant_id;
+  }
+  return t("alerts.fleet");
+}
+
+/** The tenants' and their stores' names for the alerts shown; a list the admin cannot read is skipped. */
+async function loadScopeNames(alerts: readonly Alert[]): Promise<ScopeNames> {
+  const names = new Map<string, string>();
+  const tenants = [...new Set(alerts.map((alert) => alert.tenant_id).filter((id): id is string => !!id))];
+  const [listed, ...stores] = await Promise.all([
+    api.listTenants().catch(() => []),
+    ...tenants.map((tenant) => api.listStores(tenant).catch(() => [])),
+  ]);
+  for (const tenant of listed) names.set(tenant.tenant_id.toUpperCase(), tenant.name);
+  for (const list of stores) for (const store of list) names.set(store.store_id.toUpperCase(), store.name);
+  return names;
+}
+
+/** The names last loaded for the alerts shown; the screen reloads them with its list. */
+const [names, setNames] = createSignal<ScopeNames>(new Map());
+
 /** The drawer's way to Chain integrity for a chain break; nothing for any other alert. */
 function ChainIntegrityLink(props: { alert: Alert }) {
   return (
@@ -130,6 +168,7 @@ export function Alerts() {
     setBusy(true);
     try {
       const loaded = await api.listAlerts(recent(), recent() ? ALERT_LIMIT : undefined);
+      setNames(await loadScopeNames(loaded));
       setAlerts(loaded);
     } catch (caught) {
       const message = apiMessage(caught);
@@ -214,7 +253,7 @@ export function Alerts() {
     return key ? t(key) : kind;
   };
 
-  const scopeLabel = (alert: Alert): string => alert.tenant_id ?? t("alerts.fleet");
+  const scopeLabel = (alert: Alert): string => scopeWords(alert, names());
 
   const stateBadge = (alert: Alert) => {
     const state = alertState(alert);
