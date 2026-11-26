@@ -74,6 +74,12 @@ impl Projection {
         }
     }
 
+    /// Records a guest count given to an open order after it opened (ADR-0254), replacing any
+    /// count it had: what a guard reads as `order.guest_count` from now on.
+    pub(in crate::app) fn record_guest_count(&mut self, order_id: OrderId, guest_count: u16) {
+        self.guest_counts.insert(order_id, guest_count);
+    }
+
     /// Records the subject an open delivery order names as its recipient.
     pub(in crate::app) fn record_recipient(
         &mut self,

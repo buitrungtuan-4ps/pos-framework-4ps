@@ -16,10 +16,10 @@ use pos_proto::events::{
     CashDrawerPaidOut, CashShiftClosed, CashShiftCounted, CashShiftOpened, DataCustomFieldSet,
     DataCustomRecordChanged, DataSubjectMasked, EventType, FiscalInvoiceIssued,
     FiscalInvoiceScheduled, InventoryItemRestored, InventoryItemSoldOut, KitchenTicketBumped,
-    SalesOrderClosed, SalesOrderConfirmedByStaff, SalesOrderLineAdded, SalesOrderLineFired,
-    SalesOrderLineRepriced, SalesOrderLineUpdated, SalesOrderLineVoided, SalesOrderOpened,
-    SalesOrderRejectedByStaff, SalesTableClosed, SalesTableMerged, SalesTableOpened,
-    SalesTableTransferred,
+    SalesOrderClosed, SalesOrderConfirmedByStaff, SalesOrderGuestsCounted, SalesOrderLineAdded,
+    SalesOrderLineFired, SalesOrderLineRepriced, SalesOrderLineUpdated, SalesOrderLineVoided,
+    SalesOrderOpened, SalesOrderRejectedByStaff, SalesTableClosed, SalesTableMerged,
+    SalesTableOpened, SalesTableTransferred,
 };
 use pos_proto::time::Timestamp;
 use pos_proto::{BillState, OrderLineState, PaymentMethod, ShiftState, TableState};
@@ -328,6 +328,16 @@ impl<S: EventStore> Edge<S> {
         Ok(())
     }
 
+    /// Replays a guest count recorded on a seated table's open order (ADR-0254): the latest wins.
+    fn fold_guests_counted(
+        projection: &mut Projection,
+        envelope: &EventEnvelope<RawPayload>,
+    ) -> Result<(), AppError> {
+        let event: SalesOrderGuestsCounted = envelope.data.decode().map_err(AppError::Encode)?;
+        projection.record_guest_count(event.order_id, event.guest_count);
+        Ok(())
+    }
+
     /// Replays an order that ended owing nothing: a table released with nothing sold on it
     /// ([`Edge::release_table`]), or a guest order staff refused.
     fn fold_order_closed(
@@ -373,6 +383,7 @@ impl<S: EventStore> Edge<S> {
                 Self::fold_staff_decision(projection, envelope, known)?;
             }
             EventType::SalesOrderClosed => Self::fold_order_closed(projection, envelope)?,
+            EventType::SalesOrderGuestsCounted => Self::fold_guests_counted(projection, envelope)?,
             EventType::SalesTableTransferred => Self::fold_transfer(projection, envelope)?,
             EventType::SalesOrderLineAdded
             | EventType::SalesOrderLineFired

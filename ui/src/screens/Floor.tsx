@@ -21,6 +21,7 @@ import { floorSections } from "../state/floor-tree";
 import { AreaTabs } from "../components/AreaTabs";
 import { guestStep } from "../state/flows";
 import { Takeaway } from "./Takeaway";
+import { GUEST_COUNTS } from "../components/GuestCountPrompt";
 import { errorMessage } from "../lib/errors";
 import { NO_ACTS, PackageScreen } from "../package/screen";
 
@@ -92,9 +93,6 @@ function seatThenOpen(tableId: string, navigate: (to: string) => void, guestCoun
   );
   navigate(order);
 }
-
-/** The counts the guest pad offers, one tap each. */
-const GUEST_COUNTS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] as const;
 
 /** A free table the operator tapped, waiting for its guest count. */
 interface AskingGuests {

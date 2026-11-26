@@ -116,6 +116,7 @@ where
     Router::new()
         // The floor: seat, clean, move the guests to another table, read.
         .route("/api/tables/{id}/seat", post(tables::seat_table::<S>))
+        .route("/api/tables/{id}/guests", post(tables::count_guests::<S>))
         .route("/api/tables/{id}/clean", post(tables::clean_table::<S>))
         .route("/api/tables/{id}/release", post(tables::release_table::<S>))
         .route(

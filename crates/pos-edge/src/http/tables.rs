@@ -116,6 +116,62 @@ where
     respond(edge.seat_table(actor, table_id, guest_count).await)
 }
 
+/// How many guests sit at a seated table (ADR-0254).
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub(crate) struct GuestCountRequest {
+    /// How many guests, at least one.
+    #[cfg_attr(feature = "openapi", schema(minimum = 1))]
+    guest_count: u16,
+}
+
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/api/tables/{id}/guests",
+    security(("till_session" = [])),
+    extensions(("x-permission" = json!("sales.table.manage"))),
+    params(
+        ("id" = String, Path, description = "The table's id, a ULID"),
+    ),
+    request_body(content = GuestCountRequest, content_type = "application/json"),
+    responses(
+        (status = 200, body = TableResponse, description = "Recorded on the table's open order; the table keeps its `state`"),
+        (status = 400, description = "The id is not a ULID, or the body is not `{\"guest_count\": <number>}` of at least 1"),
+        (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
+        (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed"),
+        (status = 409, description = "Refused: the person lacks the permission, or nobody sits at the table. \
+                                      `pos-error-reason` names which"),
+        (status = 503, description = "The store is unavailable, and nothing was recorded"),
+        (status = 500, description = "The edge could not apply the command"),
+    ),
+    tag = "floor",
+))]
+/// `POST /api/tables/{id}/guests` — record how many guests sit at a seated table
+/// ([ADR-0254](../../../../docs/adr/0254-a-seated-tables-guest-count-is-recorded-in-place.md)),
+/// for a flow that asks the count before the first dish. The latest count wins.
+pub(crate) async fn count_guests<S>(
+    State(edge): State<Arc<Edge<S>>>,
+    Extension(actor): Extension<Actor>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> Response
+where
+    S: EventStore + Send + Sync + 'static,
+{
+    let Some(table_id) = parse_table(&id) else {
+        return bad_request("a table id is a ULID");
+    };
+    match serde_json::from_slice::<GuestCountRequest>(&body) {
+        Ok(request) if request.guest_count > 0 => respond(
+            edge.count_guests(actor, table_id, request.guest_count)
+                .await,
+        ),
+        Ok(_) | Err(_) => {
+            bad_request("a guest count body is {\"guest_count\": <number of at least 1>}")
+        }
+    }
+}
+
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/api/tables/{id}/clean",
