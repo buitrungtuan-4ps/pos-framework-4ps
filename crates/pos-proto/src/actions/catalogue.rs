@@ -299,6 +299,15 @@ pub const CATALOGUE: &[Action] = &[
         ..BASE
     },
     Action {
+        action_id: "sales.table.count_guests",
+        effect: EdgeWrite,
+        params: &[required("table_id", Id), required("guest_count", Count)],
+        routes: &["POST /api/tables/{id}/guests"],
+        permissions: MANAGE_TABLES,
+        summary: "Record how many guests sit at a seated table (ADR-0254)",
+        ..BASE
+    },
+    Action {
         action_id: "sales.table.release",
         effect: EdgeWrite,
         frequency: Rare,

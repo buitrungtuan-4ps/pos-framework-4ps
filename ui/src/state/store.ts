@@ -623,9 +623,10 @@ export function setLink(status: LinkStatus): void {
 // A table's order says how many guests sat down, if whoever seated them said: what a flow's
 // guest-count step reads (`./flows.ts`). A walk-in's names no table and is no step's.
 // An opened order: its guests, and for a delivery order a read of what is open, which names the
-// vendor its badge shows (ADR-0248 decision 5).
+// vendor its badge shows (ADR-0248 decision 5). A count given after the seat names only its order
+// (`sales.order.guests_counted`, ADR-0254): the latest wins, on every till.
 function foldOpened(payload: Record<string, unknown>): void {
-  const table = str(payload, "table_id");
+  const table = str(payload, "table_id") ?? state.orderTable[str(payload, "order_id") ?? ""] ?? null;
   const count = payload["guest_count"];
   if (table !== null) recordGuests(table, typeof count === "number" ? count : undefined);
   if (str(payload, "vendor_id") !== null) void loadLiveOrders();
@@ -653,6 +654,7 @@ export function fold(event: ServerEvent): void {
       break;
     }
     case "sales.order.opened":
+    case "sales.order.guests_counted":
       foldOpened(payload);
       break;
     case "sales.order.closed": {

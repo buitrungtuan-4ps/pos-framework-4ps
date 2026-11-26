@@ -7,7 +7,8 @@
 use pos_core::decision::{Actor, TableCommand, decide_table};
 use pos_ports::event_store::EventStore;
 use pos_proto::events::{
-    SalesOrderClosed, SalesOrderOpened, SalesTableClosed, SalesTableOpened, SalesTableTransferred,
+    SalesOrderClosed, SalesOrderGuestsCounted, SalesOrderOpened, SalesTableClosed,
+    SalesTableOpened, SalesTableTransferred,
 };
 use pos_proto::ids::{OrderId, TableId};
 use pos_proto::time::Timestamp;
@@ -117,6 +118,46 @@ impl<S: EventStore> Edge<S> {
         Ok(TableView {
             table_id,
             state: decision.next_state,
+        })
+    }
+
+    /// Records how many guests sit at a seated table, on its open order
+    /// (`sales.order.guests_counted`,
+    /// [ADR-0254](../../../../docs/adr/0254-a-seated-tables-guest-count-is-recorded-in-place.md)).
+    ///
+    /// For a table seated without its count when the store's flow asks for one before the first
+    /// dish: the cashier gives it here rather than releasing the table and seating it again. The
+    /// latest count wins, so a wrong one is corrected the same way. The table does not move.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::Domain`] for a count of zero, a table nobody sits at, without
+    /// `sales.table.manage`, or at a store without table service; [`AppError::NoOpenOrder`] if the
+    /// seated table holds no order; [`AppError`] if the store cannot
+    /// be written.
+    pub async fn count_guests(
+        &self,
+        actor: Actor,
+        table_id: TableId,
+        guest_count: u16,
+    ) -> Result<TableView, AppError> {
+        let ctx = self.decision_ctx(actor)?;
+        let current = self.table_state(table_id);
+        pos_core::floor::guests::decide_guest_count(current, guest_count, &ctx)?;
+        let order_id = self
+            .lock_projection()
+            .order_for_table(table_id)
+            .ok_or(AppError::NoOpenOrder)?;
+        let payload = SalesOrderGuestsCounted {
+            order_id,
+            guest_count,
+        };
+        self.commit_and_publish(&ctx, &payload).await?;
+        self.lock_projection()
+            .record_guest_count(order_id, guest_count);
+        Ok(TableView {
+            table_id,
+            state: current,
         })
     }
 

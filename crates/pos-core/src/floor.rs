@@ -18,6 +18,7 @@
 use std::collections::BTreeSet;
 
 pub mod area_tree;
+pub mod guests;
 
 use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::{CourseId, MenuItemId, StationId};

@@ -358,6 +358,10 @@ export const api = {
       `/api/tables/${tableId}/seat`,
       guestCount === undefined ? undefined : { guest_count: guestCount },
     ),
+  // A seated table's guest count, given in place when a flow asks for it before the first dish
+  // (ADR-0254). The latest count wins.
+  countGuests: (tableId: string, guestCount: number) =>
+    request<TableResponse>("POST", `/api/tables/${tableId}/guests`, { guest_count: guestCount }),
   cleanTable: (tableId: string) =>
     request<TableResponse>("POST", `/api/tables/${tableId}/clean`),
   // A table seated by mistake goes straight back to the floor, while nothing is sold on it

@@ -147,11 +147,12 @@ describe("a money act left unconfirmed", () => {
 });
 
 describe("a flow's refusal (ADR-0192)", () => {
-  it("names the step the edge says comes first", async () => {
+  it("names the step the edge says comes first, in words rather than its id (ADR-0254)", async () => {
     const { errorMessage } = await import("../src/lib/errors");
     const message = errorMessage(
       new ApiError(409, "step guests of flow dine_in comes first", "FLOW_PREREQUISITE_UNMET"),
     );
-    expect(message).toContain("guests");
+    expect(message).toContain("(the guest count)");
+    expect(message).not.toContain("guests");
   });
 });

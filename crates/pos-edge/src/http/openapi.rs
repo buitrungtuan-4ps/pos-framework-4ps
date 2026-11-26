@@ -108,6 +108,7 @@ use utoipa::{Modify, OpenApi};
         super::menu::mark_sold_out,
         super::menu::restore_item,
         super::tables::seat_table,
+        super::tables::count_guests,
         super::tables::clean_table,
         super::tables::release_table,
         super::tables::transfer_table,

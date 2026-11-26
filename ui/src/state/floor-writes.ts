@@ -6,6 +6,7 @@
 import { api } from "../api/client";
 import type { BillResponse } from "../api/schemas";
 import { editWrite } from "./edge-write";
+import { forgetGuests, guestsOf, recordGuests } from "./flows";
 import { tableReacts } from "./optimistic";
 import { reload, rereadWhole } from "./engine";
 import { loadLiveOrders, openBillFor, setSoldOut, state, updateStore } from "./store";
@@ -31,6 +32,22 @@ function paintTable(tableId: string, next: string): () => void {
         draft.tableState[tableId] = was;
       }
     });
+}
+
+/**
+ * A seated table's guest count, given in place (ADR-0254): the line its flow held back can go as
+ * soon as it shows. A refusal puts back what the till knew.
+ */
+export async function countGuests(tableId: string, count: number): Promise<void> {
+  const was = guestsOf(tableId);
+  await editWrite("sales.table.count_guests", {
+    paint: () => {
+      recordGuests(tableId, count);
+      return () => (was === undefined ? forgetGuests(tableId) : recordGuests(tableId, was === "skipped" ? undefined : was));
+    },
+    send: () => api.countGuests(tableId, count),
+    reread: () => void loadLiveOrders(),
+  });
 }
 
 /** A table that needed cleaning, free again. */

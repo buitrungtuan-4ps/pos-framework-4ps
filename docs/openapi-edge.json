@@ -5128,6 +5128,72 @@
         "x-permission": "sales.table.manage"
       }
     },
+    "/api/tables/{id}/guests": {
+      "post": {
+        "tags": [
+          "floor"
+        ],
+        "summary": "`POST /api/tables/{id}/guests` — record how many guests sit at a seated table\n([ADR-0254](../../../../docs/adr/0254-a-seated-tables-guest-count-is-recorded-in-place.md)),\nfor a flow that asks the count before the first dish. The latest count wins.",
+        "operationId": "count_guests",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The table's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GuestCountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Recorded on the table's open order; the table keeps its `state`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TableResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The id is not a ULID, or the body is not `{\"guest_count\": <number>}` of at least 1"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed"
+          },
+          "409": {
+            "description": "Refused: the person lacks the permission, or nobody sits at the table. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "sales.table.manage"
+      }
+    },
     "/api/tables/{id}/lines": {
       "post": {
         "tags": [
@@ -7255,6 +7321,21 @@
             "format": "int32",
             "description": "Zero-based row from the top.",
             "minimum": 0
+          }
+        }
+      },
+      "GuestCountRequest": {
+        "type": "object",
+        "description": "How many guests sit at a seated table (ADR-0254).",
+        "required": [
+          "guest_count"
+        ],
+        "properties": {
+          "guest_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many guests, at least one.",
+            "minimum": 1
           }
         }
       },
