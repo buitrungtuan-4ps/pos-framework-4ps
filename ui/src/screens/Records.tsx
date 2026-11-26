@@ -30,7 +30,7 @@ import { createScreenRead } from "../state/screen-read";
 const INPUT = "mt-1 block min-h-touch w-full rounded-token border border-line bg-surface px-3";
 
 /** Why a save or a read was refused, as the operator reads it. */
-function refusalKey(caught: unknown): MessageKey {
+export function refusalKey(caught: unknown): MessageKey {
   const reason = caught instanceof ApiError ? caught.reason : null;
   if (reason === "CUSTOM_ENTRY_REFUSED") {
     return "records.refused_entry";
@@ -96,7 +96,7 @@ const INPUTS: Readonly<Record<string, (props: InputProps) => JSX.Element>> = {
 };
 
 /** One field's label and input, in the form its type takes. */
-function FieldInput(props: { field: CustomField; value: Drafted; onInput: (value: Drafted) => void }) {
+export function FieldInput(props: { field: CustomField; value: Drafted; onInput: (value: Drafted) => void }) {
   const id = () => `field-${props.field.custom_field_id}`;
   const Input = INPUTS[props.field.field_type] ?? TypedInput;
   return (
@@ -111,7 +111,7 @@ function FieldInput(props: { field: CustomField; value: Drafted; onInput: (value
 }
 
 /** The consents the personal values typed need, one box each, labelled with the tenant's purpose. */
-function ConsentBoxes(props: { purposes: string[]; given: ReadonlySet<string>; onTick: (purpose: string, ticked: boolean) => void }) {
+export function ConsentBoxes(props: { purposes: string[]; given: ReadonlySet<string>; onTick: (purpose: string, ticked: boolean) => void }) {
   return (
     <For each={props.purposes}>
       {(purpose) => (

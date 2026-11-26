@@ -136,6 +136,7 @@ export type ApproverRequest = {
 // non-personal values, and one subject's personal values for a person holding `data.personal.read`.
 export type PackageData = Schemas["PackageData"];
 export type CustomField = Schemas["CustomField"];
+export type FieldsRequest = Schemas["FieldsRequest"];
 export type ObjectType = Schemas["ObjectType"];
 export type CustomFieldValue = Schemas["CustomFieldValue"];
 export type CustomDataResponse = Schemas["CustomDataResponse"];

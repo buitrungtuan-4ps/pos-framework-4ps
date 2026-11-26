@@ -10,6 +10,7 @@ import { CardParked, useCardTerminal } from "../components/CardTerminal";
 import { CompPanel } from "../components/CompPanel";
 import { PendingSettle } from "../components/PendingSettle";
 import { RefusalPanel } from "../components/RefusalPanel";
+import { ObjectFields } from "../components/ObjectFields";
 import { PrintedCheck } from "../components/PrintedCheck";
 import { invoiceLine, receiptLine, taxCodeLooksValid } from "../state/settle-act";
 import { usePayActs } from "../state/pay-acts";
@@ -882,7 +883,7 @@ export function Pay() {
             )}
           </Show>
           <PrintedCheck printed={check()?.check_printed} class="mt-1" />
-
+          <ObjectFields object="DATA_OBJECT_BILL" objectId={billId() ?? undefined} />
           <RefusalPanel message={acts.refusal()} onDismiss={acts.dismiss} />
           <Show when={shape.pending()}>
             {(out) => <PendingSettle act={out().act} phase={out().phase} amount="" onLeave={() => navigate("/")} />}
