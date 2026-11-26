@@ -1,6 +1,6 @@
 # ADR-0251 — A vendor-numbered invoice is issued "number pending" and the store learns its number
 
-**Status** Accepted 2026-11-26 under the owner's decisions · **Owner** @maintainers-architecture ·
+**Status** Accepted 2026-11-26 under the owner's decisions; superseded in part by [ADR-0252](0252-hybrid-numbering-is-confirmed-on-its-own-value.md) (the HYBRID confirmation is the ADR-0169 confirmation on the value, not `einvoice.hybrid_confirmed`) · **Owner** @maintainers-architecture ·
 **Date** 2026-11-26 · Phase 11 · Details
 [ADR-0249](0249-the-e-invoice-number-comes-from-the-source-the-store-chooses.md) and supersedes its
 decision 3 (build order) · Follows the precedent of
