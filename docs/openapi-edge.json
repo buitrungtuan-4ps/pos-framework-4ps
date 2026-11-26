@@ -2758,7 +2758,7 @@
         ],
         "responses": {
           "204": {
-            "description": "Confirmed: the guest's order may now be fired"
+            "description": "Confirmed: the guest's order may now be fired, or, under `KITCHEN_RELEASE_CONFIRM_FIRES`, has been fired with its tickets printed"
           },
           "400": {
             "description": "The id is not a ULID"
@@ -10856,9 +10856,14 @@
           "order_id",
           "table_id",
           "items",
-          "total"
+          "total",
+          "confirm_fires"
         ],
         "properties": {
+          "confirm_fires": {
+            "type": "boolean",
+            "description": "Whether confirming also sends the order to the kitchen, under the store's or the vendor's\n`KITCHEN_RELEASE_CONFIRM_FIRES`\n([ADR-0247](../../../../docs/adr/0247-a-guest-or-vendor-order-reaches-the-kitchen-as-the-store-chooses.md)),\nso the till names its button by what it does."
+          },
           "items": {
             "type": "array",
             "items": {

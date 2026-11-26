@@ -12,10 +12,11 @@ use pos_proto::events::{
     SalesOrderClosed, SalesOrderConfirmedByStaff, SalesOrderRejectedByStaff, SalesTableMerged,
 };
 use pos_proto::ids::{OrderId, OrderLineId, ReasonCodeId, TableId};
+use pos_proto::kitchen_release::KitchenRelease;
 use pos_proto::qr::TableOrder;
 use pos_proto::reason_codes::ReasonAction;
 
-use crate::app::{AppError, Edge, StaffDecision, WaitingLine};
+use crate::app::{AppError, Edge, LineView, StaffDecision, WaitingLine};
 
 impl<S: EventStore> Edge<S> {
     /// Every guest order still waiting for a member of staff, oldest first
@@ -78,7 +79,9 @@ impl<S: EventStore> Edge<S> {
 
     /// Releases a guest's order to the kitchen (`sales.order.confirmed_by_staff`), ADR-0116.
     ///
-    /// The order's lines become fireable; nothing else about it changes. Idempotent in the sense
+    /// The order's lines become fireable. Under `KITCHEN_RELEASE_CONFIRM_FIRES` they are also fired
+    /// in the same transaction, and the lines fired are returned for their tickets (ADR-0247);
+    /// otherwise nothing is fired and the list is empty. Idempotent in the sense
     /// that matters operationally: a second confirmation is refused with
     /// [`AppError::NotAwaitingStaffConfirmation`] rather than writing a second event, so two
     /// devices racing on the same order produce one decision and one audit entry.
@@ -98,11 +101,18 @@ impl<S: EventStore> Edge<S> {
         &self,
         actor: Actor,
         order_id: OrderId,
-    ) -> Result<(), AppError> {
+    ) -> Result<Vec<LineView>, AppError> {
         let ctx = self.decision_ctx(actor)?;
         ctx.require(Permission::ConfirmQrOrder)?;
         if !self.awaits_staff_confirmation(order_id) {
             return Err(AppError::NotAwaitingStaffConfirmation);
+        }
+        // One tap accepts and sends where the store says so (ADR-0247): the order's unsent lines
+        // fire in the confirmation's own transaction, decided and guarded as any send is, under
+        // the person who confirms. Before a join, which moves them to the table's order.
+        let fires_too = self.confirm_fires(order_id);
+        if fires_too {
+            self.check_flow_guard("sales.order.fire", order_id)?;
         }
 
         // The table's order the guest's lines join, read before the write as a waiter's add-line
@@ -125,6 +135,18 @@ impl<S: EventStore> Edge<S> {
         let (envelope, message) = self.prepare(&ctx, &confirmed)?;
         let mut envelopes = vec![envelope];
         let mut messages = vec![message];
+        // Prepared after the confirmation, so the log reads confirmed, then sent.
+        let fires = if fires_too {
+            let unfired = self.lock_projection().unfired_lines_for_order(order_id);
+            Some(self.prepare_fires(&ctx, unfired, |_| None, None)?)
+        } else {
+            None
+        };
+        let applied = fires.map(|(fired, announced, applied)| {
+            envelopes.extend(fired);
+            messages.extend(announced);
+            applied
+        });
         if let Some(target_order_id) = joins {
             let merged = SalesTableMerged {
                 target_order_id,
@@ -135,12 +157,27 @@ impl<S: EventStore> Edge<S> {
             messages.push(message);
         }
         self.append_and_publish(envelopes, messages).await?;
-        let mut projection = self.lock_projection();
-        projection.record_staff_decision(order_id, StaffDecision::Confirmed);
-        if let Some(target_order_id) = joins {
-            projection.merge_order(target_order_id, order_id);
+        {
+            let mut projection = self.lock_projection();
+            projection.record_staff_decision(order_id, StaffDecision::Confirmed);
+            if let Some(target_order_id) = joins {
+                projection.merge_order(target_order_id, order_id);
+            }
         }
-        Ok(())
+        Ok(applied.map_or_else(Vec::new, |applied| self.apply_fires(&ctx, applied)))
+    }
+
+    /// Whether confirming `order_id` also sends it: its channel's or its vendor's kitchen release is
+    /// `KITCHEN_RELEASE_CONFIRM_FIRES` (ADR-0247 decision 1).
+    #[must_use]
+    pub fn confirm_fires(&self, order_id: OrderId) -> bool {
+        let session = self.session();
+        let projection = self.lock_projection();
+        let channel = projection
+            .order_origin(order_id)
+            .and_then(|origin| origin.channel);
+        session.kitchen_release(channel, projection.vendor(order_id))
+            == KitchenRelease::ConfirmFires
     }
 
     /// Refuses a guest's order (`sales.order.rejected_by_staff`, then `sales.order.closed`),

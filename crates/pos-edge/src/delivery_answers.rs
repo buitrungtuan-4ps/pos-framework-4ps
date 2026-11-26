@@ -230,6 +230,7 @@ mod tests {
             display_name: DisplayName::new("Sandbox delivery"),
             staff_confirm: true,
             prep_minutes: 20,
+            kitchen_release: pos_proto::Open::default(),
         }
     }
 

@@ -12,6 +12,7 @@ mod inbound;
 mod kiosk;
 mod lines;
 mod open_price;
+mod release;
 mod reprice;
 mod scan;
 mod sold_out;

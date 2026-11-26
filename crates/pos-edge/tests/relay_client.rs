@@ -365,6 +365,7 @@ fn fake_vendor(staff_confirm: bool) -> PublishedVendors {
         display_name: DisplayName::new("Sandbox delivery"),
         staff_confirm,
         prep_minutes: 20,
+        kitchen_release: pos_proto::Open::default(),
     }])
 }
 

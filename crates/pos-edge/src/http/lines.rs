@@ -373,7 +373,7 @@ where
 ///
 /// After the commit, never inside it: a printer that is down must not un-fire food the kitchen is
 /// already making, which is why this runs over views the transaction has already produced.
-async fn fired_with_tickets<S>(
+pub(super) async fn fired_with_tickets<S>(
     printers: Option<&Arc<Printers>>,
     edge: &Arc<Edge<S>>,
     views: Vec<LineView>,

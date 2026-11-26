@@ -21,6 +21,7 @@ use pos_proto::fees::PublishedFees;
 use pos_proto::floor::{FloorPlan, StationPlan};
 use pos_proto::ids::{CourseId, FeeId, MenuItemId, StationId, TableId, TaxClassId};
 use pos_proto::integrations::PublishedIntegrations;
+use pos_proto::kitchen_release::KitchenRelease;
 use pos_proto::locale::{NumberFormat, TaxRate, TaxRateTable, TaxRounding};
 use pos_proto::menu::{MenuBook, MenuCatalog, MenuEntry};
 use pos_proto::money::CurrencyCode;
@@ -345,6 +346,9 @@ impl EdgeSession {
         table_id: Option<TableId>,
         vendor_id: Option<pos_proto::ids::VendorId>,
     ) -> bool {
+        // An order the store accepts and sends on arrival waits for nobody (ADR-0247 decision 3).
+        let automatic =
+            self.kitchen_release(channel, vendor_id) == KitchenRelease::AutoAcceptAndFire;
         let qr = channel == Some(SalesChannel::Qr)
             && table_id.is_some()
             && self.qr_staff_confirmation_required;
@@ -352,7 +356,25 @@ impl EdgeSession {
         // each of its orders (ADR-0215 decision 5), as a QR order waits (ADR-0012).
         let delivery =
             channel == Some(SalesChannel::Delivery) && self.vendors.staff_confirm(vendor_id);
-        qr || delivery
+        (qr || delivery) && !automatic
+    }
+
+    /// How an order arriving on `channel`, through `vendor_id` for a delivery order, reaches the
+    /// kitchen
+    /// ([ADR-0247](../../../../../docs/adr/0247-a-guest-or-vendor-order-reaches-the-kitchen-as-the-store-chooses.md)):
+    /// the `qr` node's choice for a QR order, its vendor's for a delivery order, and two steps for
+    /// any other order, which no one confirms.
+    #[must_use]
+    pub fn kitchen_release(
+        &self,
+        channel: Option<SalesChannel>,
+        vendor_id: Option<pos_proto::ids::VendorId>,
+    ) -> KitchenRelease {
+        match channel {
+            Some(SalesChannel::Qr) => self.qr.kitchen_release(),
+            Some(SalesChannel::Delivery) => self.vendors.kitchen_release(vendor_id),
+            _ => KitchenRelease::ConfirmThenSend,
+        }
     }
 
     /// Installs a capability profile, for a test or the on-fakes example. The real store's profile

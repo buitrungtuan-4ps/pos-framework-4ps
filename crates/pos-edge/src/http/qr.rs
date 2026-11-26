@@ -70,6 +70,11 @@ struct WaitingOrderResponse {
     vendor_name: Option<String>,
     items: Vec<WaitingLineResponse>,
     total: Money,
+    /// Whether confirming also sends the order to the kitchen, under the store's or the vendor's
+    /// `KITCHEN_RELEASE_CONFIRM_FIRES`
+    /// ([ADR-0247](../../../../docs/adr/0247-a-guest-or-vendor-order-reaches-the-kitchen-as-the-store-chooses.md)),
+    /// so the till names its button by what it does.
+    confirm_fires: bool,
 }
 
 /// The queue, plus the reasons a refusal may cite.
@@ -136,6 +141,7 @@ where
                     })
                     .collect(),
                 total,
+                confirm_fires: edge.confirm_fires(order_id),
             }
         })
         .collect();
@@ -166,7 +172,8 @@ where
         ("id" = String, Path, description = "The order's id, a ULID"),
     ),
     responses(
-        (status = 204, description = "Confirmed: the guest's order may now be fired"),
+        (status = 204, description = "Confirmed: the guest's order may now be fired, or, under \
+                                      `KITCHEN_RELEASE_CONFIRM_FIRES`, has been fired with its tickets printed"),
         (status = 400, description = "The id is not a ULID"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
         (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \
@@ -195,7 +202,14 @@ where
         return bad_request("an order id is a ULID");
     };
     match edge.confirm_inbound_order(actor, order_id).await {
-        Ok(()) => {
+        Ok(fired) => {
+            // A ticket per line the confirmation sent (ADR-0247), after the commit as for any send.
+            let _tickets = super::lines::fired_with_tickets(
+                printers.as_ref().map(|Extension(printers)| printers),
+                &edge,
+                fired,
+            )
+            .await;
             crate::delivery_slips::confirmed(
                 printers
                     .as_ref()

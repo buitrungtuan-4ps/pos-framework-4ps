@@ -14,6 +14,7 @@ use pos_ports::subject_store::{SubjectRecord, SubjectStore};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::events::{SalesOrderLineAdded, SalesOrderOpened, SalesTableMerged};
 use pos_proto::ids::{DeviceId, OrderId, OrderLineId, TableId};
+use pos_proto::kitchen_release::KitchenRelease;
 use pos_proto::qr::TableOrder;
 use pos_proto::time::{BusinessDate, Timestamp};
 use pos_proto::{ClockSource, Open, SalesChannel};
@@ -100,7 +101,28 @@ impl<S: EventStore> Edge<S> {
             // Intake opens through no catalogue act, so it enters no flow (ADR-0244).
             opened_by_action_id: None,
         };
-        let prepared = self.prepare_inbound(stamp, &opened, lines, joins)?;
+        let mut prepared = self.prepare_inbound(stamp, &opened, lines, joins)?;
+        // Accepted on arrival and sent with itself where the store says so (ADR-0247): the fires go
+        // before a join, so the log reads as it happened and the replay folds them in that order.
+        let automatic =
+            session.kitchen_release(order_channel, vendor_id) == KitchenRelease::AutoAcceptAndFire;
+        let fires = automatic
+            .then(|| {
+                self.intake_fires(
+                    stamp.device_id,
+                    stamp.now,
+                    stamp.business_date,
+                    &prepared.records,
+                )
+            })
+            .flatten()
+            .map(|(ctx, (envelopes, messages, applied))| {
+                let at = prepared.events.len() - usize::from(joins.is_some());
+                prepared
+                    .events
+                    .splice(at..at, envelopes.into_iter().zip(messages));
+                (ctx, applied)
+            });
         let (envelopes, messages): (Vec<_>, Vec<_>) = prepared.events.into_iter().unzip();
 
         let business_date = stamp.business_date;
@@ -119,6 +141,9 @@ impl<S: EventStore> Edge<S> {
             projection.record_opened(order_id, None, package_version_id);
             projection.record_recipient(order_id, opened.subject_id);
             projection.record_vendor(order_id, vendor_id);
+        }
+        if let Some((ctx, applied)) = fires {
+            self.apply_fires(&ctx, applied);
         }
         Ok(InboundOrderOpened {
             order_id,

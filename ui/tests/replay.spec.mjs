@@ -3975,7 +3975,7 @@ test("a guest's QR order shows its table by the floor's label, and the queue ref
     const card = page.locator('[data-outcome="guest-order"]');
     await expect(card).toHaveCount(1);
     await expect(card.locator("h3")).toHaveText("Table 1");
-    const accept = card.getByRole("button", { name: "Send to kitchen" });
+    const accept = card.getByRole("button", { name: "Accept order" });
     const box = await accept.boundingBox();
     expect(box?.height ?? 0).toBeGreaterThanOrEqual(48);
   } finally {
@@ -4016,7 +4016,7 @@ test("a guest's order confirmed or refused leaves the queue at once, and a refus
     await navigateTo(page, "/guests");
     const cards = page.locator('[data-outcome="guest-order"]');
     await expect(cards).toHaveCount(2);
-    const accept = () => cards.first().getByRole("button", { name: "Send to kitchen" });
+    const accept = () => cards.first().getByRole("button", { name: "Accept order" });
 
     // Refused: the order is back, with the refusal's sentence.
     await refusePost(page, "**/api/orders/*/confirm", "TRANSITION_REFUSED");

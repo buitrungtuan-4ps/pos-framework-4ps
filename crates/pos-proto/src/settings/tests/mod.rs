@@ -553,6 +553,7 @@ fn read_back(node: &str, field: &str, value: Option<&Value>) -> Option<Value> {
             let qr: PublishedQr = serde_json::from_value(document).ok()?;
             match field {
                 "table_order" => Some(json!(qr.table_order().as_wire())),
+                "kitchen_release" => Some(json!(qr.kitchen_release().as_wire())),
                 _ => None,
             }
         }

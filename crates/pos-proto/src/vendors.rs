@@ -17,7 +17,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::ids::VendorId;
+use crate::kitchen_release::KitchenRelease;
 use crate::text::DisplayName;
+use crate::wire_enum::Open;
 
 /// The most vendors one store's node lists.
 pub const MAX_VENDORS: usize = 64;
@@ -41,6 +43,16 @@ pub struct PublishedVendor {
     pub staff_confirm: bool,
     /// The minutes the store tells the vendor an accepted order takes, 1 to 240.
     pub prep_minutes: u16,
+    /// How the vendor's orders reach the kitchen
+    /// ([ADR-0247](../../../docs/adr/0247-a-guest-or-vendor-order-reaches-the-kitchen-as-the-store-chooses.md)).
+    /// Absent, from a cloud before the setting or a connection that never set it, reads as
+    /// [`KitchenRelease::ConfirmThenSend`]; left off the wire while absent.
+    #[serde(
+        default,
+        deserialize_with = "crate::kitchen_release::token",
+        skip_serializing_if = "crate::wire_enum::is_absent"
+    )]
+    pub kitchen_release: Open<KitchenRelease>,
 }
 
 /// The `vendors` config node: the vendors a store takes orders from.
@@ -74,6 +86,17 @@ impl PublishedVendors {
             .find(|vendor| vendor.vendor_id == vendor_id)
     }
 
+    /// How an order from `vendor_id` reaches the kitchen (ADR-0247): its entry's choice, and
+    /// [`KitchenRelease::ConfirmThenSend`] for a vendor the node does not list.
+    #[must_use]
+    pub fn kitchen_release(&self, vendor_id: Option<VendorId>) -> KitchenRelease {
+        vendor_id
+            .and_then(|vendor_id| self.get(vendor_id))
+            .map_or(KitchenRelease::ConfirmThenSend, |vendor| {
+                KitchenRelease::read(&vendor.kitchen_release)
+            })
+    }
+
     /// Whether an order from `vendor_id` waits for a member of staff. An order from a vendor the
     /// node does not list waits for no one, as every delivery order did before the node.
     #[must_use]
@@ -105,6 +128,7 @@ mod tests {
     use crate::ids::VendorId;
     use crate::text::DisplayName;
     use crate::ulid::Ulid;
+    use crate::wire_enum::Open;
 
     fn vendor(n: u128, staff_confirm: bool, prep_minutes: u16) -> PublishedVendor {
         PublishedVendor {
@@ -112,6 +136,7 @@ mod tests {
             display_name: DisplayName::new("Sandbox delivery"),
             staff_confirm,
             prep_minutes,
+            kitchen_release: Open::default(),
         }
     }
 

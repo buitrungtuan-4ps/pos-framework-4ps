@@ -23,6 +23,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::kitchen_release::KitchenRelease;
 use crate::wire_enum;
 use crate::wire_enum::Open;
 
@@ -96,6 +97,15 @@ pub struct PublishedQr {
     )]
     #[cfg_attr(feature = "openapi", schema(nullable = false))]
     pub business_hours: Option<QrBusinessHours>,
+    /// How a guest's order reaches the kitchen (ADR-0247), a setting beside `table_order`. Read it
+    /// through [`PublishedQr::kitchen_release`]: absent or unknown is
+    /// [`KitchenRelease::ConfirmThenSend`].
+    #[serde(
+        default,
+        deserialize_with = "crate::kitchen_release::token",
+        skip_serializing_if = "crate::wire_enum::is_absent"
+    )]
+    pub kitchen_release: Open<KitchenRelease>,
 }
 
 /// The hours a store takes QR orders, as the `qr` node carries them.
@@ -135,6 +145,13 @@ impl PublishedQr {
             TableOrder::Unspecified | TableOrder::Separate => TableOrder::Separate,
             TableOrder::Join => TableOrder::Join,
         }
+    }
+
+    /// How a guest's order reaches the kitchen (ADR-0247): [`KitchenRelease::ConfirmThenSend`], the
+    /// two steps the store ran before the setting, unless the store chose otherwise.
+    #[must_use]
+    pub fn kitchen_release(&self) -> KitchenRelease {
+        KitchenRelease::read(&self.kitchen_release)
     }
 
     /// The guardrails a `qr` node carries, read apart from its setting: a `table_order` that does
