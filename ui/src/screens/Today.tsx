@@ -8,6 +8,7 @@ import type {
   VoidSettledResponse,
 } from "../api/schemas";
 import { ApproverFields } from "../components/ApproverFields";
+import { AskHqCorrection } from "../components/AskHqCorrection";
 import { PendingSettle } from "../components/PendingSettle";
 import { RefusalPanel } from "../components/RefusalPanel";
 import { useVoidSettledAct } from "../state/void-settled-act";
@@ -156,8 +157,13 @@ function VoidPaidBill(props: {
     setOpen(false);
     props.onVoided(voided);
   });
-  const voidPaidBillReason = (reasonCodeId: string) =>
-    voiding.voidWith(reasonCodeId, asks(), asks() && typed() ? { approver_code: code().trim(), approver_pin: pin() } : undefined);
+  const approval = () => (asks() && typed() ? { approver_code: code().trim(), approver_pin: pin() } : undefined);
+  // The reason the void was tried with, which a request to HQ carries (ADR-0250).
+  const [tried, setTried] = createSignal<string | null>(null);
+  const voidPaidBillReason = (reasonCodeId: string) => {
+    setTried(reasonCodeId);
+    voiding.voidWith(reasonCodeId, asks(), approval());
+  };
 
   return (
     <Show
@@ -209,6 +215,9 @@ function VoidPaidBill(props: {
           <PendingSettle act="void" phase={voiding.phase()} amount="" onLeave={() => setOpen(false)} />
         </Show>
         <RefusalPanel message={voiding.refusal() ?? error()} onDismiss={() => (voiding.dismiss(), setError(null))} />
+        <Show when={voiding.refusal() !== null && voiding.refusedReason() === "E_INVOICE_ISSUED"}>
+          <AskHqCorrection billId={props.bill.bill_id} reasonCodeId={tried()} approval={approval} />
+        </Show>
         <button
           type="button"
           class="mt-3 min-h-touch rounded-token border border-line px-3 text-sm"
