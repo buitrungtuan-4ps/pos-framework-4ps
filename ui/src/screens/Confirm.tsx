@@ -150,7 +150,7 @@ export function Confirm() {
                   disabled={busy()}
                   onClick={() => confirm(order)}
                 >
-                  {t("confirm.accept")}
+                  {t(order.confirm_fires ? "confirm.accept_and_send" : "confirm.accept")}
                 </button>
                 <button
                   type="button"

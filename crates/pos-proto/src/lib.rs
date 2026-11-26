@@ -52,6 +52,7 @@ pub mod integrations;
 pub mod inventory;
 pub mod item_codes;
 pub mod kiosk;
+pub mod kitchen_release;
 pub mod locale;
 pub mod menu;
 pub mod money;

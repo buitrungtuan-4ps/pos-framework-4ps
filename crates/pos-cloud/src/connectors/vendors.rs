@@ -15,6 +15,7 @@ use pos_proto::ids::VendorId;
 use pos_proto::integrations::SettingValue;
 use pos_proto::text::DisplayName;
 use pos_proto::vendors::{MAX_PREP_MINUTES, MIN_PREP_MINUTES, PublishedVendor, PublishedVendors};
+use pos_proto::wire_enum::Open;
 use pos_providers::Family;
 
 use crate::connections::{Connection, ScopeLevel};
@@ -23,6 +24,17 @@ use crate::connections::{Connection, ScopeLevel};
 pub const STAFF_CONFIRM: &str = "staff_confirm";
 /// The setting that says how many minutes the store tells the vendor an accepted order takes.
 pub const PREP_MINUTES: &str = "prep_minutes";
+/// The optional setting that says how the vendor's orders reach the kitchen
+/// ([ADR-0247](../../../../docs/adr/0247-a-guest-or-vendor-order-reaches-the-kitchen-as-the-store-chooses.md)):
+/// a `KITCHEN_RELEASE_*` token. Absent, the store takes two steps, as before.
+pub const KITCHEN_RELEASE: &str = "kitchen_release";
+
+/// The tokens [`KITCHEN_RELEASE`] takes, in the order the console lists them: the default first.
+pub const KITCHEN_RELEASE_OPTIONS: &[&str] = &[
+    "KITCHEN_RELEASE_CONFIRM_THEN_SEND",
+    "KITCHEN_RELEASE_CONFIRM_FIRES",
+    "KITCHEN_RELEASE_AUTO_ACCEPT_AND_FIRE",
+];
 
 /// Why a store's vendors cannot be published.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,11 +81,22 @@ pub fn vendors_for_store(
                 .ok_or_else(incomplete)?,
             _ => return Err(incomplete()),
         };
+        // Optional, and a token the provider's choice field already checked: anything else reads
+        // as absent, which the store runs as two steps.
+        let kitchen_release = match connection.settings.get(KITCHEN_RELEASE) {
+            Some(SettingValue::Text(token))
+                if KITCHEN_RELEASE_OPTIONS.contains(&token.as_str()) =>
+            {
+                Open::parse(token)
+            }
+            _ => Open::default(),
+        };
         vendors.push(PublishedVendor {
             vendor_id,
             display_name: DisplayName::new(connection.display_name.clone()),
             staff_confirm,
             prep_minutes,
+            kitchen_release,
         });
     }
     vendors.sort_by_key(|vendor| vendor.vendor_id);
@@ -91,7 +114,9 @@ mod tests {
 
     use pos_proto::integrations::SettingValue;
 
-    use super::{PREP_MINUTES, STAFF_CONFIRM, VendorsRefusal, vendors_for_store};
+    use pos_proto::kitchen_release::KitchenRelease;
+
+    use super::{KITCHEN_RELEASE, PREP_MINUTES, STAFF_CONFIRM, VendorsRefusal, vendors_for_store};
     use crate::connections::{Connection, ScopeLevel};
 
     const STORE: &str = "01J00000000000000000000STR";
@@ -145,6 +170,35 @@ mod tests {
         assert_eq!(vendor.vendor_id.to_string(), "01J0000000000000000000CNN1");
         assert!(vendor.staff_confirm);
         assert_eq!(vendor.prep_minutes, 20);
+    }
+
+    /// A connection's kitchen release rides its vendor's entry (ADR-0247); one that never set it
+    /// takes two steps.
+    #[test]
+    fn a_connection_says_how_its_orders_reach_the_kitchen() {
+        let mut settings = vec![
+            (STAFF_CONFIRM, SettingValue::Flag(true)),
+            (PREP_MINUTES, SettingValue::Number(20)),
+        ];
+        let plain = delivery("01J0000000000000000000CNN1", Some(STORE), &settings);
+        settings.push((
+            KITCHEN_RELEASE,
+            SettingValue::Text("KITCHEN_RELEASE_AUTO_ACCEPT_AND_FIRE".to_owned()),
+        ));
+        let auto = delivery("01J0000000000000000000CNN2", Some(STORE), &settings);
+        let node = vendors_for_store(&[plain, auto], &registry(), STORE).expect("publishes");
+        let releases: Vec<KitchenRelease> = node
+            .vendors()
+            .iter()
+            .map(|vendor| node.kitchen_release(Some(vendor.vendor_id)))
+            .collect();
+        assert_eq!(
+            releases,
+            [
+                KitchenRelease::ConfirmThenSend,
+                KitchenRelease::AutoAcceptAndFire
+            ]
+        );
     }
 
     #[test]

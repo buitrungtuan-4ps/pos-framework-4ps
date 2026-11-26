@@ -72,6 +72,14 @@ pub static PROVIDER: ProviderDescriptor = ProviderDescriptor {
             required: true,
         },
         SettingField {
+            key: super::vendors::KITCHEN_RELEASE,
+            label_key: "provider.field.kitchen_release",
+            kind: FieldKind::Choice {
+                options: super::vendors::KITCHEN_RELEASE_OPTIONS,
+            },
+            required: false,
+        },
+        SettingField {
             key: WEBHOOK_SECRET,
             label_key: "provider.field.webhook_secret",
             kind: FieldKind::Secret { max_len: 128 },

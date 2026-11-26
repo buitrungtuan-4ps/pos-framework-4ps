@@ -26,6 +26,7 @@ use crate::wire_enum;
 use crate::wire_enum::WireEnum;
 
 mod einvoice_nodes;
+mod kitchen_nodes;
 mod nodes;
 
 /// Where the rendered snapshot is committed, relative to the repository root.
@@ -376,6 +377,7 @@ pub fn register() -> Vec<Setting> {
         nodes::printing_settings(),
         nodes::receipt_template_settings(),
         nodes::qr_settings(),
+        kitchen_nodes::kitchen_release_settings(),
         nodes::locale_settings(),
         nodes::tender_key_settings(),
         nodes::counter_settings(),

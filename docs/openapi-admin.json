@@ -33273,6 +33273,10 @@
         "type": "string",
         "description": "A `FlowGuardScope` token: FLOW_GUARD_SCOPE_UNSPECIFIED, FLOW_GUARD_SCOPE_ENTERED, FLOW_GUARD_SCOPE_CHANNELS, FLOW_GUARD_SCOPE_ALL_ORDERS, or one a newer build sent, which is kept as it arrived"
       },
+      "OpenKitchenRelease_KitchenRelease": {
+        "type": "string",
+        "description": "A `KitchenRelease` token: KITCHEN_RELEASE_UNSPECIFIED, KITCHEN_RELEASE_AUTO_ACCEPT_AND_FIRE, KITCHEN_RELEASE_CONFIRM_FIRES, KITCHEN_RELEASE_CONFIRM_THEN_SEND, or one a newer build sent, which is kept as it arrived"
+      },
       "OpenPaymentMethod_PaymentMethod": {
         "type": "string",
         "description": "A `PaymentMethod` token: PAYMENT_METHOD_UNSPECIFIED, PAYMENT_METHOD_CASH, PAYMENT_METHOD_CARD, PAYMENT_METHOD_QR, PAYMENT_METHOD_VOUCHER, PAYMENT_METHOD_GIFT_CARD, PAYMENT_METHOD_OTHER, or one a newer build sent, which is kept as it arrived"
@@ -35126,6 +35130,10 @@
           "enabled": {
             "type": "boolean",
             "description": "QR ordering's switch as the node carries it. The switch itself is the store's\n`qr_ordering_enabled` flag (ADR-0160 decision 5), and a cloud that knows it writes this equal\nto it, so a `false` flag beside a value that is not `false` is the flag from before the\nswitch."
+          },
+          "kitchen_release": {
+            "$ref": "#/components/schemas/OpenKitchenRelease_KitchenRelease",
+            "description": "How a guest's order reaches the kitchen (ADR-0247), a setting beside `table_order`. Read it\nthrough [`PublishedQr::kitchen_release`]: absent or unknown is\n[`KitchenRelease::ConfirmThenSend`]."
           },
           "per_table_limit": {
             "type": "integer",
