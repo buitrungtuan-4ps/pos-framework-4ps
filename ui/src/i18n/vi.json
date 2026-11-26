@@ -733,5 +733,7 @@
   "card.confirm_needs_manager": "Cần quản lý đồng ý trước khi xác nhận thẻ bằng tay. Hãy nhờ quản lý nhập mã thẻ nhân viên và mã PIN.",
   "card.approver_code": "Mã nhân viên của quản lý",
   "card.approver_pin": "Mã PIN của quản lý",
-  "card.confirm_approved": "Xác nhận cùng quản lý"
+  "card.confirm_approved": "Xác nhận cùng quản lý",
+  "confirm.price_differs": "Giá trên app khác giá thực đơn. Kiểm tra đơn trước khi nhận.",
+  "counter.price_differs": "Giá app khác thực đơn"
 }

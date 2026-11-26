@@ -367,6 +367,8 @@ fn fake_vendor(staff_confirm: bool) -> PublishedVendors {
         staff_confirm,
         prep_minutes: 20,
         kitchen_release: pos_proto::Open::default(),
+        price_source: pos_proto::Open::default(),
+        price_difference_bps: 0,
     }])
 }
 
@@ -555,4 +557,50 @@ fn a_delivery_order_is_badged_with_its_vendor_on_the_counter_and_the_board() {
         Some(DisplayName::new("Sandbox delivery"))
     );
     assert_eq!(board_badge(plain), None);
+}
+
+/// A vendor's order quoting `quote` minor units for its one line (the menu sells it at 120,000).
+fn quoted_vendor_order(queued_id: &str, quote: i64) -> PendingOrderDto {
+    let mut order = pending_vendor_order(queued_id, queued_id);
+    order.order.lines[0].quoted_unit_price = Some(pos_edge::relay_client::MoneyPayload {
+        currency_code: "VND".to_owned(),
+        amount_minor: quote,
+    });
+    order
+}
+
+/// ADR-0248 decision 1: a vendor's order is priced at the app's quote by default, at the store's
+/// menu where its connection says so, and flagged for staff when the two differ past the vendor's
+/// tolerance.
+#[test]
+fn a_vendor_s_order_is_priced_at_its_source_and_flagged_past_its_tolerance() {
+    let priced = |source: &str, tolerance_bps: u32| {
+        let mut vendors = fake_vendor(true);
+        let mut vendor = vendors.vendors()[0].clone();
+        vendor.price_source = pos_proto::Open::parse(source);
+        vendor.price_difference_bps = tolerance_bps;
+        vendors = PublishedVendors::new(vec![vendor]);
+        let edge = edge_taking(vendors);
+        let transport = FakeTransport::with(vec![quoted_vendor_order("q-p", 100_000)]);
+        let client = RelayClient::new(transport.clone(), intake_over(Arc::clone(&edge)));
+        assert_eq!(run_ready(client.pump_once()).expect("pump"), 1);
+        let StoreOutcome::Accepted(record) = &transport.acks()[0].1 else {
+            panic!("refused");
+        };
+        let order_id = record.order_id.parse::<OrderId>().expect("an order id");
+        assert_eq!(record.repriced, edge.order_price_differs(order_id));
+        let counter = run_ready(edge.open_counter_orders(&InMemoryQueueNumbers::default()))
+            .expect("the counter list");
+        assert_eq!(
+            counter[0].price_differs, record.repriced,
+            "the counter flags it too"
+        );
+        (record.total.amount_minor, record.repriced)
+    };
+    // The app sold it at 100,000, 16.7% under the menu's 120,000; the bill adds 10% tax.
+    assert_eq!(priced("VENDOR_PRICE_SOURCE_APP", 0), (110_000, true));
+    assert_eq!(priced("", 0), (110_000, true), "absent reads as the app");
+    assert_eq!(priced("VENDOR_PRICE_SOURCE_MENU", 0), (132_000, true));
+    assert_eq!(priced("VENDOR_PRICE_SOURCE_MENU", 2_000), (132_000, false));
+    assert_eq!(priced("VENDOR_PRICE_SOURCE_APP", 2_000), (110_000, false));
 }

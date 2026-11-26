@@ -145,6 +145,11 @@ struct Projection {
     /// against the `vendors` node, whether it waits for staff and which vendor is answered.
     /// Dropped when the order closes.
     order_vendors: HashMap<OrderId, pos_proto::ids::VendorId>,
+    /// Each open order from outside the store whose quoted price differed from the store's menu
+    /// past its vendor's tolerance ([ADR-0248](../../../../docs/adr/0248-a-delivery-order-is-priced-paid-and-reconciled-as-the-app-sold-it.md)
+    /// decision 1), for the till to flag. Kept while the edge runs: the intake record keeps it for
+    /// good. Dropped when the order settles, closes or is refused.
+    price_flagged: HashSet<OrderId>,
     /// The number of each open bar tab
     /// ([ADR-0221](../../../../docs/adr/0221-a-bar-tab-is-an-order-without-a-table-that-stays-open.md)),
     /// folded from `sales.order.opened`. Dropped when the tab settles, closes or is refused, so it

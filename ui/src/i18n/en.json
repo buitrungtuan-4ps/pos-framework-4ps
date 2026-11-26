@@ -733,5 +733,7 @@
   "card.confirm_needs_manager": "A manager must agree before a card is confirmed by hand. Ask a manager for their badge and PIN.",
   "card.approver_code": "Manager's badge",
   "card.approver_pin": "Manager's PIN",
-  "card.confirm_approved": "Confirm with the manager"
+  "card.confirm_approved": "Confirm with the manager",
+  "confirm.price_differs": "The app's price differs from the menu. Check the order before accepting.",
+  "counter.price_differs": "App price differs from the menu"
 }

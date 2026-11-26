@@ -75,6 +75,11 @@ struct WaitingOrderResponse {
     /// ([ADR-0247](../../../../docs/adr/0247-a-guest-or-vendor-order-reaches-the-kitchen-as-the-store-chooses.md)),
     /// so the till names its button by what it does.
     confirm_fires: bool,
+    /// Whether the app's quoted price differed from the store's menu past the vendor's tolerance
+    /// ([ADR-0248](../../../../docs/adr/0248-a-delivery-order-is-priced-paid-and-reconciled-as-the-app-sold-it.md)
+    /// decision 1), so staff check the order before accepting it. Left off while false.
+    #[serde(skip_serializing_if = "core::ops::Not::not")]
+    price_differs: bool,
 }
 
 /// The queue, plus the reasons a refusal may cite.
@@ -149,6 +154,7 @@ where
                     .collect(),
                 total,
                 confirm_fires: edge.confirm_fires(order_id),
+                price_differs: edge.order_price_differs(order_id),
             }
         })
         .collect();

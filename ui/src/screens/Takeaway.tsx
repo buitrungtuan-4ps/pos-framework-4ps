@@ -44,6 +44,11 @@ function OrderHeading(props: { order: CounterOrder }) {
         ? t("counter.no_queue_number")
         : t("counter.queue_number", { number: props.order.queue_number })}
       <VendorBadge vendor={props.order.vendor_name} />
+      <Show when={props.order.price_differs === true}>
+        <span class="ml-2 text-sm font-semibold text-danger" data-outcome="price-differs">
+          {t("counter.price_differs")}
+        </span>
+      </Show>
     </>
   );
 }

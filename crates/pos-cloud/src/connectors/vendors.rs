@@ -14,7 +14,10 @@
 use pos_proto::ids::VendorId;
 use pos_proto::integrations::SettingValue;
 use pos_proto::text::DisplayName;
-use pos_proto::vendors::{MAX_PREP_MINUTES, MIN_PREP_MINUTES, PublishedVendor, PublishedVendors};
+use pos_proto::vendors::{
+    MAX_PREP_MINUTES, MAX_PRICE_DIFFERENCE_BPS, MIN_PREP_MINUTES, PublishedVendor,
+    PublishedVendors, VendorPriceSource,
+};
 use pos_proto::wire_enum::Open;
 use pos_providers::Family;
 
@@ -35,6 +38,18 @@ pub const KITCHEN_RELEASE_OPTIONS: &[&str] = &[
     "KITCHEN_RELEASE_CONFIRM_FIRES",
     "KITCHEN_RELEASE_AUTO_ACCEPT_AND_FIRE",
 ];
+
+/// The optional setting that says where the vendor's orders are priced
+/// ([ADR-0248](../../../../docs/adr/0248-a-delivery-order-is-priced-paid-and-reconciled-as-the-app-sold-it.md)
+/// decision 1): a `VENDOR_PRICE_SOURCE_*` token. Absent, the app's price.
+pub const PRICE_SOURCE: &str = "price_source";
+
+/// The tokens [`PRICE_SOURCE`] takes, the default first.
+pub const PRICE_SOURCE_OPTIONS: &[&str] = &["VENDOR_PRICE_SOURCE_APP", "VENDOR_PRICE_SOURCE_MENU"];
+
+/// The optional setting that says how far, in basis points, the app's price may differ from the
+/// store's menu before the order is flagged. Absent, `0`: any difference.
+pub const PRICE_DIFFERENCE_BPS: &str = "price_difference_bps";
 
 /// Why a store's vendors cannot be published.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -91,12 +106,15 @@ pub fn vendors_for_store(
             }
             _ => Open::default(),
         };
+        let (price_source, price_difference_bps) = price_terms(connection);
         vendors.push(PublishedVendor {
             vendor_id,
             display_name: DisplayName::new(connection.display_name.clone()),
             staff_confirm,
             prep_minutes,
             kitchen_release,
+            price_source,
+            price_difference_bps,
         });
     }
     vendors.sort_by_key(|vendor| vendor.vendor_id);
@@ -108,6 +126,25 @@ pub fn vendors_for_store(
     }
 }
 
+/// A connection's price source and tolerance (ADR-0248 decision 1), each optional and already
+/// checked by the provider's schema: anything else reads as absent, the app's price and `0`.
+fn price_terms(connection: &Connection) -> (Open<VendorPriceSource>, u32) {
+    let source = match connection.settings.get(PRICE_SOURCE) {
+        Some(SettingValue::Text(token)) if PRICE_SOURCE_OPTIONS.contains(&token.as_str()) => {
+            Open::parse(token)
+        }
+        _ => Open::default(),
+    };
+    let tolerance = match connection.settings.get(PRICE_DIFFERENCE_BPS) {
+        Some(SettingValue::Number(bps)) => u32::try_from(*bps)
+            .ok()
+            .filter(|bps| *bps <= MAX_PRICE_DIFFERENCE_BPS)
+            .unwrap_or(0),
+        _ => 0,
+    };
+    (source, tolerance)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -116,7 +153,12 @@ mod tests {
 
     use pos_proto::kitchen_release::KitchenRelease;
 
-    use super::{KITCHEN_RELEASE, PREP_MINUTES, STAFF_CONFIRM, VendorsRefusal, vendors_for_store};
+    use pos_proto::vendors::VendorPriceSource;
+
+    use super::{
+        KITCHEN_RELEASE, PREP_MINUTES, PRICE_DIFFERENCE_BPS, PRICE_SOURCE, STAFF_CONFIRM,
+        VendorsRefusal, vendors_for_store,
+    };
     use crate::connections::{Connection, ScopeLevel};
 
     const STORE: &str = "01J00000000000000000000STR";
@@ -198,6 +240,38 @@ mod tests {
                 KitchenRelease::ConfirmThenSend,
                 KitchenRelease::AutoAcceptAndFire
             ]
+        );
+    }
+
+    /// A connection's price source and tolerance ride its vendor's entry (ADR-0248 decision 1);
+    /// one that never set them is priced at the app, flagging any difference.
+    #[test]
+    fn a_connection_says_where_its_orders_are_priced() {
+        let mut settings = vec![
+            (STAFF_CONFIRM, SettingValue::Flag(true)),
+            (PREP_MINUTES, SettingValue::Number(20)),
+        ];
+        let plain = delivery("01J0000000000000000000CNN1", Some(STORE), &settings);
+        settings.push((
+            PRICE_SOURCE,
+            SettingValue::Text("VENDOR_PRICE_SOURCE_MENU".to_owned()),
+        ));
+        settings.push((PRICE_DIFFERENCE_BPS, SettingValue::Number(500)));
+        let menu = delivery("01J0000000000000000000CNN2", Some(STORE), &settings);
+        let node = vendors_for_store(&[plain, menu], &registry(), STORE).expect("publishes");
+        let terms: Vec<(VendorPriceSource, u32)> = node
+            .vendors()
+            .iter()
+            .map(|vendor| {
+                (
+                    VendorPriceSource::read(&vendor.price_source),
+                    vendor.price_difference_bps,
+                )
+            })
+            .collect();
+        assert_eq!(
+            terms,
+            [(VendorPriceSource::App, 0), (VendorPriceSource::Menu, 500)]
         );
     }
 

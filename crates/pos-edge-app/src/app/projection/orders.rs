@@ -96,6 +96,18 @@ impl Projection {
         }
     }
 
+    /// Flags an order from outside the store whose quote differed from the menu (ADR-0248).
+    pub(in crate::app) fn record_price_flag(&mut self, order_id: OrderId, differs: bool) {
+        if differs {
+            self.price_flagged.insert(order_id);
+        }
+    }
+
+    /// Whether an open order's quote differed from the menu past its vendor's tolerance.
+    pub(in crate::app) fn price_flagged(&self, order_id: OrderId) -> bool {
+        self.price_flagged.contains(&order_id)
+    }
+
     /// The vendor an open order came through, if any.
     pub(in crate::app) fn vendor(&self, order_id: OrderId) -> Option<pos_proto::ids::VendorId> {
         self.order_vendors.get(&order_id).copied()

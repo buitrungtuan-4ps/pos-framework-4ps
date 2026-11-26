@@ -112,7 +112,9 @@ pub struct InboundOrderLine {
     /// Advisory. The store re-prices from its own menu, and a mismatch is reported in
     /// [`OrderAcceptance::repriced`] rather than accepted — a marketplace's cached price is not
     /// authority over what a store charges, and silently honouring it is how a menu update loses
-    /// money for a day.
+    /// money for a day. The one exception is an order naming a vendor whose connection the store
+    /// chose to price at the app, where the quote is what the guest paid
+    /// ([ADR-0248](../../../docs/adr/0248-a-delivery-order-is-priced-paid-and-reconciled-as-the-app-sold-it.md)).
     pub quoted_unit_price: Option<Money>,
     /// What the guest asked for in words. Free text, so it stays at the store and never enters
     /// the event log — see [`GuestNote`].
@@ -185,7 +187,8 @@ pub struct OrderAcceptance {
 ///    [`OrderAcceptance::order_id`] with `created: false`. The same reference on two channels is
 ///    two orders.
 /// 2. **The store's price wins.** An implementation re-prices from its own menu and sets
-///    [`OrderAcceptance::repriced`]; it never charges the caller's quoted price.
+///    [`OrderAcceptance::repriced`]; it never charges the caller's quoted price, except on an
+///    order from a vendor the store's published configuration prices at the app (ADR-0248).
 /// 3. **An unknown menu item is [`PortError::invalid_argument`], not a substitution.** Nothing
 ///    here may guess what a caller meant.
 /// 4. **A guest note never reaches the event log.** [`GuestNote`] exists to make that

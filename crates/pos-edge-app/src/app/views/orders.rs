@@ -202,6 +202,9 @@ pub struct CounterOrderView {
     /// What the store calls the delivery vendor the order came through, for the counter's badge
     /// (ADR-0248 decision 5). `None` for any other order.
     pub vendor_name: Option<DisplayName>,
+    /// Whether the app's quoted price differed from the store's menu past the vendor's tolerance
+    /// (ADR-0248 decision 1).
+    pub price_differs: bool,
 }
 
 /// One line of an open order, as a device rebuilding its screens reads it.

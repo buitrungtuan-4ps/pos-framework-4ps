@@ -231,6 +231,8 @@ mod tests {
             staff_confirm: true,
             prep_minutes: 20,
             kitchen_release: pos_proto::Open::default(),
+            price_source: pos_proto::Open::default(),
+            price_difference_bps: 0,
         }
     }
 

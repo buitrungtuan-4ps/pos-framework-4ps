@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use pos_core::capability::Capability;
 use pos_core::error::DomainError;
-use pos_core::menu::{PricedLine, RepriceError, RequestedLine, reprice_line};
+use pos_core::menu::{PricedLine, RepriceError, RequestedLine, price_at_source, reprice_line};
 use pos_ports::event_store::EventStore;
 use pos_ports::intake_ledger::{IntakeLedger, IntakeRecord};
 use pos_ports::order_in::{ExternalReference, InboundOrder, OrderAcceptance, OrderIn};
@@ -29,6 +29,7 @@ use pos_proto::error::ErrorStatus;
 use pos_proto::ids::{DeviceId, OrderId};
 use pos_proto::money::Money;
 use pos_proto::time::BusinessDate;
+use pos_proto::vendors::VendorPriceSource;
 use pos_proto::wire_enum::Open;
 use pos_proto::{SalesChannel, StoreId};
 
@@ -114,6 +115,9 @@ where
             Vec::with_capacity(order.lines.len());
         let mut total = Money::zero(session.currency);
         let mut repriced = false;
+        let vendor = order
+            .vendor_id
+            .and_then(|vendor_id| session.vendors.get(vendor_id));
         for line in &order.lines {
             let requested = RequestedLine {
                 menu_item_id: line.menu_item_id,
@@ -123,13 +127,23 @@ where
                 typed_unit_price: None,
                 weight_source: None,
             };
-            let priced = reprice_line(
+            let mut priced = reprice_line(
                 session.menu_for(channel),
                 &session.tax_rates,
                 channel,
                 &requested,
             )
             .map_err(|error| port_error_from_reprice(&error))?;
+            // A vendor's line sells at the source its connection chose (ADR-0248 decision 1).
+            if let Some(vendor) = vendor {
+                priced = price_at_source(
+                    priced,
+                    line.quoted_unit_price,
+                    VendorPriceSource::read(&vendor.price_source) == VendorPriceSource::App,
+                    vendor.price_difference_bps,
+                )
+                .map_err(|error| port_error_from_reprice(&error))?;
+            }
             // An item staff marked sold out at the till is refused exactly as one the console
             // withdrew is: the menu the guest or the marketplace ordered from was published before
             // the kitchen ran out, and does not know.
