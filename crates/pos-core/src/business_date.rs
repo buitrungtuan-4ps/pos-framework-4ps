@@ -189,6 +189,15 @@ pub struct LocalTime {
     minute: u8,
 }
 
+impl LocalTime {
+    /// The minutes since local midnight: 0 at 00:00, 1439 at 23:59 (ADR-0255).
+    #[must_use]
+    pub const fn minute_of_day(&self) -> u16 {
+        // An hour is below 24 and a minute below 60, so this is at most 1439.
+        (self.hour as u16) * 60 + self.minute as u16
+    }
+}
+
 impl core::fmt::Display for LocalTime {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(

@@ -320,6 +320,28 @@ printing.receipt_tax_components	scope=SETTING_SCOPE_TENANT
 printing.receipt_tax_components	since=0.14.1
 printing.receipt_tax_components	value=false
 printing.receipt_tax_components	value=true
+qr.auto_fire_from_minute
+qr.auto_fire_from_minute	default=0
+qr.auto_fire_from_minute	kind=SETTING_KIND_INT
+qr.auto_fire_from_minute	max=1439
+qr.auto_fire_from_minute	min=0
+qr.auto_fire_from_minute	scope=SETTING_SCOPE_BRAND
+qr.auto_fire_from_minute	scope=SETTING_SCOPE_STORE
+qr.auto_fire_from_minute	scope=SETTING_SCOPE_STORE_GROUP
+qr.auto_fire_from_minute	scope=SETTING_SCOPE_TENANT
+qr.auto_fire_from_minute	since=0.14.1
+qr.auto_fire_from_minute	unit=SETTING_UNIT_MINUTES
+qr.auto_fire_until_minute
+qr.auto_fire_until_minute	default=0
+qr.auto_fire_until_minute	kind=SETTING_KIND_INT
+qr.auto_fire_until_minute	max=1439
+qr.auto_fire_until_minute	min=0
+qr.auto_fire_until_minute	scope=SETTING_SCOPE_BRAND
+qr.auto_fire_until_minute	scope=SETTING_SCOPE_STORE
+qr.auto_fire_until_minute	scope=SETTING_SCOPE_STORE_GROUP
+qr.auto_fire_until_minute	scope=SETTING_SCOPE_TENANT
+qr.auto_fire_until_minute	since=0.14.1
+qr.auto_fire_until_minute	unit=SETTING_UNIT_MINUTES
 qr.kitchen_release
 qr.kitchen_release	default=KITCHEN_RELEASE_CONFIRM_THEN_SEND
 qr.kitchen_release	kind=SETTING_KIND_CHOICE
@@ -331,6 +353,16 @@ qr.kitchen_release	since=0.14.1
 qr.kitchen_release	value=KITCHEN_RELEASE_AUTO_ACCEPT_AND_FIRE
 qr.kitchen_release	value=KITCHEN_RELEASE_CONFIRM_FIRES
 qr.kitchen_release	value=KITCHEN_RELEASE_CONFIRM_THEN_SEND
+qr.kitchen_release_outside_hours
+qr.kitchen_release_outside_hours	default=KITCHEN_RELEASE_CONFIRM_THEN_SEND
+qr.kitchen_release_outside_hours	kind=SETTING_KIND_CHOICE
+qr.kitchen_release_outside_hours	scope=SETTING_SCOPE_BRAND
+qr.kitchen_release_outside_hours	scope=SETTING_SCOPE_STORE
+qr.kitchen_release_outside_hours	scope=SETTING_SCOPE_STORE_GROUP
+qr.kitchen_release_outside_hours	scope=SETTING_SCOPE_TENANT
+qr.kitchen_release_outside_hours	since=0.14.1
+qr.kitchen_release_outside_hours	value=KITCHEN_RELEASE_CONFIRM_FIRES
+qr.kitchen_release_outside_hours	value=KITCHEN_RELEASE_CONFIRM_THEN_SEND
 qr.table_order
 qr.table_order	default=TABLE_ORDER_SEPARATE
 qr.table_order	kind=SETTING_KIND_CHOICE

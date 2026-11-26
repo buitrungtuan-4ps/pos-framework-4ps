@@ -259,6 +259,7 @@ impl Projection {
                     origin.channel,
                     origin.table_id,
                     self.vendor(order_id),
+                    order_id,
                 )
             })
     }

@@ -176,7 +176,7 @@ impl<S: EventStore> Edge<S> {
         let channel = projection
             .order_origin(order_id)
             .and_then(|origin| origin.channel);
-        session.kitchen_release(channel, projection.vendor(order_id))
+        session.kitchen_release(channel, projection.vendor(order_id), order_id)
             == KitchenRelease::ConfirmFires
     }
 

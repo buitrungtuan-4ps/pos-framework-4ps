@@ -7,14 +7,15 @@
 //! delivery connection, not a setting.
 
 use crate::kitchen_release::KitchenRelease;
-use crate::qr::PublishedQr;
+use crate::qr::{LAST_MINUTE_OF_DAY, PublishedQr};
 use crate::wire_enum::WireEnum;
 
-use super::{NEXT_RELEASE, STORE_WIDE, Setting, SettingShape, choices};
+use super::{NEXT_RELEASE, STORE_WIDE, Setting, SettingShape, SettingUnit, choices};
 
-/// The `qr` node's `kitchen_release` (ADR-0247 decision 2).
+/// The `qr` node's `kitchen_release` (ADR-0247 decision 2), and the hours its automatic send keeps
+/// (ADR-0255).
 pub(super) fn kitchen_release_settings() -> Vec<Setting> {
-    vec![Setting {
+    let mut settings = vec![Setting {
         node: PublishedQr::NODE,
         field: "kitchen_release",
         shape: SettingShape::Choice {
@@ -33,5 +34,64 @@ pub(super) fn kitchen_release_settings() -> Vec<Setting> {
                   guest's order reaches the kitchen unseen; the table token, the rate limit and \
                   the hours still apply. Where `staff_confirmation_required` is off, nothing waits \
                   and staff send the order.",
-    }]
+    }];
+    settings.extend(auto_fire_hours_settings());
+    settings
+}
+
+/// One end of the window `AUTO_ACCEPT_AND_FIRE` keeps (ADR-0255 decision 1).
+fn auto_fire_minute(field: &'static str, summary: &'static str) -> Setting {
+    Setting {
+        node: PublishedQr::NODE,
+        field,
+        shape: SettingShape::Int {
+            min: 0,
+            max: i64::from(LAST_MINUTE_OF_DAY),
+            unit: SettingUnit::Minutes,
+            default: 0,
+            preset: None,
+        },
+        scopes: STORE_WIDE,
+        since: NEXT_RELEASE,
+        confirm: None,
+        summary,
+    }
+}
+
+/// The `qr` node's hours for `AUTO_ACCEPT_AND_FIRE`, and the mode outside them (ADR-0255).
+fn auto_fire_hours_settings() -> Vec<Setting> {
+    vec![
+        auto_fire_minute(
+            "auto_fire_from_minute",
+            "The minute after the store's local midnight from which a QR order is sent with no \
+             tap, under `KITCHEN_RELEASE_AUTO_ACCEPT_AND_FIRE`: 600 is 10:00. The window runs to \
+             `auto_fire_until_minute`, wraps past midnight when it starts later than it ends, and \
+             is always open when the two are equal, as both are by default.",
+        ),
+        auto_fire_minute(
+            "auto_fire_until_minute",
+            "The minute after the store's local midnight at which a QR order stops being sent \
+             with no tap: 840 is 14:00. Outside the window an order arrives as \
+             `kitchen_release_outside_hours` says.",
+        ),
+        Setting {
+            node: PublishedQr::NODE,
+            field: "kitchen_release_outside_hours",
+            shape: SettingShape::Choice {
+                values: vec![
+                    KitchenRelease::ConfirmFires.as_wire(),
+                    KitchenRelease::ConfirmThenSend.as_wire(),
+                ],
+                default: KitchenRelease::ConfirmThenSend.as_wire(),
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            confirm: None,
+            summary: "How a QR order that arrives outside the automatic send's hours reaches the \
+                      kitchen, under `KITCHEN_RELEASE_AUTO_ACCEPT_AND_FIRE`. \
+                      `KITCHEN_RELEASE_CONFIRM_THEN_SEND`, the default, waits for staff to accept \
+                      it and then send it; `_CONFIRM_FIRES` sends it in the tap that accepts it.",
+        },
+    ]
 }

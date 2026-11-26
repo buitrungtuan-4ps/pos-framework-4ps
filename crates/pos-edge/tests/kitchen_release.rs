@@ -299,3 +299,98 @@ async fn an_order_that_waits_prints_no_ticket_on_arrival() {
         assert!(printed.is_empty());
     }
 }
+
+/// The store-local minute now, from the session's own time zone, as the edge reads it (ADR-0255).
+fn minute_now(session: &EdgeSession) -> u16 {
+    let now = pos_proto::ClockSource::now(&pos_edge::SystemClock);
+    pos_core::business_date::local_time(now, &session.timezone)
+        .expect("a local time")
+        .minute_of_day()
+}
+
+/// An automatic-send store whose window is `window(now)`, and outside it `outside`.
+fn edge_with_hours(
+    store: FakeStore,
+    window: impl Fn(u16) -> (u16, u16),
+    outside: KitchenRelease,
+) -> Edge<FakeStore> {
+    let mut session = session(KitchenRelease::AutoAcceptAndFire);
+    let (from, until) = window(minute_now(&session));
+    session.qr.auto_fire_from_minute = Some(from);
+    session.qr.auto_fire_until_minute = Some(until);
+    session.qr.kitchen_release_outside_hours = Open::from_known(outside);
+    Edge::new(
+        store,
+        StoreIdentity::for_store(store_id()),
+        session,
+        Arc::new(InMemoryReceipts::new()),
+    )
+    .expect("seed the id generator")
+}
+
+/// A window that holds the next hour, and one that starts an hour from now: each wide enough that
+/// the minute cannot leave it while a test runs.
+fn open_now(minute: u16) -> (u16, u16) {
+    ((minute + 1439) % 1440, (minute + 60) % 1440)
+}
+
+fn closed_now(minute: u16) -> (u16, u16) {
+    ((minute + 60) % 1440, (minute + 120) % 1440)
+}
+
+#[test]
+fn inside_the_hours_an_order_is_sent_on_arrival() {
+    run_ready(async {
+        let edge = edge_with_hours(
+            FakeStore::default(),
+            open_now,
+            KitchenRelease::ConfirmThenSend,
+        );
+        let opened = a_guest_order(&edge).await;
+        assert!(!opened.awaiting_staff_confirmation, "nobody is asked");
+        let line = edge.order_line_ids(opened.order_id)[0];
+        assert_eq!(edge.line_state(line), Some(OrderLineState::Fired));
+    });
+}
+
+#[test]
+fn outside_the_hours_an_order_waits_as_the_outside_mode_says_and_keeps_waiting() {
+    run_ready(async {
+        let store = FakeStore::default();
+        let edge = edge_with_hours(store.clone(), closed_now, KitchenRelease::ConfirmThenSend);
+        let opened = a_guest_order(&edge).await;
+        assert!(opened.awaiting_staff_confirmation, "a person sees it first");
+        let line = edge.order_line_ids(opened.order_id)[0];
+        assert_eq!(edge.line_state(line), Some(OrderLineState::Added));
+        assert!(
+            !edge.confirm_fires(opened.order_id),
+            "two steps outside the hours"
+        );
+        assert_eq!(edge.orders_awaiting_staff_confirmation().len(), 1);
+
+        // The minute it arrived, read from its id, decides: a rebuilt edge still holds it.
+        let rebuilt = edge_with_hours(store, closed_now, KitchenRelease::ConfirmThenSend);
+        rebuilt.rebuild().await.expect("rebuilds");
+        assert_eq!(rebuilt.orders_awaiting_staff_confirmation().len(), 1);
+        assert_eq!(rebuilt.line_state(line), Some(OrderLineState::Added));
+    });
+}
+
+#[test]
+fn outside_the_hours_confirm_fires_sends_in_the_accepting_tap() {
+    run_ready(async {
+        let edge = edge_with_hours(
+            FakeStore::default(),
+            closed_now,
+            KitchenRelease::ConfirmFires,
+        );
+        let opened = a_guest_order(&edge).await;
+        assert!(opened.awaiting_staff_confirmation);
+        assert!(edge.confirm_fires(opened.order_id));
+        let fired = edge
+            .confirm_inbound_order(waiter(), opened.order_id)
+            .await
+            .expect("confirms and sends");
+        assert_eq!(fired.len(), 1);
+    });
+}

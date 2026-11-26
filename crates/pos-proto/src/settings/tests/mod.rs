@@ -486,6 +486,21 @@ fn samples(setting: &Setting) -> Vec<Value> {
     }
 }
 
+/// What the `qr` node's reader runs for `field`, from `document` ([`read_back`]'s QR arm).
+fn qr_read_back(document: Value, field: &str) -> Option<Value> {
+    let qr: PublishedQr = serde_json::from_value(document).ok()?;
+    match field {
+        "table_order" => Some(json!(qr.table_order().as_wire())),
+        "kitchen_release" => Some(json!(qr.kitchen_release().as_wire())),
+        "auto_fire_from_minute" => Some(json!(qr.auto_fire_window().0)),
+        "auto_fire_until_minute" => Some(json!(qr.auto_fire_window().1)),
+        "kitchen_release_outside_hours" => {
+            Some(json!(qr.kitchen_release_outside_hours().as_wire()))
+        }
+        _ => None,
+    }
+}
+
 /// Reads one field of a node back through the node's own type, as the edge reads it — from a
 /// node carrying `value`, or from an empty node when `value` is `None`.
 ///
@@ -549,14 +564,7 @@ fn read_back(node: &str, field: &str, value: Option<&Value>) -> Option<Value> {
                 _ => None,
             }
         }
-        PublishedQr::NODE => {
-            let qr: PublishedQr = serde_json::from_value(document).ok()?;
-            match field {
-                "table_order" => Some(json!(qr.table_order().as_wire())),
-                "kitchen_release" => Some(json!(qr.kitchen_release().as_wire())),
-                _ => None,
-            }
-        }
+        PublishedQr::NODE => qr_read_back(document, field),
         LocaleSettings::NODE => {
             let locale: LocaleSettings = serde_json::from_value(document).ok()?;
             match field {

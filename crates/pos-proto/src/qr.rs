@@ -106,7 +106,36 @@ pub struct PublishedQr {
         skip_serializing_if = "crate::wire_enum::is_absent"
     )]
     pub kitchen_release: Open<KitchenRelease>,
+    /// The minute after the store's local midnight from which `AUTO_ACCEPT_AND_FIRE` applies
+    /// ([ADR-0255](../../../docs/adr/0255-a-qr-orders-automatic-send-keeps-the-hours-the-store-sets.md)).
+    /// Read it through [`PublishedQr::auto_fire_window`].
+    #[serde(
+        default,
+        deserialize_with = "minute",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    pub auto_fire_from_minute: Option<u16>,
+    /// The minute it stops applying; equal to the first minute, always (ADR-0255).
+    #[serde(
+        default,
+        deserialize_with = "minute",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    pub auto_fire_until_minute: Option<u16>,
+    /// How an order arriving outside those minutes reaches the kitchen (ADR-0255). Read it through
+    /// [`PublishedQr::kitchen_release_outside_hours`].
+    #[serde(
+        default,
+        deserialize_with = "crate::kitchen_release::token",
+        skip_serializing_if = "crate::wire_enum::is_absent"
+    )]
+    pub kitchen_release_outside_hours: Open<KitchenRelease>,
 }
+
+/// The last minute of a day, counted from local midnight (ADR-0255).
+pub const LAST_MINUTE_OF_DAY: u16 = 1439;
 
 /// The hours a store takes QR orders, as the `qr` node carries them.
 ///
@@ -154,6 +183,30 @@ impl PublishedQr {
         KitchenRelease::read(&self.kitchen_release)
     }
 
+    /// The minutes `AUTO_ACCEPT_AND_FIRE` applies in, `(from, until)` after the store's local
+    /// midnight (ADR-0255): `[from, until)`, wrapping past midnight when `from` is later, and always
+    /// when they are equal. Absent reads as 0, so a store that set neither is always in its window.
+    #[must_use]
+    pub fn auto_fire_window(&self) -> (u16, u16) {
+        (
+            self.auto_fire_from_minute.unwrap_or(0),
+            self.auto_fire_until_minute.unwrap_or(0),
+        )
+    }
+
+    /// How a QR order arriving outside [`Self::auto_fire_window`] reaches the kitchen (ADR-0255):
+    /// [`KitchenRelease::ConfirmFires`] where the store chose it, and otherwise, absent, unknown or
+    /// automatic, [`KitchenRelease::ConfirmThenSend`], so a person sees it first.
+    #[must_use]
+    pub fn kitchen_release_outside_hours(&self) -> KitchenRelease {
+        match KitchenRelease::read(&self.kitchen_release_outside_hours) {
+            KitchenRelease::ConfirmFires => KitchenRelease::ConfirmFires,
+            KitchenRelease::Unspecified
+            | KitchenRelease::AutoAcceptAndFire
+            | KitchenRelease::ConfirmThenSend => KitchenRelease::ConfirmThenSend,
+        }
+    }
+
     /// The guardrails a `qr` node carries, read apart from its setting: a `table_order` that does
     /// not parse is left out rather than taking them down, and a node that is not an object carries
     /// none. The `table_order` of what comes back is the default; read the setting through the
@@ -182,6 +235,18 @@ where
     Ok(Value::deserialize(deserializer)?
         .as_u64()
         .and_then(|count| u32::try_from(count).ok()))
+}
+
+/// A minute of the day as the node carries it: a whole number from 0 to [`LAST_MINUTE_OF_DAY`], and
+/// `None` for anything else, which reads as 0.
+fn minute<'de, D>(deserializer: D) -> Result<Option<u16>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Value::deserialize(deserializer)?
+        .as_u64()
+        .and_then(|minute| u16::try_from(minute).ok())
+        .filter(|minute| *minute <= LAST_MINUTE_OF_DAY))
 }
 
 /// A number of seconds as the node carries it: a non-negative whole number, and `None` for anything
