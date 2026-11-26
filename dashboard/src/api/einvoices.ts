@@ -60,3 +60,33 @@ export const correctEInvoice = (
     kind,
     total_minor: totalMinor,
   });
+
+/** One correction request a store manager sent from the till (ADR-0250). People by id only. */
+export type CorrectionRequestView = components["schemas"]["CorrectionRequestView"];
+
+/** The tenant's correction requests, oldest first, of one status or all. */
+export const listCorrectionRequests = (
+  tenantId: string,
+  status?: "PENDING" | "APPROVED" | "DECLINED",
+): Promise<CorrectionRequestView[]> =>
+  requestJson<CorrectionRequestView[]>(
+    "GET",
+    `/admin/einvoices/correction-requests?tenant_id=${encodeURIComponent(tenantId)}${
+      status ? `&status=${status}` : ""
+    }`,
+  );
+
+/**
+ * Approves or declines a request. The cloud records who decided, publishes the decision on the
+ * store's own `einvoice` node and audits it with the requester. Nothing is issued by a decision.
+ */
+export const decideCorrectionRequest = (
+  tenantId: string,
+  requestId: string,
+  verb: "approve" | "decline",
+): Promise<CorrectionRequestView> =>
+  requestJson<CorrectionRequestView>(
+    "POST",
+    `/admin/einvoices/correction-requests/${encodeURIComponent(requestId)}/${verb}`,
+    { tenant_id: tenantId },
+  );
