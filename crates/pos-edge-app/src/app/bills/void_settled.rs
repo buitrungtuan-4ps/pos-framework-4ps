@@ -4,7 +4,9 @@
 //! Voiding a bill that was paid, whole
 //! ([ADR-0184](../../../../../docs/adr/0184-a-settled-bill-is-voided-whole-not-refunded.md)).
 
-use pos_core::decision::{Actor, BillCommand, DecisionCtx, Effect, SettledVoid, decide_bill};
+use pos_core::decision::{
+    Actor, BillCommand, DecisionCtx, Effect, InvoicedVoid, SettledVoid, decide_bill,
+};
 use pos_core::permission::Permission;
 use pos_ports::event_store::EventStore;
 use pos_proto::ShiftState;
@@ -30,7 +32,8 @@ impl<S: EventStore> Edge<S> {
     /// (ADR-0184 decisions 2–8).
     ///
     /// What no approval changes is decided first — the bill must be settled, inside the store's
-    /// `billing.settled_void_window`, and carry no issued e-invoice — so nobody is asked for a PIN
+    /// `billing.settled_void_window`, and carry no issued e-invoice unless the store's
+    /// `einvoice.invoiced_correction` route lets the till void it (ADR-0245) — so nobody is asked for a PIN
     /// for a void that would be refused anyway. Then `billing.bill.void_settled`, held directly or
     /// approved by a holder's code and PIN. The bill's cash leaves the drawer of the till the void is
     /// done at (ADR-0167), refused as cash into that drawer would be; every other tender is
@@ -38,8 +41,8 @@ impl<S: EventStore> Edge<S> {
     /// shift and committed with the approval's override in one transaction, so a replay gives the
     /// same cash back from the same drawer.
     ///
-    /// No store issues e-invoices yet (ADR-0156 is proposed, not built), so no bill carries one and
-    /// the edge says so (ADR-0184, amendment of 2026-11-02).
+    /// A bill voided with an issued invoice is corrected by the cloud from `billing.bill.voided`, as
+    /// `einvoice.correction_kind` says; the step-up below records the approving manager.
     ///
     /// # Errors
     ///
@@ -66,6 +69,8 @@ impl<S: EventStore> Edge<S> {
         {
             return Err(AppError::VoidReasonNotValid);
         }
+        // Read before the facts are built, so no projection guard is held across another lock.
+        let invoiced = self.invoiced_void(bill_id, &record, &ctx);
         let facts = SettledVoid {
             pin_verified: false,
             window: session.billing.settled_void_window(),
@@ -74,8 +79,9 @@ impl<S: EventStore> Edge<S> {
                 .as_ref()
                 .map_or(ctx.business_date, |receipt| receipt.business_date),
             taking_shift_open: record.taking_shift_open,
-            // A bill with an issued e-invoice is corrected in the console (ADR-0225 decision 7).
-            e_invoice_issued: self.lock_projection().invoices.issued_for(bill_id),
+            // A bill with an issued e-invoice is corrected by the route the store chose (ADR-0245).
+            e_invoice_issued: invoiced.is_some(),
+            invoiced: invoiced.unwrap_or_default(),
         };
         // The facts, decided as if the act were held, before anybody is asked to approve it.
         let mut probe = ctx.clone();
@@ -143,6 +149,30 @@ impl<S: EventStore> Edge<S> {
             voided_time: ctx.now,
             reason: session.reason_codes.find(reason_code_id).cloned(),
             till_name: self.till_name(scope.own),
+        })
+    }
+
+    /// What the store's `einvoice` route decides the void of an invoiced bill on (ADR-0245): its
+    /// total, which a bill with no receipt cannot be within a limit of, and its invoice's age.
+    fn invoiced_void(
+        &self,
+        bill_id: BillId,
+        record: &PaidRecord,
+        ctx: &DecisionCtx,
+    ) -> Option<InvoicedVoid> {
+        let einvoice = &self.session().einvoice;
+        let now_ms = u64::try_from(ctx.now.as_milliseconds_since_epoch()).unwrap_or(0);
+        let issued_ms = self.lock_projection().invoices.issued_ms(bill_id)?;
+        Some(InvoicedVoid {
+            route: einvoice.invoiced_correction(),
+            bill_total_minor: record
+                .receipt
+                .as_ref()
+                .map_or(i64::MAX, |receipt| receipt.total_due.amount_minor),
+            manager_limit_minor: einvoice.manager_correction_limit(),
+            invoice_age_minutes: i64::try_from(now_ms.saturating_sub(issued_ms) / 60_000)
+                .unwrap_or(i64::MAX),
+            cancel_window_minutes: einvoice.cancel_window_minutes(),
         })
     }
 

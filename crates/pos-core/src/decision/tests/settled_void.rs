@@ -5,9 +5,10 @@
 //! an issued invoice, and the permission with its PIN.
 
 use super::*;
-use crate::decision::{BillDecision, SettledVoid, within_settled_void_window};
+use crate::decision::{BillDecision, InvoicedVoid, SettledVoid, within_settled_void_window};
 use crate::permission::{Role, default_grants};
 use pos_proto::billing::SettledVoidWindow;
+use pos_proto::einvoice::InvoicedCorrection;
 
 fn today() -> BusinessDate {
     BusinessDate::from_ymd(2026, 8, 19).expect("valid date")
@@ -25,6 +26,7 @@ fn today_s_void() -> SettledVoid {
         bill_business_date: today(),
         taking_shift_open: true,
         e_invoice_issued: false,
+        invoiced: InvoicedVoid::default(),
     }
 }
 
@@ -210,4 +212,91 @@ fn what_no_approval_changes_is_refused_before_the_permission_is_asked() {
         void_settled(BillState::Settled, invoiced, &nobody),
         Err(DomainError::EInvoiceIssued)
     );
+}
+
+/// An invoiced bill of 165,000 whose invoice is 10 minutes old, under `route`.
+fn invoiced_under(route: InvoicedCorrection, limit: i64, window: i64) -> SettledVoid {
+    SettledVoid {
+        e_invoice_issued: true,
+        invoiced: InvoicedVoid {
+            route,
+            bill_total_minor: 165_000,
+            manager_limit_minor: limit,
+            invoice_age_minutes: 10,
+            cancel_window_minutes: window,
+        },
+        ..today_s_void()
+    }
+}
+
+#[test]
+fn an_invoiced_bill_is_voided_at_the_till_only_where_the_stores_route_allows() {
+    let ctx = ctx_granting(&[Permission::VoidSettledBill]);
+    for (void, allowed, why) in [
+        (
+            invoiced_under(InvoicedCorrection::HqOnly, 1_000_000, 60),
+            false,
+            "HQ only, the default",
+        ),
+        (
+            invoiced_under(InvoicedCorrection::Unspecified, 1_000_000, 60),
+            false,
+            "unspecified is HQ only",
+        ),
+        (
+            invoiced_under(InvoicedCorrection::Request, 1_000_000, 60),
+            false,
+            "a request is not a void",
+        ),
+        (
+            invoiced_under(InvoicedCorrection::ManagerUpToLimit, 165_000, 0),
+            true,
+            "at the limit",
+        ),
+        (
+            invoiced_under(InvoicedCorrection::ManagerUpToLimit, 164_999, 0),
+            false,
+            "above the limit",
+        ),
+        (
+            invoiced_under(InvoicedCorrection::ManagerUpToLimit, 0, 0),
+            false,
+            "a limit of 0 allows none",
+        ),
+        (
+            invoiced_under(InvoicedCorrection::CancelWindow, 0, 11),
+            true,
+            "inside the window",
+        ),
+        (
+            invoiced_under(InvoicedCorrection::CancelWindow, 0, 10),
+            false,
+            "the window has closed",
+        ),
+        (
+            invoiced_under(InvoicedCorrection::CancelWindow, 0, 0),
+            false,
+            "a window of 0 allows none",
+        ),
+    ] {
+        let decided = void_settled(BillState::Settled, void, &ctx);
+        if allowed {
+            assert!(decided.is_ok(), "{why}");
+        } else {
+            assert_eq!(decided.err(), Some(DomainError::EInvoiceIssued), "{why}");
+        }
+    }
+}
+
+#[test]
+fn a_route_that_allows_the_till_still_needs_the_permission_and_its_pin() {
+    let nobody = ctx_granting(&[]);
+    let within = SettledVoid {
+        pin_verified: false,
+        ..invoiced_under(InvoicedCorrection::ManagerUpToLimit, 200_000, 0)
+    };
+    assert!(matches!(
+        void_settled(BillState::Settled, within, &nobody),
+        Err(DomainError::PermissionDenied { .. })
+    ));
 }

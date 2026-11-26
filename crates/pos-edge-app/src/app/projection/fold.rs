@@ -462,7 +462,9 @@ impl<S: EventStore> Edge<S> {
     ) -> Result<(), AppError> {
         if known == EventType::FiscalInvoiceIssued {
             let event: FiscalInvoiceIssued = envelope.data.decode().map_err(AppError::Encode)?;
-            projection.invoices.fold(&event, envelope.event_id);
+            projection
+                .invoices
+                .fold(&event, envelope.event_id, envelope.event_time);
         } else {
             let event: FiscalInvoiceScheduled = envelope.data.decode().map_err(AppError::Encode)?;
             // Who settled the bill, whom its issue is recorded against when it falls due.

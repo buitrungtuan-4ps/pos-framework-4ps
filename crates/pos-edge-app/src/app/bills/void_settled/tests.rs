@@ -544,3 +544,48 @@ fn an_unpaid_void_still_puts_the_order_back() {
         assert_eq!(on_a_screen(&edge, line), (true, true), "owing again");
     });
 }
+
+/// ADR-0245: a bill whose invoice was issued is voided at the till only where the store's
+/// `einvoice.invoiced_correction` route allows it, and then with the manager's approval as any
+/// other paid bill. The cloud corrects the invoice from the void.
+#[test]
+fn an_invoiced_bill_is_voided_at_the_till_only_where_the_stores_route_allows() {
+    use pos_proto::einvoice::{EInvoiceIssueMoment, InvoicedCorrection, PublishedEInvoice};
+    pos_fakes::executor::run_ready(async {
+        for (route, limit, window, allowed) in [
+            (InvoicedCorrection::HqOnly, 1_000_000, 60, false),
+            (InvoicedCorrection::ManagerUpToLimit, 165_000, 0, true),
+            (InvoicedCorrection::ManagerUpToLimit, 164_999, 0, false),
+            (InvoicedCorrection::CancelWindow, 0, 5, true),
+            (InvoicedCorrection::CancelWindow, 0, 0, false),
+        ] {
+            let mut session = session();
+            session.einvoice = PublishedEInvoice {
+                issue_moment: Open::from_known(EInvoiceIssueMoment::Immediate),
+                symbol: Some("1C26MAA".to_owned()),
+                invoiced_correction: Open::from_known(route),
+                manager_correction_limit: Some(limit),
+                cancel_window_minutes: Some(window),
+                ..PublishedEInvoice::default()
+            };
+            let edge = over(FakeStore::default(), session);
+            let bill_id = a_paid_bill(&edge, 501, vec![card(165_000)]).await;
+            assert!(edge.lock_projection().invoices.issued_ms(bill_id).is_some());
+            let voided = void(&edge, bill_id, Some("MGR-1")).await;
+            if allowed {
+                let voided = voided.expect("the route lets the till void it");
+                assert_eq!(voided.state, BillState::Voided, "{route:?}");
+                assert_eq!(voided.other_reversed, vnd(165_000), "{route:?}");
+            } else {
+                assert!(
+                    matches!(voided, Err(AppError::Domain(DomainError::EInvoiceIssued))),
+                    "{route:?} {limit} {window}: got {voided:?}"
+                );
+                assert_eq!(
+                    edge.lock_projection().bill(bill_id).map(|bill| bill.state),
+                    Some(BillState::Settled)
+                );
+            }
+        }
+    });
+}

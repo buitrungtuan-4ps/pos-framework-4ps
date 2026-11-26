@@ -92,6 +92,17 @@ einvoice.batch_minute	scope=SETTING_SCOPE_STORE_GROUP
 einvoice.batch_minute	scope=SETTING_SCOPE_TENANT
 einvoice.batch_minute	since=0.14.1
 einvoice.batch_minute	unit=SETTING_UNIT_MINUTES
+einvoice.cancel_window_minutes
+einvoice.cancel_window_minutes	default=0
+einvoice.cancel_window_minutes	kind=SETTING_KIND_INT
+einvoice.cancel_window_minutes	max=1440
+einvoice.cancel_window_minutes	min=0
+einvoice.cancel_window_minutes	scope=SETTING_SCOPE_BRAND
+einvoice.cancel_window_minutes	scope=SETTING_SCOPE_STORE
+einvoice.cancel_window_minutes	scope=SETTING_SCOPE_STORE_GROUP
+einvoice.cancel_window_minutes	scope=SETTING_SCOPE_TENANT
+einvoice.cancel_window_minutes	since=0.14.1
+einvoice.cancel_window_minutes	unit=SETTING_UNIT_MINUTES
 einvoice.correction_kind
 einvoice.correction_kind	default=EINVOICE_KIND_ADJUSTMENT
 einvoice.correction_kind	kind=SETTING_KIND_CHOICE
@@ -113,6 +124,17 @@ einvoice.delay_minutes	scope=SETTING_SCOPE_STORE_GROUP
 einvoice.delay_minutes	scope=SETTING_SCOPE_TENANT
 einvoice.delay_minutes	since=0.14.1
 einvoice.delay_minutes	unit=SETTING_UNIT_MINUTES
+einvoice.invoiced_correction
+einvoice.invoiced_correction	default=INVOICED_CORRECTION_HQ_ONLY
+einvoice.invoiced_correction	kind=SETTING_KIND_CHOICE
+einvoice.invoiced_correction	scope=SETTING_SCOPE_BRAND
+einvoice.invoiced_correction	scope=SETTING_SCOPE_STORE
+einvoice.invoiced_correction	scope=SETTING_SCOPE_STORE_GROUP
+einvoice.invoiced_correction	scope=SETTING_SCOPE_TENANT
+einvoice.invoiced_correction	since=0.14.1
+einvoice.invoiced_correction	value=INVOICED_CORRECTION_CANCEL_WINDOW
+einvoice.invoiced_correction	value=INVOICED_CORRECTION_HQ_ONLY
+einvoice.invoiced_correction	value=INVOICED_CORRECTION_MANAGER_UP_TO_LIMIT
 einvoice.issue_moment
 einvoice.issue_moment	default=EINVOICE_ISSUE_MOMENT_OFF
 einvoice.issue_moment	kind=SETTING_KIND_CHOICE
@@ -126,6 +148,17 @@ einvoice.issue_moment	value=EINVOICE_ISSUE_MOMENT_IMMEDIATE
 einvoice.issue_moment	value=EINVOICE_ISSUE_MOMENT_OFF
 einvoice.issue_moment	value=EINVOICE_ISSUE_MOMENT_ON_REQUEST
 einvoice.issue_moment	value=EINVOICE_ISSUE_MOMENT_SCHEDULED_PER_ORDER
+einvoice.manager_correction_limit
+einvoice.manager_correction_limit	default=0
+einvoice.manager_correction_limit	kind=SETTING_KIND_INT
+einvoice.manager_correction_limit	max=1000000000000
+einvoice.manager_correction_limit	min=0
+einvoice.manager_correction_limit	scope=SETTING_SCOPE_BRAND
+einvoice.manager_correction_limit	scope=SETTING_SCOPE_STORE
+einvoice.manager_correction_limit	scope=SETTING_SCOPE_STORE_GROUP
+einvoice.manager_correction_limit	scope=SETTING_SCOPE_TENANT
+einvoice.manager_correction_limit	since=0.14.1
+einvoice.manager_correction_limit	unit=SETTING_UNIT_MINOR_UNITS
 einvoice.symbol_allocation
 einvoice.symbol_allocation	default=EINVOICE_SYMBOL_ALLOCATION_MANUAL
 einvoice.symbol_allocation	kind=SETTING_KIND_CHOICE

@@ -229,7 +229,7 @@ impl<S: EventStore> Edge<S> {
             .as_ref()
             .zip(issued_id)
             .and_then(|(record, invoice_id)| {
-                self.fold_settle_invoice(record, invoice_id, ctx.actor)
+                self.fold_settle_invoice(record, invoice_id, ctx.actor, ctx.now)
             });
 
         let _fired = self.apply_fires(&ctx, fires);

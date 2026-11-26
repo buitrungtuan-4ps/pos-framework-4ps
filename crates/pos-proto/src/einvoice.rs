@@ -66,6 +66,27 @@ wire_enum! {
     Automatic = "AUTOMATIC",
 }
 
+wire_enum! {
+    /// How a bill with an issued invoice is voided or refunded
+    /// ([ADR-0245](../../../docs/adr/0245-an-invoiced-bill-is-corrected-by-the-route-the-store-chooses.md)
+    /// decision 1). Every statement of law behind it is to be confirmed by legal or the accountant.
+    InvoicedCorrection, prefix = "INVOICED_CORRECTION";
+    /// The till refuses; HQ corrects in the console. The default, and every store before it.
+    HqOnly = "HQ_ONLY",
+    /// A manager requests it from the till, and HQ or the accountant approves it in a queue.
+    Request = "REQUEST",
+    /// A manager voids at the till up to `manager_correction_limit`; the cloud corrects.
+    ManagerUpToLimit = "MANAGER_UP_TO_LIMIT",
+    /// A manager voids at the till while the invoice is younger than `cancel_window_minutes`.
+    CancelWindow = "CANCEL_WINDOW",
+}
+
+/// The values `manager_correction_limit` may take, in the minor unit.
+pub const MANAGER_CORRECTION_LIMIT: std::ops::RangeInclusive<i64> = 0..=1_000_000_000_000;
+
+/// The values `cancel_window_minutes` may take: up to a day.
+pub const CANCEL_WINDOW_MINUTES: std::ops::RangeInclusive<i64> = 0..=1_440;
+
 /// The latest a country's law lets an invoice be issued after its sale (ADR-0229 decision 2): fixed
 /// law from the country pack, which the cloud refuses a setting past and the edge clamps to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -196,6 +217,26 @@ pub struct PublishedEInvoice {
     /// decision 2). Read it through [`Self::correction_kind`].
     #[serde(default, deserialize_with = "token", skip_serializing_if = "is_absent")]
     pub correction_kind: Open<EInvoiceKind>,
+    /// How an invoiced bill is voided (ADR-0245 decision 1). Read it through
+    /// [`Self::invoiced_correction`].
+    #[serde(default, deserialize_with = "token", skip_serializing_if = "is_absent")]
+    pub invoiced_correction: Open<InvoicedCorrection>,
+    /// The bill total a manager may void at the till under `MANAGER_UP_TO_LIMIT`, in the minor
+    /// unit. Read it through [`Self::manager_correction_limit`].
+    #[serde(
+        default,
+        deserialize_with = "whole",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub manager_correction_limit: Option<i64>,
+    /// How many minutes after its issue an invoice may still be voided at the till under
+    /// `CANCEL_WINDOW`. Read it through [`Self::cancel_window_minutes`].
+    #[serde(
+        default,
+        deserialize_with = "whole",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub cancel_window_minutes: Option<i64>,
 }
 
 impl PublishedEInvoice {
@@ -256,6 +297,36 @@ impl PublishedEInvoice {
                 EInvoiceKind::Adjustment
             }
         }
+    }
+
+    /// How an invoiced bill is voided: the node's route, and [`InvoicedCorrection::HqOnly`] for an
+    /// absent, unspecified or unknown one.
+    #[must_use]
+    pub fn invoiced_correction(&self) -> InvoicedCorrection {
+        match self.invoiced_correction.known() {
+            InvoicedCorrection::Request => InvoicedCorrection::Request,
+            InvoicedCorrection::ManagerUpToLimit => InvoicedCorrection::ManagerUpToLimit,
+            InvoicedCorrection::CancelWindow => InvoicedCorrection::CancelWindow,
+            InvoicedCorrection::Unspecified | InvoicedCorrection::HqOnly => {
+                InvoicedCorrection::HqOnly
+            }
+        }
+    }
+
+    /// The manager's limit: the node's within [`MANAGER_CORRECTION_LIMIT`], and 0 otherwise.
+    #[must_use]
+    pub fn manager_correction_limit(&self) -> i64 {
+        self.manager_correction_limit
+            .filter(|limit| MANAGER_CORRECTION_LIMIT.contains(limit))
+            .unwrap_or(0)
+    }
+
+    /// The cancel window: the node's minutes within [`CANCEL_WINDOW_MINUTES`], and 0 otherwise.
+    #[must_use]
+    pub fn cancel_window_minutes(&self) -> i64 {
+        self.cancel_window_minutes
+            .filter(|minutes| CANCEL_WINDOW_MINUTES.contains(minutes))
+            .unwrap_or(0)
     }
 
     /// The symbol to number under, or `None` while the cloud has published none, or one that is
@@ -416,6 +487,43 @@ mod tests {
         ] {
             let node: PublishedEInvoice = serde_json::from_str(text).unwrap_or_default();
             assert_eq!(node.correction_kind(), kind, "{text}");
+        }
+    }
+
+    #[test]
+    fn an_invoiced_bill_goes_to_hq_unless_the_node_names_a_route_within_bounds() {
+        use super::InvoicedCorrection as Route;
+        for (text, route, limit, window) in [
+            ("{}", Route::HqOnly, 0, 0),
+            (
+                r#"{ "invoiced_correction": "INVOICED_CORRECTION_MANAGER_UP_TO_LIMIT", "manager_correction_limit": 200000 }"#,
+                Route::ManagerUpToLimit,
+                200_000,
+                0,
+            ),
+            (
+                r#"{ "invoiced_correction": "INVOICED_CORRECTION_CANCEL_WINDOW", "cancel_window_minutes": 15 }"#,
+                Route::CancelWindow,
+                0,
+                15,
+            ),
+            (
+                r#"{ "invoiced_correction": "INVOICED_CORRECTION_LATER", "manager_correction_limit": -1, "cancel_window_minutes": 1441 }"#,
+                Route::HqOnly,
+                0,
+                0,
+            ),
+        ] {
+            let node: PublishedEInvoice = serde_json::from_str(text).unwrap_or_default();
+            assert_eq!(
+                (
+                    node.invoiced_correction(),
+                    node.manager_correction_limit(),
+                    node.cancel_window_minutes()
+                ),
+                (route, limit, window),
+                "{text}"
+            );
         }
     }
 
