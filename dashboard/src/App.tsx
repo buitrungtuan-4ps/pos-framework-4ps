@@ -151,6 +151,9 @@ const PackageDesigner = lazy(() =>
 const Settings = lazy(() =>
   import("./screens/Settings").then((module) => ({ default: module.Settings })),
 );
+const SettingsHistory = lazy(() =>
+  import("./screens/SettingsHistory").then((module) => ({ default: module.SettingsHistory })),
+);
 const StoreSettings = lazy(() =>
   import("./screens/StoreSettings").then((module) => ({ default: module.StoreSettings })),
 );
@@ -222,6 +225,7 @@ const COMPONENTS: Record<ScreenId, Component> = {
   packages: Packages,
   packageDesigner: PackageDesigner,
   settings: Settings,
+  settingsHistory: SettingsHistory,
   storeSettings: StoreSettings,
   einvoices: EInvoices,
   taxRates: TaxRates,
