@@ -14,6 +14,7 @@ import { actionAt, fixedParams, reactionActs } from "../../../lib/action-catalog
 import { idFrom } from "../../../lib/flow-graph";
 import type { PartProps } from "../designer/parts";
 import { ConditionEditor } from "../rules/ConditionEditor";
+import { actionName } from "../screens/names";
 
 const TRIGGERS: readonly { readonly value: string; readonly key: MessageKey }[] = [
   { value: "REACTION_TRIGGER_ORDER_OPENED", key: "reaction.when.orderOpened" },
@@ -89,7 +90,7 @@ function Act(props: { reaction: Reaction; onChange: (reaction: Reaction) => void
       <SelectField
         label={t("reaction.then")}
         value={props.reaction.then.action_id}
-        options={reactionActs().map((act) => ({ value: act.action_id, label: act.action_id }))}
+        options={reactionActs().map((act) => ({ value: act.action_id, label: actionName(act.action_id) }))}
         onChange={(action_id) => props.onChange({ ...props.reaction, then: { action_id, params: {} } })}
       />
       <For each={action() === undefined ? [] : fixedParams(action()!)}>
