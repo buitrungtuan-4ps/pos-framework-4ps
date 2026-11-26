@@ -489,9 +489,12 @@ export function tableState(tableId: string): string {
 }
 
 export function linesForTable(tableId: string): OrderLine[] {
-  // A line added before the table's order was known waits under a provisional order of its own.
-  const orderId = state.tableOrder[tableId] ?? `${PENDING}order:${tableId}`;
-  return Object.values(state.lines).filter((line) => line.orderId === orderId);
+  // A line added before the table's order was known waits under a provisional order of its own,
+  // and is still this table's once the seat lands and the order is known, until the edge has it:
+  // read by the order alone, it left the screen between the two, and payment with it.
+  const ghost = `${PENDING}order:${tableId}`;
+  const orderId = state.tableOrder[tableId] ?? ghost;
+  return Object.values(state.lines).filter((line) => line.orderId === orderId || line.orderId === ghost);
 }
 
 // The prefix of a provisional id: a line, or an order, this device painted before the edge answered
