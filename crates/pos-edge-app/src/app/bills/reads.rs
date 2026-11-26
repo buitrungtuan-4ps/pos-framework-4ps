@@ -249,6 +249,31 @@ impl<S: EventStore> Edge<S> {
     pub fn order_totals(&self, order_id: OrderId) -> Result<BillTotals, AppError> {
         let session = self.session();
         let order = self.order_snapshot(order_id, &session)?;
+        Self::totals_of(&session, &order)
+    }
+
+    /// What a bill would open at over `lines` on `channel`, before they are written: the total an
+    /// order arriving from outside the store answers its caller with, tax and fees included
+    /// ([ADR-0248](../../../../../docs/adr/0248-a-delivery-order-is-priced-paid-and-reconciled-as-the-app-sold-it.md)
+    /// decision 4), from the same assembly the bill and [`Self::order_totals`] use.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::order_totals`].
+    pub(in crate::app) fn totals_of_lines(
+        &self,
+        lines: Vec<crate::app::LineRecord>,
+        channel: pos_proto::SalesChannel,
+    ) -> Result<BillTotals, AppError> {
+        let session = self.session();
+        let order = Self::snapshot_of_lines(lines, channel)?;
+        Self::totals_of(&session, &order)
+    }
+
+    fn totals_of(
+        session: &crate::app::EdgeSession,
+        order: &crate::app::OrderSnapshot,
+    ) -> Result<BillTotals, AppError> {
         if order.class_bases.is_empty() {
             // Nothing ordered — a seated table before its first line, or one whose every line was
             // voided. `assemble` refuses an empty bill (there is nothing to allocate across), and
@@ -264,8 +289,8 @@ impl<S: EventStore> Edge<S> {
         // its channel now would freeze (ADR-0159 decision 3): the figure the bill will open at.
         let in_force = session.fees.in_force(order.sales_channel);
         Ok(billing::assemble(&Self::bill_input(
-            &session,
-            &order,
+            session,
+            order,
             &in_force,
             // No bill, so nothing waived.
             &[],

@@ -380,6 +380,9 @@ pub struct InboundOrderOpened {
     /// Whether it waits for a member of staff before the kitchen sees it — the same value written
     /// to the idempotency ledger row in the order's own transaction.
     pub awaiting_staff_confirmation: bool,
+    /// What the order's bill will open at, tax and fees included (ADR-0248 decision 4), or `None`
+    /// where it cannot be told (a channel this build does not know, a class with no rate).
+    pub total: Option<Money>,
 }
 
 /// What [`Edge::open_inbound_order`] needs to write the idempotency ledger row in the order's own
@@ -395,7 +398,9 @@ pub struct IntakeIntent<'a> {
     pub sales_channel: &'a str,
     /// The caller's own reference — the second half of the idempotency key.
     pub external_reference: &'a str,
-    /// The accepted total (tax-inclusive), the store's own menu total.
+    /// The accepted total, tax and fees included: what the order's bill opens at
+    /// ([ADR-0248](../../../../docs/adr/0248-a-delivery-order-is-priced-paid-and-reconciled-as-the-app-sold-it.md)
+    /// decision 4). The caller's sum of the lines stands only where that cannot be told.
     pub total: Money,
     /// Whether any line's caller-quoted price differed from the store's.
     pub repriced: bool,

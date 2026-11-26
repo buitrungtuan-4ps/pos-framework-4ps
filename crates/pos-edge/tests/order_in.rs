@@ -84,6 +84,12 @@ impl OrderInHarness for EdgeIntakeHarness {
         (MenuItemId::new(Ulid::from_u128(500)), price())
     }
 
+    /// The menu's [`price`] with the delivery rate's 10% tax: what the order's bill charges and
+    /// what the intake answers with (ADR-0248 decision 4).
+    fn total_of_one(&self) -> Money {
+        Money::new(CurrencyCode::VND, 132_000)
+    }
+
     fn unknown_menu_item(&self) -> MenuItemId {
         MenuItemId::new(Ulid::from_u128(u128::MAX))
     }
@@ -388,7 +394,8 @@ mod channel_prices {
     }
 
     /// A delivery order is charged the delivery price, and a channel the book does not price is
-    /// charged the dining room's, as every channel was before.
+    /// charged the dining room's, as every channel was before. The total answered includes the
+    /// channel's tax, as the bill will.
     #[test]
     fn a_delivery_order_is_priced_from_the_delivery_book() {
         let intake = intake_over(
@@ -399,11 +406,13 @@ mod channel_prices {
 
         let delivery = run_ready(intake.submit(&one_margherita("GRAB-1", SalesChannel::Delivery)))
             .expect("the store accepts it");
-        assert_eq!(delivery.total, Money::new(CurrencyCode::VND, 135_000));
+        // The delivery book's price with the delivery rate's 10% tax: what the bill will charge,
+        // which is what the vendor is answered with (ADR-0248 decision 4).
+        assert_eq!(delivery.total, Money::new(CurrencyCode::VND, 148_500));
 
         let takeaway = run_ready(intake.submit(&one_margherita("WEB-1", SalesChannel::Takeaway)))
             .expect("the store accepts it");
-        assert_eq!(takeaway.total, Money::new(CurrencyCode::VND, 120_000));
+        assert_eq!(takeaway.total, Money::new(CurrencyCode::VND, 132_000));
     }
 }
 

@@ -1410,9 +1410,9 @@ async fn a_relayed_takeaway_order_is_accepted_and_priced_by_the_store() {
     );
     assert_eq!(
         accepted.total,
-        vnd(UNIT_PRICE),
-        "the total is the store's own figure, not the caller's quote — ex-tax, as the priced lines \
-         are; tax joins at the bill"
+        vnd(UNIT_PRICE + UNIT_PRICE / 10),
+        "the total is the store's own figure, not the caller's quote, and it is what the bill will \
+         charge, with the takeaway rate's 10% tax (ADR-0248 decision 4)"
     );
     assert_eq!(
         accepted.queue_number,

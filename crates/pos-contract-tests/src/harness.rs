@@ -543,6 +543,14 @@ pub trait OrderInHarness: Send + Sync {
     /// A menu item the store sells, and the price it sells it at.
     fn known_menu_item(&self) -> (pos_proto::MenuItemId, pos_proto::Money);
 
+    /// What an order of one [`Self::known_menu_item`] on the delivery channel totals, tax and fees
+    /// included: the figure the store answers with
+    /// ([ADR-0248](../../../docs/adr/0248-a-delivery-order-is-priced-paid-and-reconciled-as-the-app-sold-it.md)
+    /// decision 4). The item's price unless the harness's store taxes or charges on top of it.
+    fn total_of_one(&self) -> pos_proto::Money {
+        self.known_menu_item().1
+    }
+
     /// A menu item the store does not sell.
     fn unknown_menu_item(&self) -> pos_proto::MenuItemId;
 

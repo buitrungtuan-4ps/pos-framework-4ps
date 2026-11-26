@@ -100,7 +100,7 @@ fn order(
 /// [`CaseFailure`] if the obligation does not hold.
 pub async fn accepts_an_order<H: OrderInHarness>(harness: &H) -> Result<(), CaseFailure> {
     let intake = harness.fresh().await?;
-    let (menu_item_id, price) = harness.known_menu_item();
+    let (menu_item_id, _) = harness.known_menu_item();
     let accepted = intake
         .submit(&order(
             harness.store_id(),
@@ -114,8 +114,8 @@ pub async fn accepts_an_order<H: OrderInHarness>(harness: &H) -> Result<(), Case
     obligation.require(accepted.created, "a first submission creates the order")?;
     obligation.require_eq(
         &accepted.total,
-        &price,
-        "and the total comes from the store's own menu",
+        &harness.total_of_one(),
+        "and the total comes from the store's own menu, tax included",
     )
 }
 
@@ -217,7 +217,7 @@ pub async fn the_stores_price_wins<H: OrderInHarness>(harness: &H) -> Result<(),
 
     obligation.require_eq(
         &accepted.total,
-        &price,
+        &harness.total_of_one(),
         "the store charges its own price, not the caller's quote",
     )?;
     obligation.require(

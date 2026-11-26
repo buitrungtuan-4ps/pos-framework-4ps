@@ -92,6 +92,26 @@ impl<S: EventStore> Edge<S> {
         })
     }
 
+    /// A snapshot of lines not yet written, for the total an inbound order answers with before it
+    /// commits (ADR-0248 decision 4).
+    ///
+    /// # Errors
+    ///
+    /// [`AppError`] if a line's amounts cannot be summed.
+    pub(in crate::app) fn snapshot_of_lines(
+        lines: Vec<LineRecord>,
+        sales_channel: pos_proto::SalesChannel,
+    ) -> Result<OrderSnapshot, AppError> {
+        let class_bases = Self::class_bases(&lines)?;
+        let bill_lines = Self::bill_lines(&lines);
+        Ok(OrderSnapshot {
+            lines,
+            class_bases,
+            bill_lines,
+            sales_channel,
+        })
+    }
+
     /// The lines that were actually sold: everything but the voided ones.
     ///
     /// One definition, two readers — [`Self::class_bases`] taxes them and [`Self::receipt_lines`]

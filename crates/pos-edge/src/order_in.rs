@@ -287,6 +287,7 @@ where
             order_id,
             business_date,
             awaiting_staff_confirmation,
+            total,
         } = match self.open(order, &priced, recipient).await {
             Ok(opened) => opened,
             Err(AppError::Port(error)) if error.status() == ErrorStatus::AlreadyExists => {
@@ -300,7 +301,8 @@ where
             order_id,
             created: true,
             queue_number,
-            total: priced.total,
+            // The bill's total with tax, as the ledger row keeps it (ADR-0248 decision 4).
+            total: total.unwrap_or(priced.total),
             repriced: priced.repriced,
             // Whether a QR order waits for staff (ADR-0057, and ADR-0080 M7 for the store's own
             // switch) was decided by `open_inbound_order` against the session snapshot this order
