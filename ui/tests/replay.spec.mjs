@@ -7388,6 +7388,39 @@ test("a free table opens its order at once, and its lines and payment wait for t
   }
 });
 
+// A line added while its table's seat is still on its way stays on the order, sending, once the seat
+// is confirmed and before the edge has the line: the till learns the table's order between the two,
+// and the line it painted under no order yet is still this table's.
+test("a line added before the seat is confirmed stays sending on the order until the edge has it", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    const seat = await holdPost(page, "**/api/tables/*/seat");
+    const line = await holdPost(page, "**/api/tables/*/lines");
+    await page.locator('[data-step="onCard"]').first().click();
+    await answerGuests(page);
+    await expect(page.locator('[data-outcome="order-open"]')).toBeVisible();
+    await page.locator('[data-step="onItem"]').first().click();
+    await expect(page.locator('[data-outcome="line-sending"]')).toHaveText("Sending…");
+    await seat.sent;
+    seat.release();
+    await line.sent;
+    // The seat has landed and the line is with the edge, unanswered.
+    await expect(page.locator('[data-outcome="line-sending"]')).toHaveText("Sending…");
+    await expect(page.locator('[data-step="takePayment"]')).toBeDisabled();
+    line.release();
+
+    await expect(page.locator('[data-outcome="line-sending"]')).toHaveCount(0);
+    await expect(page.locator('[data-outcome="line-added"]')).toHaveCount(1);
+    await expect(page.locator('[data-step="takePayment"]')).toBeEnabled();
+  } finally {
+    await edge.stop();
+  }
+});
+
 test("a seat the edge refuses goes back to the floor, saying why and keeping what was typed", async ({
   page,
 }) => {
