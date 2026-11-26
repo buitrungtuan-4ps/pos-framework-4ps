@@ -84,6 +84,8 @@ A NUC that fails P14 is a finding to fix before the pilot. It is not a reason to
   `CHANNEL` (or, where the store refuses an order without one, as a Vietnamese store that asks each
   walk-in does, at `SALES_CHANNEL_TAKEAWAY`), lets the edge price and tax the line at that channel,
   pays the check's total with tax, and reports the channel and the e-invoices the settles issued
-  (numbered, or "number pending").
+  (numbered, or "number pending"). A store that keeps a drawer per till refuses cash at a device bound to no
+  till (`NOT_A_TILL`), as the driver's devices are, so run it there with `PAYMENT=PAYMENT_METHOD_QR`
+  (or another tender the store accepts).
 - **Buy or borrow the reference NUC** (an Intel or ASUS NUC, any Windows edition, as roadmap-v4
   "What the owner decided" says) and the pilot's tablet and phones. Everything else waits on them.

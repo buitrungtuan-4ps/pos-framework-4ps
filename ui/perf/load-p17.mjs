@@ -21,7 +21,7 @@
 // Usage:
 //   POS_EDGE_BIN=<minimal-edge> node perf/load-p17.mjs            # starts its own edge
 //   EDGE_URL=http://127.0.0.1:8787 PAIRING_CODE=123456 STAFF_CODE=.. STAFF_PIN=.. node perf/load-p17.mjs
-// Knobs: DEVICES (default 30), DURATION_S (60), THINK_MS (pause between a device's sales, default
+// Knobs: PAYMENT (the tender, default PAYMENT_METHOD_CASH), DEVICES (default 30), DURATION_S (60), THINK_MS (pause between a device's sales, default
 // 0: as fast as the edge answers, the worst case), PROFILE (the demo store, default
 // `kitchen-stations`, whose stations take a counter order's lines), REPORT (a JSON report's path).
 //
@@ -36,6 +36,9 @@ const DEVICES = Number(process.env["DEVICES"] ?? 30);
 const DURATION_S = Number(process.env["DURATION_S"] ?? 60);
 const THINK_MS = Number(process.env["THINK_MS"] ?? 0);
 const BUDGET_MS = { add_line: 30, fire: 40, settle: 60 };
+/** The tender each sale is paid with. A store that keeps a drawer per till refuses cash at a device
+ * bound to no till (`NOT_A_TILL`), so the driver's unbound devices pay it by another tender there. */
+const PAYMENT = process.env["PAYMENT"] ?? "PAYMENT_METHOD_CASH";
 /** The channel each counter order opens at: the knob, or what the first order the store took needed. */
 let channel = process.env["CHANNEL"] || undefined;
 /** The e-invoices the settles issued: numbered by the store, or "number pending" for the vendor. */
@@ -164,7 +167,7 @@ async function sell(base, token, item, price, currency, deadline) {
     const check = await call(base, token, "check", "GET", `/api/bills/${bill.bill_id}/check`);
     const due = check?.total_due ?? bill.total_due ?? { currency_code: currency, amount_minor: price };
     const done = await call(base, token, "settle", "POST", `/api/bills/${bill.bill_id}/settle`, {
-      payments: [{ method: "PAYMENT_METHOD_CASH", tendered: due, applied_to_bill: due }],
+      payments: [{ method: PAYMENT, tendered: due, applied_to_bill: due }],
     });
     if (done) {
       settled += 1;
