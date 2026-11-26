@@ -21,6 +21,8 @@ const EXEMPT: Readonly<Record<string, string>> = {
     "the records screen waits for the edge's answer: a personal value is never drawn before the edge has kept it (ADR-0206)",
   "data.custom_record.change":
     "the records screen waits for the edge's answer: a personal value is never drawn before the edge has kept it (ADR-0206)",
+  "fiscal.correction.request":
+    "no till screen sends it yet: the correction request form comes with the console queue (ADR-0250, O2 slice C)",
 };
 
 // The till's own source as text, the generated API types left out.

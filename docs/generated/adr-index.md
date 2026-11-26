@@ -18,7 +18,6 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 - [ADR-0216](../adr/0216-integrations-come-in-three-tiers-and-functions-wait.md) Integrations come in three tiers, and WebAssembly functions wait for a real case
 - [ADR-0231](../adr/0231-a-phone-keeps-its-till-token-in-a-store-the-owner-chooses.md) A phone keeps its till token in a store the owner chooses
 - [ADR-0249](../adr/0249-the-e-invoice-number-comes-from-the-source-the-store-chooses.md) An e-invoice's number comes from the source the tenant, store or vendor connection chooses
-- [ADR-0250](../adr/0250-a-store-learns-a-correction-decision-on-its-einvoice-node.md) A store learns HQ's decision on a correction request on its own `einvoice` node
 
 ## Citations of ADRs that do not exist
 

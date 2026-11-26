@@ -15,11 +15,17 @@
 use serde::{Deserialize, Serialize};
 
 use crate::ids::SubjectId;
+
 use crate::money::Money;
 use crate::time::{CalendarDate, Timestamp};
 use crate::ulid::Ulid;
 use crate::wire_enum;
 use crate::wire_enum::{Open, WireEnum};
+
+mod correction;
+pub use correction::{
+    CORRECTION_DECISIONS_MAX, CorrectionDecision, CorrectionRequest, DecidedCorrection,
+};
 
 wire_enum! {
     /// When a settled bill issues an e-invoice (ADR-0229 decision 1).
@@ -237,6 +243,23 @@ pub struct PublishedEInvoice {
         skip_serializing_if = "Option::is_none"
     )]
     pub cancel_window_minutes: Option<i64>,
+    /// Whether a correction request needs a reason (ADR-0245 decision 2). Read it through
+    /// [`Self::correction_reason_required`].
+    #[serde(
+        default,
+        deserialize_with = "flag",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub correction_reason_required: Option<bool>,
+    /// HQ's decisions on this store's correction requests, newest last, at most
+    /// [`CORRECTION_DECISIONS_MAX`]. Written by the cloud on the Store layer alone, and not a
+    /// setting ([ADR-0250](../../../docs/adr/0250-a-store-learns-a-correction-decision-on-its-einvoice-node.md)).
+    #[serde(
+        default,
+        deserialize_with = "correction::decisions",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub correction_decisions: Vec<DecidedCorrection>,
 }
 
 impl PublishedEInvoice {
@@ -321,6 +344,21 @@ impl PublishedEInvoice {
             .unwrap_or(0)
     }
 
+    /// Whether a correction request needs a reason: on unless the node turns it off.
+    #[must_use]
+    pub fn correction_reason_required(&self) -> bool {
+        self.correction_reason_required.unwrap_or(true)
+    }
+
+    /// HQ's latest decision on `bill_id`'s correction request, if the cloud has published one.
+    #[must_use]
+    pub fn correction_decision(&self, bill_id: crate::ids::BillId) -> Option<&DecidedCorrection> {
+        self.correction_decisions
+            .iter()
+            .rev()
+            .find(|decided| decided.bill_id == bill_id)
+    }
+
     /// The cancel window: the node's minutes within [`CANCEL_WINDOW_MINUTES`], and 0 otherwise.
     #[must_use]
     pub fn cancel_window_minutes(&self) -> i64 {
@@ -403,6 +441,13 @@ where
     D: serde::Deserializer<'de>,
 {
     Ok(serde_json::Value::deserialize(deserializer)?.as_i64())
+}
+
+fn flag<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(serde_json::Value::deserialize(deserializer)?.as_bool())
 }
 
 fn is_absent<T: WireEnum + PartialEq>(moment: &Open<T>) -> bool {

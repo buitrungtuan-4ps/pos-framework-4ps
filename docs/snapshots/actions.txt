@@ -380,6 +380,18 @@ data.custom_record.print	refusal=NOTHING_TO_PRINT
 data.custom_record.print	refusal=UNKNOWN_CUSTOM_RECORD
 data.custom_record.print	route=POST /api/custom-records/{id}/slip
 data.custom_record.print	since=0.14.1
+fiscal.correction.request
+fiscal.correction.request	effect=ACTION_EFFECT_EDGE_WRITE
+fiscal.correction.request	frequency=ACTION_FREQUENCY_RARE
+fiscal.correction.request	param=bill_id:ACTION_PARAM_KIND_ID:required
+fiscal.correction.request	param=reason_code_id:ACTION_PARAM_KIND_ID:optional
+fiscal.correction.request	permission=billing.bill.void_settled
+fiscal.correction.request	refusal=APPROVAL_REQUIRED
+fiscal.correction.request	refusal=CORRECTION_NOT_NEEDED
+fiscal.correction.request	refusal=E_INVOICE_ISSUED
+fiscal.correction.request	refusal=VOID_REASON_NOT_VALID
+fiscal.correction.request	route=POST /api/bills/{id}/correction_request
+fiscal.correction.request	since=0.14.1
 integrations.lookup.run
 integrations.lookup.run	effect=ACTION_EFFECT_EXTERNAL
 integrations.lookup.run	frequency=ACTION_FREQUENCY_RARE

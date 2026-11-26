@@ -29,6 +29,7 @@
 //! Created while the catalogue is still young, so the file grows by reviewable diffs
 //! from here rather than arriving fully formed with no history.
 
+use crate::einvoice::{CorrectionRequest, DecidedCorrection};
 use crate::envelope::{EventPayload, PayloadPart};
 use crate::events::{
     BillFeeLine, BillTaxComponent, BillTaxLine, CustomFieldValue, DenominationCount, EventType,
@@ -45,6 +46,16 @@ pub const SNAPSHOT_PATH: &str = "docs/snapshots/events.txt";
 /// barrier ([`crate::pii`]) is placed here too, and a test checks that each path runs through
 /// fields of the payload.
 const PARTS: &[(EventType, &str, &[&str])] = &[
+    (
+        EventType::FiscalCorrectionRequested,
+        "request",
+        CorrectionRequest::FIELD_NAMES,
+    ),
+    (
+        EventType::FiscalCorrectionDecided,
+        "decision",
+        DecidedCorrection::FIELD_NAMES,
+    ),
     (
         EventType::BillingBillOpened,
         "fee_rules[]",

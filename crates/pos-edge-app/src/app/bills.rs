@@ -7,11 +7,13 @@
 mod card;
 mod checks;
 mod comp;
+mod correction_request;
 mod invoice;
 
 pub(in crate::app) use card::CardTerminal;
 pub use card::{CardAsk, CardOutcome, CardRefusal, CardResolution, ParkedCard};
 pub use checks::CheckPrinted;
+pub use correction_request::CorrectionRequested;
 pub use payments::{PaymentTaken, TakenPayment};
 pub use void::VoidedBill;
 mod open;

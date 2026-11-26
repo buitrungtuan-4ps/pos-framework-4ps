@@ -235,6 +235,12 @@ where
             "/api/bills/{id}/void_settled",
             post(super::void_settled::void_settled_bill::<S>),
         )
+        // Asking HQ to correct a paid bill's issued e-invoice (ADR-0250): the void's own
+        // permission, and nothing moves until HQ approves.
+        .route(
+            "/api/bills/{id}/correction_request",
+            post(super::correction_request::request_correction::<S>),
+        )
         .route("/api/bills/{id}/discount", post(bills::discount_bill::<S>))
         // Giving a line away (ADR-0219 decision 1): `billing.comp.apply`, PIN-flagged, so the
         // approver rides with the request as it does for a waive.

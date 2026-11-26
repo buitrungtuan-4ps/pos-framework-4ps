@@ -619,6 +619,7 @@ fn read_back_einvoice(field: &str, document: Value) -> Option<Value> {
         "invoiced_correction" => Some(json!(einvoice.invoiced_correction().as_wire())),
         "manager_correction_limit" => Some(json!(einvoice.manager_correction_limit())),
         "cancel_window_minutes" => Some(json!(einvoice.cancel_window_minutes())),
+        "correction_reason_required" => Some(json!(einvoice.correction_reason_required())),
         _ => None,
     }
 }

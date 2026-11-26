@@ -481,6 +481,73 @@
         "x-permission": "billing.comp.apply"
       }
     },
+    "/api/bills/{id}/correction_request": {
+      "post": {
+        "tags": [
+          "bills"
+        ],
+        "summary": "`POST /api/bills/{id}/correction_request` — ask HQ to correct a paid bill's issued e-invoice\n(ADR-0245 route b, ADR-0250).",
+        "operationId": "request_correction",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The bill's id, a ULID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "`reason_code_id`, a void reason from the managed list, with `approver_code` and `approver_pin` of somebody who holds `billing.bill.void_settled` where the person acting does not hold it directly",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CorrectionRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Recorded as `fiscal.correction.requested`: HQ decides in the console, and the store may void the bill once it approves. Nothing is issued and no money moves",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CorrectionRequestResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The id is not a ULID"
+          },
+          "401": {
+            "description": "This device is not paired: no token, or one the edge does not accept"
+          },
+          "403": {
+            "description": "Nobody is signed in on this device, or the sign-in lapsed; the request needs an approval that was missing or refused, or the approver is locked out"
+          },
+          "409": {
+            "description": "Refused: the bill is not settled (`TRANSITION_REFUSED`), it needs no request (`CORRECTION_NOT_NEEDED`: no invoice, already approved, or the till may void it), HQ corrects it in the console (`E_INVOICE_ISSUED`), the reason is missing or not one for voiding a bill (`VOID_REASON_NOT_VALID`), or the person lacks the permission. `pos-error-reason` names which"
+          },
+          "500": {
+            "description": "The edge could not apply the command"
+          },
+          "503": {
+            "description": "The store is unavailable, and nothing was recorded"
+          }
+        },
+        "security": [
+          {
+            "till_session": []
+          }
+        ],
+        "x-permission": "billing.bill.void_settled"
+      }
+    },
     "/api/bills/{id}/discount": {
       "post": {
         "tags": [
@@ -6334,6 +6401,61 @@
           },
           "reason_code_id": {
             "$ref": "#/components/schemas/ReasonCodeId"
+          }
+        }
+      },
+      "CorrectionRequestBody": {
+        "type": "object",
+        "description": "A correction request as a till sends it: the reason, and the approver's code and PIN where the\nperson acting does not hold `billing.bill.void_settled` directly. Both are secrets and are\nnever logged.",
+        "properties": {
+          "approver_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "approver_pin": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason_code_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ReasonCodeId",
+                "description": "A reason from the store's `VOID_BILL` list; required while\n`einvoice.correction_reason_required` is on."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "CorrectionRequestResponse": {
+        "type": "object",
+        "description": "The request as it was recorded, for the till to show while it waits for HQ.",
+        "required": [
+          "bill_id",
+          "amount",
+          "kind",
+          "requested_time"
+        ],
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Money",
+            "description": "The amount asked back: the bill's total."
+          },
+          "bill_id": {
+            "$ref": "#/components/schemas/BillId"
+          },
+          "kind": {
+            "type": "string",
+            "description": "The kind the cloud will issue once HQ approves, such as `EINVOICE_KIND_ADJUSTMENT`."
+          },
+          "requested_time": {
+            "$ref": "#/components/schemas/Timestamp"
           }
         }
       },

@@ -113,6 +113,11 @@ pub enum DomainError {
     /// is the country module's to say, not the core's.
     EInvoiceIssued,
 
+    /// A correction request names a bill that needs none: no invoice was issued for it, HQ already
+    /// approved it, or the till may void it itself
+    /// ([ADR-0250](../../../docs/adr/0250-a-store-learns-a-correction-decision-on-its-einvoice-node.md)).
+    CorrectionNotNeeded,
+
     /// A price override is not above zero, or is above the store's published multiple of the price
     /// the line was added at (`billing.price_override_max_multiple`,
     /// [ADR-0219](../../../docs/adr/0219-a-comp-and-a-price-override-each-need-a-reason-and-an-approver.md)
@@ -187,6 +192,9 @@ impl core::fmt::Display for DomainError {
             Self::EInvoiceIssued => {
                 f.write_str("an e-invoice was issued for the bill; cancel it before voiding")
             }
+            Self::CorrectionNotNeeded => {
+                f.write_str("the bill needs no correction request: void it, or it has no invoice")
+            }
             Self::PermissionDenied { permission } => {
                 write!(f, "permission denied: {permission}")
             }
@@ -214,6 +222,7 @@ impl core::error::Error for DomainError {
             | Self::PriceOutOfRange { .. }
             | Self::SettledVoidWindowClosed { .. }
             | Self::EInvoiceIssued
+            | Self::CorrectionNotNeeded
             | Self::PermissionDenied { .. }
             | Self::CapabilityDisabled { .. } => None,
         }
