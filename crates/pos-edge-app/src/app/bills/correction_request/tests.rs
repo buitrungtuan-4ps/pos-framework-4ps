@@ -170,3 +170,98 @@ fn a_reason_is_required_unless_the_store_turns_it_off() {
         assert_eq!(requested_events(&store).await, 1);
     });
 }
+
+/// HQ's `decision` on `bill_id` at `decided_ms`, published on the store's node.
+fn decided_at(
+    edge: &Edge<FakeStore>,
+    bill_id: BillId,
+    decision: CorrectionDecision,
+    decided_ms: i64,
+) {
+    let mut session = (*edge.session()).clone();
+    session
+        .einvoice
+        .correction_decisions
+        .push(DecidedCorrection {
+            bill_id,
+            decision: Open::from_known(decision),
+            decided_by_user_id: Ulid::from_u128(0xAD),
+            decided_time: Timestamp::from_milliseconds_since_epoch(decided_ms).expect("an instant"),
+        });
+    edge.apply_session(session);
+}
+
+async fn decided_events(store: &FakeStore) -> Vec<DecidedCorrection> {
+    store
+        .read(&EventQuery::first(
+            identity().store_id,
+            NonZeroU32::new(500).expect("not zero"),
+        ))
+        .await
+        .expect("reads")
+        .iter()
+        .filter(|event| event.event_type.as_str() == "fiscal.correction.decided")
+        .map(|event| {
+            event
+                .data
+                .decode::<pos_proto::events::FiscalCorrectionDecided>()
+                .expect("decodes")
+                .decision
+        })
+        .collect()
+}
+
+#[test]
+fn the_store_records_each_decision_on_a_bill_it_asked_about_once() {
+    pos_fakes::executor::run_ready(async {
+        let store = FakeStore::default();
+        let edge = over(store.clone(), routed(InvoicedCorrection::Request));
+        let asked = a_paid_bill(&edge, 604, vec![card(165_000)]).await;
+        let other = a_paid_bill(&edge, 605, vec![card(165_000)]).await;
+        edge.request_invoice_correction(actor(), asked, Some(reason()), Some(&approval("MGR-1")))
+            .await
+            .expect("a manager asks");
+
+        decided_at(&edge, asked, CorrectionDecision::Declined, 10);
+        decided_at(&edge, other, CorrectionDecision::Approved, 10);
+        assert_eq!(
+            edge.record_correction_decisions().await.ok(),
+            Some(1),
+            "only the bill it asked about"
+        );
+        assert_eq!(
+            edge.record_correction_decisions().await.ok(),
+            Some(0),
+            "recorded once"
+        );
+
+        // A restart folds the log and records nothing again.
+        let restarted = over(store.clone(), (*edge.session()).clone());
+        restarted.rebuild().await.expect("rebuilds");
+        assert_eq!(restarted.record_correction_decisions().await.ok(), Some(0));
+
+        // HQ changes its mind later: the newer decision is recorded too.
+        decided_at(&restarted, asked, CorrectionDecision::Approved, 20);
+        assert_eq!(restarted.record_correction_decisions().await.ok(), Some(1));
+        let recorded = decided_events(&store).await;
+        assert_eq!(recorded.len(), 2);
+        assert_eq!(recorded[0].bill_id, asked);
+        assert!(!recorded[0].approved());
+        assert!(recorded[1].approved());
+        let envelope_employee = store
+            .read(&EventQuery::first(
+                identity().store_id,
+                NonZeroU32::new(500).expect("not zero"),
+            ))
+            .await
+            .expect("reads")
+            .into_iter()
+            .rfind(|event| event.event_type.as_str() == "fiscal.correction.decided")
+            .and_then(|event| event.employee_id);
+        assert_ne!(
+            envelope_employee,
+            Some(actor().employee_id),
+            "stamped by the box, not a person"
+        );
+    });
+}
