@@ -81,6 +81,10 @@ struct CounterOrderResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(nullable = false))]
     vendor_name: Option<String>,
+    /// Whether the app's quoted price differed from the store's menu past the vendor's tolerance
+    /// (ADR-0248 decision 1). Left off while false.
+    #[serde(skip_serializing_if = "core::ops::Not::not")]
+    price_differs: bool,
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(
@@ -122,6 +126,7 @@ where
                     total_due: order.total_due,
                     bill_id: order.bill_id.map(|id| id.to_string()),
                     vendor_name: order.vendor_name.map(|name| name.as_str().to_owned()),
+                    price_differs: order.price_differs,
                 })
                 .collect();
             (StatusCode::OK, Json(body)).into_response()

@@ -241,9 +241,56 @@ pub fn reprice_line(
     })
 }
 
+/// Prices a vendor's line at the source its connection chose
+/// ([ADR-0248](../../../docs/adr/0248-a-delivery-order-is-priced-paid-and-reconciled-as-the-app-sold-it.md)
+/// decision 1), from `line` as [`reprice_line`] priced it at the store's menu.
+///
+/// With `at_quote`, a line the app `quoted` a price for is sold at that unit price, so the bill is
+/// what the guest paid, and taxed as the menu price would be; without it, or with no quote, the
+/// menu's price stands. Either way the line is flagged [`PricedLine::repriced`] when the quote
+/// differs from the menu's price by more than `tolerance_bps` basis points of the menu's price
+/// (`0` flags any difference). A quote in another currency is never honoured, and always flagged.
+///
+/// # Errors
+///
+/// [`RepriceError::Money`] if the quoted line's total overflows.
+pub fn price_at_source(
+    line: PricedLine,
+    quoted: Option<Money>,
+    at_quote: bool,
+    tolerance_bps: u32,
+) -> Result<PricedLine, RepriceError> {
+    let Some(quoted) = quoted else {
+        return Ok(PricedLine {
+            repriced: false,
+            ..line
+        });
+    };
+    let menu = line.unit_price;
+    if quoted.currency_code != menu.currency_code {
+        return Ok(PricedLine {
+            repriced: true,
+            ..line
+        });
+    }
+    let difference = (i128::from(quoted.amount_minor) - i128::from(menu.amount_minor)).abs();
+    let allowed = i128::from(menu.amount_minor).abs() * i128::from(tolerance_bps);
+    let repriced = difference * 10_000 > allowed;
+    if !at_quote {
+        return Ok(PricedLine { repriced, ..line });
+    }
+    let line_total = quoted.mul_quantity(line.quantity, Rounding::HalfUp)?;
+    Ok(PricedLine {
+        unit_price: quoted,
+        line_total,
+        repriced,
+        ..line
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{RepriceError, RequestedLine, WeighError, reprice_line};
+    use super::{RepriceError, RequestedLine, WeighError, price_at_source, reprice_line};
     use pos_proto::locale::{TaxRate, TaxRateTable};
     use pos_proto::menu::{MenuCatalog, MenuEntry};
     use pos_proto::money::{CurrencyCode, Money};
@@ -293,6 +340,42 @@ mod tests {
             typed_unit_price: None,
             weight_source: None,
         }
+    }
+
+    /// ADR-0248 decision 1: a vendor's line sells at the app's quote or the menu's price, as its
+    /// connection says, and is flagged only past the tolerance.
+    #[test]
+    fn a_vendor_line_sells_at_its_source_and_is_flagged_past_the_tolerance() {
+        let two = Quantity::from_milli(2_000);
+        let menu = reprice_line(
+            &catalog(),
+            &rates(),
+            SalesChannel::DineIn,
+            &line(item(500), two),
+        )
+        .expect("priced");
+        // The app sold it at 140,000₫, 6.67% under the menu's 150,000₫.
+        let quote = Some(vnd(140_000));
+        let app = price_at_source(menu.clone(), quote, true, 0).expect("app");
+        assert_eq!(
+            (app.unit_price, app.line_total, app.repriced),
+            (vnd(140_000), vnd(280_000), true)
+        );
+        let tolerated = price_at_source(menu.clone(), quote, true, 700).expect("within 7%");
+        assert_eq!(
+            (tolerated.line_total, tolerated.repriced),
+            (vnd(280_000), false)
+        );
+        let at_menu = price_at_source(menu.clone(), quote, false, 500).expect("menu");
+        assert_eq!((at_menu.line_total, at_menu.repriced), (vnd(300_000), true));
+        let unquoted = price_at_source(menu.clone(), None, true, 0).expect("no quote");
+        assert_eq!(
+            (unquoted.line_total, unquoted.repriced),
+            (vnd(300_000), false)
+        );
+        let foreign = Money::new(CurrencyCode::USD, 600);
+        let foreign = price_at_source(menu, Some(foreign), true, 10_000).expect("foreign");
+        assert_eq!((foreign.line_total, foreign.repriced), (vnd(300_000), true));
     }
 
     #[test]

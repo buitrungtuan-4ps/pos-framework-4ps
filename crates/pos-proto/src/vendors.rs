@@ -19,7 +19,54 @@ use serde::{Deserialize, Serialize};
 use crate::ids::VendorId;
 use crate::kitchen_release::KitchenRelease;
 use crate::text::DisplayName;
+use crate::wire_enum;
 use crate::wire_enum::Open;
+
+wire_enum! {
+    /// Where a vendor's order is priced
+    /// ([ADR-0248](../../../docs/adr/0248-a-delivery-order-is-priced-paid-and-reconciled-as-the-app-sold-it.md)
+    /// decision 1).
+    VendorPriceSource, prefix = "VENDOR_PRICE_SOURCE";
+    /// At the price the vendor's app quoted for each line, which is what the guest paid. The
+    /// default; a line the app quoted no price for is priced at the store's menu.
+    App = "APP",
+    /// At the store's own menu for the delivery channel, whatever the app quoted.
+    Menu = "MENU",
+}
+
+impl VendorPriceSource {
+    /// A node's value as the store runs it: [`Self::App`] for an absent value and for one this
+    /// release does not know.
+    #[must_use]
+    pub fn read(value: &Open<Self>) -> Self {
+        match value.known() {
+            Self::Menu => Self::Menu,
+            Self::Unspecified | Self::App => Self::App,
+        }
+    }
+}
+
+/// A price source token as a node carries it, any value read leniently: one this release does not
+/// know, or not a string at all, is kept as absent rather than refusing the node.
+fn price_source_token<'de, D>(deserializer: D) -> Result<Open<VendorPriceSource>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(serde_json::Value::deserialize(deserializer)?
+        .as_str()
+        .map_or_else(Open::default, Open::parse))
+}
+
+/// The most a price difference may be tolerated by: 100%, in basis points.
+pub const MAX_PRICE_DIFFERENCE_BPS: u32 = 10_000;
+
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if passes a reference"
+)]
+fn is_zero(value: &u32) -> bool {
+    *value == 0
+}
 
 /// The most vendors one store's node lists.
 pub const MAX_VENDORS: usize = 64;
@@ -53,6 +100,18 @@ pub struct PublishedVendor {
         skip_serializing_if = "crate::wire_enum::is_absent"
     )]
     pub kitchen_release: Open<KitchenRelease>,
+    /// Where the vendor's orders are priced (ADR-0248 decision 1). Absent, from a cloud before the
+    /// setting or a connection that never set it, reads as [`VendorPriceSource::App`].
+    #[serde(
+        default,
+        deserialize_with = "price_source_token",
+        skip_serializing_if = "crate::wire_enum::is_absent"
+    )]
+    pub price_source: Open<VendorPriceSource>,
+    /// How far, in basis points of the menu price, the app's quote may differ from the store's
+    /// menu before the order is flagged; `0` (the default) flags any difference.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub price_difference_bps: u32,
 }
 
 /// The `vendors` config node: the vendors a store takes orders from.
@@ -113,6 +172,7 @@ impl PublishedVendors {
         self.vendors.len() <= MAX_VENDORS
             && self.vendors.iter().enumerate().all(|(index, vendor)| {
                 (MIN_PREP_MINUTES..=MAX_PREP_MINUTES).contains(&vendor.prep_minutes)
+                    && vendor.price_difference_bps <= MAX_PRICE_DIFFERENCE_BPS
                     && !self
                         .vendors
                         .iter()
@@ -124,7 +184,7 @@ impl PublishedVendors {
 
 #[cfg(test)]
 mod tests {
-    use super::{PublishedVendor, PublishedVendors};
+    use super::{PublishedVendor, PublishedVendors, VendorPriceSource};
     use crate::ids::VendorId;
     use crate::text::DisplayName;
     use crate::ulid::Ulid;
@@ -137,6 +197,8 @@ mod tests {
             staff_confirm,
             prep_minutes,
             kitchen_release: Open::default(),
+            price_source: Open::default(),
+            price_difference_bps: 0,
         }
     }
 
@@ -168,5 +230,37 @@ mod tests {
         assert!(!PublishedVendors::new(vec![vendor(1, true, 0)]).is_valid());
         assert!(!PublishedVendors::new(vec![vendor(1, true, 241)]).is_valid());
         assert!(!PublishedVendors::new(vec![vendor(1, true, 20), vendor(1, false, 20)]).is_valid());
+        let mut tolerant = vendor(1, true, 20);
+        tolerant.price_difference_bps = 10_001;
+        assert!(!PublishedVendors::new(vec![tolerant]).is_valid());
+    }
+
+    /// ADR-0248 decision 1: absent or unknown, a vendor's orders are priced at the app's quote;
+    /// the store's menu only where the node says so.
+    #[test]
+    fn a_vendor_s_price_source_reads_as_the_app_unless_it_says_the_menu() {
+        let json = r#"{"vendors":[{"vendor_id":"00000000000000000000000001","display_name":"A",
+            "staff_confirm":false,"prep_minutes":20,"price_source":"VENDOR_PRICE_SOURCE_TELEPATHY"},
+            {"vendor_id":"00000000000000000000000002","display_name":"B","staff_confirm":false,
+            "prep_minutes":20,"price_source":"VENDOR_PRICE_SOURCE_MENU","price_difference_bps":500}]}"#;
+        let node: PublishedVendors = serde_json::from_str(json).expect("lenient");
+        let sources: Vec<_> = node
+            .vendors()
+            .iter()
+            .map(|vendor| {
+                (
+                    VendorPriceSource::read(&vendor.price_source),
+                    vendor.price_difference_bps,
+                )
+            })
+            .collect();
+        assert_eq!(
+            sources,
+            [(VendorPriceSource::App, 0), (VendorPriceSource::Menu, 500)]
+        );
+        assert_eq!(
+            VendorPriceSource::read(&vendor(1, false, 20).price_source),
+            VendorPriceSource::App
+        );
     }
 }

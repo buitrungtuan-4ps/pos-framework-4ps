@@ -3987,6 +3987,41 @@ test("a guest's QR order shows its table by the floor's label, and the queue ref
 // queue on the tap. A refusal puts it back with its sentence; an answer that is lost puts it back and
 // reads the queue again, which finds whether the store made it. The demo store takes no QR orders,
 // so the queue and both acts are answered here, and each act is counted to show it is sent once.
+// A delivery order whose app price differs from the menu past the vendor's tolerance is flagged on
+// the guests' queue and the counter list before staff take it (ADR-0248 decision 1). minimal-edge
+// takes no delivery order, so both reads are answered with a flagged one.
+test("a delivery order priced off the menu is flagged on the guests' queue and the counter", async ({ page }) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    const money = (amount) => ({ amount_minor: amount, currency_code: "VND" });
+    const order = {
+      order_id: "01J0000000000000000000DEL1",
+      items: [{ display_name: "Margherita", quantity: { milli: 1000 } }],
+      vendor_name: "Sandbox delivery",
+      price_differs: true,
+    };
+    await page.route("**/api/orders/awaiting-confirmation", (route) =>
+      route.fulfill({
+        json: {
+          orders: [{ ...order, table_id: "", items: [{ ...order.items[0], line_total: money(100_000) }], total: money(110_000), confirm_fires: false }],
+          reject_reasons: [],
+        },
+      }),
+    );
+    await page.route("**/api/orders/open", (route) => route.fulfill({ json: [{ ...order, total_due: money(110_000) }] }));
+    await navigateTo(page, "/guests");
+    await expect(page.locator('[data-outcome="price-differs"]')).toHaveText(
+      "The app's price differs from the menu. Check the order before accepting.",
+    );
+    await navigateTo(page, "/counter");
+    await expect(page.locator('[data-step="charge"]').first()).toContainText("App price differs from the menu");
+  } finally {
+    await edge.stop();
+  }
+});
+
 test("a guest's order confirmed or refused leaves the queue at once, and a refusal or a lost answer is read", async ({
   page,
 }) => {

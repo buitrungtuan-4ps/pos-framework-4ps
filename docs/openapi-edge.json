@@ -6418,6 +6418,10 @@
           "order_id": {
             "type": "string"
           },
+          "price_differs": {
+            "type": "boolean",
+            "description": "Whether the app's quoted price differed from the store's menu past the vendor's tolerance\n(ADR-0248 decision 1). Left off while false."
+          },
           "queue_number": {
             "type": "integer",
             "format": "int64",
@@ -10880,6 +10884,10 @@
           },
           "order_id": {
             "type": "string"
+          },
+          "price_differs": {
+            "type": "boolean",
+            "description": "Whether the app's quoted price differed from the store's menu past the vendor's tolerance\n([ADR-0248](../../../../docs/adr/0248-a-delivery-order-is-priced-paid-and-reconciled-as-the-app-sold-it.md)\ndecision 1), so staff check the order before accepting it. Left off while false."
           },
           "table_id": {
             "type": "string",

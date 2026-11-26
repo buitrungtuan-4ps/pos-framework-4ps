@@ -83,6 +83,7 @@ impl<S: EventStore> Edge<S> {
         // taken microseconds earlier, and the config-pull loop can swap the session between the
         // two; recomputing would reintroduce the disagreement this replaces, just more rarely.
         let vendor_id = intake.as_ref().and_then(|intent| intent.vendor_id);
+        let price_differs = intake.as_ref().is_some_and(|intent| intent.repriced);
         let holds_for_staff =
             session.holds_for_staff_confirmation(order_channel, table_id, vendor_id);
         let joins =
@@ -135,6 +136,7 @@ impl<S: EventStore> Edge<S> {
             projection.record_opened(order_id, None, package_version_id);
             projection.record_recipient(order_id, opened.subject_id);
             projection.record_vendor(order_id, vendor_id);
+            projection.record_price_flag(order_id, price_differs);
         }
         if let Some((ctx, applied)) = fires {
             self.apply_fires(&ctx, applied);
@@ -215,6 +217,13 @@ impl<S: EventStore> Edge<S> {
             .vendors
             .get(vendor_id)
             .map(|vendor| vendor.display_name.clone())
+    }
+
+    /// Whether `order_id` came from outside the store at a quoted price that differed from the
+    /// store's menu past its vendor's tolerance (ADR-0248 decision 1): the till flags it.
+    #[must_use]
+    pub fn order_price_differs(&self, order_id: OrderId) -> bool {
+        self.lock_projection().price_flagged(order_id)
     }
 
     /// Whether the kitchen has made every line of `order_id`: each one still on it bumped.

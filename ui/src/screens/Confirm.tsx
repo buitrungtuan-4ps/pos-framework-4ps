@@ -47,6 +47,23 @@ function heading(order: { table_id: string; vendor_name?: string }): string {
     : t("confirm.table", { table: tableLabel(order.table_id) });
 }
 
+/**
+ * A waiting order's heading, and a warning when the app's price differed from the store's menu
+ * past the vendor's tolerance, so staff check it before accepting (ADR-0248 decision 1).
+ */
+function OrderHeading(props: { order: WaitingOrder }) {
+  return (
+    <>
+      <h3 class="text-lg font-semibold">{heading(props.order)}</h3>
+      <Show when={props.order.price_differs === true}>
+        <p class="mt-1 text-sm font-semibold text-danger" data-outcome="price-differs">
+          {t("confirm.price_differs")}
+        </p>
+      </Show>
+    </>
+  );
+}
+
 export function Confirm() {
   const [orders, setOrders] = createSignal<WaitingOrder[] | null>(null);
   const [reasons, setReasons] = createSignal<RejectReason[]>([]);
@@ -123,9 +140,7 @@ export function Confirm() {
         <For each={orders() ?? []}>
           {(order) => (
             <li class="rounded-token border border-line bg-surface p-4" data-outcome="guest-order">
-              <h3 class="text-lg font-semibold">
-                {heading(order)}
-              </h3>
+              <OrderHeading order={order} />
               <ul class="mt-2 flex list-none flex-col gap-1 p-0 text-sm">
                 <For each={order.items}>
                   {(line) => (

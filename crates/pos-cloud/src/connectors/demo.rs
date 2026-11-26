@@ -10,18 +10,20 @@
 //! The body is JSON:
 //!
 //! ```json
-//! { "order_ref": "D-1001", "placed_at_ms": 1800000000000,
-//!   "items": [{ "sku": "PIZZA-M", "quantity": 2, "note": "no basil" }],
+//! { "order_ref": "D-1001", "placed_at_ms": 1800000000000, "currency": "VND",
+//!   "items": [{ "sku": "PIZZA-M", "quantity": 2, "unit_price": 140000, "note": "no basil" }],
 //!   "deliver_to": { "name": "…", "phone": "…", "address": "…" } }
 //! ```
 //!
-//! `deliver_to` is optional; when it is there, all three are.
+//! `deliver_to` is optional; when it is there, all three are. `unit_price` is optional, the price
+//! the app sold the item at in the currency's minor units, and needs the order's `currency`.
 //!
 //! and the header `x-demo-signature` is `sha256=` and the lowercase hex HMAC-SHA256 of the raw body
 //! under the connection's `webhook_secret`.
 
 use hmac::digest::KeyInit as _;
 use hmac::{Hmac, Mac};
+use pos_proto::money::{CurrencyCode, Money};
 use pos_providers::{Family, FieldKind, ProviderDescriptor, SettingField};
 use serde::Deserialize;
 use sha2::Sha256;
@@ -80,6 +82,23 @@ pub static PROVIDER: ProviderDescriptor = ProviderDescriptor {
             required: false,
         },
         SettingField {
+            key: super::vendors::PRICE_SOURCE,
+            label_key: "provider.field.price_source",
+            kind: FieldKind::Choice {
+                options: super::vendors::PRICE_SOURCE_OPTIONS,
+            },
+            required: false,
+        },
+        SettingField {
+            key: super::vendors::PRICE_DIFFERENCE_BPS,
+            label_key: "provider.field.price_difference_bps",
+            kind: FieldKind::Number {
+                min: 0,
+                max: pos_proto::vendors::MAX_PRICE_DIFFERENCE_BPS as i64,
+            },
+            required: false,
+        },
+        SettingField {
             key: WEBHOOK_SECRET,
             label_key: "provider.field.webhook_secret",
             kind: FieldKind::Secret { max_len: 128 },
@@ -102,6 +121,8 @@ struct DemoOrder {
     items: Vec<DemoItem>,
     #[serde(default)]
     deliver_to: Option<DemoRecipient>,
+    #[serde(default)]
+    currency: Option<String>,
 }
 
 /// Who the demo vendor's order goes to.
@@ -120,6 +141,8 @@ struct DemoItem {
     quantity: u32,
     #[serde(default)]
     note: Option<String>,
+    #[serde(default)]
+    unit_price: Option<i64>,
 }
 
 impl OrderConnector for DemoConnector {
@@ -146,18 +169,30 @@ impl OrderConnector for DemoConnector {
     fn read(&self, body: &[u8]) -> Result<VendorOrder, &'static str> {
         let order: DemoOrder =
             serde_json::from_slice(body).map_err(|_| "the body is not a demo vendor order")?;
+        let currency = order
+            .currency
+            .as_deref()
+            .map(CurrencyCode::parse)
+            .transpose()
+            .map_err(|_| "the order's currency is not an ISO 4217 code")?;
+        let mut lines = Vec::with_capacity(order.items.len());
+        for item in order.items {
+            let unit_price = match (item.unit_price, currency) {
+                (None, _) => None,
+                (Some(minor), Some(currency)) if minor >= 0 => Some(Money::new(currency, minor)),
+                (Some(_), _) => return Err("a unit price is at least 0, in the order's currency"),
+            };
+            lines.push(VendorLine {
+                item_code: item.sku,
+                quantity: item.quantity,
+                note: item.note,
+                unit_price,
+            });
+        }
         Ok(VendorOrder {
             reference: order.order_ref,
             placed_at_ms: order.placed_at_ms,
-            lines: order
-                .items
-                .into_iter()
-                .map(|item| VendorLine {
-                    item_code: item.sku,
-                    quantity: item.quantity,
-                    note: item.note,
-                })
-                .collect(),
+            lines,
             recipient: order.deliver_to.map(|to| VendorRecipient {
                 name: to.name,
                 phone: to.phone,
@@ -210,6 +245,8 @@ pub fn sign(body: &[u8], secret: &str) -> Option<String> {
 mod tests {
     use axum::http::{HeaderMap, HeaderValue};
 
+    use pos_proto::money::{CurrencyCode, Money};
+
     use super::{DemoConnector, PROVIDER, SIGNATURE_HEADER, sign};
     use crate::connectors::OrderConnector as _;
 
@@ -260,6 +297,29 @@ mod tests {
                 .is_err(),
             "a field the format does not have is refused"
         );
+        assert_eq!(order.lines[0].unit_price, None, "no price quoted");
+    }
+
+    /// ADR-0248 decision 1: the app's price for each item rides the line, in the order's currency.
+    #[test]
+    fn the_demo_order_quotes_the_app_s_price_in_its_currency() {
+        let order = DemoConnector
+            .read(
+                br#"{"order_ref":"D-2","placed_at_ms":1,"currency":"VND",
+                    "items":[{"sku":"PIZZA-M","quantity":1,"unit_price":140000}]}"#,
+            )
+            .expect("reads");
+        assert_eq!(
+            order.lines[0].unit_price,
+            Some(Money::new(CurrencyCode::VND, 140_000))
+        );
+        for bad in [
+            &br#"{"order_ref":"D","placed_at_ms":1,"items":[{"sku":"A","quantity":1,"unit_price":1}]}"#[..],
+            br#"{"order_ref":"D","placed_at_ms":1,"currency":"VND","items":[{"sku":"A","quantity":1,"unit_price":-1}]}"#,
+            br#"{"order_ref":"D","placed_at_ms":1,"currency":"dong","items":[]}"#,
+        ] {
+            assert!(DemoConnector.read(bad).is_err());
+        }
     }
 
     #[test]

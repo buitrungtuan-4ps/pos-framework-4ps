@@ -3263,5 +3263,9 @@
   "integrations.publishTo": "Integrations for {store}",
   "integrations.publish": "Publish integrations",
   "integrations.publishNeedsStore": "Choose a store first.",
-  "integrations.published": "Published: {connections} connections and {vendors} delivery apps."
+  "integrations.published": "Published: {connections} connections and {vendors} delivery apps.",
+  "provider.field.price_source": "Price delivery orders at",
+  "provider.field.price_source.VENDOR_PRICE_SOURCE_APP": "The app's price (what the guest paid)",
+  "provider.field.price_source.VENDOR_PRICE_SOURCE_MENU": "The store's delivery menu",
+  "provider.field.price_difference_bps": "Flag a price that differs from the menu by more than (basis points, 100 = 1%; 0 flags any difference)"
 }

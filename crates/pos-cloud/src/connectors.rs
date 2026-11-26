@@ -90,6 +90,11 @@ pub struct VendorLine {
     pub quantity: u32,
     /// The guest's note, which stays at the store and never enters the event log.
     pub note: Option<String>,
+    /// The unit price the vendor's app sold the item at, where the vendor says
+    /// ([ADR-0248](../../../docs/adr/0248-a-delivery-order-is-priced-paid-and-reconciled-as-the-app-sold-it.md)
+    /// decision 1): passed to the store as the line's quote, which prices it under the connection's
+    /// `price_source`.
+    pub unit_price: Option<pos_proto::money::Money>,
 }
 
 /// What one vendor decides: how its webhook is signed, and how its order reads. Pure: no I/O, no
@@ -191,8 +196,9 @@ pub fn to_inbound(
             menu_item_id,
             quantity: Quantity::from_milli(i64::from(line.quantity).saturating_mul(1_000)),
             modifier_menu_item_ids: Vec::new(),
-            // The store's own price is what counts: no quote is passed, so nothing is repriced.
-            quoted_unit_price: None,
+            // The app's price, where the vendor quoted one: the store prices the line at its
+            // connection's source and flags a difference (ADR-0248 decision 1).
+            quoted_unit_price: line.unit_price,
             note: line
                 .note
                 .as_deref()
@@ -243,6 +249,7 @@ mod tests {
             item_code: code.to_owned(),
             quantity,
             note: None,
+            unit_price: None,
         }
     }
 
@@ -287,7 +294,26 @@ mod tests {
         assert_eq!(inbound.lines[0].quantity, Quantity::from_milli(2_000));
         assert_eq!(
             inbound.lines[0].quoted_unit_price, None,
-            "the store prices it"
+            "no quote from a vendor that sends no price"
+        );
+        let mut quoted = line("PIZZA-M", 1);
+        quoted.unit_price = Some(pos_proto::money::Money::new(
+            pos_proto::money::CurrencyCode::VND,
+            140_000,
+        ));
+        let inbound = to_inbound(
+            "01J0000000000000000000CN01",
+            store,
+            &order(vec![quoted]),
+            &map,
+        )
+        .expect("maps");
+        assert_eq!(
+            inbound.lines[0]
+                .quoted_unit_price
+                .map(|price| price.amount_minor),
+            Some(140_000),
+            "the app's price rides as the line's quote (ADR-0248)"
         );
 
         assert_eq!(

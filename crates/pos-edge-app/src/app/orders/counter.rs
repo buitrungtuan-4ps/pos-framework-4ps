@@ -159,6 +159,7 @@ impl<S: EventStore> Edge<S> {
                 total_due: self.order_totals(order_id)?.total_due,
                 bill_id,
                 vendor_name: self.vendor_name(vendor_id),
+                price_differs: self.order_price_differs(order_id),
             });
         }
         Ok(views)
