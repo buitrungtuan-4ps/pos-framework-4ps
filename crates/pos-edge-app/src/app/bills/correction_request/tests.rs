@@ -243,7 +243,10 @@ fn the_store_records_each_decision_on_a_bill_it_asked_about_once() {
         // HQ changes its mind later: the newer decision is recorded too.
         decided_at(&restarted, asked, CorrectionDecision::Approved, 20);
         assert_eq!(restarted.record_correction_decisions().await.ok(), Some(1));
-        let recorded = decided_events(&store).await;
+        // The log orders by event id, and the restarted box mints its own: two events in one
+        // millisecond may read back in either order, so they are read in the order HQ decided.
+        let mut recorded = decided_events(&store).await;
+        recorded.sort_by_key(|decided| decided.decided_time);
         assert_eq!(recorded.len(), 2);
         assert_eq!(recorded[0].bill_id, asked);
         assert!(!recorded[0].approved());
