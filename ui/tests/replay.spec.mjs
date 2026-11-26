@@ -4627,6 +4627,8 @@ test("a delivery order shows its vendor on the counter list and the kitchen boar
     await expect(page.locator('[data-step="charge"]').first()).toContainText("Delivery: Sandbox delivery");
     await navigateTo(page, "/kds");
     await expect(page.locator('[data-step="onBump"]').first()).toContainText("Delivery: Sandbox delivery");
+    // The board keeps polling through the route: wait for any fetch in flight before the edge stops.
+    await page.unrouteAll({ behavior: "wait" });
   } finally {
     await edge.stop();
   }
