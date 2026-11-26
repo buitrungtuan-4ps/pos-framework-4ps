@@ -236,6 +236,39 @@ async fn ops_reads_the_list_and_cannot_correct() {
     assert_eq!(correct.status(), StatusCode::FORBIDDEN);
 }
 
+/// An invoice the store issued "number pending" is not corrected until the vendor numbers it: a
+/// correction names the number it corrects (ADR-0251).
+#[tokio::test]
+async fn an_invoice_waiting_for_the_vendors_number_is_not_corrected_yet() {
+    let (router, submissions, _admin) = app().await;
+    let waiting = "01KCCCCCCCCCCCCCCCCCCCCCCC";
+    submissions
+        .record(SubmissionRow {
+            invoice_id: waiting.to_owned(),
+            bill_id: "01KEEEEEEEEEEEEEEEEEEEEEEE".to_owned(),
+            invoice_number: format!("PENDING/{waiting}"),
+            state: "PENDING".to_owned(),
+            ..original()
+        })
+        .await
+        .expect("record");
+    let cookie = admin_cookie(&router).await;
+    let correct = router
+        .oneshot(post_with_cookie(
+            &format!("/admin/einvoices/{waiting}/correct"),
+            &serde_json::json!({ "tenant_id": tenant().to_string(), "kind": "ADJUSTMENT", "total_minor": -165_000 }),
+            &cookie,
+        ))
+        .await
+        .expect("route");
+    assert_eq!(correct.status(), StatusCode::CONFLICT);
+    let body = json_body(correct).await;
+    assert_eq!(
+        body["error"]["details"][0]["reason"],
+        "E_INVOICE_NUMBER_PENDING"
+    );
+}
+
 const REQUEST: &str = "01KDDDDDDDDDDDDDDDDDDDDDDD";
 const BILL: &str = "01KBBBBBBBBBBBBBBBBBBBBBBB";
 

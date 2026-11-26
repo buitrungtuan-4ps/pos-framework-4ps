@@ -27,7 +27,7 @@ mod vendor;
 pub use correction::{
     CORRECTION_DECISIONS_MAX, CorrectionDecision, CorrectionRequest, DecidedCorrection,
 };
-pub use vendor::{VENDOR_NUMBERS_MAX, VendorNumber};
+pub use vendor::{VENDOR_NUMBERS_MAX, VendorCode, VendorNumber};
 
 wire_enum! {
     /// When a settled bill issues an e-invoice (ADR-0229 decision 1).

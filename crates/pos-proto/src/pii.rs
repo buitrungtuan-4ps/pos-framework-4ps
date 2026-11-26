@@ -209,6 +209,8 @@ no_pii!(
     einvoice::InvoiceSchedule,
     einvoice::CorrectionRequest,
     einvoice::DecidedCorrection,
+    einvoice::VendorNumber,
+    einvoice::VendorCode,
     fees::FrozenFee,
     events::BillFeeLine,
     events::BillTaxLine,

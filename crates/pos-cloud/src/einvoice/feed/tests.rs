@@ -423,7 +423,10 @@ async fn a_pending_invoice_is_numbered_by_the_vendor_and_its_number_written_for_
         .iter()
         .map(|(_, at, entry)| {
             assert_eq!(*at, store());
-            (entry.bill_id.to_string(), entry.invoice_number.clone())
+            (
+                entry.bill_id.to_string(),
+                entry.invoice_number.as_str().to_owned(),
+            )
         })
         .collect();
     learned.sort();

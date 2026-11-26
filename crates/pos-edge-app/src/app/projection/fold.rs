@@ -448,7 +448,8 @@ impl<S: EventStore> Edge<S> {
             EventType::FiscalInvoiceIssued
             | EventType::FiscalInvoiceScheduled
             | EventType::FiscalCorrectionRequested
-            | EventType::FiscalCorrectionDecided => {
+            | EventType::FiscalCorrectionDecided
+            | EventType::FiscalInvoiceNumbered => {
                 Self::fold_fiscal(projection, envelope, known)?;
             }
             _ => {}
@@ -471,6 +472,10 @@ impl<S: EventStore> Edge<S> {
             let event: pos_proto::events::FiscalCorrectionDecided =
                 envelope.data.decode().map_err(AppError::Encode)?;
             projection.invoices.fold_decided(&event.decision);
+        } else if known == EventType::FiscalInvoiceNumbered {
+            let event: pos_proto::events::FiscalInvoiceNumbered =
+                envelope.data.decode().map_err(AppError::Encode)?;
+            projection.invoices.fold_numbered(&event.number);
         } else if known == EventType::FiscalInvoiceIssued {
             let event: FiscalInvoiceIssued = envelope.data.decode().map_err(AppError::Encode)?;
             projection

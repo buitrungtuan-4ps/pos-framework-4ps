@@ -23,7 +23,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::chain::ChainHash;
-use crate::einvoice::{CorrectionRequest, DecidedCorrection, FiscalInvoice, InvoiceSchedule};
+use crate::einvoice::{
+    CorrectionRequest, DecidedCorrection, FiscalInvoice, InvoiceSchedule, VendorNumber,
+};
 use crate::enums::{
     PaymentMethod, PaymentOutcome, ReductionKind, SalesChannel, ShipmentStatus,
     StockLedgerEntryKind,
@@ -456,6 +458,14 @@ event_catalogue! {
     FiscalCorrectionDecided => "fiscal.correction.decided", version = 1 {
         /// The bill, approved or declined, by which console user and when.
         decision: DecidedCorrection,
+    },
+    /// The vendor's number for a bill's e-invoice issued "number pending" reached the store on its
+    /// `einvoice` node
+    /// ([ADR-0251](../../../docs/adr/0251-a-vendor-numbered-invoice-waits-for-its-number-and-the-store-learns-it.md)
+    /// decision 4).
+    FiscalInvoiceNumbered => "fiscal.invoice.numbered", version = 1 {
+        /// The bill, its invoice's number and the vendor's reference.
+        number: VendorNumber,
     },
     /// A settled bill's e-invoice will be issued when due, in the settle's transaction (ADR-0229).
     FiscalInvoiceScheduled => "fiscal.invoice.scheduled", version = 1 {

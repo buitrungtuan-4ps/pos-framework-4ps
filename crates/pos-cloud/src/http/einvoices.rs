@@ -268,6 +268,14 @@ where
         .await
         .map_err(|_| service_unavailable("e-invoice submissions"))?
         .ok_or_else(|| api_error(ErrorStatus::NotFound, "no such invoice"))?;
+    if crate::einvoice::vendor_numbers::is_pending(&original.invoice_number) {
+        // A correction names the number it corrects, which the vendor has not yet given (ADR-0251).
+        return Err(api_error_with_details(
+            ErrorStatus::FailedPrecondition,
+            "the invoice waits for the vendor's number",
+            &[("invoice_id", "E_INVOICE_NUMBER_PENDING")],
+        ));
+    }
     let kind = if request.kind == "REPLACEMENT" {
         EInvoiceKind::Replacement
     } else {

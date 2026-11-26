@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use pos_core::decision::Actor;
-use pos_proto::einvoice::{DecidedCorrection, InvoiceSymbol};
+use pos_proto::einvoice::{DecidedCorrection, InvoiceSymbol, VendorNumber};
 use pos_proto::events::{FiscalInvoiceIssued, FiscalInvoiceScheduled};
 use pos_proto::ids::{BillId, EventId, SubjectId};
 use pos_proto::time::Timestamp;
@@ -151,6 +151,42 @@ impl Invoices {
     }
 
     /// The number and lookup code of the invoice issued for `bill_id`, if one was.
+    /// Folds the vendor's number for a bill whose invoice was issued "number pending" (ADR-0251
+    /// decision 4): the bill's reference takes it, the bill no longer waits, and a number under a
+    /// symbol counts as that symbol's, so a store switched back to the POS numbers after it
+    /// (decision 5).
+    pub(in crate::app) fn fold_numbered(&mut self, numbered: &VendorNumber) {
+        self.awaiting_number.remove(&numbered.bill_id);
+        if let Some((reference, _)) = self.invoiced.get_mut(&numbered.bill_id) {
+            reference.number = Some(numbered.invoice_number.as_str().to_owned());
+        }
+        let parsed =
+            numbered
+                .invoice_number
+                .as_str()
+                .rsplit_once('/')
+                .and_then(|(symbol, sequence)| {
+                    Some((InvoiceSymbol::parse(symbol)?, sequence.parse::<u32>().ok()?))
+                });
+        if let Some((symbol, sequence)) = parsed {
+            let last = self.last.entry(symbol).or_insert(0);
+            *last = (*last).max(sequence);
+        }
+    }
+
+    /// The published numbers for bills still waiting for one, newest per bill.
+    pub(in crate::app) fn unnumbered(&self, published: &[VendorNumber]) -> Vec<VendorNumber> {
+        let mut newest: BTreeMap<BillId, &VendorNumber> = BTreeMap::new();
+        for numbered in published {
+            newest.insert(numbered.bill_id, numbered);
+        }
+        newest
+            .into_values()
+            .filter(|numbered| self.awaiting_number.contains(&numbered.bill_id))
+            .cloned()
+            .collect()
+    }
+
     /// Whether any invoice issued "number pending" still waits for the vendor's number.
     pub(in crate::app) fn awaits_vendor_numbers(&self) -> bool {
         !self.awaiting_number.is_empty()

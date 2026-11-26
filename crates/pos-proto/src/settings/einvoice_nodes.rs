@@ -5,7 +5,9 @@
 //! ([ADR-0229](../../../../docs/adr/0229-the-e-invoice-issue-moment-is-a-schedule.md)), apart from
 //! `nodes.rs`, which is at its size limit.
 
-use crate::einvoice::{self, EInvoiceIssueMoment, EInvoiceSymbolAllocation, PublishedEInvoice};
+use crate::einvoice::{
+    self, EInvoiceIssueMoment, EInvoiceNumberSource, EInvoiceSymbolAllocation, PublishedEInvoice,
+};
 use crate::wire_enum::WireEnum;
 
 use super::{NEXT_RELEASE, STORE_WIDE, Setting, SettingShape, SettingUnit, choices};
@@ -88,7 +90,39 @@ pub(super) fn einvoice_settings() -> Vec<Setting> {
                       pack seeds, allocates one when a box is activated for a store with none and \
                       with each lease bump. The cloud reads it; the edge does not.",
         },
+        number_source_setting(),
     ]
+}
+
+/// `einvoice.number_source`: who numbers the store's invoices
+/// ([ADR-0251](../../../../docs/adr/0251-a-vendor-numbered-invoice-waits-for-its-number-and-the-store-learns-it.md)).
+/// `HYBRID` is offered only once its offline symbol is built (decision 8).
+pub(super) fn number_source_setting() -> Setting {
+    Setting {
+        node: PublishedEInvoice::NODE,
+        field: "number_source",
+        shape: SettingShape::Choice {
+            values: vec![
+                EInvoiceNumberSource::Pos.as_wire(),
+                EInvoiceNumberSource::Vendor.as_wire(),
+            ],
+            default: PublishedEInvoice::default().number_source().as_wire(),
+            // Which source a seller may use is to be confirmed by legal and the vendor, so no
+            // template chooses for the tenant.
+            preset: None,
+        },
+        scopes: STORE_WIDE,
+        since: NEXT_RELEASE,
+        confirm: None,
+        summary: "Who numbers the store's e-invoices. `EINVOICE_NUMBER_SOURCE_POS`, the default, \
+                  numbers each at issue from the store's own symbol, offline too; `_VENDOR` issues \
+                  it at the same moment \"number pending\", the cloud asks the vendor for the \
+                  number, and the store learns it at its next config pull, after which a copy of \
+                  the receipt prints it. Numbering stays gapless either way: a store switched \
+                  back to the POS keeps issuing \"number pending\" until no invoice waits. \
+                  Whether a seller may let the vendor number is to be confirmed by legal and the \
+                  vendor.",
+    }
 }
 
 /// The `billing` node's card setting (ADR-0243), apart from `nodes.rs`, which is at its size limit.

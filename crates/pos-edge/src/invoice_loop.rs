@@ -45,7 +45,8 @@ pub fn spawn_invoice_issuing<S>(
     });
 }
 
-/// One tick: the deferred invoices that fell due, then HQ's correction decisions (ADR-0250), each
+/// One tick: the deferred invoices that fell due, the vendor's numbers for invoices issued "number
+/// pending" (ADR-0251), then HQ's correction decisions (ADR-0250), each
 /// recorded once whether it arrived before a restart or after. Counts only: no bill or buyer is
 /// named in a log.
 async fn tick<S: EventStore>(edge: &Edge<S>) {
@@ -54,6 +55,13 @@ async fn tick<S: EventStore>(edge: &Edge<S>) {
         Ok(issued) => tracing::info!(issued, "issued deferred e-invoices"),
         Err(error) => {
             tracing::warn!(%error, "issuing deferred e-invoices failed; retrying next tick");
+        }
+    }
+    match edge.record_vendor_numbers().await {
+        Ok(0) => {}
+        Ok(recorded) => tracing::info!(recorded, "recorded the vendor's e-invoice numbers"),
+        Err(error) => {
+            tracing::warn!(%error, "recording the vendor's e-invoice numbers failed; retrying next tick");
         }
     }
     match edge.record_correction_decisions().await {

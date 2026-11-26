@@ -22,6 +22,19 @@ export function stateTone(state: string): "active" | "danger" | "neutral" {
   return state === "REJECTED" ? "danger" : "neutral";
 }
 
+/**
+ * Whether the invoice waits for the vendor's number: the store issued it "number pending" and the
+ * cloud holds a placeholder until the vendor numbers it (ADR-0251). It cannot be corrected yet.
+ */
+export function numberPending(number: string): boolean {
+  return number.startsWith("PENDING/");
+}
+
+/** The number column's text: the number, or that the vendor has not yet given one. */
+export function numberText(number: string): string {
+  return numberPending(number) ? t("einvoices.numberPending") : number;
+}
+
 /** The money exponent of the currencies the pilot sells in; VND and JPY have none. */
 function exponentOf(currency: string): number {
   return currency === "VND" || currency === "JPY" ? 0 : 2;
@@ -92,7 +105,7 @@ export function InvoiceList() {
         pageSize={25}
         searchText={(row) => `${row.invoice_number} ${row.state}`}
         columns={[
-          { key: "number", header: t("einvoices.colNumber"), cell: (row) => <span class="font-mono">{row.invoice_number}</span>, sortValue: (row) => row.invoice_number },
+          { key: "number", header: t("einvoices.colNumber"), cell: (row) => <span class="font-mono">{numberText(row.invoice_number)}</span>, sortValue: (row) => row.invoice_number },
           { key: "date", header: t("einvoices.colDate"), cell: (row) => <>{row.issued_on}</>, sortValue: (row) => row.issued_on },
           { key: "kind", header: t("einvoices.colKind"), cell: (row) => <>{t(`einvoices.kind.${row.kind}` as never)}</> },
           { key: "total", header: t("einvoices.colTotal"), cell: (row) => <>{formatMinor(row.total_minor, exponentOf(row.currency))} {row.currency}</> },
@@ -100,9 +113,9 @@ export function InvoiceList() {
           { key: "detail", header: t("einvoices.colDetail"), cell: (row) => <span class="text-sm text-ink-muted">{row.refusal ?? row.authority_reference ?? row.corrects_invoice_number ?? ""}</span> },
         ]}
         actions={(row) => (
-          <Button variant="ghost" onClick={() => setOpen(row)}>
-            {t("einvoices.correct")}
-          </Button>
+          <Show when={!numberPending(row.invoice_number)}>
+            <Button variant="ghost" onClick={() => setOpen(row)}>{t("einvoices.correct")}</Button>
+          </Show>
         )}
         actionsHeader={t("einvoices.colActions")}
       />
