@@ -364,6 +364,10 @@ pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
         RouteGate::Person(&[Permission::ManageTables]),
     ),
     (
+        "POST /api/tables/{id}/guests",
+        RouteGate::Person(&[Permission::ManageTables]),
+    ),
+    (
         "POST /api/tables/{id}/lines",
         RouteGate::Person(&[Permission::AddLine]),
     ),

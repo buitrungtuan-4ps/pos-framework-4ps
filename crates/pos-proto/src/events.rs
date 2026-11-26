@@ -92,28 +92,27 @@ event_catalogue! {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         opened_by_action_id: Option<ActionKey>,
     },
-    /// An order reached a terminal state.
-    ///
-    /// Declared beyond the specification's list: the order lifecycle had no terminal
-    /// event distinct from bill settlement, and an order can also end by being voided.
+    /// An order reached a terminal state (declared beyond the specification's list: an order can
+    /// end other than by a settled bill).
     SalesOrderClosed => "sales.order.closed", version = 1 {
         /// The order.
         order_id: OrderId,
         /// Why a tableless order nothing was sold on was closed, from the store's reasons for
-        /// `REASON_ACTION_CLOSE_ORDER`
-        /// ([ADR-0221](../../../docs/adr/0221-a-bar-tab-is-an-order-without-a-table-that-stays-open.md)).
-        /// Absent on a released table, a refused guest order, a close where the store's list
-        /// gives no such reason, and every close written before this field; left off the wire
-        /// while absent.
+        /// `REASON_ACTION_CLOSE_ORDER` (ADR-0221). Absent otherwise and on older closes; left off
+        /// the wire while absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason_code_id: Option<ReasonCodeId>,
     },
-    /// A line was added to an order.
-    ///
-    /// Carries the **line snapshot** required by `docs/pos-spec.md` §14.2: price, tax
-    /// class and the rate in force, and the display name, all captured now. A line
-    /// never references the live menu, so editing or deleting a menu item cannot alter
-    /// an open order or a settled bill.
+    /// A seated table's guest count, recorded on its open order after the seat (ADR-0254). The
+    /// latest count wins over the one `sales.order.opened` carried.
+    SalesOrderGuestsCounted => "sales.order.guests_counted", version = 1 {
+        /// The table's open order.
+        order_id: OrderId,
+        /// How many guests, at least one.
+        guest_count: u16,
+    },
+    /// A line was added to an order, with the **line snapshot** of `docs/pos-spec.md` §14.2: price,
+    /// tax class, rate and display name captured now, so a menu edit never alters an order or bill.
     SalesOrderLineAdded => "sales.order_line.added", version = 1 {
         /// The order.
         order_id: OrderId,

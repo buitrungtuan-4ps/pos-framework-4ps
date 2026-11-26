@@ -2990,6 +2990,7 @@
   "designer.action.sales_item_mark_sold_out": "Đánh dấu hết món",
   "designer.action.sales_item_restore": "Mở bán lại món",
   "designer.action.sales_table_seat": "Xếp bàn",
+  "designer.action.sales_table_count_guests": "Ghi số khách",
   "designer.action.sales_table_release": "Trả bàn",
   "designer.action.sales_table_clean": "Đánh dấu bàn đã dọn",
   "designer.action.sales_order_transfer": "Chuyển bàn",

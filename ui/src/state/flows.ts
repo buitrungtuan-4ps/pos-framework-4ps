@@ -21,7 +21,9 @@ import { createEffect, createRoot, createSignal } from "solid-js";
 
 import DEFAULT_PACKAGE from "../package/default-package.json";
 import { resolveVariant, type Variant } from "../../../packages/package-renderer/src/variant";
-import { t } from "../i18n";
+import { ApiError } from "../api/client";
+import { t, type MessageKey } from "../i18n";
+import en from "../i18n/en.json";
 import { governs, needsRules, startTillRules, tillRules, type Fact, type Facts, type Flow, type FlowStep } from "../rules/till-rules";
 import { reactionsNeedRules } from "./reactions";
 
@@ -250,13 +252,40 @@ export function lineWaits(tableId: string, lineCount: number): string | null {
   return missingFor("sales.line.add", DINE_IN_TOKEN, { channel: DINE_IN_TOKEN, order }, guests === "skipped", tableId, SEAT_ACT);
 }
 
-/** What the till says of a step a line waits on. */
+/** What the till says of a step a line waits on: the guest count asked in place, any other by its act. */
 export function flowWaitSentence(step: string): string {
-  return isGuestStep(step) ? t("order.flow_waits_guests") : t("order.flow_waits_step", { step });
+  return isGuestStep(step) ? t("order.flow_waits_guests") : t("order.flow_waits_step", { step: stepInWords(step) });
+}
+
+/**
+ * A step in the till's words: what its act does (`flow.act.*`), never its step id or act id
+ * (ADR-0254 decision 5). A step no running flow names, or an act this release has no words for, is
+ * "another step".
+ */
+export function stepInWords(step: string): string {
+  const act = activeFlows()
+    .flatMap((variant) => variant.body.steps)
+    .find((candidate) => candidate.step_id === step)?.action_id;
+  const key = act === undefined || act === null ? "" : `flow.act.${act.replaceAll(".", "_")}`;
+  return Object.hasOwn(en, key) ? t(key as MessageKey) : t("flow.act.unnamed");
+}
+
+/**
+ * After the edge refused a line for want of a guest count on a table this till did not seat, the
+ * till knows the count is missing and asks for it in place (ADR-0254), as it does for its own seats.
+ */
+export function learnMissingGuests(tableId: string, caught: unknown): void {
+  if (!(caught instanceof ApiError) || caught.reason !== "FLOW_PREREQUISITE_UNMET") {
+    return;
+  }
+  const step = /step (\S+) of flow/.exec(caught.message)?.[1] ?? "";
+  if (isGuestStep(step) && guestsOf(tableId) === undefined) {
+    recordGuests(tableId, undefined);
+  }
 }
 
 /** Whether `step` is a step that seats a table, which is the one that asks the guest count. */
-function isGuestStep(step: string): boolean {
+export function isGuestStep(step: string): boolean {
   return activeFlows().some((variant) =>
     variant.body.steps.some((candidate) => candidate.step_id === step && candidate.action_id === "sales.table.seat"),
   );

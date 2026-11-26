@@ -12,6 +12,7 @@
 import { ApiError } from "../api/client";
 import type { ShiftResponse } from "../api/schemas";
 import { type MessageKey, t } from "../i18n";
+import { stepInWords } from "../state/flows";
 
 // Token → catalogue key. Several tokens share a sentence where the operator's next step is the same.
 const REASONS: Readonly<Record<string, MessageKey>> = {
@@ -165,7 +166,7 @@ export function errorMessage(
   // manager can fix the guard. The edge's sentence carries the step's id.
   if (caught.reason === "FLOW_PREREQUISITE_UNMET") {
     const step = /step (\S+) of flow/.exec(caught.message)?.[1] ?? "";
-    return t("error.flow_prerequisite_unmet", { step });
+    return t("error.flow_prerequisite_unmet", { step: stepInWords(step) });
   }
   const key = caught.reason === null ? undefined : (own[caught.reason] ?? REASONS[caught.reason]);
   return key === undefined ? caught.message : t(key);

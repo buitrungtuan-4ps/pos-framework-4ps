@@ -655,6 +655,13 @@ export function fold(event: ServerEvent): void {
     case "sales.order.opened":
       foldOpened(payload);
       break;
+    case "sales.order.guests_counted": {
+      // A count given after the seat (ADR-0254): the latest wins, on every till.
+      const table = state.orderTable[str(payload, "order_id") ?? ""];
+      const count = payload["guest_count"];
+      if (table !== undefined && typeof count === "number") recordGuests(table, count);
+      break;
+    }
     case "sales.order.closed": {
       // An order that ended owing nothing: a table released with nothing sold on it (ADR-0163), or
       // a guest order staff refused. Either way it is off every board, and a table still showing it

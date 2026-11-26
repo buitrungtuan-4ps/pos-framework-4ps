@@ -602,6 +602,14 @@ sales.table.clean	param=table_id:ACTION_PARAM_KIND_ID:required
 sales.table.clean	permission=sales.table.manage
 sales.table.clean	route=POST /api/tables/{id}/clean
 sales.table.clean	since=0.14.1
+sales.table.count_guests
+sales.table.count_guests	effect=ACTION_EFFECT_EDGE_WRITE
+sales.table.count_guests	frequency=ACTION_FREQUENCY_COMMON
+sales.table.count_guests	param=guest_count:ACTION_PARAM_KIND_COUNT:required
+sales.table.count_guests	param=table_id:ACTION_PARAM_KIND_ID:required
+sales.table.count_guests	permission=sales.table.manage
+sales.table.count_guests	route=POST /api/tables/{id}/guests
+sales.table.count_guests	since=0.14.1
 sales.table.release
 sales.table.release	effect=ACTION_EFFECT_EDGE_WRITE
 sales.table.release	frequency=ACTION_FREQUENCY_RARE

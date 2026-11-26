@@ -2990,6 +2990,7 @@
   "designer.action.sales_item_mark_sold_out": "Mark an item sold out",
   "designer.action.sales_item_restore": "Bring an item back",
   "designer.action.sales_table_seat": "Seat a table",
+  "designer.action.sales_table_count_guests": "Record the guest count",
   "designer.action.sales_table_release": "Release a table",
   "designer.action.sales_table_clean": "Mark a table clean",
   "designer.action.sales_order_transfer": "Move a table",

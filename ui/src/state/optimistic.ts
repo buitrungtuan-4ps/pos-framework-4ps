@@ -23,7 +23,7 @@ import type { LineRequest, MenuItemResponse, OrderLineRequest } from "../api/sch
 import { type Money, addMoney } from "../lib/money";
 import { errorMessage } from "../lib/errors";
 import { editWrite } from "./edge-write";
-import { forgetGuests, recordGuests, seatSteps, tableFacts } from "./flows";
+import { forgetGuests, learnMissingGuests, recordGuests, seatSteps, tableFacts } from "./flows";
 import { hasReactions, react } from "./reactions";
 import { load } from "./engine";
 import { PENDING, type OrderLine, loadLiveOrders, moveOrder, state, updateStore, walkInOrder } from "./store";
@@ -169,10 +169,12 @@ export async function addItem(
     return;
   }
   await editWrite("sales.line.add", {
-    undo: () =>
+    undo: (caught) => {
       updateStore((draft) => {
         delete draft.lines[ghost];
-      }),
+      });
+      learnMissingGuests(tableId, caught);
+    },
     send: () =>
       walkIn === undefined
         ? api.addLine(tableId, tableLine(item, rate, unitPrice, line))
