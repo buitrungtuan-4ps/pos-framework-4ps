@@ -7944,7 +7944,7 @@
         },
         "responses": {
           "200": {
-            "description": "The next symbol of the current year the tenant's ledger does not hold, recorded for the store and published as its `einvoice` node's `symbol`. Audited",
+            "description": "The next symbol of the current year the tenant's ledger does not hold, recorded for the store and published as its `einvoice` node's `symbol`, or its `offline_symbol` when `offline` is true (ADR-0251). Audited",
             "content": {
               "application/json": {
                 "schema": {
@@ -27888,6 +27888,10 @@
           "store_id"
         ],
         "properties": {
+          "offline": {
+            "type": "boolean",
+            "description": "`true` gives the store its **offline** symbol instead: the one a `HYBRID` store numbers\nunder while offline, published as the node's `offline_symbol` (ADR-0251 decision 6). Absent\nor `false` gives its symbol, as before."
+          },
           "store_id": {
             "type": "string"
           },
