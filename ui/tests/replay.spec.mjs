@@ -8317,6 +8317,60 @@ test("a paid bill's void out of a counted drawer is refused by the store server,
   }
 });
 
+// ADR-0250: a paid bill whose e-invoice was issued is refused at the till; where the store's route
+// sends it to HQ, the manager asks HQ from the same panel, with the reason and PIN the void was tried
+// with, and nothing is voided. The store server's answers are stubbed: this store issues no invoice.
+test("a manager asks HQ to correct a paid bill whose invoice was issued, and nothing is voided", async ({
+  page,
+}) => {
+  const edge = await startEdge();
+  try {
+    await pair(page, edge);
+    await signIn(page, edge);
+    await openShift(page);
+    await navigateTo(page, "/");
+    await aSettledTable(page);
+    await page.route("**/api/bills/*/void_settled", (route) =>
+      route.fulfill({
+        status: 409,
+        headers: { "pos-error-reason": "E_INVOICE_ISSUED", "content-type": "text/plain" },
+        body: "the bill's e-invoice was issued",
+      }),
+    );
+    let asked = null;
+    await page.route("**/api/bills/*/correction_request", (route) => {
+      asked = route.request().postDataJSON();
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          bill_id: route.request().url().split("/").at(-2),
+          amount: { currency_code: "VND", amount_minor: 165000 },
+          kind: "EINVOICE_KIND_ADJUSTMENT",
+          requested_time: 1795564800000,
+        }),
+      });
+    });
+
+    await navigateTo(page, "/today");
+    await page.locator('[data-step="chooseBill"]').click();
+    await page.locator('[data-step="askVoidPaidBill"]').click();
+    await page.locator("#void-paid-bill-approver-code").fill(edge.staffCode);
+    await page.locator("#void-paid-bill-approver-pin").fill(edge.staffPin);
+    await page.locator('[data-step="voidPaidBillReason"]').first().click();
+    await expect(page.locator('[data-outcome="money-refused"]')).toContainText("HQ corrects it");
+    await page.locator('[data-step="askHqToCorrect"]').click();
+    await expect(page.locator('[data-outcome="asked-hq"]')).toContainText("Asked HQ to correct");
+    expect(asked?.reason_code_id).toBeTruthy();
+    expect(asked?.approver_code).toBe(edge.staffCode);
+    await expect(page.locator('[data-outcome="paid-bill-voided"]')).toHaveCount(0);
+    await page.unroute("**/api/bills/*/void_settled");
+    await page.unroute("**/api/bills/*/correction_request");
+  } finally {
+    await edge.stop();
+  }
+});
+
 // ADR-0204: a settle that never reached the edge is found not taken, and only then rolled back.
 test("a settle that never reached the store server is found not taken, and the pad comes back", async ({
   page,

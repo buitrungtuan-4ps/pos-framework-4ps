@@ -86,6 +86,8 @@ import type {
   TransferResponse,
   VoidBillResponse,
   VoidSettledResponse,
+  CorrectionRequestBody,
+  CorrectionRequestResponse,
   VoidRequest,
   WaitingResponse,
   WaiveFeeRequest,
@@ -455,6 +457,10 @@ export const api = {
   // back out of this till's drawer. The answer says what to hand back and what the slip did.
   voidSettledBill: (billId: string, request_: VoidRequest) =>
     request<VoidSettledResponse>("POST", `/api/bills/${billId}/void_settled`, request_),
+  // A manager asks HQ to correct a paid bill's issued e-invoice (ADR-0250): no money moves, and the
+  // till voids the bill only once HQ approves.
+  requestCorrection: (billId: string, request_: CorrectionRequestBody) =>
+    request<CorrectionRequestResponse>("POST", `/api/bills/${billId}/correction_request`, request_),
 
   // Money off a bill before it settles. The response is the whole re-priced bill rather than an
   // acknowledgement, so the screen never subtracts a discount itself and arrives at a different tax.

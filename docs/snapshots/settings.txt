@@ -145,6 +145,7 @@ einvoice.invoiced_correction	since=0.14.1
 einvoice.invoiced_correction	value=INVOICED_CORRECTION_CANCEL_WINDOW
 einvoice.invoiced_correction	value=INVOICED_CORRECTION_HQ_ONLY
 einvoice.invoiced_correction	value=INVOICED_CORRECTION_MANAGER_UP_TO_LIMIT
+einvoice.invoiced_correction	value=INVOICED_CORRECTION_REQUEST
 einvoice.issue_moment
 einvoice.issue_moment	default=EINVOICE_ISSUE_MOMENT_OFF
 einvoice.issue_moment	kind=SETTING_KIND_CHOICE

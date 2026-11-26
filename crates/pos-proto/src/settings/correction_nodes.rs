@@ -15,31 +15,7 @@ use super::{NEXT_RELEASE, STORE_WIDE, Setting, SettingShape, SettingUnit};
 /// The settings on the `einvoice` node that say how an invoiced bill is corrected (ADR-0245).
 pub(super) fn correction_settings() -> Vec<Setting> {
     vec![
-        Setting {
-            node: PublishedEInvoice::NODE,
-            field: "invoiced_correction",
-            shape: SettingShape::Choice {
-                // `REQUEST` is offered once its console queue exists (ADR-0245 decision 1).
-                values: vec![
-                    InvoicedCorrection::HqOnly.as_wire(),
-                    InvoicedCorrection::ManagerUpToLimit.as_wire(),
-                    InvoicedCorrection::CancelWindow.as_wire(),
-                ],
-                default: PublishedEInvoice::default().invoiced_correction().as_wire(),
-                preset: None,
-            },
-            scopes: STORE_WIDE,
-            since: NEXT_RELEASE,
-            confirm: None,
-            summary: "How a bill with an issued e-invoice is voided. \
-                      `INVOICED_CORRECTION_HQ_ONLY`, the default, refuses at the till and HQ \
-                      corrects it in the console; `_MANAGER_UP_TO_LIMIT` lets a manager void it at \
-                      the till when its total is at most `einvoice.manager_correction_limit`; \
-                      `_CANCEL_WINDOW` while its invoice is younger than \
-                      `einvoice.cancel_window_minutes`. Anything else is refused at the till. The \
-                      cloud then corrects the invoice as `einvoice.correction_kind` says. Every \
-                      legal point is to be confirmed by legal or the accountant.",
-        },
+        route_setting(),
         Setting {
             node: PublishedEInvoice::NODE,
             field: "manager_correction_limit",
@@ -112,4 +88,38 @@ pub(super) fn correction_settings() -> Vec<Setting> {
             summary: "Whether a manager's request to correct a bill with an issued e-invoice must                       name a reason from the store's `VOID_BILL` reason codes. On, the default;                       off lets a request go without one. Whether a correction needs a reason is to                       be confirmed by legal or the accountant. The edge reads it.",
         },
     ]
+}
+
+/// `einvoice.invoiced_correction`: which route a bill with an issued e-invoice takes (ADR-0245).
+fn route_setting() -> Setting {
+    Setting {
+        node: PublishedEInvoice::NODE,
+        field: "invoiced_correction",
+        shape: SettingShape::Choice {
+            // `REQUEST` is offered now its console queue, the till's form and its honouring
+            // of an approval are built (ADR-0250, Consequences).
+            values: vec![
+                InvoicedCorrection::HqOnly.as_wire(),
+                InvoicedCorrection::Request.as_wire(),
+                InvoicedCorrection::ManagerUpToLimit.as_wire(),
+                InvoicedCorrection::CancelWindow.as_wire(),
+            ],
+            default: PublishedEInvoice::default().invoiced_correction().as_wire(),
+            preset: None,
+        },
+        scopes: STORE_WIDE,
+        since: NEXT_RELEASE,
+        confirm: None,
+        summary: "How a bill with an issued e-invoice is voided. \
+                  `INVOICED_CORRECTION_HQ_ONLY`, the default, refuses at the till and HQ \
+                  corrects it in the console; `_REQUEST` lets a manager ask HQ from the till \
+                  and void the bill there once HQ approves it in the console's queue; \
+                  `_MANAGER_UP_TO_LIMIT` lets a manager void it at \
+                  the till when its total is at most `einvoice.manager_correction_limit`; \
+                  `_CANCEL_WINDOW` while its invoice is younger than \
+                  `einvoice.cancel_window_minutes`. Above the limit or after the window, the \
+                  manager may ask HQ as under `_REQUEST`. Anything else is refused at the till. The \
+                  cloud then corrects the invoice as `einvoice.correction_kind` says. Every \
+                  legal point is to be confirmed by legal or the accountant.",
+    }
 }
