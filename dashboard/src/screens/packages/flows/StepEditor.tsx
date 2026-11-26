@@ -24,6 +24,7 @@ import {
   updateStep,
 } from "../../../lib/flow-graph";
 import { ConditionEditor } from "../rules/ConditionEditor";
+import { actionName } from "../screens/names";
 
 /** What the step does: show a screen, or run an act from the catalogue. */
 function StepTarget(props: { step: FlowStep; onChange: (change: Partial<FlowStep>) => void }) {
@@ -51,7 +52,7 @@ function StepTarget(props: { step: FlowStep; onChange: (change: Partial<FlowStep
           <SelectField
             label={t("flow.step.act")}
             value={props.step.action_id ?? ""}
-            options={CATALOGUE.map((action) => ({ value: action.action_id, label: action.action_id }))}
+            options={CATALOGUE.map((action) => ({ value: action.action_id, label: actionName(action.action_id) }))}
             onChange={(action_id) => props.onChange({ action_id })}
           />
         }

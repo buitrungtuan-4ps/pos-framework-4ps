@@ -96,6 +96,33 @@ function qrSwitchOf(document: Json | null): boolean {
   return false;
 }
 
+/**
+ * Whether the store's published menu prices anything for QR guests: a QR row with an item, or a
+ * fallback catalog with one, which a channel without a row sells from. With neither, a guest's QR
+ * order has nothing to buy, so switching QR on warns (O10).
+ */
+export function qrPriced(document: Json | null): boolean {
+  const object = (value: Json | null | undefined): Record<string, Json> =>
+    value !== null && value !== undefined && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const hasItems = (catalog: Json | undefined): boolean => {
+    const items = object(catalog ?? null)["items"];
+    return Array.isArray(items) && items.length > 0;
+  };
+  const menu = object(object(document)["menu"]);
+  const rows = Array.isArray(menu["channels"]) ? menu["channels"] : [];
+  const qrRow = rows.map((row) => object(row)).find((row) => row["sales_channel"] === "SALES_CHANNEL_QR");
+  return qrRow ? hasItems(qrRow["catalog"]) : hasItems(menu["fallback"]);
+}
+
+/** The warning that QR is switched on with nothing priced for QR guests. */
+function QrPriceWarning(props: { on: boolean; effective: Json | null }) {
+  return (
+    <Show when={props.on && !qrPriced(props.effective)}>
+      <Banner tone="danger" message={t("channels.qrNoPrices")} />
+    </Show>
+  );
+}
+
 /** The QR guardrail defaults, matching the server's `QrConfig::default` (ADR-0057). */
 const QR_DEFAULTS: QrGuardrails = {
   staff_confirmation_required: true,
@@ -464,7 +491,7 @@ export function Channels() {
                   onLabel={t("channels.qrSwitchOn")}
                   offLabel={t("channels.qrSwitchOff")}
                   disabled={busy()}
-                />
+                /><QrPriceWarning on={qrOn()} effective={nodes.value()?.effective ?? null} />
                 <PublishBar
                   label={t("channels.publishTo", { store: storeName() })}
                   publishedAtMs={published.publishedAtMs(QR_ORDERING_SWITCH)}
