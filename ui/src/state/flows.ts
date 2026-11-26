@@ -22,7 +22,7 @@ import { createEffect, createRoot, createSignal } from "solid-js";
 import DEFAULT_PACKAGE from "../package/default-package.json";
 import { resolveVariant, type Variant } from "../../../packages/package-renderer/src/variant";
 import { t } from "../i18n";
-import { needsRules, startTillRules, tillRules, type Fact, type Facts, type Flow, type FlowStep } from "../rules/till-rules";
+import { governs, needsRules, startTillRules, tillRules, type Fact, type Facts, type Flow, type FlowStep } from "../rules/till-rules";
 import { reactionsNeedRules } from "./reactions";
 
 /**
@@ -189,14 +189,26 @@ export function guestStep(channel: string): { readonly required: boolean } | und
  * `guestsSkipped` says the operator skipped the guest count when seating it. `null` too when the
  * till cannot answer: the edge re-checks.
  */
-export function missingFor(actionId: string, channel: string, facts: Facts, guestsSkipped = false, subject = ""): string | null {
+export function missingFor(
+  actionId: string,
+  channel: string,
+  facts: Facts,
+  guestsSkipped = false,
+  subject = "",
+  openedBy: string | null = null,
+): string | null {
   const rules = loaded() ? tillRules() : undefined;
   if (rules === undefined) {
     return null;
   }
   const skipped = guestsSkipped ? stepsFor("sales.table.seat", channel).map((at) => at.step.step_id) : [];
   const passed = lookupPassed()[subject] ?? [];
-  for (const at of stepsFor(actionId, channel)) {
+  // Only the flows that govern the order, as the edge re-checks it (ADR-0244).
+  const governing = stepsFor(actionId, channel).filter((at) => {
+    const body = activeFlows().filter((candidate) => candidate.body.flow_id === at.flowId)[at.variant]?.body;
+    return body !== undefined && governs(body, openedBy, channel);
+  });
+  for (const at of governing) {
     const done = passed.filter((id) => id.startsWith(`${at.flowId}/`)).map((id) => id.slice(at.flowId.length + 1));
     const answer = rules.missing(at.flowId, at.step.step_id, { skipped, done }, facts, at.variant);
     if (answer.ok && answer.missing !== null) {
@@ -235,7 +247,7 @@ export function lineWaits(tableId: string, lineCount: number): string | null {
     guests === "skipped"
       ? { channel: DINE_IN_TOKEN, line_count: lineCount }
       : { channel: DINE_IN_TOKEN, line_count: lineCount, guest_count: guests };
-  return missingFor("sales.line.add", DINE_IN_TOKEN, { channel: DINE_IN_TOKEN, order }, guests === "skipped", tableId);
+  return missingFor("sales.line.add", DINE_IN_TOKEN, { channel: DINE_IN_TOKEN, order }, guests === "skipped", tableId, SEAT_ACT);
 }
 
 /** What the till says of a step a line waits on. */
@@ -249,6 +261,9 @@ function isGuestStep(step: string): boolean {
     variant.body.steps.some((candidate) => candidate.step_id === step && candidate.action_id === "sales.table.seat"),
   );
 }
+
+/** The act that seats a table and opens its order: a table this till seated entered its flows. */
+const SEAT_ACT = "sales.table.seat";
 
 /** The dine-in channel's wire token: a table's orders are dine-in. */
 const DINE_IN_TOKEN = "SALES_CHANNEL_DINE_IN";

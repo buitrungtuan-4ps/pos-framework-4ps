@@ -125,7 +125,7 @@ pub use pii::NoPii;
 pub use protocol::{Hello, HelloOutcome, LeaseToken, MIN_SUPPORTED_PROTOCOL_VERSION, negotiate};
 pub use quantity::Quantity;
 pub use reason_codes::{PublishedReasonCode, PublishedReasonCodes, ReasonAction, ReasonCode};
-pub use text::{DisplayName, GuestNote, PermissionKey, ReleaseTag, TranslationKey};
+pub use text::{ActionKey, DisplayName, GuestNote, PermissionKey, ReleaseTag, TranslationKey};
 pub use time::{BusinessDate, CalendarDate, TimeError, Timestamp};
 pub use ulid::Ulid;
 pub use wire_enum::{Open, UnknownEnumValue, WireEnum};

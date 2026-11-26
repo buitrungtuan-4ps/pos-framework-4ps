@@ -15,6 +15,8 @@ import {
   OPTIONAL,
   prerequisiteChoices,
   removeStep,
+  REQUIRED,
+  scopeWarnings,
   renameStep,
   setPrerequisites,
   updateStep,
@@ -131,5 +133,38 @@ describe("editing", () => {
     ]);
     const both = updateStep(seating(), "seat", { screen_id: "floor" });
     expect(localProblems(both)).toEqual([{ key: "flow.problem.oneThing", stepId: "seat" }]);
+  });
+});
+
+describe("the guard scope's Check (ADR-0244)", () => {
+  const guarded: Flow = {
+    flow_id: "dine_in",
+    start_action_id: "sales.table.seat",
+    steps: [
+      { step_id: "guests", action_id: "sales.table.seat", kind: REQUIRED, done_when: "has(order.guest_count)" },
+      { step_id: "first_line", action_id: "sales.line.add", kind: REQUIRED, prerequisites: ["guests"] },
+    ],
+  };
+
+  it("warns of nothing for a flow its start act opens orders for, scoped to those orders", () => {
+    expect(scopeWarnings(guarded)).toEqual([]);
+    expect(scopeWarnings({ ...guarded, guard_scope: "FLOW_GUARD_SCOPE_ENTERED" })).toEqual([]);
+  });
+
+  it("warns when a guard can hold back orders outside the flow", () => {
+    expect(scopeWarnings({ ...guarded, guard_scope: "FLOW_GUARD_SCOPE_ALL_ORDERS" })).toEqual(["flow.scope.warnAll"]);
+    expect(
+      scopeWarnings({ ...guarded, guard_scope: "FLOW_GUARD_SCOPE_CHANNELS", guard_channels: ["SALES_CHANNEL_DINE_IN"] }),
+    ).toEqual(["flow.scope.warnChannels"]);
+    expect(scopeWarnings({ ...guarded, guard_scope: "FLOW_GUARD_SCOPE_CHANNELS" })).toEqual(["flow.scope.warnNoChannel"]);
+  });
+
+  it("says when the store cannot tell which orders a flow started", () => {
+    expect(scopeWarnings({ ...guarded, start_action_id: "sales.line.add" })).toEqual(["flow.scope.warnTillOnly"]);
+  });
+
+  it("warns of nothing for a flow with no step the store checks", () => {
+    const unguarded = { ...guarded, guard_scope: "FLOW_GUARD_SCOPE_ALL_ORDERS", steps: [guarded.steps[1]!] };
+    expect(scopeWarnings(unguarded)).toEqual([]);
   });
 });

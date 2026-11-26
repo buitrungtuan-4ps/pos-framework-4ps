@@ -66,6 +66,13 @@ impl<S: EventStore> Edge<S> {
         tab_number: Option<u64>,
     ) -> Result<CounterOrderOpened, AppError> {
         let package_version_id = self.opening_package_version();
+        // The act whose route opened it, which flows starting there govern (ADR-0244): the same
+        // route opens a tab and a counter order, told apart by the tab's number.
+        let opened_by = pos_proto::ActionKey::new(if tab_number.is_some() {
+            "sales.tab.open"
+        } else {
+            "sales.order.open"
+        });
         let opened = SalesOrderOpened {
             order_id,
             channel: Open::from_known(channel),
@@ -75,6 +82,7 @@ impl<S: EventStore> Edge<S> {
             vendor_id: None,
             subject_id: None,
             tab_number,
+            opened_by_action_id: Some(opened_by.clone()),
         };
         self.commit_and_publish(ctx, &opened).await?;
         {
@@ -82,6 +90,7 @@ impl<S: EventStore> Edge<S> {
             projection.open_order_origin(order_id, Some(channel), None);
             projection.record_opened(order_id, None, package_version_id);
             projection.record_tab(order_id, tab_number);
+            projection.record_opening_act(order_id, Some(opened_by));
             projection.record_opener(order_id, Some(ctx.actor.employee_id));
         }
         Ok(CounterOrderOpened {

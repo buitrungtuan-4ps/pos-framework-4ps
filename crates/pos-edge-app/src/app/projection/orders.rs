@@ -111,6 +111,24 @@ impl Projection {
         self.package_versions.get(&order_id).copied()
     }
 
+    /// Records the catalogue act that opened an order (ADR-0244), live and replayed alike.
+    pub(in crate::app) fn record_opening_act(
+        &mut self,
+        order_id: OrderId,
+        action_id: Option<pos_proto::ActionKey>,
+    ) {
+        if let Some(action_id) = action_id {
+            self.opening_acts.insert(order_id, action_id);
+        }
+    }
+
+    /// The catalogue act that opened an open order, if one did (ADR-0244).
+    pub(in crate::app) fn opening_act(&self, order_id: OrderId) -> Option<&str> {
+        self.opening_acts
+            .get(&order_id)
+            .map(pos_proto::ActionKey::as_str)
+    }
+
     /// The package versions open orders still run under.
     pub(in crate::app) fn referenced_versions(&self) -> HashSet<PackageVersionId> {
         self.package_versions.values().copied().collect()
@@ -302,6 +320,7 @@ impl Projection {
         self.closed_orders.insert(order_id);
         self.guest_counts.remove(&order_id);
         self.package_versions.remove(&order_id);
+        self.opening_acts.remove(&order_id);
         self.recipients.remove(&order_id);
         self.order_vendors.remove(&order_id);
         self.forget_checks(order_id);

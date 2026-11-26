@@ -36,6 +36,26 @@ export interface Flow {
   readonly flow_id: string;
   readonly start_action_id: string;
   readonly steps: readonly FlowStep[];
+  /** Which orders its edge guards apply to (ADR-0244); absent reads as `FLOW_GUARD_SCOPE_ENTERED`. */
+  readonly guard_scope?: string;
+  /** The channels `FLOW_GUARD_SCOPE_CHANNELS` applies to. */
+  readonly guard_channels?: readonly string[];
+}
+
+/**
+ * Whether `flow` governs an order the act `openedBy` opened on `channel` (ADR-0244), as the edge
+ * decides it: every order under `ALL_ORDERS`, the named channels under `CHANNELS`, and otherwise,
+ * the default and any scope this till does not know, only an order its start act opened.
+ */
+export function governs(flow: Flow, openedBy: string | null, channel: string): boolean {
+  switch (flow.guard_scope) {
+    case "FLOW_GUARD_SCOPE_ALL_ORDERS":
+      return true;
+    case "FLOW_GUARD_SCOPE_CHANNELS":
+      return (flow.guard_channels ?? []).includes(channel);
+    default:
+      return openedBy !== null && openedBy === flow.start_action_id;
+  }
 }
 
 /** What the till knows of a flow in progress. */

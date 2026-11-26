@@ -33269,6 +33269,10 @@
         "type": "string",
         "description": "A `FeeTax` token: FEE_TAX_UNSPECIFIED, FEE_TAX_NOT_TAXABLE, FEE_TAX_FOLLOW_LINES, FEE_TAX_TAX_CLASS, or one a newer build sent, which is kept as it arrived"
       },
+      "OpenFlowGuardScope_FlowGuardScope": {
+        "type": "string",
+        "description": "A `FlowGuardScope` token: FLOW_GUARD_SCOPE_UNSPECIFIED, FLOW_GUARD_SCOPE_ENTERED, FLOW_GUARD_SCOPE_CHANNELS, FLOW_GUARD_SCOPE_ALL_ORDERS, or one a newer build sent, which is kept as it arrived"
+      },
       "OpenPaymentMethod_PaymentMethod": {
         "type": "string",
         "description": "A `PaymentMethod` token: PAYMENT_METHOD_UNSPECIFIED, PAYMENT_METHOD_CASH, PAYMENT_METHOD_CARD, PAYMENT_METHOD_QR, PAYMENT_METHOD_VOUCHER, PAYMENT_METHOD_GIFT_CARD, PAYMENT_METHOD_OTHER, or one a newer build sent, which is kept as it arrived"
@@ -38779,6 +38783,17 @@
               "flow_id": {
                 "type": "string",
                 "description": "The flow's id within its package. Its variants share it."
+              },
+              "guard_channels": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/OpenSalesChannel_SalesChannel"
+                },
+                "description": "The channels [`FlowGuardScope::Channels`] applies to, at most [`GUARD_CHANNELS_MAX`].\nIgnored under any other scope."
+              },
+              "guard_scope": {
+                "$ref": "#/components/schemas/OpenFlowGuardScope_FlowGuardScope",
+                "description": "Which orders the flow's edge guards apply to (ADR-0244). Absent reads as\n[`FlowGuardScope::Entered`]; read it through [`Flow::guard_scope`]."
               },
               "start_action_id": {
                 "type": "string",

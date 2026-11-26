@@ -18,6 +18,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::enums::SalesChannel;
 use crate::wire_enum;
 use crate::wire_enum::{Open, is_absent};
 
@@ -39,6 +40,21 @@ wire_enum! {
     Optional = "OPTIONAL",
 }
 
+/// The most channels a flow's `guard_channels` names: one per sales channel.
+pub const GUARD_CHANNELS_MAX: usize = 8;
+
+wire_enum! {
+    /// Which orders a flow's edge guards apply to
+    /// ([ADR-0244](../../../docs/adr/0244-a-flows-guards-apply-to-the-orders-it-governs.md)).
+    FlowGuardScope, prefix = "FLOW_GUARD_SCOPE";
+    /// Only orders its start act opened. The default.
+    Entered = "ENTERED",
+    /// Orders on the channels `guard_channels` names, however they were opened.
+    Channels = "CHANNELS",
+    /// Every order that takes a guarded act.
+    AllOrders = "ALL_ORDERS",
+}
+
 /// One flow of a package.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -50,6 +66,49 @@ pub struct Flow {
     /// The steps, at most [`STEPS_MAX`], in the order the till offers them when several are
     /// available at once.
     pub steps: Vec<FlowStep>,
+    /// Which orders the flow's edge guards apply to (ADR-0244). Absent reads as
+    /// [`FlowGuardScope::Entered`]; read it through [`Flow::guard_scope`].
+    #[serde(default, skip_serializing_if = "is_absent")]
+    pub guard_scope: Open<FlowGuardScope>,
+    /// The channels [`FlowGuardScope::Channels`] applies to, at most [`GUARD_CHANNELS_MAX`].
+    /// Ignored under any other scope.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guard_channels: Vec<Open<SalesChannel>>,
+}
+
+impl Flow {
+    /// Which orders the flow's guards apply to: [`FlowGuardScope::Entered`] unless the flow says
+    /// otherwise, including for a scope this release does not know, the narrowest reading.
+    #[must_use]
+    pub fn guard_scope(&self) -> FlowGuardScope {
+        match self.guard_scope.known() {
+            FlowGuardScope::Channels => FlowGuardScope::Channels,
+            FlowGuardScope::AllOrders => FlowGuardScope::AllOrders,
+            FlowGuardScope::Unspecified | FlowGuardScope::Entered => FlowGuardScope::Entered,
+        }
+    }
+
+    /// Whether the flow's guards apply to an order opened by `opened_by_action_id` on `channel`
+    /// (ADR-0244 decisions 1 to 3). Under [`FlowGuardScope::Entered`] that is an order its start
+    /// act opened; an order that records no opening act entered no flow.
+    #[must_use]
+    pub fn governs(
+        &self,
+        opened_by_action_id: Option<&str>,
+        channel: Option<SalesChannel>,
+    ) -> bool {
+        match self.guard_scope() {
+            FlowGuardScope::AllOrders => true,
+            FlowGuardScope::Channels => channel.is_some_and(|channel| {
+                self.guard_channels
+                    .iter()
+                    .any(|named| named.known() == channel)
+            }),
+            FlowGuardScope::Entered | FlowGuardScope::Unspecified => {
+                opened_by_action_id == Some(self.start_action_id.as_str())
+            }
+        }
+    }
 }
 
 /// One step of a flow. It names exactly one of `screen_id` and `action_id`.
@@ -116,7 +175,8 @@ impl FlowStep {
 
 #[cfg(test)]
 mod tests {
-    use super::{Flow, StepKind};
+    use super::{Flow, FlowGuardScope, StepKind};
+    use crate::enums::SalesChannel;
 
     const GUEST_COUNT_FIRST: &str = r#"{"flow_id":"dine_in","start_action_id":"sales.table.seat","steps":[{"step_id":"guests","action_id":"sales.table.seat","kind":"STEP_KIND_REQUIRED","applies_when":"channel == 'SALES_CHANNEL_DINE_IN'","done_when":"has(order.guest_count) && order.guest_count > 0"},{"step_id":"first_line","action_id":"sales.line.add","kind":"STEP_KIND_REQUIRED","prerequisites":["guests"]}]}"#;
 
@@ -165,6 +225,36 @@ mod tests {
         assert_eq!(serde_json::to_string(&flow).expect("serialise"), with);
         let without: Flow = serde_json::from_str(GUEST_COUNT_FIRST).expect("parses");
         assert!(without.steps.iter().all(|step| step.offline.is_none()));
+    }
+
+    /// A flow with no scope governs only the orders its start act opened; a scope rides the wire
+    /// and round-trips, and an unknown one reads as the narrowest (ADR-0244).
+    #[test]
+    fn a_flow_governs_the_orders_its_scope_names() {
+        let entered: Flow = serde_json::from_str(GUEST_COUNT_FIRST).expect("parses");
+        assert_eq!(entered.guard_scope(), FlowGuardScope::Entered);
+        assert!(entered.governs(Some("sales.table.seat"), Some(SalesChannel::DineIn)));
+        assert!(!entered.governs(Some("sales.order.open"), Some(SalesChannel::DineIn)));
+        assert!(!entered.governs(None, Some(SalesChannel::Delivery)));
+
+        let head = GUEST_COUNT_FIRST.trim_end_matches('}');
+        let channels = format!(
+            r#"{head},"guard_scope":"FLOW_GUARD_SCOPE_CHANNELS","guard_channels":["SALES_CHANNEL_DINE_IN","SALES_CHANNEL_QR"]}}"#
+        );
+        let flow: Flow = serde_json::from_str(&channels).expect("parses");
+        assert!(flow.governs(None, Some(SalesChannel::Qr)));
+        assert!(flow.governs(Some("sales.order.open"), Some(SalesChannel::DineIn)));
+        assert!(!flow.governs(Some("sales.table.seat"), Some(SalesChannel::Takeaway)));
+        assert_eq!(serde_json::to_string(&flow).expect("serialise"), channels);
+
+        let all = format!(r#"{head},"guard_scope":"FLOW_GUARD_SCOPE_ALL_ORDERS"}}"#);
+        let flow: Flow = serde_json::from_str(&all).expect("parses");
+        assert!(flow.governs(None, None));
+
+        let newer = format!(r#"{head},"guard_scope":"FLOW_GUARD_SCOPE_SOMETIMES"}}"#);
+        let flow: Flow = serde_json::from_str(&newer).expect("parses");
+        assert_eq!(flow.guard_scope(), FlowGuardScope::Entered);
+        assert!(!flow.governs(None, Some(SalesChannel::DineIn)));
     }
 
     /// A field from a newer release is ignored, and a kind from a newer release is kept as it came.

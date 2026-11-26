@@ -39,7 +39,7 @@ use crate::ids::{
 use crate::money::{Money, Ratio};
 use crate::package::DataObject;
 use crate::quantity::Quantity;
-use crate::text::{DisplayName, PermissionKey, ReleaseTag, TerminalReference};
+use crate::text::{ActionKey, DisplayName, PermissionKey, ReleaseTag, TerminalReference};
 use crate::time::Timestamp;
 use crate::ulid::Ulid;
 use crate::wire_enum::Open;
@@ -88,6 +88,9 @@ event_catalogue! {
         /// order and on every order opened before this field; left off the wire while absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tab_number: Option<u64>,
+        /// The catalogue act that opened the order (ADR-0244); absent for intake and older orders.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        opened_by_action_id: Option<ActionKey>,
     },
     /// An order reached a terminal state.
     ///
@@ -953,16 +956,14 @@ event_catalogue! {
         object_id: Ulid,
         /// The non-personal values, by field. A personal value is never here.
         values: Vec<CustomFieldValue>,
-        /// The subject record holding the object's personal values, when it has any (ADR-0194
-        /// decision 4).
+        /// The subject record holding the object's personal values, if any (ADR-0194 decision 4).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         subject_id: Option<SubjectId>,
         /// The package version whose declarations the values follow.
         package_version_id: PackageVersionId,
     },
-    /// A record of a custom object type was created or changed (ADR-0194 decision 3). Only the
-    /// values that changed are listed; a record's first event lists every value it was created
-    /// with.
+    /// A custom object type's record was created or changed (ADR-0194 decision 3): the values that
+    /// changed, or every value it was created with.
     DataCustomRecordChanged => "data.custom_record.changed", version = 1 {
         /// The record.
         custom_record_id: CustomRecordId,
@@ -970,8 +971,7 @@ event_catalogue! {
         object_type_id: ObjectTypeId,
         /// The non-personal values, by field. A personal value is never here.
         values: Vec<CustomFieldValue>,
-        /// The subject record holding the record's personal values, when it has any (ADR-0194
-        /// decision 4).
+        /// The subject record holding the record's personal values, if any (ADR-0194 decision 4).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         subject_id: Option<SubjectId>,
         /// The package version whose declarations the values follow.

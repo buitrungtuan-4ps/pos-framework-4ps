@@ -246,7 +246,8 @@ impl<S: EventStore> Edge<S> {
 
     /// Re-checks a command for `action_id` on `order_id` against the flows of the version the order
     /// opened under (see [`Self::package_for`]): the variant of each flow for the order's channel,
-    /// and its guards answered from the order's facts. Passes when the order runs under the default
+    /// kept where the flow's guard scope takes the order in (ADR-0244), and its guards answered
+    /// from the order's facts. Passes when the order runs under the default
     /// package, or its version has no guard for the act.
     ///
     /// # Errors
@@ -257,7 +258,7 @@ impl<S: EventStore> Edge<S> {
         action_id: &str,
         order_id: OrderId,
     ) -> Result<(), AppError> {
-        let (channel, guest_count, line_count, version) = {
+        let (channel, guest_count, line_count, version, opened_by) = {
             let projection = self.lock_projection();
             (
                 projection
@@ -266,6 +267,7 @@ impl<S: EventStore> Edge<S> {
                 projection.guest_count(order_id),
                 projection.lines_for_order(order_id).len(),
                 projection.package_version(order_id),
+                projection.opening_act(order_id).map(str::to_owned),
             )
         };
         let Some((package, compiled)) = self.package_for(order_id, version) else {
@@ -299,7 +301,15 @@ impl<S: EventStore> Edge<S> {
                 resolve(&variants, &context).cloned()
             })
             .collect();
-        let flows: Vec<&Flow> = resolved.iter().collect();
+        // Only the flows that govern this order (ADR-0244): by default those its opening act
+        // started, so a dine-in flow's guard never refuses a counter or delivery order.
+        let flows: Vec<&Flow> = resolved
+            .iter()
+            .filter(|flow| flow.governs(opened_by.as_deref(), channel))
+            .collect();
+        if flows.is_empty() {
+            return Ok(());
+        }
         let conditions = EdgeConditions {
             compiled: Some(compiled),
             ..EdgeConditions::with(order_facts(channel, guest_count, line_count))

@@ -3,7 +3,7 @@
 
 import { beforeAll, describe, expect, it } from "vitest";
 
-import { instantiateTillRules, needsRules, type Flow, type TillRules } from "../src/rules/till-rules";
+import { governs, instantiateTillRules, needsRules, type Flow, type TillRules } from "../src/rules/till-rules";
 // The module's bytes, inlined as a data URL, as `pnpm rules` built them.
 import moduleData from "../src/rules/pos_till_rules.wasm?url&inline";
 
@@ -58,5 +58,21 @@ describe("when the till loads the module", () => {
             needsRules([{ flow_id: "f", start_action_id: "a", steps: [{ step_id: "s", action_id: "a" }] }]),
         ).toBe(false);
         expect(needsRules([DINE_IN])).toBe(true);
+    });
+});
+
+describe("which orders a flow's guards apply to (ADR-0244)", () => {
+    it("by default only an order its start act opened", () => {
+        expect(governs(DINE_IN, "sales.table.seat", "SALES_CHANNEL_DINE_IN")).toBe(true);
+        expect(governs(DINE_IN, "sales.order.open", "SALES_CHANNEL_DINE_IN")).toBe(false);
+        expect(governs(DINE_IN, null, "SALES_CHANNEL_DELIVERY")).toBe(false);
+    });
+
+    it("the channels it names, or every order, where it says so", () => {
+        const channels: Flow = { ...DINE_IN, guard_scope: "FLOW_GUARD_SCOPE_CHANNELS", guard_channels: ["SALES_CHANNEL_QR"] };
+        expect(governs(channels, null, "SALES_CHANNEL_QR")).toBe(true);
+        expect(governs(channels, "sales.table.seat", "SALES_CHANNEL_DINE_IN")).toBe(false);
+        expect(governs({ ...DINE_IN, guard_scope: "FLOW_GUARD_SCOPE_ALL_ORDERS" }, null, "SALES_CHANNEL_TAKEAWAY")).toBe(true);
+        expect(governs({ ...DINE_IN, guard_scope: "FLOW_GUARD_SCOPE_SOMETIMES" }, null, "SALES_CHANNEL_DINE_IN")).toBe(false);
     });
 });

@@ -126,6 +126,38 @@ impl core::fmt::Display for PermissionKey {
     }
 }
 
+/// A catalogue act's identifier, shaped `domain.resource.action`
+/// ([ADR-0191](../../../docs/adr/0191-every-act-is-in-a-typed-catalogue.md)).
+///
+/// Admissible in an event payload for [`PermissionKey`]'s reason: it is drawn from the closed,
+/// append-only catalogue the framework owns, so it names an act rather than describing anybody.
+/// `sales.order.opened` records the act that opened an order with it
+/// ([ADR-0244](../../../docs/adr/0244-a-flows-guards-apply-to-the-orders-it-governs.md)).
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(transparent)]
+pub struct ActionKey(Box<str>);
+
+impl ActionKey {
+    /// Wraps a catalogue act's identifier.
+    #[must_use]
+    pub fn new(value: impl Into<Box<str>>) -> Self {
+        Self(value.into())
+    }
+
+    /// The identifier as a string slice.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl core::fmt::Display for ActionKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// A release identifier, such as `v1.4.0`.
 ///
 /// Admissible in an event payload: it names a build, not a person. Fleet rollout
