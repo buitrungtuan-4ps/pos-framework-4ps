@@ -35725,6 +35725,18 @@
         "type": "object",
         "description": "The `qr` node: its setting, and the guardrails the console's QR form writes beside it.\n\nEach guardrail is `None` where the node does not carry it, or carries something other than its\nJSON type, and each is left off the wire while absent.",
         "properties": {
+          "auto_fire_from_minute": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The minute after the store's local midnight from which `AUTO_ACCEPT_AND_FIRE` applies\n([ADR-0255](../../../docs/adr/0255-a-qr-orders-automatic-send-keeps-the-hours-the-store-sets.md)).\nRead it through [`PublishedQr::auto_fire_window`].",
+            "minimum": 0
+          },
+          "auto_fire_until_minute": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The minute it stops applying; equal to the first minute, always (ADR-0255).",
+            "minimum": 0
+          },
           "business_hours": {
             "$ref": "#/components/schemas/QrBusinessHours",
             "description": "The hours the store takes QR orders. Absent, or without a whole open and close hour, is\nalways open."
@@ -35736,6 +35748,10 @@
           "kitchen_release": {
             "$ref": "#/components/schemas/OpenKitchenRelease_KitchenRelease",
             "description": "How a guest's order reaches the kitchen (ADR-0247), a setting beside `table_order`. Read it\nthrough [`PublishedQr::kitchen_release`]: absent or unknown is\n[`KitchenRelease::ConfirmThenSend`]."
+          },
+          "kitchen_release_outside_hours": {
+            "$ref": "#/components/schemas/OpenKitchenRelease_KitchenRelease",
+            "description": "How an order arriving outside those minutes reaches the kitchen (ADR-0255). Read it through\n[`PublishedQr::kitchen_release_outside_hours`]."
           },
           "per_table_limit": {
             "type": "integer",

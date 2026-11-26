@@ -201,7 +201,9 @@ impl PublishedQr {
     pub fn kitchen_release_outside_hours(&self) -> KitchenRelease {
         match KitchenRelease::read(&self.kitchen_release_outside_hours) {
             KitchenRelease::ConfirmFires => KitchenRelease::ConfirmFires,
-            _ => KitchenRelease::ConfirmThenSend,
+            KitchenRelease::Unspecified
+            | KitchenRelease::AutoAcceptAndFire
+            | KitchenRelease::ConfirmThenSend => KitchenRelease::ConfirmThenSend,
         }
     }
 

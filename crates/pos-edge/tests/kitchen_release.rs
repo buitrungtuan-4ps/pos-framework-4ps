@@ -302,16 +302,7 @@ async fn an_order_that_waits_prints_no_ticket_on_arrival() {
 
 /// The store-local minute now, from the session's own time zone, as the edge reads it (ADR-0255).
 fn minute_now(session: &EdgeSession) -> u16 {
-    let now = pos_proto::time::Timestamp::from_milliseconds_since_epoch(
-        i64::try_from(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("after the epoch")
-                .as_millis(),
-        )
-        .expect("fits"),
-    )
-    .expect("a valid instant");
+    let now = pos_proto::ClockSource::now(&pos_edge::SystemClock);
     pos_core::business_date::local_time(now, &session.timezone)
         .expect("a local time")
         .minute_of_day()
