@@ -141,6 +141,11 @@ pub(crate) fn einvoice_submitter(store: &PostgresStore) -> JoinHandle<()> {
             ledger: Arc::new(store.einvoice_symbols()),
             // A store's correction request waits here for HQ (ADR-0250).
             requests: Arc::new(store.einvoice_correction_requests()),
+            // A vendor's number for an invoice issued "number pending" (ADR-0251).
+            numbers: Arc::new(pos_cloud::einvoice::vendor_numbers::Published {
+                trees: store.config_trees(),
+                clock: SystemClock,
+            }),
         },
         provider,
         SystemClock,

@@ -15,3 +15,4 @@ pub mod requests;
 pub mod sandbox;
 pub mod submitter;
 pub mod symbols;
+pub mod vendor_numbers;

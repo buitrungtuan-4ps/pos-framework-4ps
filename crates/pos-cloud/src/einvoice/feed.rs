@@ -23,7 +23,7 @@ use pos_ports::fiscalization::{
     CorrectionKind, Fiscalization, InvoiceCorrection, InvoiceNumber, InvoiceRequest,
 };
 use pos_proto::determinism::ClockSource;
-use pos_proto::einvoice::EInvoiceKind;
+use pos_proto::einvoice::{EInvoiceKind, VendorNumber};
 use pos_proto::events::{
     BillingBillVoided, EventType, FiscalCorrectionRequested, FiscalInvoiceIssued,
 };
@@ -36,6 +36,7 @@ use store_postgres::SubmissionRow;
 
 use super::corrections::{Corrector, correct_voided_bill};
 use super::submitter::{retry_wait_seconds, retryable};
+use super::vendor_numbers::VendorNumbers;
 use crate::dashboard::projector::StoreCatalog;
 
 /// Events one page reads from a store's log.
@@ -404,11 +405,17 @@ pub fn issued_row(
         invoice_id: event_id.to_string(),
         store_id: store.to_string(),
         bill_id: issued.bill_id.to_string(),
-        invoice_number: format!(
-            "{}/{:08}",
-            invoice.invoice_symbol.as_str(),
-            invoice.invoice_sequence
-        ),
+        // An invoice issued "number pending" holds a placeholder until the vendor numbers it
+        // (ADR-0251 decision 3).
+        invoice_number: if invoice.number_pending() {
+            super::vendor_numbers::pending_number(event_id)
+        } else {
+            format!(
+                "{}/{:08}",
+                invoice.invoice_symbol.as_str(),
+                invoice.invoice_sequence
+            )
+        },
         kind: invoice
             .kind
             .known()
@@ -525,7 +532,9 @@ fn request_of(row: &SubmissionRow) -> Option<InvoiceRequest> {
         buyer: None,
         lines: Vec::new(),
         total: Money::new(currency, row.total_minor),
-        issued_number: Some(InvoiceNumber::new(row.invoice_number.as_str())),
+        // A pending invoice is submitted with no number, so the provider takes its own (ADR-0251).
+        issued_number: (!super::vendor_numbers::is_pending(&row.invoice_number))
+            .then(|| InvoiceNumber::new(row.invoice_number.as_str())),
         correction,
     })
 }
@@ -548,6 +557,7 @@ pub struct SubmitReport {
 /// The table could not be read or written.
 pub async fn submit_due<F: Fiscalization>(
     submissions: &dyn SubmissionStore,
+    numbers: &dyn VendorNumbers,
     provider: &F,
     now_ms: i64,
 ) -> Result<SubmitReport, FeedError> {
@@ -561,8 +571,17 @@ pub async fn submit_due<F: Fiscalization>(
             submissions.settle(row).await?;
             continue;
         };
-        match provider.issue(&request).await {
+        let pending = request.issued_number.is_none();
+        let answered = if pending {
+            super::vendor_numbers::number(provider, &request).await
+        } else {
+            provider.issue(&request).await
+        };
+        match answered {
             Ok(issued) => {
+                if pending {
+                    learn_number(numbers, &mut row, &issued).await?;
+                }
                 STATE_SUBMITTED.clone_into(&mut row.state);
                 row.authority_reference = issued.authority_reference.map(String::from);
                 report.submitted = report.submitted.saturating_add(1);
@@ -612,7 +631,39 @@ where
             tracing::warn!(%error, store = %store, "the e-invoice feed could not read a store this pass");
         }
     }
-    submit_due(submissions, provider, now_ms).await
+    submit_due(submissions, corrector.numbers.as_ref(), provider, now_ms).await
+}
+
+/// Writes the number the vendor gave a pending invoice on the store's node and onto its row. Written
+/// to the node first: a publish that fails leaves the row pending, and the next pass asks again,
+/// which the provider answers with the same number (one bill, one number).
+async fn learn_number(
+    numbers: &dyn VendorNumbers,
+    row: &mut SubmissionRow,
+    issued: &pos_ports::fiscalization::IssuedInvoice,
+) -> Result<(), FeedError> {
+    let tenant = row
+        .tenant_id
+        .parse::<Ulid>()
+        .map(TenantId::new)
+        .map_err(text)?;
+    let store = row
+        .store_id
+        .parse::<Ulid>()
+        .map(StoreId::new)
+        .map_err(text)?;
+    let bill_id = row.bill_id.parse::<Ulid>().map(BillId::new).map_err(text)?;
+    let entry = VendorNumber {
+        bill_id,
+        invoice_number: issued.invoice_number.as_str().to_owned(),
+        authority_reference: issued.authority_reference.as_deref().map(str::to_owned),
+    };
+    numbers.write(tenant, store, entry).await?;
+    issued
+        .invoice_number
+        .as_str()
+        .clone_into(&mut row.invoice_number);
+    Ok(())
 }
 
 /// Runs [`pass`] every [`INTERVAL`] until `shutdown`.

@@ -7,7 +7,9 @@ use pos_ports::event_store::EventStore as _;
 use pos_ports::{PortError, Transactional as _, TxContext as _};
 use std::sync::Arc;
 
-use pos_proto::einvoice::{EInvoiceKind, FiscalInvoice, InvoiceSymbol, PublishedEInvoice};
+use pos_proto::einvoice::{
+    EInvoiceKind, EInvoiceNumberSource, FiscalInvoice, InvoiceSymbol, PublishedEInvoice,
+};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::events::{BillingBillVoided, EventType, FiscalInvoiceIssued};
 use pos_proto::ids::{BillId, StoreId, TenantId};
@@ -28,6 +30,7 @@ use crate::einvoice::sandbox::{SandboxEInvoice, SandboxMode};
 use crate::einvoice::symbols::{
     InMemorySymbolLedger, SymbolLedger as _, SymbolRecord, SymbolSource,
 };
+use crate::einvoice::vendor_numbers::{Recorded, is_pending};
 
 fn store() -> StoreId {
     StoreId::new(Ulid::from_u128(0x0ADA))
@@ -109,6 +112,7 @@ async fn corrector(kind: &'static str) -> Corrector {
         settings: Arc::new(Node(kind)),
         ledger: Arc::new(ledger),
         requests: Arc::new(InMemoryCorrectionRequests::default()),
+        numbers: Arc::new(Recorded::default()),
     }
 }
 
@@ -350,17 +354,132 @@ async fn the_sandbox_takes_each_invoice_and_a_refusal_stops_while_a_timeout_retr
     );
     // Not due yet; then due, and refused, which stops it.
     assert_eq!(
-        submit_due(&submissions, &provider, 3_000).await,
+        submit_due(&submissions, &Recorded::default(), &provider, 3_000).await,
         Ok(SubmitReport::default())
     );
     provider.set_mode(SandboxMode::Refuse);
-    let report = submit_due(&submissions, &provider, 62_000).await;
+    let report = submit_due(&submissions, &Recorded::default(), &provider, 62_000).await;
     assert_eq!(report.map(|report| report.rejected), Ok(1));
     let refused = submissions.list(tenant(), None, true).await.expect("list");
     assert_eq!(refused[0].state, STATE_REJECTED);
     assert!(refused[0].refusal.is_some());
     assert_eq!(
-        submit_due(&submissions, &provider, 10_000_000).await,
+        submit_due(&submissions, &Recorded::default(), &provider, 10_000_000).await,
         Ok(SubmitReport::default())
     );
+}
+
+/// One invoice per `bills`, each issued "number pending" for the vendor (ADR-0251).
+fn vendor_log(bills: &[u32]) -> Vec<EventEnvelope<RawPayload>> {
+    let mut events = log(0, bills);
+    for event in &mut events {
+        let mut issued: FiscalInvoiceIssued = event.data.decode().expect("decodes");
+        issued.invoice.invoice_sequence = 0;
+        issued.invoice.number_source = Open::from_known(EInvoiceNumberSource::Vendor);
+        event.data = RawPayload::encode(&issued).expect("a payload");
+    }
+    events
+}
+
+#[tokio::test]
+async fn a_pending_invoice_is_numbered_by_the_vendor_and_its_number_written_for_the_store() {
+    let events = FakeStore::new();
+    append(&events, &vendor_log(&[1, 2])).await;
+    let submissions = InMemorySubmissions::default();
+    let corrector = corrector("EINVOICE_KIND_ADJUSTMENT").await;
+    assert_eq!(
+        feed_store(&events, &submissions, &corrector, tenant(), store(), NOW_MS).await,
+        Ok(2)
+    );
+    let recorded = submissions.list(tenant(), None, false).await.expect("list");
+    assert!(
+        recorded.iter().all(|row| is_pending(&row.invoice_number)),
+        "no number is invented before the vendor gives one"
+    );
+
+    let written = Recorded::default();
+    let provider = SandboxEInvoice::new();
+    let report = submit_due(&submissions, &written, &provider, NOW_MS).await;
+    assert_eq!(report.map(|report| report.submitted), Ok(2));
+
+    let mut rows = submissions.list(tenant(), None, false).await.expect("list");
+    rows.sort_by(|a, b| a.bill_id.cmp(&b.bill_id));
+    let numbers: Vec<(&str, &str)> = rows
+        .iter()
+        .map(|row| (row.state.as_str(), row.invoice_number.as_str()))
+        .collect();
+    assert_eq!(numbers.len(), 2);
+    assert!(
+        numbers
+            .iter()
+            .all(|(state, number)| *state == STATE_SUBMITTED && !is_pending(number))
+    );
+    assert_ne!(numbers[0].1, numbers[1].1, "one bill, one number");
+
+    let mut learned: Vec<(String, String)> = written
+        .0
+        .lock()
+        .expect("written")
+        .iter()
+        .map(|(_, at, entry)| {
+            assert_eq!(*at, store());
+            (entry.bill_id.to_string(), entry.invoice_number.clone())
+        })
+        .collect();
+    learned.sort();
+    let expected: Vec<(String, String)> = rows
+        .iter()
+        .map(|row| (row.bill_id.clone(), row.invoice_number.clone()))
+        .collect();
+    assert_eq!(
+        learned, expected,
+        "the store learns exactly the numbers recorded"
+    );
+}
+
+#[tokio::test]
+async fn a_void_of_a_pending_invoice_is_corrected_once_the_vendor_has_numbered_it() {
+    let events = FakeStore::new();
+    let mut batch = vendor_log(&[1]);
+    batch.push(voided(1, u128::MAX));
+    append(&events, &batch).await;
+    let submissions = InMemorySubmissions::default();
+    let corrector = corrector("EINVOICE_KIND_ADJUSTMENT").await;
+    assert!(
+        feed_store(&events, &submissions, &corrector, tenant(), store(), NOW_MS)
+            .await
+            .is_err(),
+        "a correction names the number it corrects, so it waits"
+    );
+    let provider = SandboxEInvoice::new();
+    submit_due(&submissions, &Recorded::default(), &provider, NOW_MS)
+        .await
+        .expect("numbers the original");
+    assert_eq!(
+        feed_store(
+            &events,
+            &submissions,
+            &corrector,
+            tenant(),
+            store(),
+            NOW_MS + 1
+        )
+        .await,
+        Ok(1),
+        "the void is corrected once the original has its number"
+    );
+    let rows = submissions.list(tenant(), None, false).await.expect("list");
+    let original = rows
+        .iter()
+        .find(|row| row.corrects_invoice_number.is_none())
+        .expect("the original");
+    let correction = rows
+        .iter()
+        .find(|row| row.corrects_invoice_number.is_some())
+        .expect("its correction");
+    assert_eq!(
+        correction.corrects_invoice_number.as_deref(),
+        Some(original.invoice_number.as_str())
+    );
+    assert_eq!(correction.total_minor, -165_000);
 }
