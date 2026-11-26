@@ -14,7 +14,7 @@ use pos_core::decision::{Actor, DecisionCtx};
 use pos_core::permission::Permission;
 use pos_ports::event_store::EventStore;
 use pos_proto::einvoice::{CorrectionRequest, EInvoiceKind};
-use pos_proto::events::FiscalCorrectionRequested;
+use pos_proto::events::{FiscalCorrectionDecided, FiscalCorrectionRequested};
 use pos_proto::ids::{BillId, ReasonCodeId};
 use pos_proto::money::Money;
 use pos_proto::reason_codes::ReasonAction;
@@ -97,12 +97,43 @@ impl<S: EventStore> Edge<S> {
             messages.push(message);
         }
         self.append_and_publish(envelopes, messages).await?;
+        self.lock_projection().invoices.fold_requested(bill_id);
         Ok(CorrectionRequested {
             bill_id,
             amount,
             kind,
             requested_time: ctx.now,
         })
+    }
+}
+
+impl<S: EventStore> Edge<S> {
+    /// Records `fiscal.correction.decided` for each decision the store's `einvoice` node holds on a
+    /// bill this store asked about and has not recorded yet (ADR-0250 decision 3), stamped by the
+    /// box; answers how many it recorded. Folded from the log, so a restart records none twice.
+    ///
+    /// # Errors
+    ///
+    /// The first store or clock failure; the decisions before it stay recorded.
+    pub async fn record_correction_decisions(&self) -> Result<usize, AppError> {
+        let published = self.session().einvoice.correction_decisions.clone();
+        if published.is_empty() {
+            return Ok(0);
+        }
+        let unrecorded = self.lock_projection().invoices.unrecorded(&published);
+        let mut recorded = 0;
+        for decision in unrecorded {
+            let ctx = self.box_ctx()?;
+            let decided = FiscalCorrectionDecided { decision };
+            let (envelope, message) = self.prepare_on(&ctx, &decided, None)?;
+            self.append_and_publish(vec![envelope], vec![message])
+                .await?;
+            self.lock_projection()
+                .invoices
+                .fold_decided(&decided.decision);
+            recorded += 1;
+        }
+        Ok(recorded)
     }
 }
 
