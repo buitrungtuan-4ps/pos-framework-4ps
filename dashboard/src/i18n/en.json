@@ -3267,5 +3267,9 @@
   "provider.field.price_source": "Price delivery orders at",
   "provider.field.price_source.VENDOR_PRICE_SOURCE_APP": "The app's price (what the guest paid)",
   "provider.field.price_source.VENDOR_PRICE_SOURCE_MENU": "The store's delivery menu",
-  "provider.field.price_difference_bps": "Flag a price that differs from the menu by more than (basis points, 100 = 1%; 0 flags any difference)"
+  "provider.field.price_difference_bps": "Flag a price that differs from the menu by more than (basis points, 100 = 1%; 0 flags any difference)",
+  "provider.field.payment": "Where this app's guests pay",
+  "provider.field.payment.VENDOR_PAYMENT_IN_APP": "In the app (the bill settles when the store accepts the order)",
+  "provider.field.payment.VENDOR_PAYMENT_AT_STORE": "At the store (the till takes the money)",
+  "reports.tenderVendor": "Paid via delivery apps"
 }

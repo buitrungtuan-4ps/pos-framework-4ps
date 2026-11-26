@@ -99,6 +99,14 @@ pub static PROVIDER: ProviderDescriptor = ProviderDescriptor {
             required: false,
         },
         SettingField {
+            key: super::vendors::PAYMENT,
+            label_key: "provider.field.payment",
+            kind: FieldKind::Choice {
+                options: super::vendors::PAYMENT_OPTIONS,
+            },
+            required: false,
+        },
+        SettingField {
             key: WEBHOOK_SECRET,
             label_key: "provider.field.webhook_secret",
             kind: FieldKind::Secret { max_len: 128 },

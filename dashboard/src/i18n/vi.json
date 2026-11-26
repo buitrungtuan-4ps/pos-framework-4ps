@@ -3267,5 +3267,9 @@
   "provider.field.price_source": "Tính giá đơn giao hàng theo",
   "provider.field.price_source.VENDOR_PRICE_SOURCE_APP": "Giá trên app (khách đã trả)",
   "provider.field.price_source.VENDOR_PRICE_SOURCE_MENU": "Thực đơn giao hàng của cửa hàng",
-  "provider.field.price_difference_bps": "Cảnh báo khi giá lệch so với thực đơn quá (điểm cơ bản, 100 = 1%; 0 cảnh báo mọi chênh lệch)"
+  "provider.field.price_difference_bps": "Cảnh báo khi giá lệch so với thực đơn quá (điểm cơ bản, 100 = 1%; 0 cảnh báo mọi chênh lệch)",
+  "provider.field.payment": "Khách của app này thanh toán ở đâu",
+  "provider.field.payment.VENDOR_PAYMENT_IN_APP": "Trong app (hóa đơn được thanh toán khi cửa hàng nhận đơn)",
+  "provider.field.payment.VENDOR_PAYMENT_AT_STORE": "Tại cửa hàng (thu tiền tại quầy)",
+  "reports.tenderVendor": "Thanh toán qua app giao hàng"
 }

@@ -4,7 +4,7 @@
 //! Opening the bill for a table's order or for an order by id.
 
 use pos_core::billing;
-use pos_core::decision::{Actor, TableCommand, decide_table};
+use pos_core::decision::{Actor, DecisionCtx, TableCommand, decide_table};
 use pos_core::permission::Permission;
 use pos_ports::event_store::EventStore;
 use pos_proto::events::BillingBillOpened;
@@ -75,6 +75,16 @@ impl<S: EventStore> Edge<S> {
         order_id: OrderId,
     ) -> Result<BillView, AppError> {
         let ctx = self.decision_ctx(actor)?;
+        self.open_bill_in(&ctx, order_id).await
+    }
+
+    /// [`Self::open_bill_for_order`] in `ctx`, which the box's own settle of an order paid in a
+    /// vendor's app builds for itself (ADR-0248 decision 2).
+    pub(in crate::app) async fn open_bill_in(
+        &self,
+        ctx: &DecisionCtx,
+        order_id: OrderId,
+    ) -> Result<BillView, AppError> {
         ctx.require(Permission::OpenBill)?;
         let table_id = self.billable_order(order_id)?;
         self.check_flow_guard("billing.bill.open", order_id)?;
@@ -85,7 +95,7 @@ impl<S: EventStore> Edge<S> {
             Some(table_id) => Some(decide_table(
                 self.table_state(table_id),
                 TableCommand::RequestBill,
-                &ctx,
+                ctx,
             )?),
             None => None,
         };
@@ -98,7 +108,7 @@ impl<S: EventStore> Edge<S> {
             order_line_ids,
             fee_rules,
         };
-        self.commit_and_publish(&ctx, &payload).await?;
+        self.commit_and_publish(ctx, &payload).await?;
 
         let table_state = table_decision.map(|decision| decision.next_state);
         self.record_opened_bill(payload, table_id, table_state);

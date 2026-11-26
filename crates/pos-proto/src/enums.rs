@@ -138,6 +138,10 @@ wire_enum! {
     GiftCard = "GIFT_CARD",
     /// Anything else, with a note.
     Other = "OTHER",
+    /// Paid in a delivery vendor's app, settled by the store when it accepts the order
+    /// ([ADR-0248](../../../docs/adr/0248-a-delivery-order-is-priced-paid-and-reconciled-as-the-app-sold-it.md)
+    /// decision 2). No money reaches the drawer; the vendor pays the store out.
+    Vendor = "VENDOR",
 }
 
 wire_enum! {
@@ -448,8 +452,13 @@ mod tests {
 
     #[test]
     fn payment_methods_cover_the_documented_set() {
-        // Six values including the reserved gift-card slot, even though version one
-        // shows four buttons.
-        assert_eq!(PaymentMethod::ALL.len(), 7, "six methods plus UNSPECIFIED");
+        // Seven values including the reserved gift-card slot, even though version one
+        // shows four buttons, and the vendor's, which no till offers (ADR-0248).
+        assert_eq!(
+            PaymentMethod::ALL.len(),
+            8,
+            "seven methods plus UNSPECIFIED"
+        );
+        assert_eq!(PaymentMethod::Vendor.as_wire(), "PAYMENT_METHOD_VENDOR");
     }
 }

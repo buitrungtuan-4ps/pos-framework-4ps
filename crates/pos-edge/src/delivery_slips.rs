@@ -92,8 +92,8 @@ where
     }
 }
 
-/// The store has taken `order_id`, at once or because staff confirmed it: print its slip and
-/// accept it with its vendor, where it has either.
+/// The store has taken `order_id`, at once or because staff confirmed it: settle it where its guest
+/// paid in the vendor's app, print its slip and accept it with its vendor, where it has each.
 pub async fn confirmed<S>(
     printers: Option<&Printers>,
     answers: Option<&DeliveryAnswers>,
@@ -102,6 +102,11 @@ pub async fn confirmed<S>(
 ) where
     S: EventStore + SubjectStore,
 {
+    // Paid in the vendor's app: the bill settles as the order is taken (ADR-0248 decision 2). A
+    // refusal leaves it for the till, and the order is taken all the same.
+    if let Err(error) = edge.settle_paid_in_app(order_id).await {
+        tracing::warn!(%order_id, %error, "an order paid in its vendor's app could not be settled; the till takes it");
+    }
     if let Some(printers) = printers {
         let _outcome = print_delivery_slip(printers, edge, order_id).await;
     }
