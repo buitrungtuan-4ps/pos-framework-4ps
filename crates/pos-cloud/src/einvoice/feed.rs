@@ -23,7 +23,7 @@ use pos_ports::fiscalization::{
     CorrectionKind, Fiscalization, InvoiceCorrection, InvoiceNumber, InvoiceRequest,
 };
 use pos_proto::determinism::ClockSource;
-use pos_proto::einvoice::{EInvoiceKind, VendorNumber};
+use pos_proto::einvoice::{EInvoiceKind, VendorCode, VendorNumber};
 use pos_proto::events::{
     BillingBillVoided, EventType, FiscalCorrectionRequested, FiscalInvoiceIssued,
 };
@@ -655,8 +655,8 @@ async fn learn_number(
     let bill_id = row.bill_id.parse::<Ulid>().map(BillId::new).map_err(text)?;
     let entry = VendorNumber {
         bill_id,
-        invoice_number: issued.invoice_number.as_str().to_owned(),
-        authority_reference: issued.authority_reference.as_deref().map(str::to_owned),
+        invoice_number: VendorCode::new(issued.invoice_number.as_str()),
+        authority_reference: issued.authority_reference.as_deref().map(VendorCode::new),
     };
     numbers.write(tenant, store, entry).await?;
     issued

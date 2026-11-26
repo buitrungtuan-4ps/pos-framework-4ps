@@ -29,7 +29,7 @@
 //! Created while the catalogue is still young, so the file grows by reviewable diffs
 //! from here rather than arriving fully formed with no history.
 
-use crate::einvoice::{CorrectionRequest, DecidedCorrection};
+use crate::einvoice::{CorrectionRequest, DecidedCorrection, VendorNumber};
 use crate::envelope::{EventPayload, PayloadPart};
 use crate::events::{
     BillFeeLine, BillTaxComponent, BillTaxLine, CustomFieldValue, DenominationCount, EventType,
@@ -55,6 +55,11 @@ const PARTS: &[(EventType, &str, &[&str])] = &[
         EventType::FiscalCorrectionDecided,
         "decision",
         DecidedCorrection::FIELD_NAMES,
+    ),
+    (
+        EventType::FiscalInvoiceNumbered,
+        "number",
+        VendorNumber::FIELD_NAMES,
     ),
     (
         EventType::BillingBillOpened,

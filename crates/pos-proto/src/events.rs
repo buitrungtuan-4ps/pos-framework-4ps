@@ -457,6 +457,11 @@ event_catalogue! {
         /// The bill, approved or declined, by which console user and when.
         decision: DecidedCorrection,
     },
+    /// The vendor's number for a bill's invoice issued "number pending" reached the store (ADR-0251).
+    FiscalInvoiceNumbered => "fiscal.invoice.numbered", version = 1 {
+        /// The bill, its invoice's number and the vendor's reference.
+        number: crate::einvoice::VendorNumber,
+    },
     /// A settled bill's e-invoice will be issued when due, in the settle's transaction (ADR-0229).
     FiscalInvoiceScheduled => "fiscal.invoice.scheduled", version = 1 {
         /// The settled bill.
@@ -464,8 +469,7 @@ event_catalogue! {
         /// When it is due, and the buyer it will name.
         schedule: InvoiceSchedule,
     },
-    /// A settled bill's receipt was printed again, as a copy marked COPY
-    /// ([ADR-0164](../../../docs/adr/0164-a-receipt-is-reprinted-as-a-marked-copy-and-every-reprint-is-counted.md)).
+    /// A settled bill's receipt was printed again, as a copy marked COPY (ADR-0164).
     ///
     /// One event per copy, so a reprint rate is a count (the envelope names the employee and the
     /// device, `docs/pos-spec.md` §11 item 3). A copy keeps the receipt's own number, so the gapless

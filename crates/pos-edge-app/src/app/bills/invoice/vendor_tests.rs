@@ -11,8 +11,10 @@ use std::sync::Arc;
 use pos_fakes::FakeStore;
 use pos_ports::event_store::{EventQuery, EventStore};
 use pos_proto::EventPayload;
-use pos_proto::einvoice::{EInvoiceIssueMoment, EInvoiceNumberSource, PublishedEInvoice};
-use pos_proto::events::FiscalInvoiceIssued;
+use pos_proto::einvoice::{
+    EInvoiceIssueMoment, EInvoiceNumberSource, PublishedEInvoice, VendorCode, VendorNumber,
+};
+use pos_proto::events::{FiscalInvoiceIssued, FiscalInvoiceNumbered};
 use pos_proto::ids::{BillId, TableId};
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::Open;
@@ -189,6 +191,122 @@ fn a_deferred_vendor_invoice_is_issued_number_pending_when_it_falls_due() {
         assert!(
             issued[0].invoice.number_pending(),
             "HYBRID without an offline symbol waits for the vendor"
+        );
+    });
+}
+
+/// The vendor's `number` for `bill_id`, published on the store's node as the cloud writes it, under
+/// `source`.
+fn numbered(
+    edge: &Edge<FakeStore>,
+    source: EInvoiceNumberSource,
+    (bill_id, number): (BillId, &str),
+) {
+    let mut session = (*edge.session()).clone();
+    session.einvoice.number_source = Open::from_known(source);
+    session.einvoice.vendor_numbers.push(VendorNumber {
+        bill_id,
+        invoice_number: VendorCode::new(number),
+        authority_reference: Some(VendorCode::new("SANDBOX-REF")),
+    });
+    edge.apply_session(session);
+}
+
+async fn numbered_events(store: &FakeStore) -> Vec<FiscalInvoiceNumbered> {
+    store
+        .read(&EventQuery::first(
+            identity().store_id,
+            NonZeroU32::new(200).expect("200 is not zero"),
+        ))
+        .await
+        .expect("reads the log")
+        .iter()
+        .filter(|envelope| {
+            envelope.event_type.as_str() == FiscalInvoiceNumbered::EVENT_TYPE.as_str()
+        })
+        .map(|envelope| envelope.data.decode().expect("decodes"))
+        .collect()
+}
+
+#[test]
+fn the_store_records_the_vendors_number_once_and_a_copy_prints_it() {
+    pos_fakes::executor::run_ready(async {
+        let store = FakeStore::default();
+        let edge = a_store(
+            store.clone(),
+            EInvoiceIssueMoment::Immediate,
+            EInvoiceNumberSource::Vendor,
+        );
+        let (first, _) = settle_one(&edge, 1).await;
+        let (second, _) = settle_one(&edge, 2).await;
+        assert_eq!(
+            edge.record_vendor_numbers().await.ok(),
+            Some(0),
+            "nothing published yet"
+        );
+
+        numbered(
+            &edge,
+            EInvoiceNumberSource::Vendor,
+            (first, "1C26MAA/00000005"),
+        );
+        assert_eq!(edge.record_vendor_numbers().await.ok(), Some(1));
+        assert_eq!(
+            edge.record_vendor_numbers().await.ok(),
+            Some(0),
+            "recorded once"
+        );
+        let recorded = numbered_events(&store).await;
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].number.bill_id, first);
+
+        let copy = edge.reprint_receipt(actor(), first).await.expect("copies");
+        assert_eq!(
+            copy.invoice.and_then(|invoice| invoice.number).as_deref(),
+            Some("1C26MAA/00000005")
+        );
+        let waiting = edge.reprint_receipt(actor(), second).await.expect("copies");
+        assert_eq!(
+            waiting.invoice.map(|invoice| invoice.number),
+            Some(None),
+            "still pending"
+        );
+
+        edge.rebuild().await.expect("rebuilds from the log");
+        assert_eq!(
+            edge.record_vendor_numbers().await.ok(),
+            Some(0),
+            "none twice after a restart"
+        );
+        let copy = edge.reprint_receipt(actor(), first).await.expect("copies");
+        assert_eq!(
+            copy.invoice.and_then(|invoice| invoice.number).as_deref(),
+            Some("1C26MAA/00000005")
+        );
+    });
+}
+
+#[test]
+fn a_store_switched_back_numbers_after_the_vendors_last_number_once_none_waits() {
+    pos_fakes::executor::run_ready(async {
+        let store = FakeStore::default();
+        let edge = a_store(
+            store.clone(),
+            EInvoiceIssueMoment::Immediate,
+            EInvoiceNumberSource::Vendor,
+        );
+        let (first, _) = settle_one(&edge, 1).await;
+        numbered(
+            &edge,
+            EInvoiceNumberSource::Pos,
+            (first, "1C26MAA/00000006"),
+        );
+        assert_eq!(edge.record_vendor_numbers().await.ok(), Some(1));
+        let (_, answered) = settle_one(&edge, 2).await;
+        assert_eq!(
+            answered.and_then(|invoice| invoice.number).as_deref(),
+            Some("1C26MAA/00000007"),
+            "the store numbers after the vendor's last number, never over it"
         );
     });
 }

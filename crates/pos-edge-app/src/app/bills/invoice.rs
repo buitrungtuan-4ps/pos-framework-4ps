@@ -15,7 +15,9 @@ use pos_proto::ClockSource;
 use pos_proto::einvoice::{
     EInvoiceKind, EInvoiceNumberSource, FiscalInvoice, InvoiceSchedule, InvoiceSymbol,
 };
-use pos_proto::events::{BillingBillSettled, FiscalInvoiceIssued, FiscalInvoiceScheduled};
+use pos_proto::events::{
+    BillingBillSettled, FiscalInvoiceIssued, FiscalInvoiceNumbered, FiscalInvoiceScheduled,
+};
 use pos_proto::ids::{BillId, EventId, SubjectId};
 use pos_proto::integrations::IntegrationFamily;
 use pos_proto::money::Money;
@@ -268,6 +270,37 @@ fn calendar_date(
         .map_err(|_clock| AppError::Clock)?;
     CalendarDate::from_ymd(civil.year(), civil.month(), civil.day())
         .map_err(|_clock| AppError::Clock)
+}
+
+impl<S: EventStore> Edge<S> {
+    /// Records `fiscal.invoice.numbered` for each number the store's `einvoice` node holds for a bill
+    /// whose invoice still waits for one (ADR-0251 decision 4), stamped by the box; answers how many
+    /// it recorded. Folded from the log, so a restart records none twice.
+    ///
+    /// # Errors
+    ///
+    /// The first store or clock failure; the numbers before it stay recorded.
+    pub async fn record_vendor_numbers(&self) -> Result<usize, AppError> {
+        let published = self.session().einvoice.vendor_numbers.clone();
+        if published.is_empty() {
+            return Ok(0);
+        }
+        let _invoicing = self.invoicing.lock().await;
+        let unnumbered = self.lock_projection().invoices.unnumbered(&published);
+        let mut recorded = 0;
+        for number in unnumbered {
+            let ctx = self.box_ctx()?;
+            let numbered = FiscalInvoiceNumbered { number };
+            let (envelope, message) = self.prepare_on(&ctx, &numbered, None)?;
+            self.append_and_publish(vec![envelope], vec![message])
+                .await?;
+            self.lock_projection()
+                .invoices
+                .fold_numbered(&numbered.number);
+            recorded += 1;
+        }
+        Ok(recorded)
+    }
 }
 
 #[cfg(test)]
