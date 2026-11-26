@@ -6,7 +6,8 @@
 //!
 //! Every minute the edge issues whatever has fallen due, each taking the next number of its symbol
 //! then. Nothing here needs the cloud: a store offline at its batch window issues on time, and the
-//! cloud submits when the events arrive. A tick that fails is logged and tried at the next one.
+//! cloud submits when the events arrive. A tick that fails is logged and tried at the next one. The
+//! same tick records each correction decision HQ published for this store (ADR-0250).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -38,13 +39,28 @@ pub fn spawn_invoice_issuing<S>(
                         break;
                     }
                 }
-                _instant = ticks.tick() => match edge.issue_due_invoices().await {
-                    // A count only: no bill or buyer is named in a log.
-                    Ok(0) => {}
-                    Ok(issued) => tracing::info!(issued, "issued deferred e-invoices"),
-                    Err(error) => tracing::warn!(%error, "issuing deferred e-invoices failed; retrying next tick"),
-                },
+                _instant = ticks.tick() => tick(&edge).await,
             }
         }
     });
+}
+
+/// One tick: the deferred invoices that fell due, then HQ's correction decisions (ADR-0250), each
+/// recorded once whether it arrived before a restart or after. Counts only: no bill or buyer is
+/// named in a log.
+async fn tick<S: EventStore>(edge: &Edge<S>) {
+    match edge.issue_due_invoices().await {
+        Ok(0) => {}
+        Ok(issued) => tracing::info!(issued, "issued deferred e-invoices"),
+        Err(error) => {
+            tracing::warn!(%error, "issuing deferred e-invoices failed; retrying next tick");
+        }
+    }
+    match edge.record_correction_decisions().await {
+        Ok(0) => {}
+        Ok(recorded) => tracing::info!(recorded, "recorded HQ's correction decisions"),
+        Err(error) => {
+            tracing::warn!(%error, "recording HQ's correction decisions failed; retrying next tick");
+        }
+    }
 }

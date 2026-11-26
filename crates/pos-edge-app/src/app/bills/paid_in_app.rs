@@ -76,8 +76,9 @@ impl<S: EventStore> Edge<S> {
     }
 
     /// The box acting for itself: the store's own device, no employee, and only what a settle of
-    /// an order paid in the app needs.
-    fn box_ctx(&self) -> Result<DecisionCtx, AppError> {
+    /// an order paid in the app needs. A correction decision HQ published is recorded under it too
+    /// (ADR-0250).
+    pub(super) fn box_ctx(&self) -> Result<DecisionCtx, AppError> {
         let session = self.session();
         let now = self.clock.now();
         let business_date = derive_business_date(now, &session.timezone, session.cutoff)
