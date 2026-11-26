@@ -87,6 +87,21 @@ wire_enum! {
     CancelWindow = "CANCEL_WINDOW",
 }
 
+wire_enum! {
+    /// Who numbers a store's e-invoices
+    /// ([ADR-0249](../../../docs/adr/0249-the-e-invoice-number-comes-from-the-source-the-store-chooses.md),
+    /// [ADR-0251](../../../docs/adr/0251-a-vendor-numbered-invoice-waits-for-its-number-and-the-store-learns-it.md)).
+    /// Every statement of law behind it is to be confirmed by legal or the accountant.
+    EInvoiceNumberSource, prefix = "EINVOICE_NUMBER_SOURCE";
+    /// The store numbers each invoice from its own symbol at issue, offline too. The default.
+    Pos = "POS",
+    /// The vendor numbers it once the cloud submits it; the store issues it "number pending".
+    Vendor = "VENDOR",
+    /// The store numbers offline from its offline symbol and the vendor numbers online. Allowed
+    /// only if legal and the vendor confirm.
+    Hybrid = "HYBRID",
+}
+
 /// The values `manager_correction_limit` may take, in the minor unit.
 pub const MANAGER_CORRECTION_LIMIT: std::ops::RangeInclusive<i64> = 0..=1_000_000_000_000;
 
@@ -260,6 +275,9 @@ pub struct PublishedEInvoice {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub correction_decisions: Vec<DecidedCorrection>,
+    /// Who numbers this store's invoices (ADR-0251). Read it through [`Self::number_source`].
+    #[serde(default, deserialize_with = "token", skip_serializing_if = "is_absent")]
+    pub number_source: Open<EInvoiceNumberSource>,
 }
 
 impl PublishedEInvoice {
@@ -344,6 +362,19 @@ impl PublishedEInvoice {
             .unwrap_or(0)
     }
 
+    /// Who numbers this store's invoices: the node's source, and [`EInvoiceNumberSource::Pos`] for
+    /// an absent, unspecified or unknown one.
+    #[must_use]
+    pub fn number_source(&self) -> EInvoiceNumberSource {
+        match self.number_source.known() {
+            EInvoiceNumberSource::Vendor => EInvoiceNumberSource::Vendor,
+            EInvoiceNumberSource::Hybrid => EInvoiceNumberSource::Hybrid,
+            EInvoiceNumberSource::Unspecified | EInvoiceNumberSource::Pos => {
+                EInvoiceNumberSource::Pos
+            }
+        }
+    }
+
     /// Whether a correction request needs a reason: on unless the node turns it off.
     #[must_use]
     pub fn correction_reason_required(&self) -> bool {
@@ -402,6 +433,23 @@ pub struct FiscalInvoice {
     /// (ADR-0229 decision 5). Absent where none was published.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connection_id: Option<Ulid>,
+    /// Who numbers it (ADR-0251 decision 1). Absent reads as `EINVOICE_NUMBER_SOURCE_POS`; under
+    /// `_VENDOR` the store took no number, `invoice_sequence` is 0 and the vendor gives the number
+    /// once the cloud submits it. Read it through [`Self::number_pending`].
+    #[serde(default, deserialize_with = "token", skip_serializing_if = "is_absent")]
+    pub number_source: Open<EInvoiceNumberSource>,
+}
+
+impl FiscalInvoice {
+    /// Whether the store issued it without a number, for the vendor to give one.
+    #[must_use]
+    pub fn number_pending(&self) -> bool {
+        self.invoice_sequence == 0
+            && matches!(
+                self.number_source.known(),
+                EInvoiceNumberSource::Vendor | EInvoiceNumberSource::Hybrid
+            )
+    }
 }
 
 /// A bill whose invoice waits for its moment, as `fiscal.invoice.scheduled` carries it (ADR-0229

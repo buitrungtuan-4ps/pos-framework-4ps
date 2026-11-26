@@ -12,7 +12,9 @@ use pos_core::decision::{Actor, DecisionCtx};
 use pos_core::einvoice::{IssueSchedule, due_time};
 use pos_ports::event_store::EventStore;
 use pos_proto::ClockSource;
-use pos_proto::einvoice::{EInvoiceKind, FiscalInvoice, InvoiceSchedule, InvoiceSymbol};
+use pos_proto::einvoice::{
+    EInvoiceKind, EInvoiceNumberSource, FiscalInvoice, InvoiceSchedule, InvoiceSymbol,
+};
 use pos_proto::events::{BillingBillSettled, FiscalInvoiceIssued, FiscalInvoiceScheduled};
 use pos_proto::ids::{BillId, EventId, SubjectId};
 use pos_proto::integrations::IntegrationFamily;
@@ -138,12 +140,17 @@ impl<S: EventStore> Edge<S> {
         symbol: InvoiceSymbol,
         (bill_id, total, buyer_subject_id): (BillId, Money, Option<SubjectId>),
     ) -> Result<FiscalInvoiceIssued, AppError> {
-        let sequence = self
-            .lock_projection()
-            .invoices
-            .next_under(&symbol)
-            .ok_or(AppError::EInvoiceSymbolMissing)?;
         let session = self.session();
+        let source = self.number_source_now(session.einvoice.number_source());
+        let sequence = if source == EInvoiceNumberSource::Pos {
+            self.lock_projection()
+                .invoices
+                .next_under(&symbol)
+                .ok_or(AppError::EInvoiceSymbolMissing)?
+        } else {
+            // Issued "number pending": the store takes no number, so its sequence never moves.
+            0
+        };
         Ok(FiscalInvoiceIssued {
             bill_id,
             invoice: FiscalInvoice {
@@ -160,8 +167,26 @@ impl<S: EventStore> Edge<S> {
                     .in_family(IntegrationFamily::EInvoice)
                     .next()
                     .and_then(|connection| connection.connection_id.parse::<Ulid>().ok()),
+                number_source: Open::from_known(source),
             },
         })
+    }
+
+    /// Who numbers an invoice issued now under the store's `configured` source (ADR-0251 decisions 5
+    /// and 6). A store switched back to the POS keeps issuing "number pending" while any invoice
+    /// still waits for the vendor's number, so it never numbers over one the vendor is about to
+    /// give. `HYBRID` without an offline symbol is issued "number pending", as `VENDOR` is.
+    fn number_source_now(&self, configured: EInvoiceNumberSource) -> EInvoiceNumberSource {
+        match configured {
+            EInvoiceNumberSource::Pos | EInvoiceNumberSource::Unspecified => {
+                if self.lock_projection().invoices.awaits_vendor_numbers() {
+                    EInvoiceNumberSource::Vendor
+                } else {
+                    EInvoiceNumberSource::Pos
+                }
+            }
+            source @ (EInvoiceNumberSource::Vendor | EInvoiceNumberSource::Hybrid) => source,
+        }
     }
 
     /// Issues every deferred invoice due by now, in due order, each in its own transaction and
@@ -247,3 +272,5 @@ fn calendar_date(
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod vendor_tests;

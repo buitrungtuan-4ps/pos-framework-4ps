@@ -389,7 +389,7 @@ fn a_settle_answers_with_the_invoice_number_and_its_lookup_code() {
         let invoice = settled
             .invoice
             .expect("an invoice was issued with the settle");
-        assert_eq!(invoice.number, "1C26MAA/00000001");
+        assert_eq!(invoice.number.as_deref(), Some("1C26MAA/00000001"));
         let event = store
             .read(&EventQuery::first(
                 identity().store_id,

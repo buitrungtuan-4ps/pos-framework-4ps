@@ -57,6 +57,7 @@ fn log(count: u32, sequences: &[u32]) -> Vec<EventEnvelope<RawPayload>> {
                 total: Money::new(CurrencyCode::parse("VND").expect("VND"), 165_000),
                 buyer_subject_id: None,
                 connection_id: None,
+                number_source: Open::default(),
             },
         })
         .expect("a payload");

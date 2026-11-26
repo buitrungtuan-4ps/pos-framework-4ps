@@ -55,6 +55,10 @@ export function receiptLine(bill: BillResponse): string {
  * a guest looks it up by. `null` for a deferred invoice, which has no number yet, and for none.
  */
 export function invoiceLine(bill: BillResponse): string | null {
+  if (bill.invoice_number_pending) {
+    // Issued "number pending": the vendor gives the number later, the code works now (ADR-0251).
+    return t("pay.einvoice_pending", { code: bill.invoice_lookup_code ?? "" });
+  }
   return bill.invoice_number
     ? t("pay.einvoice", { number: bill.invoice_number, code: bill.invoice_lookup_code ?? "" })
     : null;

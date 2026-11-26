@@ -7,7 +7,7 @@
 //! number under each symbol, which the next invoice continues from; the bills with one, which a void
 //! after payment refuses and a receipt's copy prints again; and the deferred invoices in due order.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use pos_core::decision::Actor;
 use pos_proto::einvoice::{DecidedCorrection, InvoiceSymbol};
@@ -55,6 +55,10 @@ pub(in crate::app) struct Invoices {
     /// ([ADR-0250](../../../../../docs/adr/0250-a-store-learns-a-correction-decision-on-its-einvoice-node.md)
     /// decision 3). At most [`CORRECTIONS_LIMIT`].
     corrections: BTreeMap<BillId, Option<Timestamp>>,
+    /// The bills whose invoice was issued "number pending" and whose number the vendor has not yet
+    /// given (ADR-0251), at most [`PENDING_LIMIT`]. While any waits, the store takes no number of
+    /// its own, so it never numbers over one the vendor is about to give (decision 5).
+    awaiting_number: BTreeSet<BillId>,
 }
 
 impl Invoices {
@@ -67,19 +71,27 @@ impl Invoices {
         invoice_id: EventId,
         issued_time: Timestamp,
     ) {
-        let last = self
-            .last
-            .entry(issued.invoice.invoice_symbol.clone())
-            .or_insert(0);
-        *last = (*last).max(issued.invoice.invoice_sequence);
+        let reference = if issued.invoice.number_pending() {
+            if self.awaiting_number.len() < PENDING_LIMIT {
+                self.awaiting_number.insert(issued.bill_id);
+            }
+            IssuedInvoiceRef::pending(&invoice_id.to_string())
+        } else {
+            let last = self
+                .last
+                .entry(issued.invoice.invoice_symbol.clone())
+                .or_insert(0);
+            *last = (*last).max(issued.invoice.invoice_sequence);
+            IssuedInvoiceRef::new(
+                issued.invoice.invoice_symbol.as_str(),
+                issued.invoice.invoice_sequence,
+                &invoice_id.to_string(),
+            )
+        };
         self.invoiced.insert(
             issued.bill_id,
             (
-                IssuedInvoiceRef::new(
-                    issued.invoice.invoice_symbol.as_str(),
-                    issued.invoice.invoice_sequence,
-                    &invoice_id.to_string(),
-                ),
+                reference,
                 u64::try_from(issued_time.as_milliseconds_since_epoch()).unwrap_or(0),
             ),
         );
@@ -139,6 +151,11 @@ impl Invoices {
     }
 
     /// The number and lookup code of the invoice issued for `bill_id`, if one was.
+    /// Whether any invoice issued "number pending" still waits for the vendor's number.
+    pub(in crate::app) fn awaits_vendor_numbers(&self) -> bool {
+        !self.awaiting_number.is_empty()
+    }
+
     pub(in crate::app) fn issued(&self, bill_id: BillId) -> Option<&IssuedInvoiceRef> {
         self.invoiced.get(&bill_id).map(|(reference, _)| reference)
     }

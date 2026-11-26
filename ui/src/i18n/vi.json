@@ -734,6 +734,7 @@
   "pay.buyer_email": "Email nhận hóa đơn điện tử",
   "pay.buyer_tax_code_shape": "Mã số thuế không đúng dạng: 10 đến 15 chữ hoặc số.",
   "pay.einvoice": "Hóa đơn điện tử {number} · mã tra cứu {code}",
+  "pay.einvoice_pending": "Hóa đơn điện tử chờ cấp số · mã tra cứu {code}",
   "card.confirm_needs_manager": "Cần quản lý đồng ý trước khi xác nhận thẻ bằng tay. Hãy nhờ quản lý nhập mã thẻ nhân viên và mã PIN.",
   "card.approver_code": "Mã nhân viên của quản lý",
   "card.approver_pin": "Mã PIN của quản lý",
