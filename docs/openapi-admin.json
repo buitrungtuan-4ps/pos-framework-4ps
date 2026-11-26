@@ -11976,6 +11976,336 @@
         "x-permission": "console.data.read"
       }
     },
+    "/admin/einvoices/correction-requests": {
+      "get": {
+        "tags": [
+          "e-invoices"
+        ],
+        "summary": "HQ's queue of correction requests (ADR-0250 decision 3).",
+        "operationId": "admin_list_correction_requests",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "path",
+            "description": "`PENDING`, `APPROVED` or `DECLINED`; every request when absent.",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tenant's correction requests, oldest first, at most 1,000, optionally of one status. People are named by id only",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CorrectionRequestView"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "tenant_id is not a ULID, or status is not PENDING, APPROVED or DECLINED (`INVALID_FORMAT` on `status`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.data.read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The queue is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.data.read"
+      }
+    },
+    "/admin/einvoices/correction-requests/{request_id}/approve": {
+      "post": {
+        "tags": [
+          "e-invoices"
+        ],
+        "summary": "HQ approves a correction request (ADR-0250 decision 3).",
+        "operationId": "admin_approve_correction_request",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "description": "The request (a ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The tenant",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecideRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Approved, audited with the requester and the approver, and published on the store's `einvoice` node: the store's manager may then void the bill once, and the cloud corrects its invoice. Approving an approved request publishes it again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CorrectionRequestView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.einvoices.correct",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such request in the tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request was declined (`CORRECTION_ALREADY_DECIDED` on `status`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Every attempt to write the store's configuration lost a race: try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The queue or the configuration store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.einvoices.correct"
+      }
+    },
+    "/admin/einvoices/correction-requests/{request_id}/decline": {
+      "post": {
+        "tags": [
+          "e-invoices"
+        ],
+        "summary": "HQ declines a correction request (ADR-0250 decision 3).",
+        "operationId": "admin_decline_correction_request",
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "description": "The request (a ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "The tenant",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecideRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Declined, audited with the requester and the decider, and published on the store's `einvoice` node: the void stays refused at the till. Declining a declined request publishes it again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CorrectionRequestView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An id is not a ULID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.einvoices.correct",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such request in the tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request was approved (`CORRECTION_ALREADY_DECIDED` on `status`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Every attempt to write the store's configuration lost a race: try again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The queue or the configuration store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.einvoices.correct"
+      }
+    },
     "/admin/einvoices/{invoice_id}/correct": {
       "post": {
         "tags": [
@@ -29120,6 +29450,84 @@
           }
         }
       },
+      "CorrectionRequestView": {
+        "type": "object",
+        "description": "One correction request. People are named by id only.",
+        "required": [
+          "request_id",
+          "store_id",
+          "bill_id",
+          "amount_minor",
+          "currency_code",
+          "kind",
+          "reason_code_id",
+          "requested_by",
+          "requested_time_ms",
+          "status",
+          "decided_by_user_id",
+          "decided_time_ms"
+        ],
+        "properties": {
+          "amount_minor": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "bill_id": {
+            "type": "string"
+          },
+          "config_version_id": {
+            "type": "string",
+            "description": "The config version that published the decision to the store, on a decision's answer."
+          },
+          "currency_code": {
+            "type": "string"
+          },
+          "decided_by_user_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "decided_time_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "kind": {
+            "type": "string",
+            "description": "`ADJUSTMENT` or `REPLACEMENT`."
+          },
+          "reason_code_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "requested_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The requesting employee's id."
+          },
+          "requested_time_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "status": {
+            "type": "string",
+            "description": "`PENDING`, `APPROVED` or `DECLINED`."
+          },
+          "store_id": {
+            "type": "string"
+          }
+        }
+      },
       "CountrySettingDefault": {
         "type": "object",
         "description": "One setting a country pack seeds: the register's key and the value, as the setting's node\ncarries it.",
@@ -30499,6 +30907,18 @@
             "format": "int64",
             "description": "Every event recorded on that day.",
             "minimum": 0
+          }
+        }
+      },
+      "DecideRequest": {
+        "type": "object",
+        "description": "A decision's body: the tenant the request belongs to.",
+        "required": [
+          "tenant_id"
+        ],
+        "properties": {
+          "tenant_id": {
+            "type": "string"
           }
         }
       },

@@ -8,13 +8,15 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use pos_cloud::audit::NoopAuditRecorder;
 use pos_cloud::auth::admin::AdminRole;
+use pos_cloud::config_tree::ConfigTreeStore as _;
 use pos_cloud::einvoice::feed::{InMemorySubmissions, SubmissionStore as _};
+use pos_cloud::einvoice::requests::{CorrectionRequests as _, InMemoryCorrectionRequests};
 use pos_cloud::einvoice::symbols::{
     InMemorySymbolLedger, SymbolLedger as _, SymbolRecord, SymbolSource,
 };
 use pos_cloud::{Cloud, http};
 use pos_fakes::FakeStore;
-use store_postgres::SubmissionRow;
+use store_postgres::{CorrectionRequestRow, SubmissionRow};
 use tower::ServiceExt;
 
 use crate::{
@@ -50,6 +52,17 @@ fn original() -> SubmissionRow {
 }
 
 async fn app() -> (axum::Router, InMemorySubmissions, crate::FakeAdmin) {
+    let (router, submissions, admin, _queue, _trees) = app_with_queue().await;
+    (router, submissions, admin)
+}
+
+async fn app_with_queue() -> (
+    axum::Router,
+    InMemorySubmissions,
+    crate::FakeAdmin,
+    InMemoryCorrectionRequests,
+    FakeConfigTrees,
+) {
     let admin = provisioned_admin();
     let trees = FakeConfigTrees::default();
     trees.seed_store_layer(
@@ -59,6 +72,7 @@ async fn app() -> (axum::Router, InMemorySubmissions, crate::FakeAdmin) {
     );
     let submissions = InMemorySubmissions::default();
     submissions.record(original()).await.expect("record");
+    let queue = InMemoryCorrectionRequests::default();
     // The store's own symbol is in the ledger, as every symbol given since ADR-0240 is.
     let ledger = InMemorySymbolLedger::default();
     ledger
@@ -83,14 +97,15 @@ async fn app() -> (axum::Router, InMemorySubmissions, crate::FakeAdmin) {
         FakeWebhooks::default(),
     ))
     .merge(http::einvoices_router(
-        trees,
+        trees.clone(),
         admin.clone(),
         clock(),
         Arc::new(NoopAuditRecorder),
         Arc::new(submissions.clone()),
         Arc::new(ledger),
+        Arc::new(queue.clone()),
     ));
-    (router, submissions, admin)
+    (router, submissions, admin, queue, trees)
 }
 
 /// The list names each invoice's state and no buyer; a correction is numbered under the tenant's
@@ -219,4 +234,183 @@ async fn ops_reads_the_list_and_cannot_correct() {
         .await
         .expect("route");
     assert_eq!(correct.status(), StatusCode::FORBIDDEN);
+}
+
+const REQUEST: &str = "01KDDDDDDDDDDDDDDDDDDDDDDD";
+const BILL: &str = "01KBBBBBBBBBBBBBBBBBBBBBBB";
+
+fn pending(request_id: &str, bill_id: &str) -> CorrectionRequestRow {
+    CorrectionRequestRow {
+        tenant_id: tenant().to_string(),
+        request_id: request_id.to_owned(),
+        store_id: store_id().to_string(),
+        bill_id: bill_id.to_owned(),
+        amount_minor: 165_000,
+        currency_code: "VND".to_owned(),
+        kind: "ADJUSTMENT".to_owned(),
+        reason_code_id: Some("01KEEEEEEEEEEEEEEEEEEEEEEE".to_owned()),
+        requested_by: Some("01KFFFFFFFFFFFFFFFFFFFFFFF".to_owned()),
+        requested_time_ms: 10,
+        status: "PENDING".to_owned(),
+        decided_by_user_id: None,
+        decided_time_ms: None,
+    }
+}
+
+/// The queue lists a pending request; approving it records the approver, keeps the requester, and
+/// publishes the decision on the store's own `einvoice` node beside what the node held. A second
+/// approval publishes it again; declining it then is refused, and another request is declined.
+#[tokio::test]
+async fn hq_approves_or_declines_a_request_and_the_store_learns_it_on_its_einvoice_node() {
+    let (router, _submissions, _admin, queue, trees) = app_with_queue().await;
+    trees.seed_store_layer(
+        tenant(),
+        store_id(),
+        serde_json::json!({ "locale": { "country_code": "VN" }, "einvoice": { "symbol": "1C23MAA" } }),
+    );
+    queue.record(pending(REQUEST, BILL)).await.expect("record");
+    let other = "01KGGGGGGGGGGGGGGGGGGGGGGG";
+    queue
+        .record(pending(other, "01KHHHHHHHHHHHHHHHHHHHHHHH"))
+        .await
+        .expect("record");
+    let cookie = admin_cookie(&router).await;
+    let list = |status: &str| {
+        get_with_cookie(
+            &format!(
+                "/admin/einvoices/correction-requests?tenant_id={}&status={status}",
+                tenant()
+            ),
+            &cookie,
+        )
+    };
+    let listed = json_body(
+        router
+            .clone()
+            .oneshot(list("PENDING"))
+            .await
+            .expect("route"),
+    )
+    .await;
+    assert_eq!(listed.as_array().map(Vec::len), Some(2));
+    assert_eq!(listed[0]["request_id"], REQUEST);
+    assert_eq!(listed[0]["requested_by"], "01KFFFFFFFFFFFFFFFFFFFFFFF");
+    let bad = router.clone().oneshot(list("MAYBE")).await.expect("route");
+    assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+
+    let decide = |request: &str, verb: &str| {
+        post_with_cookie(
+            &format!("/admin/einvoices/correction-requests/{request}/{verb}"),
+            &serde_json::json!({ "tenant_id": tenant().to_string() }),
+            &cookie,
+        )
+    };
+    let approved = router
+        .clone()
+        .oneshot(decide(REQUEST, "approve"))
+        .await
+        .expect("route");
+    assert_eq!(approved.status(), StatusCode::OK);
+    let approved = json_body(approved).await;
+    assert_eq!(approved["status"], "APPROVED");
+    assert_eq!(approved["requested_by"], "01KFFFFFFFFFFFFFFFFFFFFFFF");
+    assert!(
+        approved["decided_by_user_id"].is_string(),
+        "the approver is recorded by id"
+    );
+    assert!(approved["config_version_id"].is_string(), "published");
+
+    let declined = router
+        .clone()
+        .oneshot(decide(other, "decline"))
+        .await
+        .expect("route");
+    assert_eq!(declined.status(), StatusCode::OK);
+    let again = router
+        .clone()
+        .oneshot(decide(REQUEST, "approve"))
+        .await
+        .expect("route");
+    assert_eq!(
+        again.status(),
+        StatusCode::OK,
+        "approving again publishes again"
+    );
+    let flip = router
+        .clone()
+        .oneshot(decide(REQUEST, "decline"))
+        .await
+        .expect("route");
+    assert_eq!(flip.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        json_body(flip).await["error"]["details"][0]["reason"],
+        "CORRECTION_ALREADY_DECIDED"
+    );
+    let missing = router
+        .clone()
+        .oneshot(decide("01KJJJJJJJJJJJJJJJJJJJJJJJ", "approve"))
+        .await
+        .expect("route");
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+    the_store_learns_both_decisions(&trees).await;
+}
+
+/// The store's node keeps its symbol and holds one entry per decided bill, which the store reads.
+async fn the_store_learns_both_decisions(trees: &FakeConfigTrees) {
+    let tree = trees
+        .load(tenant(), store_id())
+        .await
+        .expect("load")
+        .expect("a tree");
+    let node = &tree.record.effective()["einvoice"];
+    assert_eq!(
+        node["symbol"], "1C23MAA",
+        "the node's other fields are kept"
+    );
+    let decisions = node["correction_decisions"].as_array().expect("decisions");
+    assert_eq!(decisions.len(), 2, "one entry per bill");
+    let published: pos_proto::einvoice::PublishedEInvoice =
+        serde_json::from_value(node.clone()).expect("the store reads its node");
+    let bill = pos_proto::ids::BillId::new(BILL.parse().expect("a ULID"));
+    assert!(
+        published
+            .correction_decision(bill)
+            .is_some_and(pos_proto::einvoice::DecidedCorrection::approved)
+    );
+    let declined_bill =
+        pos_proto::ids::BillId::new("01KHHHHHHHHHHHHHHHHHHHHHHH".parse().expect("a ULID"));
+    assert!(
+        published
+            .correction_decision(declined_bill)
+            .is_some_and(|decided| !decided.approved())
+    );
+}
+
+#[tokio::test]
+async fn ops_reads_the_queue_and_cannot_decide() {
+    let (router, _submissions, admin, queue, _trees) = app_with_queue().await;
+    queue.record(pending(REQUEST, BILL)).await.expect("record");
+    let ops = role_session_cookie(&admin, AdminRole::Ops, "ops-token").await;
+    let list = router
+        .clone()
+        .oneshot(get_with_cookie(
+            &format!(
+                "/admin/einvoices/correction-requests?tenant_id={}",
+                tenant()
+            ),
+            &ops,
+        ))
+        .await
+        .expect("route");
+    assert_eq!(list.status(), StatusCode::OK);
+    let approve = router
+        .oneshot(post_with_cookie(
+            &format!("/admin/einvoices/correction-requests/{REQUEST}/approve"),
+            &serde_json::json!({ "tenant_id": tenant().to_string() }),
+            &ops,
+        ))
+        .await
+        .expect("route");
+    assert_eq!(approve.status(), StatusCode::FORBIDDEN);
 }

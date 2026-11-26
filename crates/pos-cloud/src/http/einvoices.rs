@@ -37,6 +37,7 @@ use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::ConfigTreeStore;
 use crate::einvoice::corrections::{Correction, CorrectionError, record_correction};
 use crate::einvoice::feed::SubmissionStore;
+use crate::einvoice::requests::CorrectionRequests;
 use crate::einvoice::symbols::SymbolLedger;
 use crate::http::Json;
 
@@ -48,9 +49,13 @@ pub(crate) struct EInvoicesState<Cfg, A, C> {
     audit: Arc<dyn AuditRecorder>,
     submissions: Arc<dyn SubmissionStore>,
     ledger: Arc<dyn SymbolLedger>,
+    requests: Arc<dyn CorrectionRequests>,
 }
 
-/// Builds the invoice list and correction sub-router.
+pub(crate) mod correction_requests;
+
+/// Builds the invoice list and correction sub-router, with the queue of the stores' correction
+/// requests (ADR-0250).
 pub fn einvoices_router<Cfg, A, C>(
     config_trees: Cfg,
     admin: A,
@@ -58,6 +63,7 @@ pub fn einvoices_router<Cfg, A, C>(
     audit: Arc<dyn AuditRecorder>,
     submissions: Arc<dyn SubmissionStore>,
     ledger: Arc<dyn SymbolLedger>,
+    requests: Arc<dyn CorrectionRequests>,
 ) -> Router
 where
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
@@ -70,6 +76,18 @@ where
             "/admin/einvoices/{invoice_id}/correct",
             post(admin_correct_einvoice::<Cfg, A, C>),
         )
+        .route(
+            "/admin/einvoices/correction-requests",
+            get(correction_requests::admin_list_correction_requests::<Cfg, A, C>),
+        )
+        .route(
+            "/admin/einvoices/correction-requests/{request_id}/approve",
+            post(correction_requests::admin_approve_correction_request::<Cfg, A, C>),
+        )
+        .route(
+            "/admin/einvoices/correction-requests/{request_id}/decline",
+            post(correction_requests::admin_decline_correction_request::<Cfg, A, C>),
+        )
         .with_state(EInvoicesState {
             config_trees,
             admin,
@@ -77,6 +95,7 @@ where
             audit,
             submissions,
             ledger,
+            requests,
         })
 }
 

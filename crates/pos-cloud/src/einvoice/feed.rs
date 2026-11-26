@@ -6,7 +6,8 @@
 //!
 //! Each tick reads every active store's log after the cursor it keeps, records each
 //! `fiscal.invoice.issued` once as `PENDING`, corrects the invoice of each `billing.bill.voided` bill
-//! that has one ([`super::corrections`], ADR-0245), then submits a bounded page of due invoices through
+//! that has one ([`super::corrections`], ADR-0245) and queues each correction request for HQ
+//! ([`super::requests`], ADR-0250), then submits a bounded page of due invoices through
 //! the provider with #1350's retry rule ([`super::submitter`]): a failure that may pass is retried
 //! with a doubling wait, a refusal stops. Nothing personal is kept: the buyer is a subject id.
 
@@ -23,7 +24,9 @@ use pos_ports::fiscalization::{
 };
 use pos_proto::determinism::ClockSource;
 use pos_proto::einvoice::EInvoiceKind;
-use pos_proto::events::{BillingBillVoided, EventType, FiscalInvoiceIssued};
+use pos_proto::events::{
+    BillingBillVoided, EventType, FiscalCorrectionRequested, FiscalInvoiceIssued,
+};
 use pos_proto::ids::{BillId, EventId, StoreId, TenantId};
 use pos_proto::money::{CurrencyCode, Money};
 use pos_proto::time::CalendarDate;
@@ -455,6 +458,13 @@ pub async fn feed_store<E: EventStore>(
             break;
         };
         for event in &read {
+            if event.event_type.as_str() == EventType::FiscalCorrectionRequested.as_str() {
+                if let Ok(asked) = event.data.decode::<FiscalCorrectionRequested>() {
+                    let row = super::requests::requested_row(tenant, event, &asked.request);
+                    corrector.requests.record(row).await?;
+                }
+                continue;
+            }
             if event.event_type.as_str() == EventType::BillingBillVoided.as_str() {
                 let Ok(voided) = event.data.decode::<BillingBillVoided>() else {
                     continue;

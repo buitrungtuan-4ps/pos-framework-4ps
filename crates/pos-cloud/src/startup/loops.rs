@@ -139,6 +139,8 @@ pub(crate) fn einvoice_submitter(store: &PostgresStore) -> JoinHandle<()> {
                 store.config_trees(),
             )),
             ledger: Arc::new(store.einvoice_symbols()),
+            // A store's correction request waits here for HQ (ADR-0250).
+            requests: Arc::new(store.einvoice_correction_requests()),
         },
         provider,
         SystemClock,

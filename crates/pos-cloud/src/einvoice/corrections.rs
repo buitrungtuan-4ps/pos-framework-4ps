@@ -220,13 +220,16 @@ impl<Cfg: ConfigTreeStore + Send + Sync> StoreEInvoice for Trees<Cfg> {
     }
 }
 
-/// What the feed corrects a voided bill with: the stores' settings and the symbol ledger.
+/// What the feed corrects a voided bill with: the stores' settings and the symbol ledger, and the
+/// queue it records a store's correction requests in (ADR-0250).
 #[derive(Clone)]
 pub struct Corrector {
     /// The stores' `einvoice` nodes and countries.
     pub settings: Arc<dyn StoreEInvoice>,
     /// The tenants' symbols.
     pub ledger: Arc<dyn SymbolLedger>,
+    /// The correction requests waiting for HQ.
+    pub requests: Arc<dyn super::requests::CorrectionRequests>,
 }
 
 impl core::fmt::Debug for Corrector {
