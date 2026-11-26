@@ -224,7 +224,7 @@ fn on_request_issues_only_for_a_bill_with_a_buyer() {
         let issued = invoices(&store).await;
         assert_eq!(issued.len(), 1);
         assert_eq!(issued.first().map(|event| event.bill_id), Some(named));
-        assert!(edge.lock_projection().invoices.issued_for(named));
+        assert!(edge.lock_projection().invoices.issued_ms(named).is_some());
     });
 }
 

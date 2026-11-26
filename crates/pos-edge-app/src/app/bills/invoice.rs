@@ -200,7 +200,9 @@ impl<S: EventStore> Edge<S> {
             let invoice_id = envelope.event_id;
             self.append_and_publish(vec![envelope], vec![message])
                 .await?;
-            self.lock_projection().invoices.fold(&issued, invoice_id);
+            self.lock_projection()
+                .invoices
+                .fold(&issued, invoice_id, ctx.now);
             issued_count += 1;
         }
         Ok(issued_count)
@@ -215,11 +217,12 @@ impl<S: EventStore> Edge<S> {
         record: &SettleInvoice,
         invoice_id: EventId,
         settled_by: Actor,
+        settled_time: Timestamp,
     ) -> Option<IssuedInvoiceRef> {
         let mut projection = self.lock_projection();
         match record {
             SettleInvoice::Issued(issued) => {
-                projection.invoices.fold(issued, invoice_id);
+                projection.invoices.fold(issued, invoice_id, settled_time);
                 projection.invoices.issued(issued.bill_id).cloned()
             }
             SettleInvoice::Scheduled(scheduled) => {

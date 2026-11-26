@@ -6,7 +6,8 @@
 //!
 //! The whole bill, never part of it: there is no amount to decide, so the decision is only whether
 //! it may happen. Four things say no, in this order: the bill machine (only a `SETTLED` bill), the
-//! store's window (decision 7), an issued legal invoice (decision 8), and the permission with its
+//! store's window (decision 7), an issued legal invoice the store's route keeps from the till (decision
+//! 8, ADR-0245), and the permission with its
 //! PIN (decision 4). The window and the invoice come first because no approval changes them, so a
 //! manager is not asked to approve an act that would be refused anyway.
 //!
@@ -16,6 +17,7 @@
 
 use pos_proto::BillState;
 use pos_proto::billing::SettledVoidWindow;
+use pos_proto::einvoice::InvoicedCorrection;
 use pos_proto::time::BusinessDate;
 
 use super::{BillDecision, DecisionCtx, Effect, require_with_pin};
@@ -37,6 +39,43 @@ pub struct SettledVoid {
     pub taking_shift_open: bool,
     /// Whether a legal invoice was issued for the bill, as the store's country module says.
     pub e_invoice_issued: bool,
+    /// The store's route for a bill with an issued invoice, and what it is decided on.
+    pub invoiced: InvoicedVoid,
+}
+
+/// What the till decides an invoiced bill's void on, from the store's `einvoice` node
+/// ([ADR-0245](../../../../docs/adr/0245-an-invoiced-bill-is-corrected-by-the-route-the-store-chooses.md)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct InvoicedVoid {
+    /// `einvoice.invoiced_correction`.
+    pub route: InvoicedCorrection,
+    /// The bill's total, in the minor unit.
+    pub bill_total_minor: i64,
+    /// `einvoice.manager_correction_limit`, in the minor unit.
+    pub manager_limit_minor: i64,
+    /// Whole minutes since the invoice was issued.
+    pub invoice_age_minutes: i64,
+    /// `einvoice.cancel_window_minutes`.
+    pub cancel_window_minutes: i64,
+}
+
+/// Whether the till may void a bill whose invoice was issued (ADR-0245 decision 1): under
+/// `MANAGER_UP_TO_LIMIT` when its total is within the limit, under `CANCEL_WINDOW` while the invoice
+/// is younger than the window, and never otherwise. The cloud then corrects the invoice.
+#[must_use]
+pub(super) fn invoiced_void_at_till(invoiced: InvoicedVoid) -> bool {
+    match invoiced.route {
+        InvoicedCorrection::ManagerUpToLimit => {
+            (0..=invoiced.manager_limit_minor).contains(&invoiced.bill_total_minor)
+                && invoiced.manager_limit_minor > 0
+        }
+        InvoicedCorrection::CancelWindow => {
+            (0..invoiced.cancel_window_minutes).contains(&invoiced.invoice_age_minutes)
+        }
+        InvoicedCorrection::Unspecified
+        | InvoicedCorrection::HqOnly
+        | InvoicedCorrection::Request => false,
+    }
 }
 
 /// Whether a paid bill is still inside the window in which the till may void it
@@ -66,7 +105,8 @@ pub fn within_settled_void_window(
 ///
 /// [`DomainError::Transition`] unless the bill is `SETTLED`;
 /// [`DomainError::SettledVoidWindowClosed`] outside the store's window;
-/// [`DomainError::EInvoiceIssued`] where a legal invoice was issued for the bill;
+/// [`DomainError::EInvoiceIssued`] where a legal invoice was issued for the bill and the store's route
+/// does not let the till void it;
 /// [`DomainError::PermissionDenied`] naming `billing.bill.void_settled` if it is not granted or its
 /// PIN was not verified.
 pub(super) fn decide_settled_void(
@@ -85,7 +125,7 @@ pub(super) fn decide_settled_void(
             window: void.window,
         });
     }
-    if void.e_invoice_issued {
+    if void.e_invoice_issued && !invoiced_void_at_till(void.invoiced) {
         return Err(DomainError::EInvoiceIssued);
     }
     require_with_pin(ctx, Permission::VoidSettledBill, void.pin_verified)?;

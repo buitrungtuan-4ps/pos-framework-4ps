@@ -39,7 +39,9 @@ pub(in crate::app) struct Invoices {
     /// Each invoiced bill's invoice number and lookup code, which a copy of its receipt prints
     /// again ([ADR-0242](../../../../../docs/adr/0242-a-receipt-prints-its-invoice-number-and-lookup-code.md)
     /// decision 3).
-    invoiced: HashMap<BillId, IssuedInvoiceRef>,
+    /// With each, when its invoice was issued, in Unix milliseconds, as its event was stamped (ADR-0245's
+    /// cancel window).
+    invoiced: HashMap<BillId, (IssuedInvoiceRef, u64)>,
     /// Waiting bills by due time then bill.
     pending: BTreeMap<(Timestamp, BillId), Waiting>,
     /// Each waiting bill's due time, to find it in `pending`.
@@ -50,7 +52,12 @@ impl Invoices {
     /// Records an issued invoice, recorded by the event `invoice_id`. The highest number seen wins,
     /// so a replay in any order ends where the live box did. An invoice that was waiting leaves the
     /// queue.
-    pub(in crate::app) fn fold(&mut self, issued: &FiscalInvoiceIssued, invoice_id: EventId) {
+    pub(in crate::app) fn fold(
+        &mut self,
+        issued: &FiscalInvoiceIssued,
+        invoice_id: EventId,
+        issued_time: Timestamp,
+    ) {
         let last = self
             .last
             .entry(issued.invoice.invoice_symbol.clone())
@@ -58,10 +65,13 @@ impl Invoices {
         *last = (*last).max(issued.invoice.invoice_sequence);
         self.invoiced.insert(
             issued.bill_id,
-            IssuedInvoiceRef::new(
-                issued.invoice.invoice_symbol.as_str(),
-                issued.invoice.invoice_sequence,
-                &invoice_id.to_string(),
+            (
+                IssuedInvoiceRef::new(
+                    issued.invoice.invoice_symbol.as_str(),
+                    issued.invoice.invoice_sequence,
+                    &invoice_id.to_string(),
+                ),
+                u64::try_from(issued_time.as_milliseconds_since_epoch()).unwrap_or(0),
             ),
         );
         self.drop_pending(issued.bill_id);
@@ -119,13 +129,13 @@ impl Invoices {
             .map_or(Some(1), |last| last.checked_add(1))
     }
 
-    /// Whether an invoice was issued for `bill_id`.
-    pub(in crate::app) fn issued_for(&self, bill_id: BillId) -> bool {
-        self.invoiced.contains_key(&bill_id)
-    }
-
     /// The number and lookup code of the invoice issued for `bill_id`, if one was.
     pub(in crate::app) fn issued(&self, bill_id: BillId) -> Option<&IssuedInvoiceRef> {
-        self.invoiced.get(&bill_id)
+        self.invoiced.get(&bill_id).map(|(reference, _)| reference)
+    }
+
+    /// When the invoice issued for `bill_id` was issued, in Unix milliseconds, if one was.
+    pub(in crate::app) fn issued_ms(&self, bill_id: BillId) -> Option<u64> {
+        self.invoiced.get(&bill_id).map(|(_, issued_ms)| *issued_ms)
     }
 }
