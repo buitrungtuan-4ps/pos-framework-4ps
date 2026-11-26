@@ -18,6 +18,7 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 - [ADR-0216](../adr/0216-integrations-come-in-three-tiers-and-functions-wait.md) Integrations come in three tiers, and WebAssembly functions wait for a real case
 - [ADR-0231](../adr/0231-a-phone-keeps-its-till-token-in-a-store-the-owner-chooses.md) A phone keeps its till token in a store the owner chooses
 - [ADR-0252](../adr/0252-hybrid-numbering-is-confirmed-on-its-own-value.md) HYBRID numbering is confirmed on its own value, not by a separate setting
+- [ADR-0255](../adr/0255-a-qr-orders-automatic-send-keeps-the-hours-the-store-sets.md) A QR order's automatic send keeps the hours the store sets
 
 ## Citations of ADRs that do not exist
 
