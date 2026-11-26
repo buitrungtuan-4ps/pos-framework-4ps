@@ -171,6 +171,7 @@ einvoice.manager_correction_limit	scope=SETTING_SCOPE_TENANT
 einvoice.manager_correction_limit	since=0.14.1
 einvoice.manager_correction_limit	unit=SETTING_UNIT_MINOR_UNITS
 einvoice.number_source
+einvoice.number_source	confirm=EINVOICE_NUMBER_SOURCE_HYBRID
 einvoice.number_source	default=EINVOICE_NUMBER_SOURCE_POS
 einvoice.number_source	kind=SETTING_KIND_CHOICE
 einvoice.number_source	scope=SETTING_SCOPE_BRAND
@@ -178,6 +179,7 @@ einvoice.number_source	scope=SETTING_SCOPE_STORE
 einvoice.number_source	scope=SETTING_SCOPE_STORE_GROUP
 einvoice.number_source	scope=SETTING_SCOPE_TENANT
 einvoice.number_source	since=0.14.1
+einvoice.number_source	value=EINVOICE_NUMBER_SOURCE_HYBRID
 einvoice.number_source	value=EINVOICE_NUMBER_SOURCE_POS
 einvoice.number_source	value=EINVOICE_NUMBER_SOURCE_VENDOR
 einvoice.symbol_allocation

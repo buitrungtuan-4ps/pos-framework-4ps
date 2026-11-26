@@ -10,7 +10,7 @@ use crate::einvoice::{
 };
 use crate::wire_enum::WireEnum;
 
-use super::{NEXT_RELEASE, STORE_WIDE, Setting, SettingShape, SettingUnit, choices};
+use super::{Confirm, NEXT_RELEASE, STORE_WIDE, Setting, SettingShape, SettingUnit, choices};
 
 /// The settings on the `einvoice` node (ADR-0229 decision 1, ADR-0240 decision 4). The node's
 /// `symbol` is the cloud's to give each issuing point and is not a setting.
@@ -96,7 +96,8 @@ pub(super) fn einvoice_settings() -> Vec<Setting> {
 
 /// `einvoice.number_source`: who numbers the store's invoices
 /// ([ADR-0251](../../../../docs/adr/0251-a-vendor-numbered-invoice-waits-for-its-number-and-the-store-learns-it.md)).
-/// `HYBRID` is offered only once its offline symbol is built (decision 8).
+/// `HYBRID` is written only with a recorded confirmation that legal and the vendor allow it
+/// (decision 6, ADR-0169).
 pub(super) fn number_source_setting() -> Setting {
     Setting {
         node: PublishedEInvoice::NODE,
@@ -105,6 +106,7 @@ pub(super) fn number_source_setting() -> Setting {
             values: vec![
                 EInvoiceNumberSource::Pos.as_wire(),
                 EInvoiceNumberSource::Vendor.as_wire(),
+                EInvoiceNumberSource::Hybrid.as_wire(),
             ],
             default: PublishedEInvoice::default().number_source().as_wire(),
             // Which source a seller may use is to be confirmed by legal and the vendor, so no
@@ -113,13 +115,22 @@ pub(super) fn number_source_setting() -> Setting {
         },
         scopes: STORE_WIDE,
         since: NEXT_RELEASE,
-        confirm: None,
+        // Allowed only if legal and the vendor confirm, so the cloud writes it only with a recorded
+        // confirmation (ADR-0251 decision 6).
+        confirm: Some(Confirm {
+            value: "EINVOICE_NUMBER_SOURCE_HYBRID",
+            notice: "settings.item.einvoice.number_source.confirm",
+        }),
         summary: "Who numbers the store's e-invoices. `EINVOICE_NUMBER_SOURCE_POS`, the default, \
                   numbers each at issue from the store's own symbol, offline too; `_VENDOR` issues \
                   it at the same moment \"number pending\", the cloud asks the vendor for the \
                   number, and the store learns it at its next config pull, after which a copy of \
                   the receipt prints it. Numbering stays gapless either way: a store switched \
                   back to the POS keeps issuing \"number pending\" until no invoice waits. \
+                  `_HYBRID` numbers from the store's offline symbol while it is offline and lets \
+                  the vendor number online; it is written only with a recorded confirmation that \
+                  legal and the vendor allow it, and without an offline symbol it waits for the \
+                  vendor as `_VENDOR` does. \
                   Whether a seller may let the vendor number is to be confirmed by legal and the \
                   vendor.",
     }

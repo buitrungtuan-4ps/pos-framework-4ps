@@ -24,3 +24,17 @@ describe("the e-invoice symbol screen's reading of a store", () => {
     expect(needsSymbol(null)).toBe(false);
   });
 });
+
+describe("a hybrid store's offline symbol (ADR-0251)", () => {
+  it("reads the number source and the offline symbol, absent as not hybrid and none", async () => {
+    const { readHybrid } = await import("../src/screens/einvoices/OfflineSymbol");
+    expect(
+      readHybrid({ einvoice: { number_source: "EINVOICE_NUMBER_SOURCE_HYBRID", offline_symbol: "1C26MAZ" } }),
+    ).toEqual({ hybrid: true, offlineSymbol: "1C26MAZ" });
+    expect(readHybrid({ einvoice: { number_source: "EINVOICE_NUMBER_SOURCE_VENDOR" } })).toEqual({
+      hybrid: false,
+      offlineSymbol: null,
+    });
+    expect(readHybrid(null)).toEqual({ hybrid: false, offlineSymbol: null });
+  });
+});
