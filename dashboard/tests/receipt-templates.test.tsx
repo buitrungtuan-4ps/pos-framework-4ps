@@ -36,6 +36,8 @@ vi.mock("../src/api/client", () => ({
         { code: "ZZ", receipt_required_sections: [] },
       ]),
   },
+  // The custom-field switches read the tenant's packages (O8): this tenant has none.
+  requestJson: () => Promise.resolve([]),
 }));
 
 describe("receipt templates as data", () => {
