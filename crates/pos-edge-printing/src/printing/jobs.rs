@@ -482,7 +482,14 @@ fn with_invoice(
     document.blocks.splice(
         at..at,
         [
-            line(format!("{}: {}", labels.einvoice_number, invoice.number)),
+            line(format!(
+                "{}: {}",
+                labels.einvoice_number,
+                invoice
+                    .number
+                    .as_deref()
+                    .unwrap_or(labels.einvoice_number_pending)
+            )),
             line(format!(
                 "{}: {}",
                 labels.einvoice_lookup, invoice.lookup_code
@@ -524,6 +531,26 @@ mod invoice_lines {
                 text("Số HĐĐT: 1C26MAA/00000042"),
                 text("Mã tra cứu: 56789XYZWQ"),
                 PrintBlock::Feed { lines: 3 },
+                PrintBlock::Cut,
+            ]
+        );
+    }
+
+    /// An invoice the vendor has not yet numbered prints "number pending" and its lookup code
+    /// (ADR-0251 decision 2).
+    #[test]
+    fn an_invoice_waiting_for_the_vendors_number_prints_number_pending() {
+        let mut document = PrintDocument {
+            blocks: vec![text("TOTAL 165.000"), PrintBlock::Cut],
+        };
+        let invoice = IssuedInvoiceRef::pending("01KABCDEFGH0123456789XYZWQ");
+        with_invoice(&mut document, &VIETNAMESE, &invoice);
+        assert_eq!(
+            document.blocks,
+            vec![
+                text("TOTAL 165.000"),
+                text("Số HĐĐT: Chờ cấp số"),
+                text("Mã tra cứu: 56789XYZWQ"),
                 PrintBlock::Cut,
             ]
         );

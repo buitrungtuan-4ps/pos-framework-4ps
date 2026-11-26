@@ -178,6 +178,13 @@ pub(crate) struct BillResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(nullable = false))]
     invoice_lookup_code: Option<String>,
+    /// True when the settle issued its e-invoice "number pending": the vendor gives the number
+    /// later, and the lookup code works meanwhile
+    /// ([ADR-0251](../../../../docs/adr/0251-a-vendor-numbered-invoice-waits-for-its-number-and-the-store-learns-it.md)).
+    /// Absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    invoice_number_pending: Option<bool>,
 }
 
 impl From<BillView> for BillResponse {
@@ -191,7 +198,14 @@ impl From<BillView> for BillResponse {
             print_receipt: view.print_receipt,
             receipt_print: None,
             drawer_open: None,
-            invoice_number: view.invoice.as_ref().map(|invoice| invoice.number.clone()),
+            invoice_number: view
+                .invoice
+                .as_ref()
+                .and_then(|invoice| invoice.number.clone()),
+            invoice_number_pending: view
+                .invoice
+                .as_ref()
+                .and_then(|invoice| invoice.number.is_none().then_some(true)),
             invoice_lookup_code: view.invoice.map(|invoice| invoice.lookup_code),
         }
     }

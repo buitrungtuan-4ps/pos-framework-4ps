@@ -307,8 +307,10 @@ pub struct BillView {
 /// The number of an e-invoice a settle issued and the code a guest looks it up by (ADR-0242).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IssuedInvoiceRef {
-    /// The symbol and sequence, `1C26MAA/00000042`.
-    pub number: String,
+    /// The symbol and sequence, `1C26MAA/00000042`, or `None` while the vendor has not yet given
+    /// the number of an invoice issued "number pending"
+    /// ([ADR-0251](../../../../../docs/adr/0251-a-vendor-numbered-invoice-waits-for-its-number-and-the-store-learns-it.md)).
+    pub number: Option<String>,
     /// The last ten characters of the invoice's id: the store has it offline, and it says nothing
     /// about the bill (ADR-0242 decision 2).
     pub lookup_code: String,
@@ -319,9 +321,20 @@ impl IssuedInvoiceRef {
     /// `symbol`.
     #[must_use]
     pub fn new(symbol: &str, sequence: u32, invoice_id: &str) -> Self {
+        Self::numbered(Some(format!("{symbol}/{sequence:08}")), invoice_id)
+    }
+
+    /// The reference of the invoice recorded by the event `invoice_id` and issued "number pending":
+    /// it has its lookup code, which the store derives offline, but no number yet (ADR-0251).
+    #[must_use]
+    pub fn pending(invoice_id: &str) -> Self {
+        Self::numbered(None, invoice_id)
+    }
+
+    fn numbered(number: Option<String>, invoice_id: &str) -> Self {
         let start = invoice_id.len().saturating_sub(10);
         Self {
-            number: format!("{symbol}/{sequence:08}"),
+            number,
             lookup_code: invoice_id.get(start..).unwrap_or(invoice_id).to_owned(),
         }
     }
