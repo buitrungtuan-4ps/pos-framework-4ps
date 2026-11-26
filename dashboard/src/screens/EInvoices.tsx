@@ -9,6 +9,7 @@
 import { createEffect, createSignal, Show } from "solid-js";
 
 import { api } from "../api/client";
+import { OfflineSymbol } from "./einvoices/OfflineSymbol";
 import { allocateEInvoiceSymbol, publishEInvoiceSymbol } from "../api/einvoices";
 import type { Json } from "../api/types";
 import { t } from "../i18n";
@@ -161,6 +162,7 @@ export function EInvoices() {
                 <div class="grid max-w-xl gap-4">
                   <SymbolState state={state()} />
                   <SymbolForm current={state().symbol} onPublished={read.refetch} />
+                  <OfflineSymbol />
                 </div>
               )}
             </Show>

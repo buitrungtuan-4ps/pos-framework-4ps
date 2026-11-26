@@ -31,6 +31,7 @@ import { tenantId } from "../state/session";
 import { Banner, Button, Card, PageHeader, SelectField } from "../components/ui";
 import { ConfirmDialog, EmptyState } from "../components/kit";
 import { toast } from "../components/Toast";
+import { StagedPublish } from "./settings/StagedPublish";
 
 /** A value in words: a token in the console's words, a switch as On or Off, "not set" for none. */
 export function valueWords(value: Json | undefined): string {
@@ -233,6 +234,7 @@ export function SettingsHistory() {
           whatOptions={whatOptionsOf(changes())}
           onWhat={setWhat}
         />
+        <StagedPublish places={read.value()?.places ?? new Map<string, string>()} />
         <Show when={failureOf(read)}>{(message) => <Banner tone="danger" message={message()} />}</Show>
         <Show when={refused().length > 0}>
           <Banner tone="danger" message={t("settingsHistory.refused", { list: refused().join("; ") })} />

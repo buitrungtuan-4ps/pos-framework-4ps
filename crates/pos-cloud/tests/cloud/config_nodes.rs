@@ -916,6 +916,37 @@ async fn each_vietnamese_store_is_allocated_a_symbol_of_its_own() {
         state.record.layers[2]["einvoice"]["symbol"],
         symbol.as_str()
     );
+
+    // ADR-0251 decision 6: a HYBRID store's offline symbol comes from the same ledger, never the
+    // symbol it numbers under online, and the symbol stays as it was.
+    let mut offline_body = symbol_body(store_id(), None);
+    offline_body["offline"] = serde_json::json!(true);
+    let offline = router
+        .clone()
+        .oneshot(post_with_cookie(
+            "/admin/config/einvoice-symbol/allocate",
+            &offline_body,
+            &cookie,
+        ))
+        .await
+        .expect("route");
+    assert_eq!(offline.status(), StatusCode::OK);
+    let offline = json_body(offline).await["symbol"]
+        .as_str()
+        .expect("a symbol")
+        .to_owned();
+    assert_eq!(
+        offline, "1C23MAC",
+        "the next symbol no store of the tenant holds"
+    );
+    let state = trees
+        .load(tenant(), store_id())
+        .await
+        .expect("load")
+        .expect("a published tree");
+    let node = &state.record.layers[2]["einvoice"];
+    assert_eq!(node["symbol"], symbol.as_str());
+    assert_eq!(node["offline_symbol"], offline.as_str());
 }
 
 /// ADR-0240 decision 3: a store with no country, or one with no rule, is told to type it by hand.
