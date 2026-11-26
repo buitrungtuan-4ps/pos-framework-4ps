@@ -43,13 +43,14 @@ function StageField(props: { setting: SettingDefinition; value: Json | undefined
           { value: "false", label: t("settings.off") },
         ]
       : stageableValues(props.setting).map((value) => ({ value, label: tFromServer(`settings.value.${value}`, value) }));
-  const shown = props.value === undefined ? UNSET : String(props.value);
+  // Read on every change of `props.value`, so the select shows a cleared stage as unchanged.
+  const shown = () => (props.value === undefined ? UNSET : String(props.value));
   const read = (value: string): Json | undefined =>
     value === UNSET ? undefined : props.setting.kind === "SETTING_KIND_BOOL" ? value === "true" : value;
   return (
     <SelectField
       label={label}
-      value={shown}
+      value={shown()}
       options={[{ value: UNSET, label: t("stagedPublish.unchanged") }, ...options]}
       onChange={(value) => props.onStage(read(value))}
     />
@@ -81,8 +82,11 @@ async function publishStaged(
   return failed;
 }
 
-/** The card: a group, its staged values, a place, and Publish. `places` maps `scope:id` to a name. */
-export function StagedPublish(props: { places: ReadonlyMap<string, string> }) {
+/**
+ * The card: a group, its staged values, a place, and Publish. `places` maps `scope:id` to a name;
+ * `onPublished` runs after a publish, so the history below shows what it wrote.
+ */
+export function StagedPublish(props: { places: ReadonlyMap<string, string>; onPublished?: () => unknown }) {
   const catalogue = createAdminResource(async () => api.settingsCatalogue(), { scope: "tenant" });
   const [group, setGroup] = createSignal("");
   const [staged, setStaged] = createSignal<ReadonlyMap<string, Json>>(new Map());
@@ -97,6 +101,7 @@ export function StagedPublish(props: { places: ReadonlyMap<string, string> }) {
     setBusy(false);
     setRefused(failed);
     if (failed.length === 0) setStaged(new Map());
+    await props.onPublished?.();
   };
   return (
     <Card title={t("stagedPublish.title")}>

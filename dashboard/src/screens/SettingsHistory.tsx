@@ -234,7 +234,7 @@ export function SettingsHistory() {
           whatOptions={whatOptionsOf(changes())}
           onWhat={setWhat}
         />
-        <StagedPublish places={read.value()?.places ?? new Map<string, string>()} />
+        <StagedPublish places={read.value()?.places ?? new Map<string, string>()} onPublished={() => read.refetch()} />
         <Show when={failureOf(read)}>{(message) => <Banner tone="danger" message={message()} />}</Show>
         <Show when={refused().length > 0}>
           <Banner tone="danger" message={t("settingsHistory.refused", { list: refused().join("; ") })} />
