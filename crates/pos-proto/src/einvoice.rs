@@ -191,6 +191,11 @@ pub struct PublishedEInvoice {
     /// [`Self::symbol_allocation`].
     #[serde(default, deserialize_with = "token", skip_serializing_if = "is_absent")]
     pub symbol_allocation: Open<EInvoiceSymbolAllocation>,
+    /// What the cloud issues when an invoiced bill is voided or refunded
+    /// ([ADR-0245](../../../docs/adr/0245-an-invoiced-bill-is-corrected-by-the-route-the-store-chooses.md)
+    /// decision 2). Read it through [`Self::correction_kind`].
+    #[serde(default, deserialize_with = "token", skip_serializing_if = "is_absent")]
+    pub correction_kind: Open<EInvoiceKind>,
 }
 
 impl PublishedEInvoice {
@@ -236,6 +241,19 @@ impl PublishedEInvoice {
             EInvoiceSymbolAllocation::Automatic => EInvoiceSymbolAllocation::Automatic,
             EInvoiceSymbolAllocation::Unspecified | EInvoiceSymbolAllocation::Manual => {
                 EInvoiceSymbolAllocation::Manual
+            }
+        }
+    }
+
+    /// The kind of correction the cloud issues for a voided invoiced bill:
+    /// [`EInvoiceKind::Replacement`] only when the node says so, and [`EInvoiceKind::Adjustment`]
+    /// otherwise. Which errors need which kind is to be confirmed by legal or the accountant.
+    #[must_use]
+    pub fn correction_kind(&self) -> EInvoiceKind {
+        match self.correction_kind.known() {
+            EInvoiceKind::Replacement => EInvoiceKind::Replacement,
+            EInvoiceKind::Unspecified | EInvoiceKind::Original | EInvoiceKind::Adjustment => {
+                EInvoiceKind::Adjustment
             }
         }
     }
@@ -377,6 +395,28 @@ mod tests {
         assert!(EInvoiceIssueMoment::BatchWindow.is_deferred());
         assert!(!EInvoiceIssueMoment::Immediate.is_deferred());
         assert!(!EInvoiceIssueMoment::OnRequest.is_deferred());
+    }
+
+    #[test]
+    fn a_voided_bill_is_adjusted_unless_the_node_says_replace() {
+        for (text, kind) in [
+            ("{}", super::EInvoiceKind::Adjustment),
+            (
+                r#"{ "correction_kind": "EINVOICE_KIND_REPLACEMENT" }"#,
+                super::EInvoiceKind::Replacement,
+            ),
+            (
+                r#"{ "correction_kind": "EINVOICE_KIND_ORIGINAL" }"#,
+                super::EInvoiceKind::Adjustment,
+            ),
+            (
+                r#"{ "correction_kind": 3 }"#,
+                super::EInvoiceKind::Adjustment,
+            ),
+        ] {
+            let node: PublishedEInvoice = serde_json::from_str(text).unwrap_or_default();
+            assert_eq!(node.correction_kind(), kind, "{text}");
+        }
     }
 
     #[test]

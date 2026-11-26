@@ -25,6 +25,7 @@ use pos_cloud_api::response::{
 };
 use pos_proto::ErrorStatus;
 use pos_proto::determinism::ClockSource;
+use pos_proto::einvoice::EInvoiceKind;
 use pos_proto::ids::{StoreId, TenantId};
 use pos_proto::ulid::Ulid;
 use serde::{Deserialize, Serialize};
@@ -34,10 +35,10 @@ use crate::audit::AuditRecorder;
 use crate::auth::admin::AdminStore;
 use crate::auth::console_rbac::ConsolePermission;
 use crate::config_tree::ConfigTreeStore;
-use crate::einvoice::feed::{STATE_PENDING, SubmissionStore};
-use crate::einvoice::symbols::{SymbolLedger, allocate};
+use crate::einvoice::corrections::{Correction, CorrectionError, record_correction};
+use crate::einvoice::feed::SubmissionStore;
+use crate::einvoice::symbols::SymbolLedger;
 use crate::http::Json;
-use crate::http::config_nodes::utc_year;
 
 #[derive(Clone)]
 pub(crate) struct EInvoicesState<Cfg, A, C> {
@@ -248,52 +249,43 @@ where
         .await
         .map_err(|_| service_unavailable("e-invoice submissions"))?
         .ok_or_else(|| api_error(ErrorStatus::NotFound, "no such invoice"))?;
-    let earlier = state
-        .submissions
-        .corrections_of(tenant, original.invoice_number.clone())
-        .await
-        .map_err(|_| service_unavailable("e-invoice submissions"))?;
-    check_standing(&request, standing_total(&original, &earlier))?;
-    let now = state.clock.now();
-    let symbol = correction_symbol(&state, tenant, &original, now).await?;
-    let last = state
-        .submissions
-        .last_number(tenant, symbol.clone())
-        .await
-        .map_err(|_| service_unavailable("e-invoice submissions"))?;
-    let sequence = last
-        .and_then(|number| {
-            number
-                .rsplit('/')
-                .next()
-                .and_then(|n| n.parse::<u32>().ok())
-        })
-        .unwrap_or(0)
-        .saturating_add(1);
-    let now_ms = now.as_milliseconds_since_epoch();
-    let id = mint_ulid(now_ms).ok_or_else(|| service_unavailable("id minting"))?;
-    let correction = SubmissionRow {
-        invoice_id: id.to_string(),
-        invoice_number: format!("{symbol}/{sequence:08}"),
-        kind: request.kind.clone(),
-        issued_on: utc_date(now_ms),
-        total_minor: request.total_minor,
-        buyer_subject_id: None,
-        corrects_invoice_number: Some(original.invoice_number.clone()),
-        state: STATE_PENDING.to_owned(),
-        failed_attempts: 0,
-        next_attempt_ms: now_ms,
-        authority_reference: None,
-        refusal: None,
-        recorded_at_ms: now_ms,
-        updated_at_ms: now_ms,
-        ..original.clone()
+    let kind = if request.kind == "REPLACEMENT" {
+        EInvoiceKind::Replacement
+    } else {
+        EInvoiceKind::Adjustment
     };
-    state
-        .submissions
-        .record(correction.clone())
-        .await
+    let now = state.clock.now();
+    let id = mint_ulid(now.as_milliseconds_since_epoch())
+        .ok_or_else(|| service_unavailable("id minting"))?;
+    let store = original
+        .store_id
+        .parse::<Ulid>()
+        .map(StoreId::new)
         .map_err(|_| service_unavailable("e-invoice submissions"))?;
+    let tree = state
+        .config_trees
+        .load(tenant, store)
+        .await
+        .map_err(|_| service_unavailable("configuration"))?;
+    let countries = crate::countries::registry();
+    let country = tree
+        .as_ref()
+        .and_then(|tree| crate::http::locale_node::published_country(&tree.record))
+        .and_then(|code| countries.get(code));
+    let correction = record_correction(
+        state.submissions.as_ref(),
+        state.ledger.as_ref(),
+        country,
+        &original,
+        Correction {
+            kind,
+            total_minor: request.total_minor,
+        },
+        id,
+        now,
+    )
+    .await
+    .map_err(refusal)?;
     audit_action(
         &state.audit,
         &state.clock,
@@ -341,124 +333,22 @@ fn check_correction(request: &CorrectEInvoiceRequest) -> Result<(), Response> {
     Ok(())
 }
 
-/// What the invoice stands at after its corrections so far: its total, replaced by each replacement
-/// and moved by each adjustment, in the order they were recorded.
-fn standing_total(original: &SubmissionRow, earlier: &[SubmissionRow]) -> i64 {
-    earlier.iter().fold(original.total_minor, |total, row| {
-        if row.kind == "REPLACEMENT" {
-            row.total_minor
-        } else {
-            total.saturating_add(row.total_minor)
-        }
-    })
-}
-
-/// Refuses an adjustment that would take the invoice below zero: a correction may take a sale back
-/// to nothing, never further (found in the phase-10 demo, after security review E1). Whether an
-/// adjustment may exceed what was sold is to be confirmed by legal or the accountant; this keeps to
-/// the conservative reading.
-#[expect(
-    clippy::result_large_err,
-    reason = "the Err is the axum Response the handler returns"
-)]
-fn check_standing(request: &CorrectEInvoiceRequest, standing: i64) -> Result<(), Response> {
-    if request.kind == "ADJUSTMENT" && standing.saturating_add(request.total_minor) < 0 {
-        return Err(api_error_with_details(
+/// The answer to a correction the shared path refused.
+fn refusal(error: CorrectionError) -> Response {
+    match error {
+        // Found in the phase-10 demo, after security review E1: a correction may take a sale back
+        // to nothing, never further. Whether an adjustment may exceed what was sold is to be
+        // confirmed by legal or the accountant; this keeps to the conservative reading.
+        CorrectionError::BelowZero => api_error_with_details(
             ErrorStatus::InvalidArgument,
             "an adjustment cannot take the invoice below zero",
             &[("total_minor", "OUT_OF_RANGE")],
-        ));
-    }
-    Ok(())
-}
-
-/// The tenant's correction symbol for this year: the ledger's, or a new one allocated from the
-/// original store's country rule (ADR-0240 decision 6).
-async fn correction_symbol<Cfg, A, C>(
-    state: &EInvoicesState<Cfg, A, C>,
-    tenant: TenantId,
-    original: &SubmissionRow,
-    now: pos_proto::time::Timestamp,
-) -> Result<String, Response>
-where
-    Cfg: ConfigTreeStore,
-{
-    let year = utc_year(now);
-    let year_digits = format!("{:02}", year.rem_euclid(100));
-    let held = state
-        .ledger
-        .list(tenant)
-        .await
-        .map_err(|_| service_unavailable("e-invoice symbol ledger"))?;
-    if let Some(record) = held.iter().find(|record| {
-        record.store_id.is_none() && record.symbol.get(2..4) == Some(year_digits.as_str())
-    }) {
-        return Ok(record.symbol.clone());
-    }
-    let store = original
-        .store_id
-        .parse::<Ulid>()
-        .map(StoreId::new)
-        .map_err(|_| service_unavailable("e-invoice submissions"))?;
-    let tree = state
-        .config_trees
-        .load(tenant, store)
-        .await
-        .map_err(|_| service_unavailable("configuration"))?;
-    let countries = crate::countries::registry();
-    let country = tree
-        .as_ref()
-        .and_then(|tree| crate::http::locale_node::published_country(&tree.record))
-        .and_then(|code| countries.get(code));
-    allocate(
-        state.ledger.as_ref(),
-        country,
-        tenant,
-        None,
-        None,
-        year,
-        now,
-    )
-    .await
-    .map(|record| record.symbol)
-    .map_err(|_| {
-        api_error_with_details(
+        ),
+        CorrectionError::NoRule => api_error_with_details(
             ErrorStatus::Unprocessable,
             "no correction symbol could be allocated from the store's country rule",
             &[("symbol", "E_INVOICE_SYMBOL_NO_RULE")],
-        )
-    })
-}
-
-/// `YYYY-MM-DD` of `ms` in UTC.
-fn utc_date(ms: i64) -> String {
-    let days = ms.div_euclid(86_400_000);
-    let shifted = days + 719_468;
-    let era = shifted.div_euclid(146_097);
-    let day_of_era = shifted - era * 146_097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_from_march = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_from_march + 2) / 5 + 1;
-    let month = if month_from_march < 10 {
-        month_from_march + 3
-    } else {
-        month_from_march - 9
-    };
-    let year = year_of_era + era * 400 + i64::from(month <= 2);
-    format!("{year:04}-{month:02}-{day:02}")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::utc_date;
-
-    #[test]
-    fn a_utc_date_is_written_as_the_calendar_writes_it() {
-        assert_eq!(utc_date(0), "1970-01-01");
-        assert_eq!(utc_date(1_795_564_800_000), "2026-11-25");
-        assert_eq!(utc_date(1_798_761_599_999), "2026-12-31");
-        assert_eq!(utc_date(1_772_323_200_000), "2026-03-01");
+        ),
+        CorrectionError::Unavailable(what) => service_unavailable(what),
     }
 }

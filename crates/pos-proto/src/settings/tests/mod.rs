@@ -615,6 +615,7 @@ fn read_back_einvoice(field: &str, document: Value) -> Option<Value> {
         "delay_minutes" => Some(json!(einvoice.delay_minutes())),
         "batch_minute" => Some(json!(einvoice.batch_minute())),
         "symbol_allocation" => Some(json!(einvoice.symbol_allocation().as_wire())),
+        "correction_kind" => Some(json!(einvoice.correction_kind().as_wire())),
         _ => None,
     }
 }
