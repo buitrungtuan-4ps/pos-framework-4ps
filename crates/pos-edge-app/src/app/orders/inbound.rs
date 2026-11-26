@@ -202,6 +202,21 @@ impl<S: EventStore> Edge<S> {
         self.session().vendors.get(vendor_id).cloned()
     }
 
+    /// What the store calls `vendor_id`, for a delivery order's badge on the counter and the
+    /// kitchen board (ADR-0248 decision 5): its entry's name in the `vendors` node. `None` for no
+    /// vendor, or one the store no longer lists.
+    #[must_use]
+    pub fn vendor_name(
+        &self,
+        vendor_id: Option<pos_proto::ids::VendorId>,
+    ) -> Option<pos_proto::text::DisplayName> {
+        let vendor_id = vendor_id?;
+        self.session()
+            .vendors
+            .get(vendor_id)
+            .map(|vendor| vendor.display_name.clone())
+    }
+
     /// Whether the kitchen has made every line of `order_id`: each one still on it bumped.
     #[must_use]
     pub fn order_made(&self, order_id: OrderId) -> bool {

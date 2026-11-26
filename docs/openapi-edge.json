@@ -6426,6 +6426,10 @@
           },
           "total_due": {
             "$ref": "#/components/schemas/Money"
+          },
+          "vendor_name": {
+            "type": "string",
+            "description": "What the store calls the delivery vendor the order came through, for its badge (ADR-0248\ndecision 5). Absent for any other order."
           }
         }
       },
@@ -7557,6 +7561,10 @@
           "table_id": {
             "type": "string",
             "description": "The table it sits on. Absent for a counter order, which has none."
+          },
+          "vendor_name": {
+            "type": "string",
+            "description": "What the store calls the delivery vendor the order came through, for the kitchen's badge\n(ADR-0248 decision 5). Absent for any other order."
           }
         }
       },

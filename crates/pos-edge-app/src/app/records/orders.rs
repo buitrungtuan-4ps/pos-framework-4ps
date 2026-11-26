@@ -44,6 +44,8 @@ pub(in crate::app) struct LiveSnapshot {
     pub(in crate::app) open_bill_ids: Vec<BillId>,
     pub(in crate::app) sales_channel: Option<SalesChannel>,
     pub(in crate::app) guest_count: Option<u16>,
+    /// The vendor a delivery order came through (ADR-0248 decision 5).
+    pub(in crate::app) vendor_id: Option<pos_proto::ids::VendorId>,
     /// Each line with its id and whether a station has bumped it.
     pub(in crate::app) lines: Vec<(OrderLineId, LineRecord, bool)>,
 }

@@ -127,11 +127,12 @@ impl<S: EventStore> Edge<S> {
         let language = session.display_language.clone().unwrap_or_default();
         let mut views = Vec::with_capacity(order_ids.len());
         for order_id in order_ids {
-            let (lines, bill_id) = {
+            let (lines, bill_id, vendor_id) = {
                 let projection = self.lock_projection();
                 (
                     projection.lines_for_order(order_id),
                     projection.bill_for_order(order_id),
+                    projection.vendor(order_id),
                 )
             };
             let items = lines
@@ -157,6 +158,7 @@ impl<S: EventStore> Edge<S> {
                 items,
                 total_due: self.order_totals(order_id)?.total_due,
                 bill_id,
+                vendor_name: self.vendor_name(vendor_id),
             });
         }
         Ok(views)

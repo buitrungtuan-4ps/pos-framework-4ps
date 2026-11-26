@@ -124,6 +124,7 @@ impl<S: EventStore> Edge<S> {
                 open_bill_ids: projection.open_bills_for_order(order_id),
                 sales_channel: projection.order_channel(order_id),
                 guest_count: projection.guest_count(order_id),
+                vendor_id: projection.vendor(order_id),
                 lines: projection
                     .identified_lines_for_order(order_id)
                     .into_iter()
@@ -150,6 +151,7 @@ impl<S: EventStore> Edge<S> {
                 open_bill_ids: order.open_bill_ids,
                 sales_channel: order.sales_channel,
                 guest_count: order.guest_count,
+                vendor_name: self.vendor_name(order.vendor_id),
                 lines: order
                     .lines
                     .into_iter()

@@ -3,6 +3,7 @@
 // retried with the engine's backoff (ADR-0173).
 
 import { api } from "../api/client";
+import { noteOrderVendors } from "./order-vendors";
 import { createRetry } from "./screen-read";
 import { setQueueNumbers, state } from "./store";
 
@@ -48,6 +49,7 @@ export async function refreshQueueNumbers(onBoard: readonly string[]): Promise<v
       }
     }
     setQueueNumbers(next);
+    noteOrderVendors(counter, false);
   } catch (caught) {
     queueNumbersRetry.after(caught, () => {
       queueNumbersReadAt = 0;

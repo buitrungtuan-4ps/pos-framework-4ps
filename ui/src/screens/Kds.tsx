@@ -23,6 +23,8 @@ import { createBumper } from "../state/kitchen-writes";
 import { WriteRefused } from "../components/WriteRefused";
 import { setItemSoldOut } from "../state/floor-writes";
 import { queueNumberFor, refreshQueueNumbers } from "../state/queue-numbers";
+import { orderVendor } from "../state/order-vendors";
+import { VendorBadge } from "../components/VendorBadge";
 import { Children } from "../../../packages/package-renderer/src/render";
 import { RegionsContext, type Regions } from "../../../packages/package-renderer/src/regions";
 import { NO_ACTS, PackageScreen } from "../package/screen";
@@ -115,6 +117,19 @@ function counterLabel(orderId: string): string {
   return number === undefined
     ? t("kds.counter_order", { ref: orderId.slice(-4) })
     : t("counter.queue_number", { number });
+}
+
+// A ticket's heading: its table, or a counter order's number with the vendor's badge on a delivery
+// order (ADR-0248 decision 5).
+function TicketHeading(props: { ticket: KitchenTicket }) {
+  return (
+    <>
+      {props.ticket.tableLabel === ""
+        ? counterLabel(props.ticket.orderId)
+        : t("common.table", { label: props.ticket.tableLabel })}
+      <VendorBadge vendor={orderVendor(props.ticket.orderId)} />
+    </>
+  );
 }
 
 // A ticket a person may not bump answers no tap (ADR-0158); without this line a cashier who opened
@@ -448,9 +463,7 @@ export function Kds() {
                 >
                   <span class="flex w-full items-baseline justify-between gap-3">
                     <span class="text-sm text-ink-muted">
-                      {current().tableLabel === ""
-                        ? counterLabel(current().orderId)
-                        : t("common.table", { label: current().tableLabel })}
+                      <TicketHeading ticket={current()} />
                       <Show when={station() === "" && stationName(current().stationId) !== ""}>
                         {" · "}
                         {stationName(current().stationId)}

@@ -7,6 +7,7 @@ import { Keypad } from "../components/Keypad";
 import { ReadFailed } from "../components/StoreData";
 import { PageHeader } from "../components/ui";
 import { BillReductions } from "../components/BillReductions";
+import { VendorBadge } from "../components/VendorBadge";
 import { t } from "../i18n";
 import { money, parseWhole, percentOf, quickCashFor, roundToIncrement } from "../lib/money";
 import {
@@ -33,6 +34,19 @@ import { createPrint } from "../state/print-writes";
 import { Children } from "../../../packages/package-renderer/src/render";
 import { RegionsContext, type Regions } from "../../../packages/package-renderer/src/regions";
 import { NO_ACTS, PackageScreen } from "../package/screen";
+
+// A counter order's heading: the number the guest was given, and the vendor's badge on a delivery
+// order (ADR-0248 decision 5).
+function OrderHeading(props: { order: CounterOrder }) {
+  return (
+    <>
+      {props.order.queue_number === undefined
+        ? t("counter.no_queue_number")
+        : t("counter.queue_number", { number: props.order.queue_number })}
+      <VendorBadge vendor={props.order.vendor_name} />
+    </>
+  );
+}
 
 // The table pay screen's guard on the cash snap, kept in step with `Pay.tsx` by hand rather than
 // shared: this is its second use, and `docs/design-principles.md` extracts on the third. `Pay.tsx`
@@ -314,9 +328,7 @@ export function Takeaway() {
                     >
                       <span class="flex items-baseline justify-between gap-3">
                         <span class="text-lg font-semibold tabular-nums">
-                          {order.queue_number === undefined
-                            ? t("counter.no_queue_number")
-                            : t("counter.queue_number", { number: order.queue_number })}
+                          <OrderHeading order={order} />
                         </span>
                         <span class="text-lg font-semibold tabular-nums">
                           {formatAmount(order.total_due)}
@@ -355,9 +367,7 @@ export function Takeaway() {
             fallback={
               <>
                 <p class="mt-4 text-sm text-ink-muted">
-                  {order().queue_number === undefined
-                    ? t("counter.no_queue_number")
-                    : t("counter.queue_number", { number: order().queue_number ?? 0 })}
+                  <OrderHeading order={order()} />
                 </p>
                 <p class="text-2xl font-semibold tabular-nums">{formatAmount(order().total_due)}</p>
 
