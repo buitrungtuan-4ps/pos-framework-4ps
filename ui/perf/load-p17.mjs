@@ -7,6 +7,13 @@
 // and at the end asks the edge's own `/api/sync` for its outbox depth, so the count of sales can be set
 // against what the outbox holds.
 //
+// A Vietnamese store (or any store that asks each walk-in whether it eats in or takes away) refuses a
+// counter order that names no channel, and taxes each line by its channel: the driver opens each order
+// at `CHANNEL` (default: none, falling back to `SALES_CHANNEL_TAKEAWAY` when the store refuses one
+// without), lets the edge price the line at that channel, and pays the check's total, tax included.
+// It counts the e-invoices the settles issued (numbered or "number pending"), so a store that issues
+// at settle is measured with that work in it.
+//
 // What it does not drive: the guest QR page and delivery intake, which reach a store through the
 // cloud (`/v1/qr/*`, the gateway). Running those at the same time needs a cloud and its own load
 // tool; on the NUC run this beside them.
@@ -29,6 +36,10 @@ const DEVICES = Number(process.env["DEVICES"] ?? 30);
 const DURATION_S = Number(process.env["DURATION_S"] ?? 60);
 const THINK_MS = Number(process.env["THINK_MS"] ?? 0);
 const BUDGET_MS = { add_line: 30, fire: 40, settle: 60 };
+/** The channel each counter order opens at: the knob, or what the first order the store took needed. */
+let channel = process.env["CHANNEL"] || undefined;
+/** The e-invoices the settles issued: numbered by the store, or "number pending" for the vendor. */
+const invoices = { numbered: 0, pending: 0 };
 
 /** Latency samples per act, in milliseconds, and the failures. */
 const samples = {};
@@ -114,11 +125,25 @@ function socket(base, token) {
   return counter;
 }
 
+/** A counter order's body: at the channel, where one is set. */
+function orderBody() {
+  return channel ? { channel } : {};
+}
+
+/** Counts the e-invoice a settle answered with: numbered by the store, or pending for the vendor. */
+function countInvoice(settled) {
+  if (settled.invoice_number) {
+    invoices.numbered += 1;
+  } else if (settled.invoice_number_pending) {
+    invoices.pending += 1;
+  }
+}
+
 /** Sells counter orders in cash until `deadline`. Returns how many settled. */
 async function sell(base, token, item, price, currency, deadline) {
   let settled = 0;
   while (performance.now() < deadline) {
-    const order = await call(base, token, "open_order", "POST", "/api/orders", {});
+    const order = await call(base, token, "open_order", "POST", "/api/orders", orderBody());
     if (!order) {
       continue;
     }
@@ -143,6 +168,7 @@ async function sell(base, token, item, price, currency, deadline) {
     });
     if (done) {
       settled += 1;
+      countInvoice(done);
     }
     if (THINK_MS > 0) {
       await new Promise((resolve) => setTimeout(resolve, THINK_MS));
@@ -178,10 +204,14 @@ async function main() {
         !entry.open_price &&
         entry.modifier_group_ids.length === 0,
     );
+    // A store that asks each walk-in for its channel refuses an order without one: take away, then.
+    if (!channel && !(await call(base, first, null, "POST", "/api/orders", {}))) {
+      channel = "SALES_CHANNEL_TAKEAWAY";
+    }
     // An item a kitchen station takes, so firing it is the real work: the first one that fires.
     let item;
     for (const candidate of candidates) {
-      const order = await call(base, first, null, "POST", "/api/orders", {});
+      const order = await call(base, first, null, "POST", "/api/orders", orderBody());
       await call(base, first, null, "POST", `/api/orders/${order.order_id}/lines`, {
         menu_item_id: candidate.menu_item_id,
         quantity: { milli: 1000 },
@@ -220,6 +250,8 @@ async function main() {
       sockets_closed_early: sockets.filter((counter) => counter.closed).length,
       frames: sockets.reduce((sum, counter) => sum + counter.frames, 0),
       outbox_depth: status?.outbox_depth ?? null,
+      channel: channel ?? null,
+      einvoices: invoices,
       acts: Object.fromEntries(
         Object.entries(samples).map(([act, list]) => [
           act,

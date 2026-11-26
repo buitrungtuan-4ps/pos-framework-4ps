@@ -80,6 +80,10 @@ A NUC that fails P14 is a finding to fix before the pilot. It is not a reason to
 - **Add the bundle check to CI** (P16's third threshold). It needs no hardware.
 - **The P17 load driver is written** (`ui/perf/load-p17.mjs`, phase 10). Run it on the NUC against the
   store's real edge with `EDGE_URL`, `PAIRING_CODE`, `STAFF_CODE` and `STAFF_PIN`, for an hour
-  (`DURATION_S=3600`), with a QR and intake load through the cloud beside it.
+  (`DURATION_S=3600`), with a QR and intake load through the cloud beside it. It opens each counter order at
+  `CHANNEL` (or, where the store refuses an order without one, as a Vietnamese store that asks each
+  walk-in does, at `SALES_CHANNEL_TAKEAWAY`), lets the edge price and tax the line at that channel,
+  pays the check's total with tax, and reports the channel and the e-invoices the settles issued
+  (numbered, or "number pending").
 - **Buy or borrow the reference NUC** (an Intel or ASUS NUC, any Windows edition, as roadmap-v4
   "What the owner decided" says) and the pilot's tablet and phones. Everything else waits on them.
