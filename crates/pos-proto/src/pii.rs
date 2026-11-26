@@ -207,6 +207,8 @@ no_pii!(
     einvoice::InvoiceSymbol,
     einvoice::FiscalInvoice,
     einvoice::InvoiceSchedule,
+    einvoice::CorrectionRequest,
+    einvoice::DecidedCorrection,
     fees::FrozenFee,
     events::BillFeeLine,
     events::BillTaxLine,

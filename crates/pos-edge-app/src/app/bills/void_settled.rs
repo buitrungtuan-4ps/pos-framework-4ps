@@ -10,6 +10,7 @@ use pos_core::decision::{
 use pos_core::permission::Permission;
 use pos_ports::event_store::EventStore;
 use pos_proto::ShiftState;
+use pos_proto::einvoice::DecidedCorrection;
 use pos_proto::events::BillingBillVoided;
 use pos_proto::ids::{BillId, ReasonCodeId};
 use pos_proto::reason_codes::ReasonAction;
@@ -20,9 +21,9 @@ use crate::app::{
 
 /// What a void after payment reads of the bill before it decides: the bill, its receipt and what
 /// its tenders put on it.
-struct PaidRecord {
-    bill: BillRecord,
-    receipt: Option<SettledReceipt>,
+pub(super) struct PaidRecord {
+    pub(super) bill: BillRecord,
+    pub(super) receipt: Option<SettledReceipt>,
     paid: PaidBill,
     taking_shift_open: bool,
 }
@@ -154,7 +155,7 @@ impl<S: EventStore> Edge<S> {
 
     /// What the store's `einvoice` route decides the void of an invoiced bill on (ADR-0245): its
     /// total, which a bill with no receipt cannot be within a limit of, and its invoice's age.
-    fn invoiced_void(
+    pub(super) fn invoiced_void(
         &self,
         bill_id: BillId,
         record: &PaidRecord,
@@ -173,12 +174,19 @@ impl<S: EventStore> Edge<S> {
             invoice_age_minutes: i64::try_from(now_ms.saturating_sub(issued_ms) / 60_000)
                 .unwrap_or(i64::MAX),
             cancel_window_minutes: einvoice.cancel_window_minutes(),
+            approved_by_hq: einvoice
+                .correction_decision(bill_id)
+                .is_some_and(DecidedCorrection::approved),
         })
     }
 
     /// The bill, its receipt, what it was paid with and whether the shift its settle was stamped
     /// with is still open, read under one lock.
-    fn paid_record(&self, bill_id: BillId, ctx: &DecisionCtx) -> Result<PaidRecord, AppError> {
+    pub(super) fn paid_record(
+        &self,
+        bill_id: BillId,
+        ctx: &DecisionCtx,
+    ) -> Result<PaidRecord, AppError> {
         let projection = self.lock_projection();
         let bill = projection.bill(bill_id).ok_or(AppError::UnknownBill)?;
         let paid = projection
@@ -198,4 +206,4 @@ impl<S: EventStore> Edge<S> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(in crate::app::bills) mod tests;

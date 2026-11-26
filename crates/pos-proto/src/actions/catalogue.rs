@@ -592,6 +592,22 @@ pub const CATALOGUE: &[Action] = &[
         summary: "Void a paid bill whole and give its money back, with a reason",
         ..BASE
     },
+    Action {
+        action_id: "fiscal.correction.request",
+        effect: EdgeWrite,
+        frequency: Rare,
+        params: &[required("bill_id", Id), optional("reason_code_id", Id)],
+        routes: &["POST /api/bills/{id}/correction_request"],
+        permissions: &["billing.bill.void_settled"],
+        refusals: &[
+            "VOID_REASON_NOT_VALID",
+            "APPROVAL_REQUIRED",
+            "CORRECTION_NOT_NEEDED",
+            "E_INVOICE_ISSUED",
+        ],
+        summary: "Ask HQ to correct a paid bill whose e-invoice was issued, with a reason",
+        ..BASE
+    },
     // ---- Cash ----
     Action {
         action_id: "cash.drawer.open",

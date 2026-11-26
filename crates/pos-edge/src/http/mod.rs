@@ -21,6 +21,7 @@ mod card;
 mod cash_movements;
 pub mod check;
 mod comp;
+mod correction_request;
 mod counter;
 mod custom_data;
 pub mod floor;
@@ -590,6 +591,7 @@ pub(crate) fn error_reason(error: &AppError) -> &'static str {
             // A void after payment the till may not make (ADR-0184 decisions 7 and 8).
             DomainError::SettledVoidWindowClosed { .. } => "SETTLED_VOID_WINDOW_CLOSED",
             DomainError::EInvoiceIssued => "E_INVOICE_ISSUED",
+            DomainError::CorrectionNotNeeded => "CORRECTION_NOT_NEEDED",
             DomainError::Empty { .. } => "EMPTY",
             DomainError::PermissionDenied { .. } => "PERMISSION_DENIED",
             DomainError::CapabilityDisabled { .. } => "CAPABILITY_DISABLED",

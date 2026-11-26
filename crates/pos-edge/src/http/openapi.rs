@@ -104,6 +104,7 @@ use utoipa::{Modify, OpenApi};
         super::bills::split_bill,
         super::void_settled::void_bill,
         super::void_settled::void_settled_bill,
+        super::correction_request::request_correction,
         super::menu::mark_sold_out,
         super::menu::restore_item,
         super::tables::seat_table,

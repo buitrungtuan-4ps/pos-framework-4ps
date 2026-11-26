@@ -5,6 +5,7 @@
 //! an issued invoice, and the permission with its PIN.
 
 use super::*;
+use crate::decision::settled_void::{decide_correction_request, invoiced_needs_request};
 use crate::decision::{BillDecision, InvoicedVoid, SettledVoid, within_settled_void_window};
 use crate::permission::{Role, default_grants};
 use pos_proto::billing::SettledVoidWindow;
@@ -224,6 +225,7 @@ fn invoiced_under(route: InvoicedCorrection, limit: i64, window: i64) -> Settled
             manager_limit_minor: limit,
             invoice_age_minutes: 10,
             cancel_window_minutes: window,
+            approved_by_hq: false,
         },
         ..today_s_void()
     }
@@ -299,4 +301,122 @@ fn a_route_that_allows_the_till_still_needs_the_permission_and_its_pin() {
         void_settled(BillState::Settled, within, &nobody),
         Err(DomainError::PermissionDenied { .. })
     ));
+}
+
+/// [`invoiced_under`], with HQ's approval as the store's node publishes it (ADR-0250).
+fn approved_under(route: InvoicedCorrection, limit: i64, window: i64) -> SettledVoid {
+    let mut void = invoiced_under(route, limit, window);
+    void.invoiced.approved_by_hq = true;
+    void
+}
+
+#[test]
+fn hqs_approval_lets_the_till_void_under_every_route_that_asks_hq() {
+    let manager = ctx_granting(&[Permission::VoidSettledBill]);
+    for route in [
+        InvoicedCorrection::Request,
+        InvoicedCorrection::ManagerUpToLimit,
+        InvoicedCorrection::CancelWindow,
+    ] {
+        assert!(
+            void_settled(
+                BillState::Settled,
+                approved_under(route, 100_000, 5),
+                &manager
+            )
+            .is_ok(),
+            "{route:?}"
+        );
+        assert_eq!(
+            void_settled(
+                BillState::Settled,
+                invoiced_under(route, 100_000, 5),
+                &manager
+            )
+            .err(),
+            Some(DomainError::EInvoiceIssued),
+            "{route:?} without an approval"
+        );
+    }
+    assert_eq!(
+        void_settled(
+            BillState::Settled,
+            approved_under(InvoicedCorrection::HqOnly, 0, 0),
+            &manager
+        )
+        .err(),
+        Some(DomainError::EInvoiceIssued),
+        "under HQ_ONLY, HQ corrects in the console"
+    );
+}
+
+#[test]
+fn an_approval_arriving_after_the_window_still_lets_the_till_void() {
+    let manager = ctx_granting(&[Permission::VoidSettledBill]);
+    let late = SettledVoid {
+        bill_business_date: yesterday(),
+        ..approved_under(InvoicedCorrection::Request, 0, 0)
+    };
+    assert!(void_settled(BillState::Settled, late, &manager).is_ok());
+    let unapproved_late = SettledVoid {
+        bill_business_date: yesterday(),
+        ..invoiced_under(InvoicedCorrection::ManagerUpToLimit, 200_000, 0)
+    };
+    assert!(matches!(
+        void_settled(BillState::Settled, unapproved_late, &manager),
+        Err(DomainError::SettledVoidWindowClosed { .. })
+    ));
+}
+
+#[test]
+fn a_request_is_taken_only_where_the_route_asks_hq() {
+    let manager = ctx_granting(&[Permission::VoidSettledBill]);
+    let ask = |void: SettledVoid| {
+        decide_correction_request(BillState::Settled, Some(void.invoiced), true, &manager)
+    };
+    assert_eq!(
+        ask(invoiced_under(InvoicedCorrection::Request, 0, 0)),
+        Ok(())
+    );
+    assert_eq!(
+        ask(invoiced_under(
+            InvoicedCorrection::ManagerUpToLimit,
+            100_000,
+            0
+        )),
+        Ok(()),
+        "above the manager's limit"
+    );
+    assert_eq!(
+        ask(invoiced_under(InvoicedCorrection::CancelWindow, 0, 30)),
+        Err(DomainError::CorrectionNotNeeded),
+        "inside the window the till voids it"
+    );
+    assert_eq!(
+        ask(approved_under(InvoicedCorrection::Request, 0, 0)),
+        Err(DomainError::CorrectionNotNeeded),
+        "already approved"
+    );
+    assert_eq!(
+        ask(invoiced_under(InvoicedCorrection::HqOnly, 0, 0)),
+        Err(DomainError::EInvoiceIssued)
+    );
+    assert_eq!(
+        decide_correction_request(BillState::Settled, None, true, &manager),
+        Err(DomainError::CorrectionNotNeeded),
+        "no invoice was issued"
+    );
+    assert_eq!(
+        decide_correction_request(
+            BillState::Settled,
+            Some(invoiced_under(InvoicedCorrection::Request, 0, 0).invoiced),
+            false,
+            &manager
+        ),
+        Err(denied()),
+        "a manager approves it with a PIN"
+    );
+    let window = |minutes| invoiced_under(InvoicedCorrection::CancelWindow, 0, minutes).invoiced;
+    assert!(!invoiced_needs_request(window(30)), "inside the window");
+    assert!(invoiced_needs_request(window(5)), "after the window");
 }

@@ -61,8 +61,8 @@ mod shifts;
 mod views;
 
 pub use bills::{
-    CardAsk, CardOutcome, CardRefusal, CardResolution, CheckPrinted, ParkedCard, PaymentTaken,
-    TakenPayment, VoidedBill,
+    CardAsk, CardOutcome, CardRefusal, CardResolution, CheckPrinted, CorrectionRequested,
+    ParkedCard, PaymentTaken, TakenPayment, VoidedBill,
 };
 pub use config_wake::{ConfigDelivery, ConfigWakeReport, ConfigWakeStanding, WAKE_SAMPLES_MAX};
 pub use custom_data::{CONSENT_FIELD_PREFIX, CustomDataView};

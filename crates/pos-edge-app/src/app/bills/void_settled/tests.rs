@@ -28,7 +28,7 @@ use crate::receipt::InMemoryReceipts;
 
 /// A store whose manager, `MGR-1`, holds `billing.bill.void_settled` directly and whose
 /// supervisor, `SUP-1`, holds only the void of an unpaid bill.
-fn session() -> EdgeSession {
+pub(in crate::app::bills) fn session() -> EdgeSession {
     let pin_phc = Argon2::default()
         .hash_password_with_salt(b"4417", b"a-fixed-test-slt")
         .expect("hash")
@@ -54,7 +54,7 @@ fn session() -> EdgeSession {
     session
 }
 
-fn over(store: FakeStore, session: EdgeSession) -> Edge<FakeStore> {
+pub(in crate::app::bills) fn over(store: FakeStore, session: EdgeSession) -> Edge<FakeStore> {
     Edge::new(
         store,
         identity(),
@@ -64,14 +64,14 @@ fn over(store: FakeStore, session: EdgeSession) -> Edge<FakeStore> {
     .expect("seeds")
 }
 
-fn approval(code: &str) -> Approval {
+pub(in crate::app::bills) fn approval(code: &str) -> Approval {
     Approval {
         code: code.to_owned(),
         pin: "4417".to_owned(),
     }
 }
 
-fn reason() -> ReasonCodeId {
+pub(in crate::app::bills) fn reason() -> ReasonCodeId {
     PublishedReasonCodes::framework_default()
         .for_action(ReasonAction::VoidBill)
         .next()
@@ -79,7 +79,7 @@ fn reason() -> ReasonCodeId {
         .id
 }
 
-fn card(minor: i64) -> Payment {
+pub(in crate::app::bills) fn card(minor: i64) -> Payment {
     Payment {
         method: PaymentMethod::Card,
         ..cash(minor)
@@ -98,7 +98,11 @@ async fn an_open_bill(edge: &Edge<FakeStore>, table: u128) -> BillId {
 }
 
 /// [`an_open_bill`], settled with `payments`.
-async fn a_paid_bill(edge: &Edge<FakeStore>, table: u128, payments: Vec<Payment>) -> BillId {
+pub(in crate::app::bills) async fn a_paid_bill(
+    edge: &Edge<FakeStore>,
+    table: u128,
+    payments: Vec<Payment>,
+) -> BillId {
     let bill_id = an_open_bill(edge, table).await;
     edge.settle_bill(actor(), bill_id, payments, None)
         .await
@@ -106,7 +110,7 @@ async fn a_paid_bill(edge: &Edge<FakeStore>, table: u128, payments: Vec<Payment>
     bill_id
 }
 
-async fn void(
+pub(in crate::app::bills) async fn void(
     edge: &Edge<FakeStore>,
     bill_id: BillId,
     approver: Option<&str>,

@@ -23,7 +23,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::chain::ChainHash;
-use crate::einvoice::{FiscalInvoice, InvoiceSchedule};
+use crate::einvoice::{CorrectionRequest, DecidedCorrection, FiscalInvoice, InvoiceSchedule};
 use crate::enums::{
     PaymentMethod, PaymentOutcome, ReductionKind, SalesChannel, ShipmentStatus,
     StockLedgerEntryKind,
@@ -446,6 +446,16 @@ event_catalogue! {
         bill_id: BillId,
         /// The invoice: its symbol and sequence, date, total and buyer's subject id.
         invoice: FiscalInvoice,
+    },
+    /// A manager asked HQ to correct a bill's issued e-invoice (ADR-0245 route b, ADR-0250).
+    FiscalCorrectionRequested => "fiscal.correction.requested", version = 1 {
+        /// The bill, the amount, the kind and the reason; the envelope names the requester.
+        request: CorrectionRequest,
+    },
+    /// HQ's decision on a correction request reached the store on its `einvoice` node (ADR-0250).
+    FiscalCorrectionDecided => "fiscal.correction.decided", version = 1 {
+        /// The bill, approved or declined, by which console user and when.
+        decision: DecidedCorrection,
     },
     /// A settled bill's e-invoice will be issued when due, in the settle's transaction (ADR-0229).
     FiscalInvoiceScheduled => "fiscal.invoice.scheduled", version = 1 {
@@ -874,19 +884,15 @@ event_catalogue! {
     /// A store published the head of its hash chain
     /// ([ADR-0131](../../../docs/adr/0131-a-chained-event-log.md) decision 4).
     ///
-    /// The anchor. A hash chain verifies happily after its tail has been cut off, and after an
-    /// edit whose later links were all re-derived — the algorithm is in the source, so anyone
-    /// holding the file can rebuild a chain that checks out. What a store **cannot** do is rewrite
-    /// what the cloud has already seen, and this is that record.
+    /// The anchor: a chain verifies after its tail is cut or re-derived, but a store **cannot**
+    /// rewrite what the cloud has already seen, and this is that record.
     ///
     /// Published at shift close: a reconciliation point a human already attends to, and one that
     /// bounds how much history a store could rewrite unobserved to a single shift. It follows that
     /// the guarantee reaches back only to the **last anchor**, not to the last event.
     ///
-    /// The head it carries is the chain as it stood **before this event was written**, because a
-    /// record cannot contain its own hash. A sale landing between the read and the commit leaves
-    /// the anchor a record or two behind, which is safe — it still extends the previous anchor, and
-    /// the next one covers the gap.
+    /// The head is the chain **before this event was written** (a record cannot hold its own hash);
+    /// a sale landing in between leaves it a record behind, which the next anchor covers.
     StoreChainAnchored => "store.chain.anchored", version = 1 {
         /// How many records the chain held when this was taken.
         chain_seq: u64,
@@ -904,21 +910,14 @@ event_catalogue! {
     /// A store admitted a device by pairing it
     /// ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4).
     ///
-    /// Declared beyond the specification's list, and the reason is the one ADR-0041 §55-57 rejected
-    /// and this record argued back: a tablet paired during a WAN outage was invisible to the cloud
-    /// **forever**, so the fleet console's picture of a store's tills was literally zero rows. This
-    /// rides the durable outbox, so an admission made with the cable unplugged reaches the cloud
-    /// when the link returns.
+    /// Declared beyond the specification's list (ADR-0118): it rides the durable outbox, so a tablet
+    /// paired during a WAN outage reaches the cloud when the link returns.
     ///
     /// # It names devices and never an employee
     ///
-    /// Deliberately, and it is decision 5 of that record rather than an omission. An employee
-    /// identity here would create a durable, central, cross-border, attributable record of
-    /// managerial activity — needing a lawful basis, a retention period, a DPIA and a transfer basis
-    /// under Decree 13/2023, and failing GDPR's prior question, because the purpose (*the cloud
-    /// knows which tills a store admitted, and can revoke one*) is served in full by device ids.
-    /// Who admitted a device is recorded on the store's own disk. A v2 carrying the actor would be
-    /// its own record, and this one does not pre-authorise it.
+    /// Deliberately (ADR-0118 decision 5): an employee here would be a central, cross-border record
+    /// of managerial activity (Decree 13/2023, GDPR) that device ids make unnecessary. Who admitted
+    /// a device is recorded on the store's own disk.
     DeviceAdmissionGranted => "device.admission.granted", version = 1 {
         /// The device that was admitted — the id the **edge** minted at redemption, which is a
         /// separate identity from the cloud's approved-device registry.
@@ -930,10 +929,8 @@ event_catalogue! {
     /// A store retired a device's admission
     /// ([ADR-0118](../../../docs/adr/0118-one-credential-per-box-and-the-cloud-learns.md) §4).
     ///
-    /// Declared beyond the specification's list, and paired with [`DeviceAdmissionGranted`] because a
-    /// roster that only ever grows is not a roster. One event per device: the break-glass that
-    /// retires every device at once emits one of these each, so a reader has a single shape to
-    /// handle and never has to interpret an absent field as *all of them*.
+    /// Paired with [`DeviceAdmissionGranted`]. One event per device, the break-glass included, so a
+    /// reader never reads an absent field as *all of them*.
     DeviceAdmissionRevoked => "device.admission.revoked", version = 1 {
         /// The device whose token stops authenticating.
         revoked_device_id: DeviceId,

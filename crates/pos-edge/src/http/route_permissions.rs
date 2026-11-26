@@ -132,6 +132,10 @@ pub const ROUTE_PERMISSIONS: &[(&str, RouteGate)] = &[
         RouteGate::Person(&[Permission::VoidBill]),
     ),
     (
+        "POST /api/bills/{id}/correction_request",
+        RouteGate::Person(&[Permission::VoidSettledBill]),
+    ),
+    (
         "POST /api/bills/{id}/void_settled",
         RouteGate::Person(&[
             Permission::VoidSettledBill,

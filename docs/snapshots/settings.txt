@@ -113,6 +113,16 @@ einvoice.correction_kind	scope=SETTING_SCOPE_TENANT
 einvoice.correction_kind	since=0.14.1
 einvoice.correction_kind	value=EINVOICE_KIND_ADJUSTMENT
 einvoice.correction_kind	value=EINVOICE_KIND_REPLACEMENT
+einvoice.correction_reason_required
+einvoice.correction_reason_required	default=true
+einvoice.correction_reason_required	kind=SETTING_KIND_BOOL
+einvoice.correction_reason_required	scope=SETTING_SCOPE_BRAND
+einvoice.correction_reason_required	scope=SETTING_SCOPE_STORE
+einvoice.correction_reason_required	scope=SETTING_SCOPE_STORE_GROUP
+einvoice.correction_reason_required	scope=SETTING_SCOPE_TENANT
+einvoice.correction_reason_required	since=0.14.1
+einvoice.correction_reason_required	value=false
+einvoice.correction_reason_required	value=true
 einvoice.delay_minutes
 einvoice.delay_minutes	default=0
 einvoice.delay_minutes	kind=SETTING_KIND_INT

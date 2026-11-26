@@ -3221,6 +3221,8 @@
   "settings.item.einvoice.manager_correction_limit.help": "Tổng tiền lớn nhất của một hóa đơn đã xuất hóa đơn điện tử mà quản lý được hủy tại quầy. 0 là không cho hủy.",
   "settings.item.einvoice.cancel_window_minutes.title": "Thời gian hủy hóa đơn đã xuất",
   "settings.item.einvoice.cancel_window_minutes.help": "Số phút sau khi xuất hóa đơn điện tử mà quản lý vẫn được hủy hóa đơn tại quầy. 0 là không cho hủy.",
+  "settings.item.einvoice.correction_reason_required.title": "Yêu cầu điều chỉnh phải có lý do",
+  "settings.item.einvoice.correction_reason_required.help": "Yêu cầu điều chỉnh hóa đơn đã xuất của quản lý phải chọn lý do. Cần pháp chế hoặc kế toán xác nhận.",
   "einvoices.symbolAllocate": "Cấp ký hiệu tiếp theo",
   "einvoices.symbolAllocateHint": "Cấp cho cửa hàng ký hiệu tiếp theo theo quy tắc của quốc gia mà chưa cửa hàng nào của bạn dùng. Cửa hàng đặt chế độ tự động sẽ được cấp khi kích hoạt máy, và được cấp ký hiệu mới khi thay máy.",
   "alerts.kind.einvoiceOverdue": "Hóa đơn điện tử sắp hoặc đã quá hạn",

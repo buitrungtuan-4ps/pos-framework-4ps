@@ -44,6 +44,7 @@ POST /api/bills/{id}/card
 POST /api/bills/{id}/card/{payment_id}/resolve
 POST /api/bills/{id}/check/print
 POST /api/bills/{id}/comp
+POST /api/bills/{id}/correction_request
 POST /api/bills/{id}/discount
 POST /api/bills/{id}/fees/{fee_id}/waive
 POST /api/bills/{id}/merge

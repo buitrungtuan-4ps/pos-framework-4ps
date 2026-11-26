@@ -99,5 +99,17 @@ pub(super) fn correction_settings() -> Vec<Setting> {
                   an invoice below zero. Which errors need which kind is to be confirmed by legal \
                   or the accountant. The cloud reads it; the edge does not.",
         },
+        Setting {
+            node: PublishedEInvoice::NODE,
+            field: "correction_reason_required",
+            shape: SettingShape::Bool {
+                default: PublishedEInvoice::default().correction_reason_required(),
+                preset: None,
+            },
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            confirm: None,
+            summary: "Whether a manager's request to correct a bill with an issued e-invoice must                       name a reason from the store's `VOID_BILL` reason codes. On, the default;                       off lets a request go without one. Whether a correction needs a reason is to                       be confirmed by legal or the accountant. The edge reads it.",
+        },
     ]
 }

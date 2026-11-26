@@ -57,13 +57,20 @@ pub struct InvoicedVoid {
     pub invoice_age_minutes: i64,
     /// `einvoice.cancel_window_minutes`.
     pub cancel_window_minutes: i64,
+    /// Whether HQ approved this bill's correction request, as the cloud published it on the store's
+    /// `einvoice` node ([ADR-0250](../../../../docs/adr/0250-a-store-learns-a-correction-decision-on-its-einvoice-node.md)).
+    pub approved_by_hq: bool,
 }
 
 /// Whether the till may void a bill whose invoice was issued (ADR-0245 decision 1): under
 /// `MANAGER_UP_TO_LIMIT` when its total is within the limit, under `CANCEL_WINDOW` while the invoice
-/// is younger than the window, and never otherwise. The cloud then corrects the invoice.
+/// is younger than the window, under any route but `HQ_ONLY` once HQ approved its request
+/// (ADR-0250 decision 4), and never otherwise. The cloud then corrects the invoice.
 #[must_use]
 pub(super) fn invoiced_void_at_till(invoiced: InvoicedVoid) -> bool {
+    if invoiced.approved_by_hq && invoiced_needs_request(invoiced) {
+        return true;
+    }
     match invoiced.route {
         InvoicedCorrection::ManagerUpToLimit => {
             (0..=invoiced.manager_limit_minor).contains(&invoiced.bill_total_minor)
@@ -75,6 +82,24 @@ pub(super) fn invoiced_void_at_till(invoiced: InvoicedVoid) -> bool {
         InvoicedCorrection::Unspecified
         | InvoicedCorrection::HqOnly
         | InvoicedCorrection::Request => false,
+    }
+}
+
+/// Whether the till must ask HQ before voiding a bill whose invoice was issued (ADR-0250 decision 5):
+/// always under `REQUEST`, above the manager's limit under `MANAGER_UP_TO_LIMIT`, and after the
+/// window under `CANCEL_WINDOW`. Never under `HQ_ONLY`, where HQ corrects in the console. Public so
+/// the till can offer the request form instead of a refusal.
+#[must_use]
+pub fn invoiced_needs_request(invoiced: InvoicedVoid) -> bool {
+    match invoiced.route {
+        InvoicedCorrection::Request => true,
+        InvoicedCorrection::ManagerUpToLimit | InvoicedCorrection::CancelWindow => {
+            !invoiced_void_at_till(InvoicedVoid {
+                approved_by_hq: false,
+                ..invoiced
+            })
+        }
+        InvoicedCorrection::Unspecified | InvoicedCorrection::HqOnly => false,
     }
 }
 
@@ -115,12 +140,18 @@ pub(super) fn decide_settled_void(
     ctx: &DecisionCtx,
 ) -> Result<BillDecision, DomainError> {
     let next_state = Bill::step(current, BillTrigger::VoidSettled)?;
-    if !within_settled_void_window(
-        void.window,
-        void.bill_business_date,
-        ctx.business_date,
-        void.taking_shift_open,
-    ) {
+    // HQ approved this void (ADR-0250), and a correction past the window is HQ's to allow.
+    let hq_approved = void.e_invoice_issued
+        && void.invoiced.approved_by_hq
+        && invoiced_needs_request(void.invoiced);
+    if !hq_approved
+        && !within_settled_void_window(
+            void.window,
+            void.bill_business_date,
+            ctx.business_date,
+            void.taking_shift_open,
+        )
+    {
         return Err(DomainError::SettledVoidWindowClosed {
             window: void.window,
         });
@@ -134,4 +165,34 @@ pub(super) fn decide_settled_void(
         settlement: None,
         effects: vec![Effect::PrintVoidBillSlip],
     })
+}
+
+/// Decides a manager's request that HQ correct a paid bill's issued invoice
+/// ([ADR-0250](../../../../docs/adr/0250-a-store-learns-a-correction-decision-on-its-einvoice-node.md)
+/// decision 3). `invoiced` is `None` where no invoice was issued for the bill.
+///
+/// # Errors
+///
+/// [`DomainError::Transition`] unless the bill is `SETTLED`; [`DomainError::CorrectionNotNeeded`]
+/// where no invoice was issued, HQ already approved, or the till may void the bill itself;
+/// [`DomainError::EInvoiceIssued`] under `HQ_ONLY`, where HQ corrects in the console;
+/// [`DomainError::PermissionDenied`] naming `billing.bill.void_settled` if it is not granted or its
+/// PIN was not verified.
+pub fn decide_correction_request(
+    current: BillState,
+    invoiced: Option<InvoicedVoid>,
+    pin_verified: bool,
+    ctx: &DecisionCtx,
+) -> Result<(), DomainError> {
+    Bill::step(current, BillTrigger::VoidSettled)?;
+    let Some(invoiced) = invoiced else {
+        return Err(DomainError::CorrectionNotNeeded);
+    };
+    if invoiced_void_at_till(invoiced) {
+        return Err(DomainError::CorrectionNotNeeded);
+    }
+    if !invoiced_needs_request(invoiced) {
+        return Err(DomainError::EInvoiceIssued);
+    }
+    require_with_pin(ctx, Permission::VoidSettledBill, pin_verified)
 }

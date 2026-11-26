@@ -46,7 +46,7 @@ use crate::permission::{Grant, Permission, PermissionSet, require};
 use crate::state_machine::StateMachine;
 
 pub mod reprice;
-mod settled_void;
+pub mod settled_void;
 pub use settled_void::{InvoicedVoid, SettledVoid, within_settled_void_window};
 
 /// Who is performing an action, for authorisation and the audit trail.
