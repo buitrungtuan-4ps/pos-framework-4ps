@@ -306,6 +306,15 @@ export const SCREENS = {
     inPalette: true,
     icon: "layers",
   },
+  // The settings history in words, with a rollback scoped by what and where (ADR-0246).
+  settingsHistory: {
+    path: "/settings-history",
+    key: "nav.settingsHistory",
+    scope: "tenant",
+    tenantScoped: true,
+    inPalette: true,
+    icon: "layers",
+  },
   storeSettings: {
     path: "/store-settings",
     key: "nav.storeSettings",
@@ -503,7 +512,9 @@ export const NAV_GROUPS: readonly {
   // What the tills run: the package versions HQ publishes and pins (ADR-0189). Its own group
   // because the settings group is full and a package is not a setting: it is the product a store
   // runs, and its screens and flows (ADR-0190, ADR-0192) join it here.
-  { key: "nav.group.packages", items: ["packages", "packageDesigner"] },
+  // The settings history sits here too: it rolls a store's settings back by setting, group or the
+  // whole package, at one place (ADR-0246), and the settings group is full.
+  { key: "nav.group.packages", items: ["packages", "packageDesigner", "settingsHistory"] },
   // Who and what may reach this console, or be reached from it: console users, machine keys, the
   // endpoints it calls out to, and the vendors it connects to. All four answer "who is allowed in,
   // or out". Integrations moved here from Settings when Shared settings filled that group's sixth
