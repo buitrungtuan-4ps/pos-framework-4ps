@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use pos_core::decision::Actor;
-use pos_proto::einvoice::InvoiceSymbol;
+use pos_proto::einvoice::{DecidedCorrection, InvoiceSymbol};
 use pos_proto::events::{FiscalInvoiceIssued, FiscalInvoiceScheduled};
 use pos_proto::ids::{BillId, EventId, SubjectId};
 use pos_proto::time::Timestamp;
@@ -20,6 +20,10 @@ use crate::app::IssuedInvoiceRef;
 /// The most deferred invoices a store holds at once (AGENTS.md §2). A settle that finds the queue
 /// full issues at once rather than refuse the sale or lose the invoice (ADR-0229 decision 4).
 pub(in crate::app) const PENDING_LIMIT: usize = 10_000;
+
+/// The most bills a store remembers asking HQ to correct (ADR-0250). Past it the oldest bill is
+/// forgotten, and a decision on it is not recorded again; the till still honours it.
+pub(in crate::app) const CORRECTIONS_LIMIT: usize = 10_000;
 
 /// A deferred invoice: the buyer it will name, and who settled the bill, whom its issue is
 /// recorded against as the settle's own follow-on.
@@ -46,6 +50,11 @@ pub(in crate::app) struct Invoices {
     pending: BTreeMap<(Timestamp, BillId), Waiting>,
     /// Each waiting bill's due time, to find it in `pending`.
     due: HashMap<BillId, Timestamp>,
+    /// The bills this store asked HQ to correct, folded from `fiscal.correction.requested`, each
+    /// with the `decided_time` of the decision `fiscal.correction.decided` last recorded for it
+    /// ([ADR-0250](../../../../../docs/adr/0250-a-store-learns-a-correction-decision-on-its-einvoice-node.md)
+    /// decision 3). At most [`CORRECTIONS_LIMIT`].
+    corrections: BTreeMap<BillId, Option<Timestamp>>,
 }
 
 impl Invoices {
@@ -137,5 +146,45 @@ impl Invoices {
     /// When the invoice issued for `bill_id` was issued, in Unix milliseconds, if one was.
     pub(in crate::app) fn issued_ms(&self, bill_id: BillId) -> Option<u64> {
         self.invoiced.get(&bill_id).map(|(_, issued_ms)| *issued_ms)
+    }
+
+    /// Remembers that this store asked HQ to correct `bill_id`'s invoice. Past
+    /// [`CORRECTIONS_LIMIT`] the oldest bill (the smallest id, which a ULID orders by time) goes.
+    pub(in crate::app) fn fold_requested(&mut self, bill_id: BillId) {
+        if self.corrections.contains_key(&bill_id) {
+            return;
+        }
+        if self.corrections.len() >= CORRECTIONS_LIMIT {
+            self.corrections.pop_first();
+        }
+        self.corrections.insert(bill_id, None);
+    }
+
+    /// Remembers that `decided` was recorded, for a bill this store asked about.
+    pub(in crate::app) fn fold_decided(&mut self, decided: &DecidedCorrection) {
+        if let Some(recorded) = self.corrections.get_mut(&decided.bill_id) {
+            *recorded = Some(decided.decided_time);
+        }
+    }
+
+    /// The decisions of `published` on bills this store asked about that it has not recorded yet:
+    /// each bill's newest entry, unless its `decided_time` is the one last recorded.
+    pub(in crate::app) fn unrecorded(
+        &self,
+        published: &[DecidedCorrection],
+    ) -> Vec<DecidedCorrection> {
+        let mut newest: BTreeMap<BillId, &DecidedCorrection> = BTreeMap::new();
+        for decided in published {
+            newest.insert(decided.bill_id, decided);
+        }
+        newest
+            .into_values()
+            .filter(|decided| {
+                self.corrections
+                    .get(&decided.bill_id)
+                    .is_some_and(|recorded| *recorded != Some(decided.decided_time))
+            })
+            .cloned()
+            .collect()
     }
 }

@@ -445,7 +445,10 @@ impl<S: EventStore> Edge<S> {
                 let event: DataSubjectMasked = envelope.data.decode().map_err(AppError::Encode)?;
                 projection.fold_subject_masked(&event);
             }
-            EventType::FiscalInvoiceIssued | EventType::FiscalInvoiceScheduled => {
+            EventType::FiscalInvoiceIssued
+            | EventType::FiscalInvoiceScheduled
+            | EventType::FiscalCorrectionRequested
+            | EventType::FiscalCorrectionDecided => {
                 Self::fold_fiscal(projection, envelope, known)?;
             }
             _ => {}
@@ -453,14 +456,22 @@ impl<S: EventStore> Edge<S> {
         Ok(())
     }
 
-    /// Folds an e-invoice issued or scheduled (ADR-0225, ADR-0229), lifted out of
-    /// [`Self::fold`] to keep that function inside its line budget.
+    /// Folds an e-invoice issued or scheduled (ADR-0225, ADR-0229), and a correction requested or
+    /// decided (ADR-0250), lifted out of [`Self::fold`] to keep that function inside its line budget.
     fn fold_fiscal(
         projection: &mut Projection,
         envelope: &EventEnvelope<RawPayload>,
         known: EventType,
     ) -> Result<(), AppError> {
-        if known == EventType::FiscalInvoiceIssued {
+        if known == EventType::FiscalCorrectionRequested {
+            let event: pos_proto::events::FiscalCorrectionRequested =
+                envelope.data.decode().map_err(AppError::Encode)?;
+            projection.invoices.fold_requested(event.request.bill_id);
+        } else if known == EventType::FiscalCorrectionDecided {
+            let event: pos_proto::events::FiscalCorrectionDecided =
+                envelope.data.decode().map_err(AppError::Encode)?;
+            projection.invoices.fold_decided(&event.decision);
+        } else if known == EventType::FiscalInvoiceIssued {
             let event: FiscalInvoiceIssued = envelope.data.decode().map_err(AppError::Encode)?;
             projection
                 .invoices
