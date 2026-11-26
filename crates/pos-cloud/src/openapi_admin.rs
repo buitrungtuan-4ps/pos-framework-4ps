@@ -141,6 +141,7 @@ pub(crate) use pos_cloud_api::error_schema::{ErrorBody, ErrorDetail, ErrorRespon
         crate::http::admin_custom_value_summary,
         crate::http::admin_custom_value_summary_csv,
         crate::http::admin_admitted_devices,
+        crate::http::admin_delivery_reconciliation,
         crate::http::admin_revoke_device,
         crate::http::admin_set_printer_paper,
         crate::http::admin_set_terminal_receipt,

@@ -58,6 +58,9 @@ pub const PAYMENT: &str = "payment";
 
 /// The tokens [`PAYMENT`] takes, the default first.
 pub const PAYMENT_OPTIONS: &[&str] = &["VENDOR_PAYMENT_IN_APP", "VENDOR_PAYMENT_AT_STORE"];
+/// The optional setting that holds the vendor's commission, in basis points of what the guest paid
+/// (ADR-0248 decision 3): the cloud's reconciliation reads it from the vendor's entry. Absent, `0`.
+pub const COMMISSION_BPS: &str = "commission_bps";
 
 /// Why a store's vendors cannot be published.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -124,6 +127,7 @@ pub fn vendors_for_store(
             price_source,
             price_difference_bps,
             payment: payment_of(connection),
+            commission_bps: basis_points(connection, COMMISSION_BPS),
         });
     }
     vendors.sort_by_key(|vendor| vendor.vendor_id);
@@ -144,14 +148,19 @@ fn price_terms(connection: &Connection) -> (Open<VendorPriceSource>, u32) {
         }
         _ => Open::default(),
     };
-    let tolerance = match connection.settings.get(PRICE_DIFFERENCE_BPS) {
+    (source, basis_points(connection, PRICE_DIFFERENCE_BPS))
+}
+
+/// A connection's optional basis-points setting `key`, 0 to 10,000, already checked by the
+/// provider's schema: anything else reads as `0`.
+fn basis_points(connection: &Connection, key: &str) -> u32 {
+    match connection.settings.get(key) {
         Some(SettingValue::Number(bps)) => u32::try_from(*bps)
             .ok()
             .filter(|bps| *bps <= MAX_PRICE_DIFFERENCE_BPS)
             .unwrap_or(0),
         _ => 0,
-    };
-    (source, tolerance)
+    }
 }
 
 /// Where a connection's guest pays (ADR-0248 decision 2), optional and already checked by the
@@ -176,8 +185,8 @@ mod tests {
     use pos_proto::vendors::{VendorPayment, VendorPriceSource};
 
     use super::{
-        KITCHEN_RELEASE, PAYMENT, PREP_MINUTES, PRICE_DIFFERENCE_BPS, PRICE_SOURCE, STAFF_CONFIRM,
-        VendorsRefusal, vendors_for_store,
+        COMMISSION_BPS, KITCHEN_RELEASE, PAYMENT, PREP_MINUTES, PRICE_DIFFERENCE_BPS, PRICE_SOURCE,
+        STAFF_CONFIRM, VendorsRefusal, vendors_for_store,
     };
     use crate::connections::{Connection, ScopeLevel};
 
@@ -277,6 +286,7 @@ mod tests {
             SettingValue::Text("VENDOR_PRICE_SOURCE_MENU".to_owned()),
         ));
         settings.push((PRICE_DIFFERENCE_BPS, SettingValue::Number(500)));
+        settings.push((COMMISSION_BPS, SettingValue::Number(2_500)));
         let menu = delivery("01J0000000000000000000CNN2", Some(STORE), &settings);
         let node = vendors_for_store(&[plain, menu], &registry(), STORE).expect("publishes");
         let terms: Vec<(VendorPriceSource, u32)> = node
@@ -293,6 +303,12 @@ mod tests {
             terms,
             [(VendorPriceSource::App, 0), (VendorPriceSource::Menu, 500)]
         );
+        let commissions: Vec<u32> = node
+            .vendors()
+            .iter()
+            .map(|vendor| vendor.commission_bps)
+            .collect();
+        assert_eq!(commissions, [0, 2_500], "ADR-0248 decision 3");
     }
 
     /// A connection's payment rides its vendor's entry (ADR-0248 decision 2); one that never set

@@ -3271,5 +3271,13 @@
   "provider.field.payment": "Where this app's guests pay",
   "provider.field.payment.VENDOR_PAYMENT_IN_APP": "In the app (the bill settles when the store accepts the order)",
   "provider.field.payment.VENDOR_PAYMENT_AT_STORE": "At the store (the till takes the money)",
-  "reports.tenderVendor": "Paid via delivery apps"
+  "reports.tenderVendor": "Paid via delivery apps",
+  "reports.deliveryTitle": "Delivery apps: reconciliation",
+  "reports.deliveryEmpty": "No delivery app orders settled in this window.",
+  "reports.deliveryVendor": "App",
+  "reports.deliveryOrders": "Orders",
+  "reports.deliveryGross": "Paid (gross)",
+  "reports.deliveryCommission": "Commission",
+  "reports.deliveryNet": "Net to be paid out",
+  "provider.field.commission_bps": "This app's commission (basis points, 100 = 1%), for reconciliation only; bills stay gross"
 }

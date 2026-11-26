@@ -31,6 +31,7 @@ use super::floats::{KeptFloats, fold_closed_floats};
 use super::handovers::{KeptHandovers, fold_handovers};
 use super::mix::{KeptLines, fold_line_updates};
 use super::tenders::fold_tenders;
+use super::vendors::{KeptVendors, VendorDay, fold_vendors};
 use super::voids::{KeptBills, fold_voids};
 
 use super::rollup::{
@@ -107,6 +108,10 @@ pub struct StoredRollups {
     /// before then reads as two shifts until the rollup is reset.
     #[serde(default)]
     pub handovers: KeptHandovers,
+    /// Each delivery vendor's settled orders by day, and what waits for a settle (ADR-0248
+    /// decision 3). `#[serde(default)]` for the same forward-compatible reason as `revenue`.
+    #[serde(default)]
+    pub vendors: KeptVendors,
 }
 
 /// The store that persists materialised rollups (a table in `store-postgres`; a fake in tests).
@@ -207,6 +212,7 @@ where
             fold_handovers(&mut state.handovers, &mut state.cash, event);
             fold_voids(&mut state.voids, &mut state.revenue, &mut state.cash, event);
             fold_devices(&mut state.devices, event);
+            fold_vendors(&mut state.vendors, event);
             folded = folded.saturating_add(1);
         }
         let short = batch.len() < page_len;
@@ -292,6 +298,26 @@ where
 {
     let state = rollups.load(tenant, store_id).await?;
     Ok(render_revenue_window(state.revenue, window))
+}
+
+/// Each delivery vendor's settled orders for each trading day in `window`, oldest day first:
+/// the day, the vendor's id and its [`VendorDay`] (ADR-0248 decision 3). Gross; the caller applies
+/// the commission the store's configuration gives.
+///
+/// # Errors
+///
+/// [`RollupError::Store`] if the rollup store cannot be read.
+pub async fn vendor_days<R>(
+    rollups: &R,
+    tenant: TenantId,
+    store_id: StoreId,
+    window: &RollupWindow,
+) -> Result<Vec<(String, BTreeMap<String, VendorDay>)>, RollupError>
+where
+    R: RollupStore,
+{
+    let state = rollups.load(tenant, store_id).await?;
+    Ok(super::vendors::render_window(state.vendors.days, window))
 }
 
 /// Builds an **X or Z report** for one store's trading day (ADR-0081, resolving spec gap D10).

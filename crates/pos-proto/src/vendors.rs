@@ -155,6 +155,12 @@ pub struct PublishedVendor {
         skip_serializing_if = "crate::wire_enum::is_absent"
     )]
     pub payment: Open<VendorPayment>,
+    /// The vendor's commission, in basis points of what the guest paid
+    /// ([ADR-0248](../../../docs/adr/0248-a-delivery-order-is-priced-paid-and-reconciled-as-the-app-sold-it.md)
+    /// decision 3). Read by the cloud's reconciliation, never by the bill, which stays gross.
+    /// `0` (the default) when the connection sets none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub commission_bps: u32,
 }
 
 /// The `vendors` config node: the vendors a store takes orders from.
@@ -216,6 +222,7 @@ impl PublishedVendors {
             && self.vendors.iter().enumerate().all(|(index, vendor)| {
                 (MIN_PREP_MINUTES..=MAX_PREP_MINUTES).contains(&vendor.prep_minutes)
                     && vendor.price_difference_bps <= MAX_PRICE_DIFFERENCE_BPS
+                    && vendor.commission_bps <= MAX_PRICE_DIFFERENCE_BPS
                     && !self
                         .vendors
                         .iter()
@@ -243,6 +250,7 @@ mod tests {
             price_source: Open::default(),
             price_difference_bps: 0,
             payment: Open::default(),
+            commission_bps: 0,
         }
     }
 

@@ -23721,6 +23721,124 @@
         "x-permission": "console.data.read"
       }
     },
+    "/admin/stores/{store_id}/delivery/reconciliation": {
+      "get": {
+        "tags": [
+          "reports"
+        ],
+        "summary": "`GET /admin/stores/{store_id}/delivery/reconciliation` (ADR-0248 decision 3).",
+        "operationId": "admin_delivery_reconciliation",
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "description": "The store (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "description": "The tenant that store belongs to (a 26-character ULID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "The first trading day, `YYYY-MM-DD`, inclusive",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "The last trading day, `YYYY-MM-DD`, inclusive",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "The most trading days to cover, the newest in range: 90 when absent, and never more than 366",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Each trading day's delivery vendors, oldest day first: the orders settled, what they took gross, the commission at the vendor's rate and the net. Amounts are integers in the currency's minor units. No customer or employee identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DeliveryReconciliationRow"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "tenant_id or store_id is absent or not a ULID, or the window is malformed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The role lacks console.reports.revenue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The rollup store is unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session_cookie": []
+          }
+        ],
+        "x-permission": "console.reports.revenue"
+      }
+    },
     "/admin/stores/{store_id}/devices": {
       "get": {
         "tags": [
@@ -30381,6 +30499,66 @@
             "format": "int64",
             "description": "Every event recorded on that day.",
             "minimum": 0
+          }
+        }
+      },
+      "DeliveryReconciliationRow": {
+        "type": "object",
+        "description": "One vendor's orders on one trading day.",
+        "required": [
+          "business_date",
+          "vendor_id",
+          "vendor_name",
+          "currency_code",
+          "orders",
+          "gross",
+          "commission_bps",
+          "commission",
+          "net"
+        ],
+        "properties": {
+          "business_date": {
+            "type": "string",
+            "description": "The store's trading day, `YYYY-MM-DD`."
+          },
+          "commission": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The commission at that rate, rounded half up to the minor unit."
+          },
+          "commission_bps": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The vendor's commission rate the store's configuration gives, in basis points.",
+            "minimum": 0
+          },
+          "currency_code": {
+            "type": "string",
+            "description": "ISO 4217 code of the amounts."
+          },
+          "gross": {
+            "type": "integer",
+            "format": "int64",
+            "description": "What they took, tax included, in minor units: the bills, gross."
+          },
+          "net": {
+            "type": "integer",
+            "format": "int64",
+            "description": "What the store expects the vendor to pay out: `gross - commission`."
+          },
+          "orders": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Settled orders.",
+            "minimum": 0
+          },
+          "vendor_id": {
+            "type": "string",
+            "description": "The vendor: the delivery connection's id."
+          },
+          "vendor_name": {
+            "type": "string",
+            "description": "What the store calls it, or empty for a vendor the store no longer lists."
           }
         }
       },

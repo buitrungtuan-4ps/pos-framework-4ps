@@ -234,6 +234,7 @@ mod tests {
             price_source: pos_proto::Open::default(),
             price_difference_bps: 0,
             payment: pos_proto::Open::default(),
+            commission_bps: 0,
         }
     }
 
