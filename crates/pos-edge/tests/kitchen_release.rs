@@ -10,14 +10,17 @@
 //! the box rather than a person, and a rebuilt edge reads the lines as sent.
 
 use std::num::NonZeroU32;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use pos_core::decision::Actor;
 use pos_core::menu::PricedLine;
+use pos_edge::printing::{PrintOutcome, Printers, TransportFactory};
 use pos_edge::{Edge, EdgeSession, InMemoryReceipts, InboundOrderOpened, StoreIdentity};
 use pos_fakes::FakeStore;
 use pos_fakes::executor::run_ready;
+use pos_ports::PortError;
 use pos_ports::event_store::{EventQuery, EventStore};
+use pos_proto::devices::{DeviceConnection, DeviceKind, PublishedDevice, PublishedDevices};
 use pos_proto::floor::{KitchenStation, StationPlan};
 use pos_proto::ids::{DeviceId, EmployeeId, MenuItemId, StationId, StoreId, TableId};
 use pos_proto::kitchen_release::KitchenRelease;
@@ -28,6 +31,7 @@ use pos_proto::quantity::Quantity;
 use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
 use pos_proto::{Open, OrderLineState, SalesChannel};
+use printer_escpos::{Transport, TransportStatus, Unreachable};
 
 fn waiter() -> Actor {
     Actor {
@@ -88,7 +92,60 @@ fn session(release: KitchenRelease) -> EdgeSession {
         ..PublishedQr::default()
     };
     session.qr_staff_confirmation_required = true;
+    session.devices = PublishedDevices::new(vec![kitchen_printer(station)]);
     session
+}
+
+/// The pizza station's ticket printer.
+fn kitchen_printer(station: StationId) -> PublishedDevice {
+    PublishedDevice {
+        device_id: DeviceId::new(Ulid::from_u128(0x9100)),
+        kind: DeviceKind::Printer.into(),
+        connection: DeviceConnection::Network.into(),
+        address: "192.0.2.10:9100".to_owned(),
+        name: DisplayName::new("Pizza"),
+        station_id: Some(station),
+        agent_device_id: None,
+        drawer_attached: false,
+        paper_width: Open::default(),
+        cuts_paper: None,
+        receipt_printer_id: None,
+        receipt_language: Open::default(),
+        receipt_second_language: Open::default(),
+        opening_float_minor: None,
+        device_class: Open::default(),
+    }
+}
+
+/// What the printer received, one entry per job.
+#[derive(Debug, Default)]
+struct Paper(Mutex<Vec<Vec<u8>>>);
+
+#[derive(Debug)]
+struct PaperRoll(Arc<Paper>);
+
+impl Transport for PaperRoll {
+    fn write(&self, bytes: &[u8]) -> Result<(), Unreachable> {
+        self.0
+            .0
+            .lock()
+            .map_err(|_| Unreachable)?
+            .push(bytes.to_vec());
+        Ok(())
+    }
+
+    fn probe(&self) -> Result<TransportStatus, Unreachable> {
+        Ok(TransportStatus::default())
+    }
+}
+
+#[derive(Debug)]
+struct PaperRolls(Arc<Paper>);
+
+impl TransportFactory for PaperRolls {
+    fn open(&self, _device: &PublishedDevice) -> Result<Box<dyn Transport>, PortError> {
+        Ok(Box::new(PaperRoll(Arc::clone(&self.0))))
+    }
 }
 
 fn edge_over(store: FakeStore, release: KitchenRelease) -> Edge<FakeStore> {
@@ -204,4 +261,41 @@ fn auto_accept_and_fire_holds_nothing_and_sends_with_the_order() {
         rebuilt.rebuild().await.expect("rebuilds");
         assert_eq!(rebuilt.line_state(line), Some(OrderLineState::Fired));
     });
+}
+
+/// A kitchen with printers and no screen sees an order sent on arrival: the store prints a ticket
+/// for each line it sent when it takes the order, once (ADR-0247).
+#[tokio::test]
+async fn an_order_sent_on_arrival_prints_its_kitchen_tickets_once() {
+    {
+        let edge = edge_over(FakeStore::default(), KitchenRelease::AutoAcceptAndFire);
+        let paper = Arc::new(Paper::default());
+        let printers = Printers::over(Arc::new(PaperRolls(Arc::clone(&paper))));
+        let opened = a_guest_order(&edge).await;
+        let first =
+            pos_edge::delivery_slips::print_sent_tickets(&printers, &edge, opened.order_id).await;
+        assert_eq!(first, [PrintOutcome::Printed]);
+        let jobs = paper.0.lock().expect("the paper").len();
+        assert_eq!(jobs, 1, "one ticket for the one line");
+        let _again =
+            pos_edge::delivery_slips::print_sent_tickets(&printers, &edge, opened.order_id).await;
+        assert_eq!(
+            paper.0.lock().expect("the paper").len(),
+            1,
+            "taking the order again prints nothing new"
+        );
+    }
+}
+
+/// Under two steps nothing is sent on arrival, so nothing prints until staff send it.
+#[tokio::test]
+async fn an_order_that_waits_prints_no_ticket_on_arrival() {
+    {
+        let edge = edge_over(FakeStore::default(), KitchenRelease::ConfirmThenSend);
+        let printers = Printers::over(Arc::new(PaperRolls(Arc::new(Paper::default()))));
+        let opened = a_guest_order(&edge).await;
+        let printed =
+            pos_edge::delivery_slips::print_sent_tickets(&printers, &edge, opened.order_id).await;
+        assert!(printed.is_empty());
+    }
 }

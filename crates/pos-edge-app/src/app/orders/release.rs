@@ -15,7 +15,10 @@ use pos_proto::ids::{DeviceId, EmployeeId, OrderLineId};
 use pos_proto::time::{BusinessDate, Timestamp};
 
 use crate::app::kitchen::PreparedFires;
-use crate::app::{Edge, LineRecord};
+use pos_proto::OrderLineState;
+use pos_proto::ids::OrderId;
+
+use crate::app::{Edge, FiredLine, LineRecord, LineView};
 
 impl<S: EventStore> Edge<S> {
     /// The fires of an order accepted on arrival: each line of `records` to the station the
@@ -86,5 +89,32 @@ impl<S: EventStore> Edge<S> {
             applied.push((*order_line_id, record.clone(), station_id, decision));
         }
         Some((ctx, (envelopes, messages, applied)))
+    }
+
+    /// The lines of `order_id` already sent to the kitchen, each with what its ticket says: for the
+    /// tickets of an order accepted and sent on arrival (ADR-0247), which no person's send prints.
+    /// A ticket's job id is its line's, so printing a line twice prints one ticket.
+    #[must_use]
+    pub fn sent_lines(&self, order_id: OrderId) -> Vec<LineView> {
+        self.lock_projection()
+            .identified_lines_for_order(order_id)
+            .into_iter()
+            .filter(|(_, record)| record.state == OrderLineState::Fired)
+            .filter_map(|(order_line_id, record)| {
+                let station_id = record.station_id?;
+                Some(LineView {
+                    order_id: record.order_id,
+                    order_line_id,
+                    state: record.state,
+                    fired: Some(FiredLine {
+                        station_id,
+                        menu_item_id: record.menu_item_id,
+                        quantity: record.quantity,
+                        modifier_menu_item_ids: record.modifier_menu_item_ids,
+                        note_present: record.note_present,
+                    }),
+                })
+            })
+            .collect()
     }
 }
