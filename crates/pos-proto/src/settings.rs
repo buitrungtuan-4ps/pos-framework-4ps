@@ -25,6 +25,7 @@
 use crate::wire_enum;
 use crate::wire_enum::WireEnum;
 
+mod correction_nodes;
 mod einvoice_nodes;
 mod kitchen_nodes;
 mod nodes;
@@ -389,6 +390,7 @@ pub fn register() -> Vec<Setting> {
         nodes::billing_settings(),
         einvoice_nodes::einvoice_settings(),
         einvoice_nodes::card_confirm_settings(),
+        correction_nodes::correction_settings(),
         nodes::package_settings(),
     ]
     .into_iter()

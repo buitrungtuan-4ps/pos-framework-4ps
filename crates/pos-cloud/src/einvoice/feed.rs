@@ -5,7 +5,8 @@
 //! ([ADR-0241](../../../../docs/adr/0241-the-cloud-submits-each-issued-invoice-from-the-log-and-keeps-its-state.md)).
 //!
 //! Each tick reads every active store's log after the cursor it keeps, records each
-//! `fiscal.invoice.issued` once as `PENDING`, then submits a bounded page of due invoices through
+//! `fiscal.invoice.issued` once as `PENDING`, corrects the invoice of each `billing.bill.voided` bill
+//! that has one ([`super::corrections`], ADR-0245), then submits a bounded page of due invoices through
 //! the provider with #1350's retry rule ([`super::submitter`]): a failure that may pass is retried
 //! with a doubling wait, a refusal stops. Nothing personal is kept: the buyer is a subject id.
 
@@ -22,7 +23,7 @@ use pos_ports::fiscalization::{
 };
 use pos_proto::determinism::ClockSource;
 use pos_proto::einvoice::EInvoiceKind;
-use pos_proto::events::{EventType, FiscalInvoiceIssued};
+use pos_proto::events::{BillingBillVoided, EventType, FiscalInvoiceIssued};
 use pos_proto::ids::{BillId, EventId, StoreId, TenantId};
 use pos_proto::money::{CurrencyCode, Money};
 use pos_proto::time::CalendarDate;
@@ -30,6 +31,7 @@ use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::WireEnum as _;
 use store_postgres::SubmissionRow;
 
+use super::corrections::{Corrector, correct_voided_bill};
 use super::submitter::{retry_wait_seconds, retryable};
 use crate::dashboard::projector::StoreCatalog;
 
@@ -80,6 +82,13 @@ pub trait SubmissionStore: Send + Sync + core::fmt::Debug {
         tenant: TenantId,
         number: String,
     ) -> FeedFuture<'_, Vec<SubmissionRow>>;
+    /// The original invoice the store issued for the bill, if any (ADR-0245).
+    fn original_for_bill(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        bill_id: String,
+    ) -> FeedFuture<'_, Option<SubmissionRow>>;
 }
 
 fn text<E: core::fmt::Display>(error: E) -> FeedError {
@@ -166,6 +175,19 @@ impl SubmissionStore for store_postgres::PostgresEInvoiceSubmissions {
     ) -> FeedFuture<'_, Vec<SubmissionRow>> {
         Box::pin(async move {
             Self::corrections_of(self, &tenant.to_string(), &number)
+                .await
+                .map_err(text)
+        })
+    }
+
+    fn original_for_bill(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        bill_id: String,
+    ) -> FeedFuture<'_, Option<SubmissionRow>> {
+        Box::pin(async move {
+            Self::original_for_bill(self, &tenant.to_string(), &store.to_string(), &bill_id)
                 .await
                 .map_err(text)
         })
@@ -314,6 +336,27 @@ impl SubmissionStore for InMemorySubmissions {
         });
         Box::pin(async move { found })
     }
+
+    fn original_for_bill(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        bill_id: String,
+    ) -> FeedFuture<'_, Option<SubmissionRow>> {
+        let (tenant, store) = (tenant.to_string(), store.to_string());
+        let found = self.rows().map(|rows| {
+            rows.values()
+                .filter(|row| {
+                    row.tenant_id == tenant
+                        && row.store_id == store
+                        && row.bill_id == bill_id
+                        && row.corrects_invoice_number.is_none()
+                })
+                .min_by_key(|row| row.recorded_at_ms)
+                .cloned()
+        });
+        Box::pin(async move { found })
+    }
 }
 
 /// Waiting for its first attempt.
@@ -385,8 +428,8 @@ pub fn issued_row(
     }
 }
 
-/// Reads one store's log after its cursor, records each issued invoice, and moves the cursor.
-/// Returns how many invoices were new.
+/// Reads one store's log after its cursor, records each issued invoice and the correction of each
+/// voided bill's invoice, and moves the cursor. Returns how many invoices were new.
 ///
 /// # Errors
 ///
@@ -394,6 +437,7 @@ pub fn issued_row(
 pub async fn feed_store<E: EventStore>(
     events: &E,
     submissions: &dyn SubmissionStore,
+    corrector: &Corrector,
     tenant: TenantId,
     store: StoreId,
     now_ms: i64,
@@ -411,6 +455,21 @@ pub async fn feed_store<E: EventStore>(
             break;
         };
         for event in &read {
+            if event.event_type.as_str() == EventType::BillingBillVoided.as_str() {
+                let Ok(voided) = event.data.decode::<BillingBillVoided>() else {
+                    continue;
+                };
+                let now = pos_proto::time::Timestamp::from_milliseconds_since_epoch(now_ms)
+                    .map_err(text)?;
+                let bill = voided.bill_id.to_string();
+                let void_event = event.event_id.as_ulid();
+                if correct_voided_bill(corrector, submissions, tenant, store, bill, void_event, now)
+                    .await?
+                {
+                    recorded = recorded.saturating_add(1);
+                }
+                continue;
+            }
             if event.event_type.as_str() != EventType::FiscalInvoiceIssued.as_str() {
                 continue;
             }
@@ -527,6 +586,7 @@ pub async fn pass<E, K, F>(
     events: &E,
     catalog: &K,
     submissions: &dyn SubmissionStore,
+    corrector: &Corrector,
     provider: &F,
     now_ms: i64,
 ) -> Result<SubmitReport, FeedError>
@@ -537,7 +597,8 @@ where
 {
     let stores = catalog.active_stores().await.map_err(text)?;
     for (tenant, store) in stores {
-        if let Err(error) = feed_store(events, submissions, tenant, store, now_ms).await {
+        if let Err(error) = feed_store(events, submissions, corrector, tenant, store, now_ms).await
+        {
             tracing::warn!(%error, store = %store, "the e-invoice feed could not read a store this pass");
         }
     }
@@ -549,6 +610,7 @@ pub async fn run<E, K, F, C>(
     events: E,
     catalog: K,
     submissions: Arc<dyn SubmissionStore>,
+    corrector: Corrector,
     provider: F,
     clock: C,
     shutdown: impl Future<Output = ()>,
@@ -561,7 +623,16 @@ pub async fn run<E, K, F, C>(
     tokio::pin!(shutdown);
     loop {
         let now_ms = clock.now().as_milliseconds_since_epoch();
-        match pass(&events, &catalog, submissions.as_ref(), &provider, now_ms).await {
+        match pass(
+            &events,
+            &catalog,
+            submissions.as_ref(),
+            &corrector,
+            &provider,
+            now_ms,
+        )
+        .await
+        {
             Ok(report) if report != SubmitReport::default() => {
                 tracing::info!(?report, "e-invoice submission pass");
             }

@@ -133,6 +133,13 @@ pub(crate) fn einvoice_submitter(store: &PostgresStore) -> JoinHandle<()> {
         store.clone(),
         store.clone(),
         Arc::new(store.einvoice_submissions()),
+        // A void of an invoiced bill is corrected under the store's `einvoice.correction_kind`.
+        pos_cloud::einvoice::corrections::Corrector {
+            settings: Arc::new(pos_cloud::einvoice::corrections::Trees(
+                store.config_trees(),
+            )),
+            ledger: Arc::new(store.einvoice_symbols()),
+        },
         provider,
         SystemClock,
         shutdown_signal(),

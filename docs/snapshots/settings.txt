@@ -92,6 +92,16 @@ einvoice.batch_minute	scope=SETTING_SCOPE_STORE_GROUP
 einvoice.batch_minute	scope=SETTING_SCOPE_TENANT
 einvoice.batch_minute	since=0.14.1
 einvoice.batch_minute	unit=SETTING_UNIT_MINUTES
+einvoice.correction_kind
+einvoice.correction_kind	default=EINVOICE_KIND_ADJUSTMENT
+einvoice.correction_kind	kind=SETTING_KIND_CHOICE
+einvoice.correction_kind	scope=SETTING_SCOPE_BRAND
+einvoice.correction_kind	scope=SETTING_SCOPE_STORE
+einvoice.correction_kind	scope=SETTING_SCOPE_STORE_GROUP
+einvoice.correction_kind	scope=SETTING_SCOPE_TENANT
+einvoice.correction_kind	since=0.14.1
+einvoice.correction_kind	value=EINVOICE_KIND_ADJUSTMENT
+einvoice.correction_kind	value=EINVOICE_KIND_REPLACEMENT
 einvoice.delay_minutes
 einvoice.delay_minutes	default=0
 einvoice.delay_minutes	kind=SETTING_KIND_INT

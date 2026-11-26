@@ -139,3 +139,55 @@ fn the_corrections_of_an_invoice_are_read_in_order() {
         assert!(other.is_empty(), "another tenant's are not read");
     });
 }
+
+/// A bill's original invoice is found by its bill, never a correction of it, and in its store only
+/// (ADR-0245, migration 0108).
+#[test]
+fn a_bills_original_invoice_is_found_by_its_bill() {
+    // Its own store and late due times, since the other tests here read the same table.
+    const OWN_STORE: &str = "01J0000000000000000000STR3";
+    block_on(async {
+        let (store, _admin) = prepared().await.expect("prepare the database");
+        let submissions = store.einvoice_submissions();
+        let bill = "01J00000000000000000000BL1";
+        assert_eq!(
+            submissions
+                .original_for_bill(TENANT_A, OWN_STORE, bill)
+                .await
+                .expect("reads"),
+            None
+        );
+        let correction = SubmissionRow {
+            invoice_number: "1K26TAA/00000001".to_owned(),
+            kind: "ADJUSTMENT".to_owned(),
+            corrects_invoice_number: Some("1C26MAA/00000007".to_owned()),
+            store_id: OWN_STORE.to_owned(),
+            ..row("00000008", 9_000_000_005)
+        };
+        submissions.record(&correction).await.expect("records");
+        submissions
+            .record(&SubmissionRow {
+                store_id: OWN_STORE.to_owned(),
+                ..row("00000007", 9_000_000_010)
+            })
+            .await
+            .expect("records");
+        let found = submissions
+            .original_for_bill(TENANT_A, OWN_STORE, bill)
+            .await
+            .expect("reads");
+        assert_eq!(
+            found.map(|row| row.invoice_number),
+            Some("1C26MAA/00000007".to_owned())
+        );
+        for (tenant, store_id) in [(TENANT_B, OWN_STORE), (TENANT_A, STORE)] {
+            assert_eq!(
+                submissions
+                    .original_for_bill(tenant, store_id, bill)
+                    .await
+                    .expect("reads"),
+                None
+            );
+        }
+    });
+}

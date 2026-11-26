@@ -339,6 +339,35 @@ impl PostgresEInvoiceSubmissions {
     }
 }
 
+impl PostgresEInvoiceSubmissions {
+    /// The original invoice the store issued for `bill_id`, if any (ADR-0245, migration 0108).
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn original_for_bill(
+        &self,
+        tenant_id: &str,
+        store_id: &str,
+        bill_id: &str,
+    ) -> Result<Option<SubmissionRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let row = connection
+            .query_opt(
+                &format!(
+                    "SELECT {COLUMNS} FROM einvoice_submissions \
+                     WHERE tenant_id = $1 AND store_id = $2 AND bill_id = $3 \
+                     AND corrects_invoice_number IS NULL \
+                     ORDER BY recorded_at_ms LIMIT 1"
+                ),
+                &[&tenant_id, &store_id, &bill_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(row.as_ref().map(from_row))
+    }
+}
+
 impl crate::PostgresStore {
     /// The e-invoice submissions over this pool (ADR-0241, migration 0106). Here rather than in
     /// `store.rs`, which is at its size baseline.
