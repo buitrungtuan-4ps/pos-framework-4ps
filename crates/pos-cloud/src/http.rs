@@ -113,6 +113,7 @@ pub(crate) mod config_nodes;
 pub(crate) mod config_publish;
 pub(crate) mod countries;
 mod custom_values;
+mod delivery_reconciliation;
 pub(crate) mod einvoices;
 pub(crate) mod fleet;
 mod grid_keys;
@@ -191,6 +192,8 @@ pub use custom_values::custom_value_report_router;
 pub(crate) use custom_values::{
     __path_admin_custom_value_summary, __path_admin_custom_value_summary_csv,
 };
+pub(crate) use delivery_reconciliation::__path_admin_delivery_reconciliation;
+use delivery_reconciliation::admin_delivery_reconciliation;
 pub(crate) use devices::{
     __path_admin_revoke_device, __path_admin_set_printer_paper,
     __path_admin_set_terminal_device_class, __path_admin_set_terminal_float,

@@ -3271,5 +3271,13 @@
   "provider.field.payment": "Khách của app này thanh toán ở đâu",
   "provider.field.payment.VENDOR_PAYMENT_IN_APP": "Trong app (hóa đơn được thanh toán khi cửa hàng nhận đơn)",
   "provider.field.payment.VENDOR_PAYMENT_AT_STORE": "Tại cửa hàng (thu tiền tại quầy)",
-  "reports.tenderVendor": "Thanh toán qua app giao hàng"
+  "reports.tenderVendor": "Thanh toán qua app giao hàng",
+  "reports.deliveryTitle": "App giao hàng: đối soát",
+  "reports.deliveryEmpty": "Không có đơn app giao hàng nào được thanh toán trong khoảng này.",
+  "reports.deliveryVendor": "App",
+  "reports.deliveryOrders": "Số đơn",
+  "reports.deliveryGross": "Đã thanh toán (gộp)",
+  "reports.deliveryCommission": "Hoa hồng",
+  "reports.deliveryNet": "Thực nhận dự kiến",
+  "provider.field.commission_bps": "Hoa hồng của app này (điểm cơ bản, 100 = 1%), chỉ để đối soát; hóa đơn vẫn giữ giá gộp"
 }

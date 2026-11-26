@@ -22,6 +22,7 @@ import { Banner, Button, Card, PageHeader } from "../components/ui";
 import { DateField, DateRange, Toolbar } from "../components/kit";
 import { DrawerTable } from "./reports/DrawerTable";
 import { XzCash } from "./reports/XzCash";
+import { DeliveryReconciliation } from "./reports/Delivery";
 import { apiMessage } from "../lib/errors";
 import type {
   DailyRevenue,
@@ -125,10 +126,7 @@ export function Reports() {
 
   const win = () => ({ from: from() || undefined, to: to() || undefined });
 
-  const fail = (caught: unknown) => {
-    const message = apiMessage(caught);
-    setError(message);
-  };
+  const fail = (caught: unknown) => setError(apiMessage(caught));
 
   /**
    * The windowed read: activity for everyone, revenue for a role that may see money.
@@ -622,6 +620,7 @@ export function Reports() {
               </Show>
               <Show when={xz()}>{(report) => <XzExtras report={report()} />}</Show>
             </Card>
+            <DeliveryReconciliation window={win} />
 
           </Show>
         </div>

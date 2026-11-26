@@ -15,10 +15,11 @@ pub mod mix;
 pub mod projection;
 pub mod rollup;
 pub mod tenders;
+pub mod vendors;
 pub mod voids;
 
 pub use projection::{
     ProjectReport, RollupError, RollupStore, StoredRollups, admitted_devices, dashboard, project,
-    revenue, xz_report,
+    revenue, vendor_days, xz_report,
 };
 pub use rollup::RollupWindow;

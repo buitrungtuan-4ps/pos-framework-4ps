@@ -57,6 +57,7 @@ fn edge_paid(payment: &str) -> (Arc<Edge<FakeStore>>, FakeStore) {
         kitchen_release: Open::default(),
         price_source: Open::default(),
         price_difference_bps: 0,
+        commission_bps: 0,
         payment: Open::parse(payment),
     }]);
     let log = FakeStore::default();

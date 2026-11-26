@@ -107,6 +107,15 @@ pub static PROVIDER: ProviderDescriptor = ProviderDescriptor {
             required: false,
         },
         SettingField {
+            key: super::vendors::COMMISSION_BPS,
+            label_key: "provider.field.commission_bps",
+            kind: FieldKind::Number {
+                min: 0,
+                max: pos_proto::vendors::MAX_PRICE_DIFFERENCE_BPS as i64,
+            },
+            required: false,
+        },
+        SettingField {
             key: WEBHOOK_SECRET,
             label_key: "provider.field.webhook_secret",
             kind: FieldKind::Secret { max_len: 128 },

@@ -13,10 +13,10 @@ use super::{
     admin_accept_invite, admin_admitted_devices, admin_config_effective, admin_config_nodes,
     admin_config_publish, admin_config_rollback, admin_config_version_effective,
     admin_config_versions, admin_create_api_key, admin_daily_rollups, admin_delete_webhook,
-    admin_enable_webhook, admin_export_revenue, admin_export_revenue_fees,
-    admin_export_revenue_tax, admin_export_rollups, admin_generate_recovery_codes,
-    admin_invite_admin, admin_list_admins, admin_list_api_keys, admin_list_invites,
-    admin_list_sessions, admin_list_webhooks, admin_login, admin_logout,
+    admin_delivery_reconciliation, admin_enable_webhook, admin_export_revenue,
+    admin_export_revenue_fees, admin_export_revenue_tax, admin_export_rollups,
+    admin_generate_recovery_codes, admin_invite_admin, admin_list_admins, admin_list_api_keys,
+    admin_list_invites, admin_list_sessions, admin_list_webhooks, admin_login, admin_logout,
     admin_recovery_codes_status, admin_reenrol_totp, admin_register_webhook, admin_revenue_daily,
     admin_revoke_api_key, admin_revoke_invite, admin_revoke_other_sessions, admin_revoke_session,
     admin_rollups_reset, admin_session, admin_set_admin_role, admin_set_admin_status, admin_setup,
@@ -263,6 +263,10 @@ where
         .route(
             "/admin/stores/{store_id}/devices/admitted",
             get(admin_admitted_devices::<S, R, K, C, A, T, W>),
+        )
+        .route(
+            "/admin/stores/{store_id}/delivery/reconciliation",
+            get(admin_delivery_reconciliation::<S, R, K, C, A, T, W>),
         )
         .route(
             "/admin/stores/{store_id}/revenue/daily",

@@ -370,6 +370,7 @@ fn fake_vendor(staff_confirm: bool) -> PublishedVendors {
         price_source: pos_proto::Open::default(),
         price_difference_bps: 0,
         payment: pos_proto::Open::default(),
+        commission_bps: 0,
     }])
 }
 
