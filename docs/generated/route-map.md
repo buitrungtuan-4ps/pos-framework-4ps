@@ -107,6 +107,7 @@ From [`docs/openapi-edge.json`](../openapi-edge.json).
 | GET | `/api/tables/{id}/check` | `table_check` | `till_session` | — | [`crates/pos-edge/src/http/check.rs`](../../crates/pos-edge/src/http/check.rs) |
 | POST | `/api/tables/{id}/check/print` | `print_table_check` | `till_session` | `billing.bill.open` | [`crates/pos-edge/src/http/check.rs`](../../crates/pos-edge/src/http/check.rs) |
 | POST | `/api/tables/{id}/clean` | `clean_table` | `till_session` | `sales.table.manage` | [`crates/pos-edge/src/http/tables.rs`](../../crates/pos-edge/src/http/tables.rs) |
+| POST | `/api/tables/{id}/guests` | `count_guests` | `till_session` | `sales.table.manage` | [`crates/pos-edge/src/http/tables.rs`](../../crates/pos-edge/src/http/tables.rs) |
 | POST | `/api/tables/{id}/lines` | `add_table_line` | `till_session` | `sales.line.add` | [`crates/pos-edge/src/http/lines.rs`](../../crates/pos-edge/src/http/lines.rs) |
 | POST | `/api/tables/{id}/release` | `release_table` | `till_session` | `sales.table.manage` | [`crates/pos-edge/src/http/tables.rs`](../../crates/pos-edge/src/http/tables.rs) |
 | POST | `/api/tables/{id}/seat` | `seat_table` | `till_session` | `sales.table.manage` | [`crates/pos-edge/src/http/tables.rs`](../../crates/pos-edge/src/http/tables.rs) |
