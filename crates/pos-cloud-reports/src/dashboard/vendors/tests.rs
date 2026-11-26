@@ -95,3 +95,91 @@ fn the_orders_waiting_for_a_settle_are_bounded() {
     assert_eq!(kept.orders.len(), MAX_WAITING);
     assert!(!kept.orders.contains_key(&id(1)), "the oldest went first");
 }
+
+fn voided(bill: u128) -> EventEnvelope<RawPayload> {
+    event(
+        EventType::BillingBillVoided,
+        &json!({ "bill_id": id(bill), "reason_code_id": id(99) }),
+    )
+}
+
+fn the_day(kept: &KeptVendors) -> Option<VendorDay> {
+    kept.days
+        .values()
+        .next()
+        .and_then(|day| day.get(VENDOR).cloned())
+}
+
+/// A paid delivery bill voided after payment comes back out of the day it was counted on; a bill
+/// voided before it was paid takes nothing out, and its order still counts when billed again.
+#[test]
+fn a_paid_bill_voided_later_comes_back_out_of_its_day() {
+    let mut kept = KeptVendors::default();
+    for event in [
+        opened(1, Some(VENDOR)),
+        bill(11, 1),
+        settled(11, 132_000),
+        opened(2, Some(VENDOR)),
+        bill(12, 2),
+        settled(12, 110_000),
+        voided(11),
+        opened(3, Some(VENDOR)),
+        bill(13, 3),
+        voided(13),
+        bill(14, 3),
+        settled(14, 50_000),
+    ] {
+        fold_vendors(&mut kept, &event);
+    }
+    assert_eq!(
+        the_day(&kept),
+        Some(VendorDay {
+            orders: 2,
+            gross: 160_000,
+            currency_code: "VND".to_owned(),
+        }),
+        "order 1 taken back out; order 3 counted once, at its second bill"
+    );
+    assert!(kept.settled.contains_key(&id(12)) && !kept.settled.contains_key(&id(11)));
+}
+
+/// Every part of a split delivery bill counts toward its vendor, and the order counts once, with
+/// its last part; a part voided after payment takes only its own amount back out.
+#[test]
+fn every_part_of_a_split_bill_counts_and_the_order_counts_once() {
+    let mut kept = KeptVendors::default();
+    let split = event(
+        EventType::BillingBillSplit,
+        &json!({ "source_bill_id": id(11), "resulting_bill_ids": [id(21), id(22), id(23)] }),
+    );
+    for event in [
+        opened(1, Some(VENDOR)),
+        bill(11, 1),
+        split,
+        settled(21, 40_000),
+    ] {
+        fold_vendors(&mut kept, &event);
+    }
+    assert_eq!(
+        the_day(&kept).map(|day| (day.orders, day.gross)),
+        Some((0, 40_000))
+    );
+    for event in [settled(22, 50_000), settled(23, 42_000)] {
+        fold_vendors(&mut kept, &event);
+    }
+    assert_eq!(
+        the_day(&kept).map(|day| (day.orders, day.gross)),
+        Some((1, 132_000))
+    );
+    fold_vendors(&mut kept, &voided(22));
+    assert_eq!(
+        the_day(&kept).map(|day| (day.orders, day.gross)),
+        Some((1, 82_000))
+    );
+    fold_vendors(&mut kept, &voided(23));
+    assert_eq!(
+        the_day(&kept).map(|day| (day.orders, day.gross)),
+        Some((0, 40_000)),
+        "the part that counted the order takes it back out"
+    );
+}
