@@ -15,6 +15,9 @@ use pos_proto::{BillState, Open, SalesChannel, TableState};
 
 use crate::app::{AppError, Edge, TableView, TransferView};
 
+/// The catalogue act whose route seats a table and opens its order (ADR-0244).
+const SEAT_ACT: &str = "sales.table.seat";
+
 impl<S: EventStore> Edge<S> {
     /// When the guests at a table sat down, or `None` when nobody is sitting there.
     ///
@@ -92,6 +95,7 @@ impl<S: EventStore> Edge<S> {
             vendor_id: None,
             subject_id: None,
             tab_number: None,
+            opened_by_action_id: Some(pos_proto::ActionKey::new(SEAT_ACT)),
         };
         let (table_envelope, table_message) = self.prepare(&ctx, &table_opened)?;
         let (order_envelope, order_message) = self.prepare(&ctx, &order_opened)?;
@@ -108,6 +112,7 @@ impl<S: EventStore> Edge<S> {
             projection.open_order(table_id, order_id);
             projection.open_order_origin(order_id, Some(channel), Some(table_id));
             projection.record_opened(order_id, guest_count, package_version_id);
+            projection.record_opening_act(order_id, Some(pos_proto::ActionKey::new(SEAT_ACT)));
         }
         Ok(TableView {
             table_id,

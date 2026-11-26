@@ -315,6 +315,7 @@ impl<S: EventStore> Edge<S> {
         // guessed variant would tax a bill at a rate nobody chose.
         projection.open_order_origin(event.order_id, event.channel.require().ok(), event.table_id);
         projection.record_opened(event.order_id, event.guest_count, event.package_version_id);
+        projection.record_opening_act(event.order_id, event.opened_by_action_id);
         projection.record_recipient(event.order_id, event.subject_id);
         projection.record_vendor(event.order_id, event.vendor_id);
         projection.record_tab(event.order_id, event.tab_number);

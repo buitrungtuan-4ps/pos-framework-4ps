@@ -3239,5 +3239,14 @@
   "settings.item.billing.card_confirm_approval.title": "Xác nhận thẻ chưa rõ kết quả bằng tay",
   "settings.item.billing.card_confirm_approval.help": "Ai phải đồng ý trước khi một thẻ mà máy quẹt chưa trả kết quả được ghi là đã thanh toán theo phiếu của máy. Mặc định là quản lý, nhập mã nhân viên và mã PIN như khi hủy hóa đơn. Chọn không ai cho phép thu ngân tự xác nhận; nên đối chiếu hằng ngày với bảng kết toán của máy quẹt.",
   "settings.value.CARD_CONFIRM_APPROVAL_MANAGER": "Quản lý",
-  "settings.value.CARD_CONFIRM_APPROVAL_NONE": "Không ai khác"
+  "settings.value.CARD_CONFIRM_APPROVAL_NONE": "Không ai khác",
+  "flow.scope.label": "Kiểm tra của cửa hàng áp dụng cho",
+  "flow.scope.hint": "Những đơn mà các bước cửa hàng kiểm tra có thể chặn.",
+  "flow.scope.FLOW_GUARD_SCOPE_ENTERED": "Chỉ đơn bắt đầu bằng flow này",
+  "flow.scope.FLOW_GUARD_SCOPE_CHANNELS": "Đơn thuộc các kênh đã chọn",
+  "flow.scope.FLOW_GUARD_SCOPE_ALL_ORDERS": "Mọi đơn",
+  "flow.scope.warnAll": "Kiểm tra: bước cửa hàng kiểm tra sẽ chặn mọi đơn có thao tác này, kể cả đơn không bắt đầu bằng flow này như đơn quầy, mang về và giao hàng.",
+  "flow.scope.warnChannels": "Kiểm tra: bước cửa hàng kiểm tra sẽ chặn mọi đơn thuộc các kênh đã chọn, kể cả đơn không bắt đầu bằng flow này.",
+  "flow.scope.warnNoChannel": "Kiểm tra: hãy chọn ít nhất một kênh, nếu không kiểm tra của cửa hàng không áp dụng cho đơn nào.",
+  "flow.scope.warnTillOnly": "Kiểm tra: flow này bắt đầu bằng thao tác không mở đơn, nên cửa hàng không biết đơn nào đã vào flow. Các bước kiểm tra chỉ hướng dẫn trên máy bán hàng, cửa hàng không bắt buộc."
 }

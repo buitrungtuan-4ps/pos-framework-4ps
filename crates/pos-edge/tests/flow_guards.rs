@@ -7,6 +7,11 @@
 //! seated without one, with `FLOW_PREREQUISITE_UNMET` naming the step, and takes it once the count
 //! is there. A store with no package, or a takeaway the guard does not apply to, is untouched.
 //!
+//! A flow's guards apply only to the orders its scope takes in
+//! ([ADR-0244](../../../docs/adr/0244-a-flows-guards-apply-to-the-orders-it-governs.md)): by
+//! default those its start act opened, so a dine-in flow seated at a table never refuses a counter
+//! order; under `ALL_ORDERS` or `CHANNELS` it does, as the flow says.
+//!
 //! An order keeps the rules of the version it opened under (decision 5): a publish while it is open
 //! does not change them, unless the edge has had to let that version go, when the order is checked
 //! under the current one.
@@ -15,10 +20,11 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use pos_core::decision::Actor;
-use pos_edge::{AppError, Edge, EdgeSession, InMemoryReceipts, LineDraft, StoreIdentity};
+use pos_edge::{
+    AppError, Edge, EdgeSession, InMemoryReceipts, LineDraft, OrderLineChoice, StoreIdentity,
+};
 use pos_fakes::FakeStore;
 use pos_ports::event_store::{EventQuery, EventStore};
-use pos_proto::CurrencyCode;
 use pos_proto::events::SalesOrderOpened;
 use pos_proto::ids::{DeviceId, EmployeeId, MenuItemId, PackageVersionId, StoreId, TableId};
 use pos_proto::money::{Money, Ratio};
@@ -26,6 +32,7 @@ use pos_proto::package::PackageContent;
 use pos_proto::quantity::Quantity;
 use pos_proto::text::DisplayName;
 use pos_proto::ulid::Ulid;
+use pos_proto::{CurrencyCode, SalesChannel};
 
 fn server() -> Actor {
     Actor {
@@ -236,5 +243,123 @@ fn an_order_whose_version_was_let_go_is_checked_under_the_current_one() {
         edge.add_line(server(), table(5), a_pizza())
             .await
             .expect("version 5 is still held, and it has no guard");
+    });
+}
+
+/// A pizza as a counter order's line names it: the store's menu prices it after the guard.
+fn a_choice() -> OrderLineChoice {
+    OrderLineChoice {
+        menu_item_id: MenuItemId::new(Ulid::from_u128(500)),
+        quantity: Quantity::ONE,
+        modifier_menu_item_ids: Vec::new(),
+        seat: None,
+        course_id: None,
+        note_present: false,
+        typed_unit_price: None,
+        weight_source: None,
+    }
+}
+
+/// Whether a counter line got past the flow's guard: this store's empty menu then refuses the
+/// item, which it checks only after the guard.
+fn passed_the_guard(result: &Result<impl std::fmt::Debug, AppError>) -> bool {
+    matches!(result, Err(AppError::ItemNotSellable))
+}
+
+/// [`guest_count_first`] with its guard scope set to `scope`, and `channels` where it names some.
+fn scoped(scope: &str, channels: &[&str]) -> PackageContent {
+    let mut content = guest_count_first();
+    let flow = content
+        .flows
+        .first_mut()
+        .map(|variant| &mut variant.body)
+        .expect("a flow");
+    flow.guard_scope = serde_json::from_value(serde_json::json!(scope)).expect("a scope");
+    flow.guard_channels = channels
+        .iter()
+        .map(|token| serde_json::from_value(serde_json::json!(token)).expect("a channel"))
+        .collect();
+    content
+}
+
+/// The phase 10 defect: a dine-in flow that asks the guest count first refused every counter order,
+/// which no seat opened. By default it governs only the orders a seat opened (ADR-0244), and each
+/// `sales.order.opened` names the act that opened it.
+#[test]
+fn a_flow_governs_only_the_orders_its_start_act_opened_by_default() {
+    pos_fakes::executor::run_ready(async {
+        let store = FakeStore::default();
+        let edge = edge_over(store.clone(), Some(guest_count_first()));
+        let counter = edge
+            .open_counter_order(server(), SalesChannel::DineIn)
+            .await
+            .expect("opens");
+        let passed = edge
+            .add_line_to_order(server(), counter.order_id, a_choice())
+            .await;
+        assert!(passed_the_guard(&passed), "{passed:?}");
+        edge.seat_table(server(), table(0), None)
+            .await
+            .expect("seats");
+        let refused = edge.add_line(server(), table(0), a_pizza()).await;
+        assert!(refused_for_guests(&refused), "{refused:?}");
+
+        let query = EventQuery::first(store_id(), NonZeroU32::new(200).expect("a positive limit"));
+        let opened_by: Vec<Option<String>> = store
+            .read(&query)
+            .await
+            .expect("read the log")
+            .into_iter()
+            .filter(|envelope| envelope.event_type.as_str() == "sales.order.opened")
+            .map(|envelope| {
+                let event: SalesOrderOpened = envelope.data.decode().expect("decodes");
+                event.opened_by_action_id.map(|act| act.as_str().to_owned())
+            })
+            .collect();
+        assert_eq!(
+            opened_by,
+            [
+                Some("sales.order.open".to_owned()),
+                Some("sales.table.seat".to_owned())
+            ]
+        );
+    });
+}
+
+/// Under `ALL_ORDERS` the flow's guard refuses a counter order too, and under `CHANNELS` it
+/// refuses an order on a channel it names and lets another through.
+#[test]
+fn a_flow_scoped_wider_guards_the_orders_it_names() {
+    pos_fakes::executor::run_ready(async {
+        let all = edge(Some(scoped("FLOW_GUARD_SCOPE_ALL_ORDERS", &[])));
+        let counter = all
+            .open_counter_order(server(), SalesChannel::DineIn)
+            .await
+            .expect("opens");
+        let refused = all
+            .add_line_to_order(server(), counter.order_id, a_choice())
+            .await;
+        assert!(refused_for_guests(&refused), "{refused:?}");
+
+        let edge = edge(Some(scoped(
+            "FLOW_GUARD_SCOPE_CHANNELS",
+            &["SALES_CHANNEL_DINE_IN"],
+        )));
+        let dine_in = edge
+            .open_counter_order(server(), SalesChannel::DineIn)
+            .await
+            .expect("opens");
+        let refused = edge
+            .add_line_to_order(server(), dine_in.order_id, a_choice())
+            .await;
+        assert!(refused_for_guests(&refused), "{refused:?}");
+        let takeaway = edge
+            .open_counter_order(server(), SalesChannel::Takeaway)
+            .await
+            .expect("opens");
+        let passed = edge
+            .add_line_to_order(server(), takeaway.order_id, a_choice())
+            .await;
+        assert!(passed_the_guard(&passed), "{passed:?}");
     });
 }

@@ -133,6 +133,10 @@ struct Projection {
     /// The package version each open order opened under, where it opened under one: its flows and
     /// guards are that version's until it closes (ADR-0192 decision 5). Dropped when it closes.
     package_versions: HashMap<OrderId, PackageVersionId>,
+    /// The catalogue act that opened each open order, where one did: an order entered a flow its
+    /// opening act starts ([ADR-0244](../../../../docs/adr/0244-a-flows-guards-apply-to-the-orders-it-governs.md)).
+    /// Folded from `sales.order.opened`, dropped when the order closes.
+    opening_acts: HashMap<OrderId, pos_proto::ActionKey>,
     /// The subject each open delivery order names as its recipient
     /// ([ADR-0215](../../../../docs/adr/0215-a-delivery-order-names-its-vendor.md) decision 3): the
     /// id only, which the delivery slip reads the record by. Dropped when the order closes.

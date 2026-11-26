@@ -3239,5 +3239,14 @@
   "settings.item.billing.card_confirm_approval.title": "Confirming an unknown card by hand",
   "settings.item.billing.card_confirm_approval.help": "Who must agree before a card the terminal left unknown is recorded as paid from the terminal's slip. A manager, the default, types their badge and PIN, as for a void. Nobody else lets the cashier confirm it alone; a daily check against the terminal's batch is recommended either way.",
   "settings.value.CARD_CONFIRM_APPROVAL_MANAGER": "A manager",
-  "settings.value.CARD_CONFIRM_APPROVAL_NONE": "Nobody else"
+  "settings.value.CARD_CONFIRM_APPROVAL_NONE": "Nobody else",
+  "flow.scope.label": "Its store checks apply to",
+  "flow.scope.hint": "Which orders the steps the store checks can hold back.",
+  "flow.scope.FLOW_GUARD_SCOPE_ENTERED": "Only orders this flow started",
+  "flow.scope.FLOW_GUARD_SCOPE_CHANNELS": "Orders on the channels chosen",
+  "flow.scope.FLOW_GUARD_SCOPE_ALL_ORDERS": "Every order",
+  "flow.scope.warnAll": "Check: a step the store checks will hold back every order that takes its act, including orders this flow never started, such as counter, takeaway and delivery orders.",
+  "flow.scope.warnChannels": "Check: a step the store checks will hold back every order on the chosen channels, including orders this flow never started.",
+  "flow.scope.warnNoChannel": "Check: choose at least one channel, or the store checks apply to no order.",
+  "flow.scope.warnTillOnly": "Check: this flow starts with an act that opens no order, so the store cannot tell which orders started it. Its checks guide the till but the store does not enforce them."
 }

@@ -81,6 +81,8 @@ fn guest_count_first() -> Flow {
                 &["guests", "note"],
             ),
         ],
+        guard_scope: Open::default(),
+        guard_channels: Vec::new(),
     }
 }
 

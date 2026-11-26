@@ -46,7 +46,9 @@ use crate::ids;
 use crate::locale;
 use crate::money::{CurrencyCode, Money, Ratio};
 use crate::quantity::Quantity;
-use crate::text::{DisplayName, PermissionKey, ReleaseTag, TerminalReference, TranslationKey};
+use crate::text::{
+    ActionKey, DisplayName, PermissionKey, ReleaseTag, TerminalReference, TranslationKey,
+};
 use crate::time::{BusinessDate, CalendarDate, Timestamp};
 use crate::ulid::Ulid;
 use crate::wire_enum::{Open, WireEnum};
@@ -93,6 +95,7 @@ no_pii!(
     DisplayName,
     TranslationKey,
     PermissionKey,
+    ActionKey,
     ReleaseTag,
     TerminalReference
 );

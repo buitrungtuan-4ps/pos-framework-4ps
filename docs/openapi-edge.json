@@ -8195,6 +8195,10 @@
           }
         }
       },
+      "OpenFlowGuardScope_FlowGuardScope": {
+        "type": "string",
+        "description": "A `FlowGuardScope` token: FLOW_GUARD_SCOPE_UNSPECIFIED, FLOW_GUARD_SCOPE_ENTERED, FLOW_GUARD_SCOPE_CHANNELS, FLOW_GUARD_SCOPE_ALL_ORDERS, or one a newer build sent, which is kept as it arrived"
+      },
       "OpenOrderRequest": {
         "type": "object",
         "description": "A walk-in order as the counter asks for it (ADR-0146). Without a channel it takes the store's\nwalk-in channel, `counter.walk_in_channel`: takeaway, the ordinary counter order, unless the store\nsets its walk-ins to be eaten in (ADR-0160 decision 2).",
@@ -10543,6 +10547,17 @@
               "flow_id": {
                 "type": "string",
                 "description": "The flow's id within its package. Its variants share it."
+              },
+              "guard_channels": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/OpenSalesChannel_SalesChannel"
+                },
+                "description": "The channels [`FlowGuardScope::Channels`] applies to, at most [`GUARD_CHANNELS_MAX`].\nIgnored under any other scope."
+              },
+              "guard_scope": {
+                "$ref": "#/components/schemas/OpenFlowGuardScope_FlowGuardScope",
+                "description": "Which orders the flow's edge guards apply to (ADR-0244). Absent reads as\n[`FlowGuardScope::Entered`]; read it through [`Flow::guard_scope`]."
               },
               "start_action_id": {
                 "type": "string",

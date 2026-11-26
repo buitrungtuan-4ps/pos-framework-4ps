@@ -248,3 +248,37 @@ export function localProblems(flow: Flow): readonly FlowProblem[] {
   }
   return problems;
 }
+
+/** Which orders a flow's edge guards apply to (ADR-0244); absent reads as `ENTERED`. */
+export const GUARD_SCOPES = ["FLOW_GUARD_SCOPE_ENTERED", "FLOW_GUARD_SCOPE_CHANNELS", "FLOW_GUARD_SCOPE_ALL_ORDERS"] as const;
+
+/** The channels a flow's guards may be scoped to, with their labels. */
+export const GUARD_CHANNELS: readonly { readonly value: string; readonly label: MessageKey }[] = [
+  { value: "SALES_CHANNEL_DINE_IN", label: "channel.dineIn" },
+  { value: "SALES_CHANNEL_TAKEAWAY", label: "channel.takeaway" },
+  { value: "SALES_CHANNEL_DELIVERY", label: "channel.delivery" },
+  { value: "SALES_CHANNEL_QR", label: "channel.qr" },
+];
+
+/** The acts whose route opens an order, which the edge records as the order's opening act. */
+const OPENING_ACTS = new Set(["sales.table.seat", "sales.order.open", "sales.tab.open"]);
+
+/**
+ * What the console's Check warns of in a flow's guard scope (ADR-0244 decision 5): a guard that can
+ * block orders outside the flow, under `ALL_ORDERS` or `CHANNELS`, and an `ENTERED` flow whose start
+ * act opens no order, whose guards the store then cannot enforce. A warning does not stop a publish.
+ */
+export function scopeWarnings(flow: Flow): readonly MessageKey[] {
+  const guarded = flow.steps.some((step) => step.kind === REQUIRED && step.done_when !== undefined);
+  if (!guarded) {
+    return [];
+  }
+  switch (flow.guard_scope) {
+    case "FLOW_GUARD_SCOPE_ALL_ORDERS":
+      return ["flow.scope.warnAll"];
+    case "FLOW_GUARD_SCOPE_CHANNELS":
+      return (flow.guard_channels ?? []).length === 0 ? ["flow.scope.warnNoChannel"] : ["flow.scope.warnChannels"];
+    default:
+      return OPENING_ACTS.has(flow.start_action_id) ? [] : ["flow.scope.warnTillOnly"];
+  }
+}

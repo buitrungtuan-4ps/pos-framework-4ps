@@ -17,7 +17,6 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 - [ADR-0212](../adr/0212-the-heartbeat-names-the-version-each-till-last-read.md) The heartbeat names the package version each till last read
 - [ADR-0216](../adr/0216-integrations-come-in-three-tiers-and-functions-wait.md) Integrations come in three tiers, and WebAssembly functions wait for a real case
 - [ADR-0231](../adr/0231-a-phone-keeps-its-till-token-in-a-store-the-owner-chooses.md) A phone keeps its till token in a store the owner chooses
-- [ADR-0244](../adr/0244-a-flows-guards-apply-to-the-orders-it-governs.md) A flow's guards apply to the orders it governs, as the flow says
 - [ADR-0245](../adr/0245-an-invoiced-bill-is-corrected-by-the-route-the-store-chooses.md) A refund or void of an invoiced bill takes the route the tenant or store chooses
 - [ADR-0246](../adr/0246-a-setting-has-one-source-and-publish-and-rollback-take-a-scope.md) A setting has one source of truth, and publish and rollback take a scope
 - [ADR-0247](../adr/0247-a-guest-or-vendor-order-reaches-the-kitchen-as-the-store-chooses.md) How a guest or vendor order reaches the kitchen is chosen per channel, vendor and store

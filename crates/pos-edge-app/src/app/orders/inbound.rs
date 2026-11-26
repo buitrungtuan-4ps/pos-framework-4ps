@@ -97,6 +97,8 @@ impl<S: EventStore> Edge<S> {
             vendor_id,
             subject_id: intake.as_ref().and_then(|intent| intent.subject_id),
             tab_number: None,
+            // Intake opens through no catalogue act, so it enters no flow (ADR-0244).
+            opened_by_action_id: None,
         };
         let prepared = self.prepare_inbound(stamp, &opened, lines, joins)?;
         let (envelopes, messages): (Vec<_>, Vec<_>) = prepared.events.into_iter().unzip();
