@@ -9,8 +9,10 @@
 //! One event at a time ([ADR-0036](../../../../docs/adr/0036-materialised-rollups.md)): an order
 //! opened through a vendor is remembered by its id, its bill by the bill's id, and the bill's
 //! settle adds one order and its total to the vendor's day. The bill and its tax stay gross; the
-//! commission is applied when the day is read, at the rate the store's configuration gives. An
-//! order that ends unpaid is forgotten with its close, and both waiting maps are bounded.
+//! commission is applied when the day is read, at the rate the store's configuration gives. Every
+//! part of a split bill counts, and the order counts once, with its last part; a settled bill voided
+//! after payment comes back out of the day it was counted on. An order that ends unpaid is forgotten
+//! with its close, and every kept map is bounded.
 
 use std::collections::BTreeMap;
 
@@ -18,40 +20,57 @@ use serde::{Deserialize, Serialize};
 
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::events::{
-    BillingBillOpened, BillingBillSettled, SalesOrderClosed, SalesOrderOpened,
+    BillingBillMerged, BillingBillOpened, BillingBillSettled, BillingBillSplit, BillingBillVoided,
+    SalesOrderClosed, SalesOrderOpened,
 };
 
-/// The most orders or bills waiting for their settle that are kept; past it the oldest is dropped.
+/// The most orders, open bills or settled bills each map keeps; past it the oldest goes first.
 pub const MAX_WAITING: usize = 4_096;
 
 /// One vendor's orders on one day.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VendorDay {
-    /// Settled orders.
+    /// Settled orders: an order counts once, when its last open part settles.
     pub orders: u64,
-    /// What they took, minor units, tax included.
+    /// What they took, minor units, tax included: every part of each.
     pub gross: i64,
     /// The currency of `gross`, ISO 4217.
     pub currency_code: String,
 }
 
-/// The vendors' days, and the orders and bills still waiting for a settle.
+/// A settled bill of a vendor's order, kept so a void after payment takes it back out.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SettledPart {
+    /// The trading day it was counted on.
+    pub day: String,
+    /// Its vendor.
+    pub vendor: String,
+    /// What it took.
+    pub total: i64,
+    /// Whether its settle counted the order.
+    pub counted_order: bool,
+}
+
+/// The vendors' days, and the orders and bills a later event still needs.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeptVendors {
     /// Each trading day's vendors, keyed by day and then by vendor id.
     #[serde(default)]
     pub days: BTreeMap<String, BTreeMap<String, VendorDay>>,
-    /// The vendor of each open order that came through one, by order id.
+    /// The vendor of each order that came through one and is not yet paid in full, by order id.
     #[serde(default)]
     pub orders: BTreeMap<String, String>,
-    /// The order of each open bill on such an order, by bill id.
+    /// The order of each open bill on such an order, by bill id: a split's parts each.
     #[serde(default)]
     pub bills: BTreeMap<String, String>,
+    /// Each settled bill of such an order, by bill id, until it is voided or ages out.
+    #[serde(default)]
+    pub settled: BTreeMap<String, SettledPart>,
 }
 
-/// Inserts into a waiting map, dropping its oldest (smallest ULID) entry past [`MAX_WAITING`].
-fn wait(map: &mut BTreeMap<String, String>, key: String, vendor: String) {
-    map.insert(key, vendor);
+/// Inserts into a kept map, dropping its oldest (smallest ULID) entry past [`MAX_WAITING`].
+fn keep<V>(map: &mut BTreeMap<String, V>, key: String, value: V) {
+    map.insert(key, value);
     while map.len() > MAX_WAITING {
         map.pop_first();
     }
@@ -65,7 +84,7 @@ pub fn fold_vendors(kept: &mut KeptVendors, event: &EventEnvelope<RawPayload>) {
             if let Ok(opened) = event.data.decode::<SalesOrderOpened>()
                 && let Some(vendor_id) = opened.vendor_id
             {
-                wait(
+                keep(
                     &mut kept.orders,
                     opened.order_id.to_string(),
                     vendor_id.to_string(),
@@ -73,35 +92,42 @@ pub fn fold_vendors(kept: &mut KeptVendors, event: &EventEnvelope<RawPayload>) {
             }
         }
         "billing.bill.opened" => {
-            let order = event
-                .data
-                .decode::<BillingBillOpened>()
-                .ok()
-                .map(|opened| (opened.bill_id.to_string(), opened.order_id.to_string()));
-            if let Some((bill_id, order_id)) = order
-                && kept.orders.contains_key(&order_id)
+            if let Ok(opened) = event.data.decode::<BillingBillOpened>() {
+                let order_id = opened.order_id.to_string();
+                if kept.orders.contains_key(&order_id) {
+                    keep(&mut kept.bills, opened.bill_id.to_string(), order_id);
+                }
+            }
+        }
+        "billing.bill.split" => {
+            if let Ok(split) = event.data.decode::<BillingBillSplit>()
+                && let Some(order_id) = kept.bills.remove(&split.source_bill_id.to_string())
             {
-                wait(&mut kept.bills, bill_id, order_id);
+                for part in split.resulting_bill_ids {
+                    keep(&mut kept.bills, part.to_string(), order_id.clone());
+                }
+            }
+        }
+        "billing.bill.merged" => {
+            if let Ok(merged) = event.data.decode::<BillingBillMerged>() {
+                let order = merged
+                    .merged_bill_ids
+                    .iter()
+                    .filter_map(|bill| kept.bills.remove(&bill.to_string()))
+                    .last();
+                if let Some(order_id) = order {
+                    keep(&mut kept.bills, merged.target_bill_id.to_string(), order_id);
+                }
             }
         }
         "billing.bill.settled" => {
-            if let Ok(settled) = event.data.decode::<BillingBillSettled>()
-                && let Some(order_id) = kept.bills.remove(&settled.bill_id.to_string())
-                && let Some(vendor) = kept.orders.remove(&order_id)
-            {
-                let day = kept
-                    .days
-                    .entry(event.business_date.to_string())
-                    .or_default()
-                    .entry(vendor)
-                    .or_default();
-                day.orders = day.orders.saturating_add(1);
-                day.gross = day.gross.saturating_add(settled.total_due.amount_minor);
-                settled
-                    .total_due
-                    .currency_code
-                    .as_str()
-                    .clone_into(&mut day.currency_code);
+            if let Ok(settled) = event.data.decode::<BillingBillSettled>() {
+                settle(kept, event.business_date.to_string(), &settled);
+            }
+        }
+        "billing.bill.voided" => {
+            if let Ok(voided) = event.data.decode::<BillingBillVoided>() {
+                void(kept, &voided.bill_id.to_string());
             }
         }
         "sales.order.closed" => {
@@ -110,6 +136,62 @@ pub fn fold_vendors(kept: &mut KeptVendors, event: &EventEnvelope<RawPayload>) {
             }
         }
         _ => {}
+    }
+}
+
+/// Adds a settled part to its vendor's day; the order counts once its last open part has settled.
+fn settle(kept: &mut KeptVendors, day: String, settled: &BillingBillSettled) {
+    let bill_id = settled.bill_id.to_string();
+    let Some(order_id) = kept.bills.remove(&bill_id) else {
+        return;
+    };
+    let Some(vendor) = kept.orders.get(&order_id).cloned() else {
+        return;
+    };
+    let last = !kept.bills.values().any(|other| *other == order_id);
+    if last {
+        kept.orders.remove(&order_id);
+    }
+    let total = settled.total_due.amount_minor;
+    let entry = kept
+        .days
+        .entry(day.clone())
+        .or_default()
+        .entry(vendor.clone())
+        .or_default();
+    entry.orders = entry.orders.saturating_add(u64::from(last));
+    entry.gross = entry.gross.saturating_add(total);
+    settled
+        .total_due
+        .currency_code
+        .as_str()
+        .clone_into(&mut entry.currency_code);
+    keep(
+        &mut kept.settled,
+        bill_id,
+        SettledPart {
+            day,
+            vendor,
+            total,
+            counted_order: last,
+        },
+    );
+}
+
+/// Takes a settled part voided after payment back out of the day it was counted on. A bill voided
+/// before it was paid is only forgotten: its order may yet be billed again.
+fn void(kept: &mut KeptVendors, bill_id: &str) {
+    kept.bills.remove(bill_id);
+    let Some(part) = kept.settled.remove(bill_id) else {
+        return;
+    };
+    if let Some(entry) = kept
+        .days
+        .get_mut(&part.day)
+        .and_then(|vendors| vendors.get_mut(&part.vendor))
+    {
+        entry.gross = entry.gross.saturating_sub(part.total);
+        entry.orders = entry.orders.saturating_sub(u64::from(part.counted_order));
     }
 }
 
