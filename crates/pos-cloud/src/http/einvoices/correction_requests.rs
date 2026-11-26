@@ -71,6 +71,7 @@ pub(crate) struct CorrectionRequestView {
     decided_time_ms: Option<i64>,
     /// The config version that published the decision to the store, on a decision's answer.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
     config_version_id: Option<String>,
 }
 
@@ -226,6 +227,10 @@ where
 
 /// Records `status` on a pending request (or repeats a decision already taken, to publish it again),
 /// writes it onto the store's node, publishes and audits.
+#[expect(
+    clippy::result_large_err,
+    reason = "the composing closure's Err is an axum Response, the shape publish_config_nodes_with takes"
+)]
 async fn decide<Cfg, A, C>(
     state: &EInvoicesState<Cfg, A, C>,
     headers: &HeaderMap,
@@ -245,7 +250,7 @@ where
         ConsolePermission::CorrectInvoices,
     )
     .await?;
-    let [tenant, request, decider] = parse_ulid_fields([
+    let [tenant, request, console_user] = parse_ulid_fields([
         ("tenant_id", &body.tenant_id),
         ("request_id", request_id),
         ("decided_by_user_id", &context.admin.id),
@@ -262,7 +267,7 @@ where
             tenant,
             request.to_string(),
             status,
-            decider.to_string(),
+            console_user.to_string(),
             now_ms,
         );
         decided.await.map_err(unreachable)?;

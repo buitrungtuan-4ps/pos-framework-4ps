@@ -353,6 +353,11 @@ async fn hq_approves_or_declines_a_request_and_the_store_learns_it_on_its_einvoi
         .expect("route");
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
 
+    the_store_learns_both_decisions(&trees).await;
+}
+
+/// The store's node keeps its symbol and holds one entry per decided bill, which the store reads.
+async fn the_store_learns_both_decisions(trees: &FakeConfigTrees) {
     let tree = trees
         .load(tenant(), store_id())
         .await
@@ -371,7 +376,7 @@ async fn hq_approves_or_declines_a_request_and_the_store_learns_it_on_its_einvoi
     assert!(
         published
             .correction_decision(bill)
-            .is_some_and(|decided| decided.approved())
+            .is_some_and(pos_proto::einvoice::DecidedCorrection::approved)
     );
     let declined_bill =
         pos_proto::ids::BillId::new("01KHHHHHHHHHHHHHHHHHHHHHHH".parse().expect("a ULID"));
