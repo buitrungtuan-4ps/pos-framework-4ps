@@ -19,6 +19,7 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 - [ADR-0231](../adr/0231-a-phone-keeps-its-till-token-in-a-store-the-owner-chooses.md) A phone keeps its till token in a store the owner chooses
 - [ADR-0252](../adr/0252-hybrid-numbering-is-confirmed-on-its-own-value.md) HYBRID numbering is confirmed on its own value, not by a separate setting
 - [ADR-0254](../adr/0254-a-seated-tables-guest-count-is-recorded-in-place.md) A seated table's guest count is recorded in place
+- [ADR-0255](../adr/0255-a-qr-orders-automatic-send-keeps-the-hours-the-store-sets.md) A QR order's automatic send keeps the hours the store sets
 
 ## Citations of ADRs that do not exist
 
