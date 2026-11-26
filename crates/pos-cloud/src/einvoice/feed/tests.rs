@@ -23,6 +23,7 @@ use super::{
 use crate::dashboard::projector::StoreCatalog;
 use crate::einvoice::corrections::{Corrector, StoreEInvoice};
 use crate::einvoice::feed::FeedFuture;
+use crate::einvoice::requests::{CorrectionRequests as _, InMemoryCorrectionRequests};
 use crate::einvoice::sandbox::{SandboxEInvoice, SandboxMode};
 use crate::einvoice::symbols::{
     InMemorySymbolLedger, SymbolLedger as _, SymbolRecord, SymbolSource,
@@ -106,6 +107,7 @@ async fn corrector(kind: &'static str) -> Corrector {
     Corrector {
         settings: Arc::new(Node(kind)),
         ledger: Arc::new(ledger),
+        requests: Arc::new(InMemoryCorrectionRequests::default()),
     }
 }
 
@@ -120,6 +122,66 @@ fn voided(sequence: u32, id: u128) -> EventEnvelope<RawPayload> {
     })
     .expect("a payload");
     event
+}
+
+/// `fiscal.correction.requested` for the bill whose invoice is `sequence`, by employee `0xE1`.
+fn requested(sequence: u32, id: u128) -> EventEnvelope<RawPayload> {
+    let mut event = fixtures::activations(store(), 1, 1).remove(0);
+    event.event_id = pos_proto::ids::EventId::new(Ulid::from_u128(id));
+    event.employee_id = Some(pos_proto::ids::EmployeeId::new(Ulid::from_u128(0xE1)));
+    event.event_type = EventType::FiscalCorrectionRequested.into();
+    event.data = RawPayload::encode(&pos_proto::events::FiscalCorrectionRequested {
+        request: pos_proto::einvoice::CorrectionRequest {
+            bill_id: BillId::new(Ulid::from_u128(u128::from(sequence))),
+            amount: Money::new(CurrencyCode::parse("VND").expect("VND"), 165_000),
+            kind: Open::from_known(EInvoiceKind::Replacement),
+            reason_code_id: Some(pos_proto::ids::ReasonCodeId::new(Ulid::from_u128(0x5EA))),
+        },
+    })
+    .expect("a payload");
+    event
+}
+
+#[tokio::test]
+async fn a_correction_request_is_queued_once_for_hq_and_issues_nothing() {
+    let events = FakeStore::new();
+    let mut batch = log(0, &[1]);
+    batch.push(requested(1, u128::MAX));
+    append(&events, &batch).await;
+    let submissions = InMemorySubmissions::default();
+    let queue = InMemoryCorrectionRequests::default();
+    let mut corrector = corrector("EINVOICE_KIND_ADJUSTMENT").await;
+    corrector.requests = Arc::new(queue.clone());
+    assert_eq!(
+        feed_store(&events, &submissions, &corrector, tenant(), store(), NOW_MS).await,
+        Ok(1),
+        "the original alone: a request issues nothing"
+    );
+    let queued = queue.list(tenant(), None).await.expect("list");
+    assert_eq!(queued.len(), 1);
+    let row = &queued[0];
+    assert_eq!(
+        (
+            row.status.as_str(),
+            row.bill_id.as_str(),
+            row.amount_minor,
+            row.kind.as_str(),
+            row.requested_by.as_deref(),
+        ),
+        (
+            "PENDING",
+            Ulid::from_u128(1).to_string().as_str(),
+            165_000,
+            "REPLACEMENT",
+            Some(Ulid::from_u128(0xE1).to_string().as_str()),
+        )
+    );
+    assert_eq!(row.request_id, Ulid::from_u128(u128::MAX).to_string());
+    assert_eq!(
+        queue.record(row.clone()).await,
+        Ok(false),
+        "a request read twice is queued once"
+    );
 }
 
 /// 2026-11-25, so the correction symbol of 2026 is this year's.

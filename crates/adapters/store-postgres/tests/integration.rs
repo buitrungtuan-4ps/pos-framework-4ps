@@ -879,6 +879,9 @@ mod einvoice_symbols_store;
 #[path = "integration/einvoice_submissions_store.rs"]
 mod einvoice_submissions_store;
 
+#[path = "integration/einvoice_correction_requests_store.rs"]
+mod einvoice_correction_requests_store;
+
 /// Tenant keys (ADR-0217, migration 0100): a version is stored once, read oldest first, kept
 /// apart per tenant, and out of reach of the tenant-scoped role.
 #[path = "integration/tenant_keys_store.rs"]
