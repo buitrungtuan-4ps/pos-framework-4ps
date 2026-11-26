@@ -24,6 +24,7 @@
   "dependencies": {
     "@solidjs/router": "^1.0.0",
     "intl-messageformat": "^12.1.4",
+    "qrcode-generator": "2.0.4",
     "solid-js": "^1.9.17"
   },
   "devDependencies": {
