@@ -12,6 +12,7 @@ import { createMemo, createSignal, Show } from "solid-js";
 
 import { api, ApiError } from "../api/client";
 import type { Area, FloorTable, TableQrToken } from "../api/schemas";
+import { QrSheet } from "./floor/QrSheet";
 import { t } from "../i18n";
 import { useEntityCrud } from "../lib/entity-crud";
 import { createAdminResource, failureOf } from "../lib/resource";
@@ -32,7 +33,6 @@ import {
 } from "../components/ui";
 import {
   type Column,
-  CLIENT_PAGE_SIZE,
   ConfirmDialog,
   DataTable,
   Drawer,
@@ -604,26 +604,7 @@ export function Floor() {
                     when={tokens().length > 0}
                     fallback={<EmptyState title={t("floor.qrEmpty")} />}
                   >
-                    <DataTable
-                      columns={[
-                        {
-                          key: "table",
-                          header: t("floor.qrTable"),
-                          cell: (row: TableQrToken) => <span>{row.label}</span>,
-                        },
-                        {
-                          key: "token",
-                          header: t("floor.qrToken"),
-                          class: "font-mono",
-                          cell: (row: TableQrToken) => (
-                            <span class="break-all text-xs text-ink-muted">{row.token}</span>
-                          ),
-                        },
-                      ]}
-                      rows={tokens()}
-                      pageSize={CLIENT_PAGE_SIZE}
-                      empty={<EmptyState title={t("floor.qrEmpty")} />}
-                    />
+                    <QrSheet tokens={tokens()} />
                   </Show>
                 )}
               </Show>
