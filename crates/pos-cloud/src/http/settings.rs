@@ -44,6 +44,7 @@ mod package_status;
 mod presets;
 mod publish;
 mod receipt;
+mod rollback_hold;
 mod values;
 
 // The handlers the console's OpenAPI document names.
@@ -55,6 +56,7 @@ pub(crate) use package_status::__path_admin_store_package;
 pub(crate) use presets::__path_admin_apply_setting_presets;
 pub(crate) use presets::as_node_value;
 pub(crate) use publish::__path_admin_publish_settings;
+pub use rollback_hold::{HeldSettings, HoldFuture, RollbackSettings, rollback_settings};
 // Moved to pos-cloud-config with the tenant layout; imported here, so the settings routes and
 // their callers keep reaching them through `super` and `crate::http`.
 use pos_cloud_config::route::setting_scope_refusal;

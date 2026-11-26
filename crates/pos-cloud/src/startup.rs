@@ -147,6 +147,11 @@ pub(super) fn cloud_app(
     .with_admin_setup_token(config.admin_setup_token.clone())
     .with_internal_shared_secret(config.internal_shared_secret.clone())
     .with_qr_switch_since(one_switch.since)
+    .with_rollback_settings(pos_cloud::http::rollback_settings(
+        packages::settings_store(store),
+        store.registry(),
+        store.store_groups(),
+    ))
 }
 
 /// The background loops this deployment turned on, for the health endpoint to check against.
