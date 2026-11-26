@@ -2031,8 +2031,9 @@ test("a free table asks how many guests, the count rides the seat, and Skip seat
 
 // A package can make the guest count required (`POS_DEMO_PROFILE=guests-required`): the pad offers
 // no Skip, and the first line waits for the count. A table seated with none by another device is
-// held on this till, which names the step, and by the edge, which refuses the line and names it.
-test("a required guest count is asked with no Skip, and a table seated without one takes no first line", async ({
+// held on this till, which names the step and asks for the count in place (ADR-0254), and by the edge,
+// which refuses the line and names it; the count given there lets the first dish go.
+test("a required guest count is asked with no Skip, and a table seated without one is asked its count in place", async ({
   page,
 }) => {
   const edge = await startEdge("guests-required");
@@ -2078,15 +2079,26 @@ test("a required guest count is asked with no Skip, and a table seated without o
     await expect(card(2)).toContainText("Occupied");
     await card(2).click();
     await expect(header).toHaveText("Table 2");
-    await expect(page.locator('[data-outcome="flow-waits"]')).toContainText("This table has no guest count");
+    // The till asks for the count in place (ADR-0254) rather than "give the table back".
+    const asked = page.locator('[data-outcome="guests-asked"]');
+    await expect(asked).toContainText("This table has no guest count");
+    await expect(asked).toContainText("How many guests?");
+    await expect(page.locator('[data-outcome="flow-waits"]')).toHaveCount(0);
     await expect(page.locator('[data-step="onItem"]').first()).toBeDisabled();
 
-    // A till that does not know the count, after a reload, holds nothing back; the edge refuses.
+    // A till that does not know the count, after a reload, holds nothing back; the edge refuses,
+    // naming the step in words, and the till then asks for the count in place too.
     await page.reload();
     await expect(header).toHaveText("Table 2");
     await page.locator('[data-step="onItem"]').first().click();
-    await expect(page.getByRole("alert")).toContainText("puts another step first (guests)");
+    await expect(page.getByRole("alert")).toContainText("puts another step first (the guest count)");
     await expect(page.locator('[data-outcome="line-added"]')).toHaveCount(0);
+    await expect(asked).toContainText("How many guests?");
+
+    // One tap on the count records it on the table's order, and the first dish goes.
+    await asked.locator('[data-step="countGuests"]').nth(3).click();
+    await expect(asked).toHaveCount(0);
+    await addItem(page);
   } finally {
     await edge.stop();
   }

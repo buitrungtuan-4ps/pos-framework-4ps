@@ -263,6 +263,7 @@ export function flowWaitSentence(step: string): string {
  * "another step".
  */
 export function stepInWords(step: string): string {
+  if (isGuestStep(step)) return t("flow.guest_count_step");
   const act = activeFlows()
     .flatMap((variant) => variant.body.steps)
     .find((candidate) => candidate.step_id === step)?.action_id;

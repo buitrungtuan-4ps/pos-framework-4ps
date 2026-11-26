@@ -7,6 +7,8 @@ import { createSignal, For, Show } from "solid-js";
 
 import { errorMessage } from "../lib/errors";
 import { countGuests } from "../state/floor-writes";
+import { flowWaitSentence, isGuestStep } from "../state/flows";
+import { can } from "../state/permissions";
 
 /** The counts the guest pad offers, one tap each. */
 export const GUEST_COUNTS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] as const;
@@ -51,5 +53,24 @@ export function GuestCountPrompt(props: { tableId: string; sentence: string }) {
         )}
       </Show>
     </div>
+  );
+}
+
+/**
+ * The step a table's first line waits on: the guest count asked in place, for a person who may seat
+ * tables; any other step, or for anyone else, named in words.
+ */
+export function FlowWait(props: { tableId: string; step: string }) {
+  return (
+    <Show
+      when={isGuestStep(props.step) && can("sales.table.manage")}
+      fallback={
+        <p class="mb-3 rounded-token border border-line px-3 py-2" role="status" data-outcome="flow-waits">
+          {flowWaitSentence(props.step)}
+        </p>
+      }
+    >
+      <GuestCountPrompt tableId={props.tableId} sentence={flowWaitSentence(props.step)} />
+    </Show>
   );
 }

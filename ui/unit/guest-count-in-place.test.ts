@@ -7,7 +7,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "solid-js/web";
 
 import { ApiError, api } from "../src/api/client";
-import { GuestCountPrompt } from "../src/components/GuestCountPrompt";
+import { FlowWait, GuestCountPrompt } from "../src/components/GuestCountPrompt";
+import { adoptSession } from "../src/state/permissions";
 import en from "../src/i18n/en.json";
 import vi_ from "../src/i18n/vi.json";
 import { errorMessage } from "../src/lib/errors";
@@ -82,6 +83,23 @@ describe("the guest count asked in place", () => {
     dispose();
   });
 
+  it("asks only a person who may seat tables; anyone else reads the sentence", () => {
+    applyPackage(RUNNING);
+    const shown = () => {
+      const target = document.createElement("div");
+      document.body.append(target);
+      const dispose = render(() => FlowWait({ tableId: "T5", step: "guests" }), target);
+      const outcome = target.firstElementChild?.getAttribute("data-outcome");
+      dispose();
+      return outcome;
+    };
+    adoptSession({ permissions_enforced: true, permissions: ["sales.line.add", "sales.table.manage"] } as never);
+    expect(shown()).toBe("guests-asked");
+    adoptSession({ permissions_enforced: true, permissions: ["sales.line.add"] } as never);
+    expect(shown()).toBe("flow-waits");
+    adoptSession({ permissions_enforced: false } as never);
+  });
+
   it("learns from the edge's refusal that a table it did not seat has no count", () => {
     applyPackage(RUNNING);
     expect(guestsOf("T3")).toBeUndefined();
@@ -107,6 +125,7 @@ describe("a missing step in words", () => {
     expect(isGuestStep("guests")).toBe(true);
     expect(isGuestStep("loyalty_card")).toBe(false);
     expect(flowWaitSentence("loyalty_card")).toBe("The store asks for a step first: look something up.");
+    expect(stepInWords("guests")).toBe("the guest count");
     expect(stepInWords("no_such_step")).toBe("another step of the store's flow");
     const refusal = new ApiError(409, "step loyalty_card of flow dine_in comes first", "FLOW_PREREQUISITE_UNMET");
     expect(errorMessage(refusal)).not.toContain("loyalty_card");

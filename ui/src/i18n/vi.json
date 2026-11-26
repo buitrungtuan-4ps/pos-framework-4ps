@@ -340,6 +340,7 @@
   "order.flow_waits_guests": "Bàn này chưa có số khách, cửa hàng cần số khách trước món đầu tiên. Bàn có bao nhiêu khách?",
   "order.flow_waits_step": "Cửa hàng cần làm bước này trước: {step}.",
   "flow.act.unnamed": "một bước khác trong quy trình của cửa hàng",
+  "flow.guest_count_step": "số khách",
   "flow.act.ui_screen_open": "mở màn hình",
   "flow.act.ui_panel_open": "mở bảng",
   "flow.act.ui_list_filter": "lọc danh sách",

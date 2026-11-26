@@ -52,12 +52,12 @@ import { PackageScreen, orderHost } from "../package/screen";
 import { useInFlight } from "../lib/in-flight";
 import { createTableScoped, resetPerTable, useKeptTable } from "../state/kept-table";
 import { createTableCheck } from "../state/table-check";
-import { flowWaitSentence, isGuestStep, lineWaits } from "../state/flows";
+import { lineWaits } from "../state/flows";
 import { createMenuSearch } from "../state/menu-search";
 import { createPrint } from "../state/print-writes";
 import { printOutcomeKey } from "../lib/print";
 import { SendFirst } from "../components/SendFirst";
-import { GuestCountPrompt } from "../components/GuestCountPrompt";
+import { FlowWait } from "../components/GuestCountPrompt";
 import { PrintedCheck } from "../components/PrintedCheck";
 import { OpenPricePrompt } from "../components/OpenPricePrompt";
 import { SellContext, askOpenPrice, askWeight, weighedLine } from "../state/sell";
@@ -637,9 +637,7 @@ export function Order() {
         </Show>
       </div>,
     order_notices: () => <>
-      <Show when={flowWait()}>
-        {(step) => isGuestStep(step()) && can("sales.table.manage") ? <GuestCountPrompt tableId={params.id} sentence={flowWaitSentence(step())} /> : <p class="mb-3 rounded-token border border-line px-3 py-2" role="status" data-outcome="flow-waits">{flowWaitSentence(step())}</p>}
-      </Show>
+      <Show when={flowWait()}>{(step) => <FlowWait tableId={params.id} step={step()} />}</Show>
       <Show when={preBill()}>
         {(prints) => <p class="mb-3 text-sm text-ink-muted" role="status" data-outcome="pre-bill-print">{preBillOutcome(prints())}</p>}
       </Show>

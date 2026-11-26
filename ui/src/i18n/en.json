@@ -340,6 +340,7 @@
   "order.flow_waits_guests": "This table has no guest count, which the store asks for before the first dish. How many guests?",
   "order.flow_waits_step": "The store asks for a step first: {step}.",
   "flow.act.unnamed": "another step of the store's flow",
+  "flow.guest_count_step": "the guest count",
   "flow.act.ui_screen_open": "open a screen",
   "flow.act.ui_panel_open": "open a panel",
   "flow.act.ui_list_filter": "filter a list",
