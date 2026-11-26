@@ -284,8 +284,9 @@ fn a_pulled_order_is_made_and_acked_accepted() {
         StoreOutcome::Accepted(record) => {
             assert!(record.created, "the store created the order");
             assert_eq!(
-                record.total.amount_minor, 120_000,
-                "the store's own price is authoritative"
+                record.total.amount_minor, 132_000,
+                "the store's own price is authoritative, with the QR rate's 10% tax as the bill \
+                 charges it (ADR-0248 decision 4)"
             );
             assert!(
                 record.awaiting_staff_confirmation,

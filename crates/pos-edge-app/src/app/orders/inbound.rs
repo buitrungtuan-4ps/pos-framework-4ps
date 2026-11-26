@@ -6,6 +6,7 @@
 //! to its table's order where the store says so, and looked up again by its idempotency key.
 
 use pos_core::business_date::derive_business_date;
+use pos_core::decision::{DecisionCtx, LineDecision};
 use pos_core::menu::PricedLine;
 use pos_ports::TxContext;
 use pos_ports::event_store::EventStore;
@@ -13,7 +14,7 @@ use pos_ports::intake_ledger::{IntakeLedger, IntakeRecord};
 use pos_ports::subject_store::{SubjectRecord, SubjectStore};
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::events::{SalesOrderLineAdded, SalesOrderOpened, SalesTableMerged};
-use pos_proto::ids::{DeviceId, OrderId, OrderLineId, TableId};
+use pos_proto::ids::{DeviceId, OrderId, OrderLineId, StationId, TableId};
 use pos_proto::kitchen_release::KitchenRelease;
 use pos_proto::qr::TableOrder;
 use pos_proto::time::{BusinessDate, Timestamp};
@@ -102,27 +103,20 @@ impl<S: EventStore> Edge<S> {
             opened_by_action_id: None,
         };
         let mut prepared = self.prepare_inbound(stamp, &opened, lines, joins)?;
-        // Accepted on arrival and sent with itself where the store says so (ADR-0247): the fires go
-        // before a join, so the log reads as it happened and the replay folds them in that order.
-        let automatic =
-            session.kitchen_release(order_channel, vendor_id) == KitchenRelease::AutoAcceptAndFire;
-        let fires = automatic
-            .then(|| {
-                self.intake_fires(
-                    stamp.device_id,
-                    stamp.now,
-                    stamp.business_date,
-                    &prepared.records,
-                )
-            })
-            .flatten()
-            .map(|(ctx, (envelopes, messages, applied))| {
-                let at = prepared.events.len() - usize::from(joins.is_some());
-                prepared
-                    .events
-                    .splice(at..at, envelopes.into_iter().zip(messages));
-                (ctx, applied)
-            });
+        // What the bill will open at, tax and fees included, is what the caller is answered with and
+        // what the ledger keeps for its retries (ADR-0248 decision 4).
+        let total = self.inbound_total(order_channel, &prepared.records);
+        let intake = intake.map(|mut intent| {
+            if let Some(total) = total {
+                intent.total = total;
+            }
+            intent
+        });
+        // Accepted on arrival and sent with itself where the store says so (ADR-0247).
+        let fires = (session.kitchen_release(order_channel, vendor_id)
+            == KitchenRelease::AutoAcceptAndFire)
+            .then(|| self.splice_intake_fires(stamp, &mut prepared, joins.is_some()))
+            .flatten();
         let (envelopes, messages): (Vec<_>, Vec<_>) = prepared.events.into_iter().unzip();
 
         let business_date = stamp.business_date;
@@ -146,10 +140,48 @@ impl<S: EventStore> Edge<S> {
             self.apply_fires(&ctx, applied);
         }
         Ok(InboundOrderOpened {
+            total,
             order_id,
             business_date,
             awaiting_staff_confirmation: holds_for_staff,
         })
+    }
+
+    /// What a bill over `records` would open at on `channel`, tax and fees included, not the lines'
+    /// sum before tax, which a delivery app took for the order's price (ADR-0248 decision 4).
+    /// `None` where it cannot be told: a channel this build does not know, a class with no rate.
+    fn inbound_total(
+        &self,
+        channel: Option<SalesChannel>,
+        records: &[(OrderLineId, LineRecord)],
+    ) -> Option<pos_proto::money::Money> {
+        let channel = channel?;
+        let lines = records.iter().map(|(_, record)| record.clone()).collect();
+        self.totals_of_lines(lines, channel)
+            .ok()
+            .map(|totals| totals.total_due)
+    }
+
+    /// Prepares the fires of an order accepted on arrival (ADR-0247) into `prepared`'s events,
+    /// before a join's, so the log reads as it happened and the replay folds them in that order;
+    /// what they make of the lines, to fold once they commit. `None` when they cannot be sent.
+    fn splice_intake_fires(
+        &self,
+        stamp: SystemStamp,
+        prepared: &mut PreparedOrder,
+        joins: bool,
+    ) -> Option<(DecisionCtx, Vec<SentLine>)> {
+        let (ctx, (envelopes, messages, applied)) = self.intake_fires(
+            stamp.device_id,
+            stamp.now,
+            stamp.business_date,
+            &prepared.records,
+        )?;
+        let at = prepared.events.len() - usize::from(joins);
+        prepared
+            .events
+            .splice(at..at, envelopes.into_iter().zip(messages));
+        Some((ctx, applied))
     }
 
     /// The subject an open delivery order names as its recipient
@@ -406,6 +438,9 @@ fn system_stamp(
         business_date,
     })
 }
+
+/// A line an order accepted on arrival sends, decided and not yet folded (ADR-0247).
+type SentLine = (OrderLineId, LineRecord, StationId, LineDecision);
 
 /// An inbound order's events, prepared for its transaction.
 struct PreparedOrder {

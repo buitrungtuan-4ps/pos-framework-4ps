@@ -120,12 +120,19 @@ where
         .into_iter()
         .map(|order_id| {
             let (lines, table_id) = edge.waiting_order_view(order_id);
-            let total = lines
-                .iter()
-                .try_fold(Money::zero(session.currency), |sum, line| {
-                    sum.checked_add(line.line_total)
-                })
-                .unwrap_or_else(|_| Money::zero(session.currency));
+            // What the bill will charge, tax and fees included, as the vendor is answered (ADR-0248
+            // decision 4); the lines' sum only if the order cannot be totalled.
+            let total = edge.order_totals(order_id).map_or_else(
+                |_| {
+                    lines
+                        .iter()
+                        .try_fold(Money::zero(session.currency), |sum, line| {
+                            sum.checked_add(line.line_total)
+                        })
+                        .unwrap_or_else(|_| Money::zero(session.currency))
+                },
+                |totals| totals.total_due,
+            );
             WaitingOrderResponse {
                 order_id: order_id.to_string(),
                 table_id: table_id.map(|id| id.to_string()).unwrap_or_default(),
