@@ -93,6 +93,11 @@ pub(super) struct PublishEInvoiceSymbolRequest {
 pub(super) struct AllocateEInvoiceSymbolRequest {
     tenant_id: String,
     store_id: String,
+    /// `true` gives the store its **offline** symbol instead: the one a `HYBRID` store numbers
+    /// under while offline, published as the node's `offline_symbol` (ADR-0251 decision 6). Absent
+    /// or `false` gives its symbol, as before.
+    #[serde(default)]
+    offline: bool,
 }
 
 /// The symbol allocated and the config version that published it.
@@ -165,7 +170,14 @@ where
     if !held.is_held_by(store_id) {
         return Err(symbol_in_use());
     }
-    let id = publish_symbol(&state, &context, tenant_id, store_id, &held, "publish").await?;
+    let id = publish_symbol(
+        &state,
+        &context,
+        (tenant_id, store_id),
+        &held,
+        ("symbol", "publish"),
+    )
+    .await?;
     Ok((
         StatusCode::OK,
         Json(PublishedConfig {
@@ -186,7 +198,8 @@ where
     ),
     responses(
         (status = 200, body = AllocatedEInvoiceSymbol, description = "The next symbol of the current year the tenant's ledger does not hold, \
-                                      recorded for the store and published as its `einvoice` node's `symbol`. Audited"),
+                                      recorded for the store and published as its `einvoice` node's `symbol`, or its \
+                                      `offline_symbol` when `offline` is true (ADR-0251). Audited"),
         (status = 400, description = "tenant_id or store_id is not a ULID", body = crate::openapi_admin::ErrorResponse),
         (status = 401, description = "No session", body = crate::openapi_admin::ErrorResponse),
         (status = 403, description = "The role lacks console.config.publish", body = crate::openapi_admin::ErrorResponse),
@@ -228,7 +241,19 @@ where
     )
     .await
     .map_err(|error| allocate_refusal(&error))?;
-    let id = publish_symbol(&state, &context, tenant_id, store_id, &record, "allocate").await?;
+    let (field, verb) = if request.offline {
+        ("offline_symbol", "allocate_offline")
+    } else {
+        ("symbol", "allocate")
+    };
+    let id = publish_symbol(
+        &state,
+        &context,
+        (tenant_id, store_id),
+        &record,
+        (field, verb),
+    )
+    .await?;
     Ok((
         StatusCode::OK,
         Json(AllocatedEInvoiceSymbol {
@@ -306,10 +331,9 @@ async fn current_generation<Cfg: LeaseStore, A, C>(
 async fn publish_symbol<Cfg, A, C>(
     state: &EInvoiceSymbolState<Cfg, A, C>,
     context: &AdminContext,
-    tenant_id: TenantId,
-    store_id: StoreId,
+    (tenant_id, store_id): (TenantId, StoreId),
     record: &SymbolRecord,
-    verb: &str,
+    (field, verb): (&str, &str),
 ) -> Result<String, Response>
 where
     Cfg: ConfigTreeStore + Clone + Send + Sync + 'static,
@@ -321,7 +345,7 @@ where
         tenant_id,
         store_id,
         ConfigLevel::Store,
-        |tree| Ok(vec![symbol_node(tree, &record.symbol)]),
+        |tree| Ok(vec![symbol_field_node(tree, field, &record.symbol)]),
     )
     .await?;
     pos_cloud_api::console::audit_action(
@@ -333,10 +357,11 @@ where
         "store",
         &store_id.to_string(),
         None,
-        Some(serde_json::json!({
-            "symbol": record.symbol,
-            "source": record.source.as_str(),
-        })),
+        Some({
+            let mut detail = serde_json::json!({ "source": record.source.as_str() });
+            detail[field] = serde_json::json!(record.symbol);
+            detail
+        }),
     )
     .await;
     Ok(id.to_string())
@@ -347,12 +372,22 @@ pub(crate) fn symbol_node(
     tree: Option<&crate::config_tree::ConfigTreeState>,
     symbol: &str,
 ) -> (String, serde_json::Value) {
+    symbol_field_node(tree, "symbol", symbol)
+}
+
+/// The store's `einvoice` node with `field` (`symbol` or `offline_symbol`) set to `symbol` and the
+/// rest kept.
+fn symbol_field_node(
+    tree: Option<&crate::config_tree::ConfigTreeState>,
+    field: &str,
+    symbol: &str,
+) -> (String, serde_json::Value) {
     let mut node = tree
         .and_then(|tree| tree.layer(ConfigLevel::Store).get(PublishedEInvoice::NODE))
         .filter(|node| node.is_object())
         .cloned()
         .unwrap_or_else(|| serde_json::json!({}));
-    node["symbol"] = serde_json::json!(symbol);
+    node[field] = serde_json::json!(symbol);
     (PublishedEInvoice::NODE.to_owned(), node)
 }
 

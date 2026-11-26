@@ -27,6 +27,10 @@ use pos_proto::wire_enum::Open;
 
 use crate::app::{AppError, Edge, IssuedInvoiceRef};
 
+/// How long after the outbox drain last reached the cloud a `HYBRID` store counts as offline (ADR-0251
+/// decision 6): two minutes, a technical threshold rather than a business choice.
+const HYBRID_OFFLINE_AFTER_MS: i64 = 120_000;
+
 /// How many due invoices one tick issues, so a long queue never holds the lock for long.
 const ISSUED_PER_TICK: usize = 100;
 
@@ -143,15 +147,18 @@ impl<S: EventStore> Edge<S> {
         (bill_id, total, buyer_subject_id): (BillId, Money, Option<SubjectId>),
     ) -> Result<FiscalInvoiceIssued, AppError> {
         let session = self.session();
-        let source = self.number_source_now(session.einvoice.number_source());
-        let sequence = if source == EInvoiceNumberSource::Pos {
+        let (source, symbol) = self.number_source_now(&session.einvoice, symbol, ctx.now);
+        let offline_numbered = session.einvoice.offline_symbol().as_ref() == Some(&symbol);
+        let sequence = if source == EInvoiceNumberSource::Vendor
+            || (source == EInvoiceNumberSource::Hybrid && !offline_numbered)
+        {
+            // Issued "number pending": the store takes no number, so its sequence never moves.
+            0
+        } else {
             self.lock_projection()
                 .invoices
                 .next_under(&symbol)
                 .ok_or(AppError::EInvoiceSymbolMissing)?
-        } else {
-            // Issued "number pending": the store takes no number, so its sequence never moves.
-            0
         };
         Ok(FiscalInvoiceIssued {
             bill_id,
@@ -174,21 +181,45 @@ impl<S: EventStore> Edge<S> {
         })
     }
 
-    /// Who numbers an invoice issued now under the store's `configured` source (ADR-0251 decisions 5
-    /// and 6). A store switched back to the POS keeps issuing "number pending" while any invoice
-    /// still waits for the vendor's number, so it never numbers over one the vendor is about to
-    /// give. `HYBRID` without an offline symbol is issued "number pending", as `VENDOR` is.
-    fn number_source_now(&self, configured: EInvoiceNumberSource) -> EInvoiceNumberSource {
-        match configured {
+    /// Who numbers an invoice issued at `now` under the store's node, and the symbol it is numbered
+    /// under (ADR-0251 decisions 5 and 6). A store switched back to the POS keeps issuing "number
+    /// pending" while any invoice still waits for the vendor's number, so it never numbers over one
+    /// the vendor is about to give. `HYBRID` offline numbers under the offline symbol, whose
+    /// sequence the vendor never shares; online, or with no offline symbol, it is issued "number
+    /// pending", as `VENDOR` is.
+    fn number_source_now(
+        &self,
+        node: &pos_proto::einvoice::PublishedEInvoice,
+        symbol: InvoiceSymbol,
+        now: Timestamp,
+    ) -> (EInvoiceNumberSource, InvoiceSymbol) {
+        match node.number_source() {
             EInvoiceNumberSource::Pos | EInvoiceNumberSource::Unspecified => {
                 if self.lock_projection().invoices.awaits_vendor_numbers() {
-                    EInvoiceNumberSource::Vendor
+                    (EInvoiceNumberSource::Vendor, symbol)
                 } else {
-                    EInvoiceNumberSource::Pos
+                    (EInvoiceNumberSource::Pos, symbol)
                 }
             }
-            source @ (EInvoiceNumberSource::Vendor | EInvoiceNumberSource::Hybrid) => source,
+            EInvoiceNumberSource::Vendor => (EInvoiceNumberSource::Vendor, symbol),
+            EInvoiceNumberSource::Hybrid => match node.offline_symbol() {
+                Some(offline) if self.offline(now) => (EInvoiceNumberSource::Hybrid, offline),
+                _ => (EInvoiceNumberSource::Hybrid, symbol),
+            },
         }
+    }
+
+    /// Whether the store is offline at `now`, as `HYBRID` reads it: the outbox drain's last attempt
+    /// failed, or it last reached the cloud more than [`HYBRID_OFFLINE_AFTER_MS`] ago.
+    fn offline(&self, now: Timestamp) -> bool {
+        if self.sync.cloud_link() != crate::sync_status::CloudLink::Online {
+            return true;
+        }
+        self.sync.last_sync_time().is_none_or(|reached| {
+            now.as_milliseconds_since_epoch()
+                .saturating_sub(reached.as_milliseconds_since_epoch())
+                > HYBRID_OFFLINE_AFTER_MS
+        })
     }
 
     /// Issues every deferred invoice due by now, in due order, each in its own transaction and

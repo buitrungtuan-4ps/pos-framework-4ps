@@ -32,10 +32,13 @@ export type AllocatedSymbolView = components["schemas"]["AllocatedEInvoiceSymbol
 export const allocateEInvoiceSymbol = (
   tenantId: string,
   storeId: string,
+  offline = false,
 ): Promise<AllocatedSymbolView> =>
   requestJson<AllocatedSymbolView>("POST", "/admin/config/einvoice-symbol/allocate", {
     tenant_id: tenantId,
     store_id: storeId,
+    // A HYBRID store's offline symbol rather than its symbol (ADR-0251 decision 6).
+    ...(offline ? { offline: true } : {}),
   });
 
 /** One invoice and where its submission stands (ADR-0241). No buyer is named. */

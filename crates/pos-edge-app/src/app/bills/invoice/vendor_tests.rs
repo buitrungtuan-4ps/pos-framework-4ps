@@ -10,7 +10,6 @@ use std::sync::Arc;
 
 use pos_fakes::FakeStore;
 use pos_ports::event_store::{EventQuery, EventStore};
-use pos_proto::EventPayload;
 use pos_proto::einvoice::{
     EInvoiceIssueMoment, EInvoiceNumberSource, PublishedEInvoice, VendorCode, VendorNumber,
 };
@@ -18,6 +17,7 @@ use pos_proto::events::{FiscalInvoiceIssued, FiscalInvoiceNumbered};
 use pos_proto::ids::{BillId, TableId};
 use pos_proto::ulid::Ulid;
 use pos_proto::wire_enum::Open;
+use pos_proto::{ClockSource as _, EventPayload};
 
 use crate::app::tests::{a_line, actor, cash, identity};
 use crate::app::{Edge, EdgeSession, IssuedInvoiceRef};
@@ -308,5 +308,73 @@ fn a_store_switched_back_numbers_after_the_vendors_last_number_once_none_waits()
             Some("1C26MAA/00000007"),
             "the store numbers after the vendor's last number, never over it"
         );
+    });
+}
+
+/// A `HYBRID` store whose node names `offline_symbol`.
+fn a_hybrid_store(store: FakeStore, offline_symbol: Option<&str>) -> Edge<FakeStore> {
+    let edge = a_store(
+        store,
+        EInvoiceIssueMoment::Immediate,
+        EInvoiceNumberSource::Hybrid,
+    );
+    let mut session = (*edge.session()).clone();
+    session.einvoice.offline_symbol = offline_symbol.map(str::to_owned);
+    edge.apply_session(session);
+    edge
+}
+
+#[test]
+fn a_hybrid_store_numbers_offline_from_its_offline_symbol_and_waits_for_the_vendor_online() {
+    pos_fakes::executor::run_ready(async {
+        let store = FakeStore::default();
+        let edge = a_hybrid_store(store.clone(), Some("1C26MAZ"));
+        // Nothing has reached the cloud yet: offline.
+        let (_, offline) = settle_one(&edge, 1).await;
+        assert_eq!(
+            offline.and_then(|invoice| invoice.number).as_deref(),
+            Some("1C26MAZ/00000001"),
+            "offline, the store numbers from the symbol the vendor never uses"
+        );
+
+        edge.sync().mark_online(edge.clock.now());
+        let (_, online) = settle_one(&edge, 2).await;
+        assert_eq!(
+            online.expect("an invoice").number,
+            None,
+            "online, the vendor numbers"
+        );
+
+        let issued = invoices(&store).await;
+        let recorded: Vec<(&str, u32, bool)> = issued
+            .iter()
+            .map(|event| {
+                (
+                    event.invoice.invoice_symbol.as_str(),
+                    event.invoice.invoice_sequence,
+                    event.invoice.number_pending(),
+                )
+            })
+            .collect();
+        assert_eq!(recorded, [("1C26MAZ", 1, false), ("1C26MAA", 0, true)]);
+        assert!(
+            issued
+                .iter()
+                .all(|event| event.invoice.number_source.known() == EInvoiceNumberSource::Hybrid)
+        );
+    });
+}
+
+#[test]
+fn a_hybrid_store_without_an_offline_symbol_waits_for_the_vendor_even_offline() {
+    pos_fakes::executor::run_ready(async {
+        let store = FakeStore::default();
+        let edge = a_hybrid_store(store.clone(), None);
+        let (_, answered) = settle_one(&edge, 1).await;
+        assert_eq!(answered.expect("an invoice").number, None);
+        // The store's own symbol never doubles as the offline one.
+        let edge = a_hybrid_store(FakeStore::default(), Some("1C26MAA"));
+        let (_, answered) = settle_one(&edge, 1).await;
+        assert_eq!(answered.expect("an invoice").number, None);
     });
 }

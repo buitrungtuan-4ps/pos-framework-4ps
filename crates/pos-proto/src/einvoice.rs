@@ -231,6 +231,15 @@ pub struct PublishedEInvoice {
         skip_serializing_if = "Option::is_none"
     )]
     pub symbol: Option<String>,
+    /// The symbol a `HYBRID` store numbers under while it is offline, which the cloud gives it from
+    /// the same ledger as every symbol, so it never shares a sequence with the vendor's (ADR-0251
+    /// decision 6). Not a setting. Read it through [`Self::offline_symbol`].
+    #[serde(
+        default,
+        deserialize_with = "text",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub offline_symbol: Option<String>,
     /// Whether the cloud allocates the symbol by itself. Read it through
     /// [`Self::symbol_allocation`].
     #[serde(default, deserialize_with = "token", skip_serializing_if = "is_absent")]
@@ -415,6 +424,16 @@ impl PublishedEInvoice {
     #[must_use]
     pub fn symbol(&self) -> Option<InvoiceSymbol> {
         self.symbol.as_deref().and_then(InvoiceSymbol::parse)
+    }
+
+    /// The symbol a `HYBRID` store numbers under offline, or `None` while the cloud has given none;
+    /// never the store's own symbol, so the two sequences stay apart.
+    #[must_use]
+    pub fn offline_symbol(&self) -> Option<InvoiceSymbol> {
+        self.offline_symbol
+            .as_deref()
+            .and_then(InvoiceSymbol::parse)
+            .filter(|offline| Some(offline) != self.symbol().as_ref())
     }
 }
 
