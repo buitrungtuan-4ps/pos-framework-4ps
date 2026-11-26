@@ -695,6 +695,8 @@
   "records.none_declared": "This store's package declares no records.",
   "records.new": "New {kind}",
   "records.save": "Save",
+  "details.title": "Details",
+  "details.saved": "Details saved",
   "records.saved": "Saved.",
   "records.required": "(required)",
   "records.none_chosen": "None",

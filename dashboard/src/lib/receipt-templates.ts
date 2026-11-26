@@ -161,3 +161,41 @@ export function templateCount(value: unknown): number {
   const templates = readTemplates(value);
   return (templates.base === undefined ? 0 : 1) + Object.keys(templates.channels ?? {}).length;
 }
+
+/** At most this many custom fields print on one template (`pos_proto::receipt::CUSTOM_FIELDS_MAX`). */
+export const CUSTOM_FIELDS_MAX = 64;
+
+/** `template` printing `ids` under its header, in that order; none drops the field off the wire. */
+export function withCustomFields(template: ReceiptTemplate, ids: readonly string[]): ReceiptTemplate {
+  const { custom_field_ids: _old, ...rest } = template;
+  const unique = [...new Set(ids)].slice(0, CUSTOM_FIELDS_MAX);
+  return unique.length === 0 ? rest : { ...rest, custom_field_ids: unique };
+}
+
+/** The custom fields a template prints now. */
+export function customFieldsOf(template: ReceiptTemplate | undefined): string[] {
+  const ids = template?.["custom_field_ids"];
+  return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
+}
+
+/** A field a receipt can print: one declared on an order or a bill, by id, with its label key. */
+export type PrintableField = { readonly id: string; readonly labelKey: string; readonly personal: boolean };
+
+/**
+ * The fields a receipt can print, from the tenant's package versions: each order or bill field once,
+ * the latest version's declaration winning, retired ones left out.
+ */
+export function printableFields(
+  versions: readonly { readonly content: { readonly data?: { readonly custom_fields?: readonly unknown[] } } }[],
+): PrintableField[] {
+  const latest = new Map<string, { custom_field_id: string; label_key: string; object?: string; deprecated?: boolean; personal?: boolean }>();
+  for (const version of versions) {
+    for (const raw of version.content.data?.custom_fields ?? []) {
+      const field = raw as { custom_field_id: string; label_key: string; object?: string; deprecated?: boolean; personal?: boolean };
+      latest.set(field.custom_field_id, field);
+    }
+  }
+  return [...latest.values()]
+    .filter((field) => (field.object === "DATA_OBJECT_ORDER" || field.object === "DATA_OBJECT_BILL") && field.deprecated !== true)
+    .map((field) => ({ id: field.custom_field_id, labelKey: field.label_key, personal: field.personal === true }));
+}

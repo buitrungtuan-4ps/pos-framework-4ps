@@ -12,6 +12,7 @@ import { createMemo, createResource, createSignal, For, Index, Show } from "soli
 
 import { api } from "../../../api/client";
 import type { Json } from "../../../api/types";
+import { CustomFieldLines } from "./CustomFieldLines";
 import { Button, SelectField, SwitchField, TextField } from "../../../components/ui";
 import { t } from "../../../i18n";
 import { channelLabel, SALES_CHANNELS } from "../../../lib/channels";
@@ -173,6 +174,7 @@ export function ReceiptTemplatesEditor(props: {
               disabled={props.disabled} onChange={write} />
             <KeyLines part="footer_keys" template={current()} suggestions={suggestions()}
               disabled={props.disabled} onChange={write} />
+            <CustomFieldLines tenantId={props.tenantId} template={current()} disabled={props.disabled} onChange={write} />
             <Show when={english.error}>
               <p class="text-sm text-ink-muted">{t("settings.receipt.gridUnread")}</p>
             </Show>

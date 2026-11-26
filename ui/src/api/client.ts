@@ -10,6 +10,7 @@ import { clearDeviceToken, deviceToken, edgeBase, rememberPairing } from "./cred
 import { observeEdgeVersion } from "./edgeVersion";
 import { type LeaseStanding, observeLeaseStanding } from "./leaseStanding";
 import type {
+  FieldsRequest,
   ActivateAccepted,
   ActivationStanding,
   BatchCloseRequest,
@@ -540,6 +541,14 @@ export const api = {
   // A package's custom records (ADR-0194): one object type's, newest first, entering one and
   // changing one. No answer carries a personal value; one subject's are read on their own, by a
   // person holding `data.personal.read`, and every read is audited (ADR-0206).
+  // One existing object's custom fields (an order, line, bill, table or shift), read and set
+  // (ADR-0194, ADR-0206). Neither answer carries a personal value.
+  objectCustomFields: (object: string, objectId: string) =>
+    request<CustomDataResponse>(
+      "GET",
+      `/api/custom-fields?object=${encodeURIComponent(object)}&object_id=${encodeURIComponent(objectId)}`,
+    ),
+  setCustomFields: (body: FieldsRequest) => request<CustomDataResponse>("POST", "/api/custom-fields", body),
   customRecords: (objectTypeId: string) =>
     request<CustomRecordsResponse>("GET", `/api/custom-records?object_type_id=${encodeURIComponent(objectTypeId)}`),
   createCustomRecord: (body: NewRecordRequest) =>

@@ -695,6 +695,8 @@
   "records.none_declared": "Gói của cửa hàng này không khai báo loại hồ sơ nào.",
   "records.new": "Thêm {kind}",
   "records.save": "Lưu",
+  "details.title": "Thông tin thêm",
+  "details.saved": "Đã lưu thông tin",
   "records.saved": "Đã lưu.",
   "records.required": "(bắt buộc)",
   "records.none_chosen": "Không chọn",
