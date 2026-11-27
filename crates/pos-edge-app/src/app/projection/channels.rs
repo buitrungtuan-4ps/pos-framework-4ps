@@ -16,7 +16,7 @@ use pos_core::error::DomainError;
 use pos_proto::PaymentMethod;
 use pos_proto::ids::{BillId, ShiftId, VendorId};
 use pos_proto::money::Money;
-use pos_proto::sale_channel::{SaleChannel, sale_channel};
+use pos_proto::sale_channel::{Opening, SaleChannel, sale_channel};
 
 use crate::app::{Projection, ShiftRecord};
 
@@ -26,9 +26,16 @@ impl Projection {
         let Some(order_id) = self.bills.get(&bill_id).map(|bill| bill.order_id) else {
             return SaleChannel::NOT_RECORDED;
         };
+        let tokens = self.sale_tokens(order_id);
         self.order_origin(order_id)
             .map_or(SaleChannel::NOT_RECORDED, |origin| {
-                sale_channel(origin.channel, origin.table_id, self.vendor(order_id))
+                sale_channel(Opening {
+                    channel: origin.channel,
+                    table_id: origin.table_id,
+                    vendor_id: self.vendor(order_id),
+                    order_type: tokens.and_then(|(order_type, _)| order_type.as_ref()),
+                    sale_source: tokens.and_then(|(_, source)| source.as_ref()),
+                })
             })
     }
 
@@ -41,7 +48,7 @@ impl Projection {
     ) -> Result<(), DomainError> {
         let channel = self.sale_channel_of(bill_id);
         if let Some(record) = shift.and_then(|shift| self.shifts.get_mut(&shift)) {
-            add_line(record, channel, 1, total)?;
+            add_line(record, channel.clone(), 1, total)?;
             record.bill_channels.insert(bill_id, channel);
         }
         Ok(())
@@ -99,7 +106,7 @@ fn add_line(
 ) -> Result<(), DomainError> {
     let at = match record
         .channels
-        .binary_search_by_key(&channel, |(kept, _, _)| *kept)
+        .binary_search_by(|(kept, _, _)| kept.cmp(&channel))
     {
         Ok(at) => at,
         Err(at) => {

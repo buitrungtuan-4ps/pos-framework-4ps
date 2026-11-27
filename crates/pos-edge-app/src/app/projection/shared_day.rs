@@ -14,7 +14,6 @@ use pos_core::decision::Actor;
 use pos_fakes::FakeStore;
 use pos_ports::event_store::EventStore as _;
 use pos_ports::{Transactional as _, TxContext as _};
-use pos_proto::WireEnum as _;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::ids::{DeviceId, EmployeeId, ShiftId, StoreId};
 use pos_proto::ulid::Ulid;
@@ -83,9 +82,9 @@ fn the_shared_store_day_rebuilds_to_the_figures_the_console_shows_too() {
             .channels
             .iter()
             .map(|line| Line {
-                source: line.channel.source.as_wire().to_owned(),
+                source: line.channel.source.as_str().to_owned(),
                 vendor_id: line.channel.vendor_id.map(|app| app.to_string()),
-                order_type: line.channel.order_type.as_wire().to_owned(),
+                order_type: line.channel.order_type.as_str().to_owned(),
                 bills: line.bills,
                 sales: line.sales.amount_minor,
             })

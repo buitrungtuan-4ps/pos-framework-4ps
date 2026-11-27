@@ -157,10 +157,10 @@ impl From<&XFigures> for XFiguresResponse {
                 .channels
                 .iter()
                 .map(|line| ChannelLineResponse {
-                    source: line.channel.source.as_wire().to_owned(),
+                    source: line.channel.source.as_str().to_owned(),
                     vendor_id: line.channel.vendor_id.map(|app| app.to_string()),
                     name: line.name.clone(),
-                    order_type: line.channel.order_type.as_wire().to_owned(),
+                    order_type: line.channel.order_type.as_str().to_owned(),
                     bill_count: line.bills,
                     sales_amount: line.sales,
                 })

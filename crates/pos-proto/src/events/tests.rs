@@ -209,6 +209,8 @@ fn an_envelope_round_trips_through_json() {
         subject_id: None,
         tab_number: None,
         opened_by_action_id: None,
+        order_type: None,
+        sale_source: None,
     };
     let envelope = sample_envelope(EventType::SalesOrderOpened, payload.clone());
     let json = serde_json::to_string(&envelope).expect("serialise");

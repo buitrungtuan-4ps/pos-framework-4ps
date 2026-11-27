@@ -102,6 +102,24 @@ impl Projection {
         }
     }
 
+    /// Records the order type and sale source an order recorded on its opening (ADR-0260).
+    pub(in crate::app) fn record_sale_tokens(
+        &mut self,
+        order_id: OrderId,
+        order_type: Option<pos_proto::sale_channel::SaleToken>,
+        sale_source: Option<pos_proto::sale_channel::SaleToken>,
+    ) {
+        if order_type.is_some() || sale_source.is_some() {
+            self.order_tokens
+                .insert(order_id, (order_type, sale_source));
+        }
+    }
+
+    /// The order type and sale source an open order recorded, either absent.
+    pub(in crate::app) fn sale_tokens(&self, order_id: OrderId) -> Option<&crate::app::SaleTokens> {
+        self.order_tokens.get(&order_id)
+    }
+
     /// Flags an order from outside the store whose quote differed from the menu (ADR-0248).
     pub(in crate::app) fn record_price_flag(&mut self, order_id: OrderId, differs: bool) {
         if differs {
@@ -342,6 +360,7 @@ impl Projection {
         self.opening_acts.remove(&order_id);
         self.recipients.remove(&order_id);
         self.order_vendors.remove(&order_id);
+        self.order_tokens.remove(&order_id);
         self.forget_checks(order_id);
         if let Some(table_id) = self.table_for_order(order_id) {
             self.table_orders.remove(&table_id);

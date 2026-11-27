@@ -29,6 +29,7 @@ use crate::ids::{
 use crate::money::{Money, Ratio};
 use crate::package::DataObject;
 use crate::quantity::Quantity;
+use crate::sale_channel::SaleToken;
 use crate::text::{ActionKey, DisplayName, PermissionKey, ReleaseTag, TerminalReference};
 use crate::time::Timestamp;
 use crate::ulid::Ulid;
@@ -81,6 +82,18 @@ event_catalogue! {
         /// The catalogue act that opened the order (ADR-0244); absent for intake and older orders.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         opened_by_action_id: Option<ActionKey>,
+        /// The order type, an `ORDER_TYPE_*` token from the store's published list
+        /// ([ADR-0260](../../../docs/adr/0260-order-types-and-sale-sources-are-published-lists.md)
+        /// decision 4). Reporting only: price and tax follow `channel`, which its base kind set.
+        /// Absent where nothing was chosen or matched, and on every order opened before this field,
+        /// which then reads as ADR-0259 derives it; a value that is not a token reads as absent.
+        /// Left off the wire while absent.
+        #[serde(default, deserialize_with = "crate::sale_channel::lenient_token", skip_serializing_if = "Option::is_none")]
+        order_type: Option<SaleToken>,
+        /// Where the order came from, a `SALE_SOURCE_*` token: a kiosk, or a source the store
+        /// published (ADR-0260 decision 4). Absent as `order_type` is, and then derived.
+        #[serde(default, deserialize_with = "crate::sale_channel::lenient_token", skip_serializing_if = "Option::is_none")]
+        sale_source: Option<SaleToken>,
     },
     /// An order reached a terminal state (declared beyond the specification's list: an order can
     /// end other than by a settled bill).

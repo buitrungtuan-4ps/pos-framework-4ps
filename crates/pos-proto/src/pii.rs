@@ -111,6 +111,11 @@ no_pii!(fees::FeeCode);
 // token built only through its check, never free text: its own documentation gives the argument.
 no_pii!(locale::TaxComponentName);
 
+// An order type's or a sale source's token, which `sales.order.opened` records (ADR-0260 decision
+// 4). Built only through its check: upper-case letters, digits and underscores after a fixed
+// prefix, so it names a kind of order and cannot carry a name, an e-mail or a phone number.
+no_pii!(crate::sale_channel::SaleToken);
+
 // The chain hash (ADR-0131), and the argument is worth stating because "a hash" is not
 // by itself an answer: a hash of personal data is still personal data under PDPD and
 // GDPR, pseudonymised rather than anonymous.
