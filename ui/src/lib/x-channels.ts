@@ -4,6 +4,7 @@
 import type { XFigures } from "../api/schemas";
 import { t, type MessageKey } from "../i18n";
 import type { Money } from "./money";
+import { localName } from "../state/order-channels";
 
 /** One line of the edge's settled bills by channel and order type. */
 export type ChannelLine = XFigures["channels"][number];
@@ -26,14 +27,18 @@ function appName(app: { vendor_id?: string; name?: string }): string {
   return app.name ?? t("x.app_unnamed", { id: (app.vendor_id ?? "").slice(-6) });
 }
 
-/** Where a line's orders came from: the app by its name, or the channel (ADR-0259). */
+/**
+ * Where a line's orders came from: the app by its name, else the store's name for the source
+ * (ADR-0260), else the till's words for a built-in (ADR-0259).
+ */
 export function channelName(line: ChannelLine): string {
-  return line.vendor_id ? appName(line) : t(SOURCES[line.source] ?? "x.source_other");
+  if (line.vendor_id) return appName(line);
+  return localName(line.source_names) ?? t(SOURCES[line.source] ?? "x.source_other");
 }
 
-/** How a line's orders were served. */
-export function orderTypeName(orderType: string): string {
-  return t(ORDER_TYPES[orderType] ?? "x.type_unspecified");
+/** How a line's orders were served: the store's name for the type, else the till's words. */
+export function orderTypeName(orderType: string, names?: Readonly<Record<string, string>>): string {
+  return localName(names) ?? t(ORDER_TYPES[orderType] ?? "x.type_unspecified");
 }
 
 /** The edge's lines summed by `label`, in the order each label first appears. */

@@ -42,9 +42,12 @@ export function XFiguresList(props: { figures: XFigures }) {
     rows: groupChannels(props.figures.channels, label),
   });
   const sections = () => [
-    grouped("x.channel_and_type", (line) => `${channelName(line)} · ${orderTypeName(line.order_type)}`),
+    grouped(
+      "x.channel_and_type",
+      (line) => `${channelName(line)} · ${orderTypeName(line.order_type, line.order_type_names)}`,
+    ),
     grouped("x.by_channel", channelName),
-    grouped("x.by_order_type", (line) => orderTypeName(line.order_type)),
+    grouped("x.by_order_type", (line) => orderTypeName(line.order_type, line.order_type_names)),
   ];
   return (
     <dl class="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-sm tabular-nums" data-outcome="x-figures">
