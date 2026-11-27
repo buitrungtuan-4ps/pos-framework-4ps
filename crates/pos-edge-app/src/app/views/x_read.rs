@@ -5,6 +5,8 @@
 //! ([ADR-0187](../../../../../docs/adr/0187-a-shift-is-handed-over-at-the-till-and-read-there.md)
 //! decision 4).
 
+use std::collections::BTreeMap;
+
 use pos_core::error::DomainError;
 use pos_proto::ShiftState;
 use pos_proto::ids::{DeviceId, ShiftId, VendorId};
@@ -33,6 +35,13 @@ pub struct ChannelLine {
     pub channel: SaleChannel,
     /// The app's name for an app's line, as [`InAppTotal::name`].
     pub name: Option<DisplayName>,
+    /// What the store's `order_channels` node calls the line's order type, by language; empty
+    /// where it names it not, and the till shows the built-in's label or the token
+    /// ([ADR-0260](../../../../../docs/adr/0260-order-types-and-sale-sources-are-published-lists.md)
+    /// decision 6).
+    pub order_type_names: BTreeMap<String, DisplayName>,
+    /// What it calls the line's source, by language, as `order_type_names`.
+    pub source_names: BTreeMap<String, DisplayName>,
     /// How many bills.
     pub bills: u32,
     /// What they came to.

@@ -11,7 +11,9 @@ use pos_proto::ids::OrderId;
 use pos_proto::text::DisplayName;
 use pos_proto::{Open, SalesChannel};
 
-use crate::app::{AppError, CounterOrderLine, CounterOrderOpened, CounterOrderView, Edge};
+use crate::app::{
+    AppError, CounterOrderLine, CounterOrderOpened, CounterOrderView, Edge, OrderRecording,
+};
 use crate::queue::QueueNumberAuthority;
 
 impl<S: EventStore> Edge<S> {
@@ -34,8 +36,26 @@ impl<S: EventStore> Edge<S> {
         actor: Actor,
         channel: SalesChannel,
     ) -> Result<CounterOrderOpened, AppError> {
+        self.open_counter_order_recorded(actor, channel, OrderRecording::default())
+            .await
+    }
+
+    /// [`Self::open_counter_order`], recording the order type and source the till names
+    /// ([ADR-0260](../../../../../docs/adr/0260-order-types-and-sale-sources-are-published-lists.md)
+    /// decision 4), which the caller has checked against the store's lists.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::open_counter_order`].
+    pub async fn open_counter_order_recorded(
+        &self,
+        actor: Actor,
+        channel: SalesChannel,
+        recording: OrderRecording,
+    ) -> Result<CounterOrderOpened, AppError> {
         let (ctx, order_id) = self.begin_tableless(actor, channel)?;
-        self.finish_tableless(&ctx, order_id, channel, None).await
+        self.finish_tableless(&ctx, order_id, (channel, recording), None)
+            .await
     }
 
     /// The checks every tableless open makes, and the new order's id: what
@@ -62,7 +82,7 @@ impl<S: EventStore> Edge<S> {
         &self,
         ctx: &DecisionCtx,
         order_id: OrderId,
-        channel: SalesChannel,
+        (channel, recording): (SalesChannel, OrderRecording),
         tab_number: Option<u64>,
     ) -> Result<CounterOrderOpened, AppError> {
         let package_version_id = self.opening_package_version();
@@ -83,8 +103,8 @@ impl<S: EventStore> Edge<S> {
             subject_id: None,
             tab_number,
             opened_by_action_id: Some(opened_by.clone()),
-            order_type: None,
-            sale_source: None,
+            order_type: recording.order_type.clone(),
+            sale_source: recording.sale_source.clone(),
         };
         self.commit_and_publish(ctx, &opened).await?;
         {
@@ -94,6 +114,7 @@ impl<S: EventStore> Edge<S> {
             projection.record_tab(order_id, tab_number);
             projection.record_opening_act(order_id, Some(opened_by));
             projection.record_opener(order_id, Some(ctx.actor.employee_id));
+            projection.record_sale_tokens(order_id, recording.order_type, recording.sale_source);
         }
         Ok(CounterOrderOpened {
             order_id,

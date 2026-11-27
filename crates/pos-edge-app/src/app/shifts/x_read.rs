@@ -150,12 +150,18 @@ impl<S: EventStore> Edge<S> {
                     None
                 },
                 channels: {
+                    let listed = self.session().order_channels.names();
+                    let names_of = |token: &pos_proto::sale_channel::SaleToken| {
+                        listed.get(token.as_str()).cloned().unwrap_or_default()
+                    };
                     let mut lines: Vec<ChannelLine> = record
                         .channels
                         .iter()
                         .map(|(channel, bills, sales)| ChannelLine {
                             channel: channel.clone(),
                             name: self.vendor_name(channel.vendor_id),
+                            order_type_names: names_of(&channel.order_type),
+                            source_names: names_of(&channel.source),
                             bills: *bills,
                             sales: *sales,
                         })

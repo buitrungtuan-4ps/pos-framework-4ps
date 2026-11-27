@@ -171,6 +171,15 @@ pub(crate) struct MenuResponse {
     /// ignores it, and a till reading an edge older than the field shows the takeaway book, the
     /// channel that edge opens every walk-in on.
     walk_in_channel: &'static str,
+    /// The active order types the counter offers on a new order, the store's `default` first, from
+    /// its `order_channels` node
+    /// ([ADR-0260](../../../../docs/adr/0260-order-types-and-sale-sources-are-published-lists.md)):
+    /// the three built-ins until it lists its own. A till older than the field ignores it, and a
+    /// till reading an edge older than the field offers eat in and take away as before.
+    order_types: Vec<OfferedOrderType>,
+    /// The sources the till may record beyond its own, `SALE_SOURCE_POS`: the store's active
+    /// custom sources, empty until it lists one.
+    sale_sources: Vec<OfferedSource>,
     /// Whether the store takes payment only once a check showing what the bill now comes to has
     /// been printed, from its `billing` node
     /// ([ADR-0218](../../../../docs/adr/0218-a-printed-check-is-an-event-every-till-sees.md)): `false`
@@ -463,6 +472,8 @@ where
             tip_percents: session.tender_keys.tip_percents(),
             split_ways_max: session.tender_keys.split_ways_max(),
             walk_in_channel: session.counter.walk_in_channel().as_wire(),
+            order_types: offered_types(&session.order_channels),
+            sale_sources: offered_sources(&session.order_channels),
             check_before_payment: session.billing.check_before_payment(),
             scan_keystroke_window_ms: session.scan.keystroke_window_ms(),
             weighing_manual_entry: edge.manual_weight_allowed(),
@@ -594,6 +605,73 @@ where
         .into_response(),
         Err(error) => error_response(&error),
     }
+}
+
+/// An order type as the counter offers it (ADR-0260).
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+struct OfferedOrderType {
+    /// Its `ORDER_TYPE_*` token, which `POST /api/orders` takes as `order_type`.
+    order_type: String,
+    /// Its base kind, `ORDER_TYPE_DINE_IN`, `_TAKEAWAY` or `_DELIVERY`, which sets the channel.
+    base_order_type: String,
+    /// Its names by language; empty for a built-in the store left unnamed.
+    names: std::collections::BTreeMap<String, String>,
+    /// Whether it is the store's default.
+    default: bool,
+}
+
+/// A sale source as the till offers it (ADR-0260).
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+struct OfferedSource {
+    /// Its `SALE_SOURCE_*` token, which `POST /api/orders` takes as `sale_source`.
+    source: String,
+    /// Its names by language.
+    names: std::collections::BTreeMap<String, String>,
+}
+
+fn names_of(
+    names: &std::collections::BTreeMap<String, DisplayName>,
+) -> std::collections::BTreeMap<String, String> {
+    names
+        .iter()
+        .map(|(language, name)| (language.clone(), name.as_str().to_owned()))
+        .collect()
+}
+
+/// The active types, the default first and otherwise in the store's order.
+fn offered_types(
+    lists: &pos_proto::order_channels::PublishedOrderChannels,
+) -> Vec<OfferedOrderType> {
+    let mut types: Vec<_> = lists
+        .order_types()
+        .into_iter()
+        .filter(|kept| kept.active)
+        .map(|kept| OfferedOrderType {
+            order_type: kept.order_type.as_str().to_owned(),
+            base_order_type: kept.base_order_type.as_str().to_owned(),
+            names: names_of(&kept.names),
+            default: kept.default,
+        })
+        .collect();
+    types.sort_by_key(|offered| !offered.default);
+    types
+}
+
+/// The active sources the till may record, in the store's order.
+fn offered_sources(
+    lists: &pos_proto::order_channels::PublishedOrderChannels,
+) -> Vec<OfferedSource> {
+    lists
+        .sources
+        .iter()
+        .filter(|kept| lists.till_may_record(&kept.source))
+        .map(|kept| OfferedSource {
+            source: kept.source.as_str().to_owned(),
+            names: names_of(&kept.names),
+        })
+        .collect()
 }
 
 #[cfg(test)]

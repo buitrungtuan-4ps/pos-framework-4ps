@@ -295,6 +295,10 @@ pub struct EdgeSession {
     /// decision 2): the channel it takes when the till names none. Takeaway, as every walk-in was
     /// before the setting, in the bootstrap and wherever the node sets none.
     pub counter: PublishedCounter,
+    /// The order types and sale sources the store lists, from the `order_channels` node
+    /// ([ADR-0260](../../../../docs/adr/0260-order-types-and-sale-sources-are-published-lists.md)):
+    /// the three built-in types and no source beyond the built-ins until the store lists its own.
+    pub order_channels: pos_proto::order_channels::PublishedOrderChannels,
     /// How quickly a barcode scanner's keystrokes arrive, from the `scan` node
     /// ([ADR-0222](../../../../docs/adr/0222-items-carry-barcodes-and-plus-and-a-counter-can-pay-first.md)
     /// decision 2): 50 ms in the bootstrap and wherever the node sets none.

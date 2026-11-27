@@ -84,8 +84,8 @@ pub use views::{
     BillCheckView, BillView, BumpView, BuyerDetails, CashMovement, ChannelLine, ClosedDrawers,
     CombinedReport, CounterOrderLine, CounterOrderOpened, CounterOrderView, DrawerFigures,
     DrawerView, DrawersView, FiredLine, HandoverSlip, InAppTotal, IssuedInvoiceRef, LineDraft,
-    LineView, LiveOrderLine, LiveOrderView, MAX_SETTLED_LISTED, OrderLineChoice, PreBill,
-    ReceiptCopy, ReceiptLine, SettledBillView, SettledVoidView, ShiftHeader, ShiftReport,
+    LineView, LiveOrderLine, LiveOrderView, MAX_SETTLED_LISTED, OrderLineChoice, OrderRecording,
+    PreBill, ReceiptCopy, ReceiptLine, SettledBillView, SettledVoidView, ShiftHeader, ShiftReport,
     ShiftView, ShiftX, StoreX, TabView, TableView, Takings, TenderTotals, TillScope, TransferView,
     WaitingLine, XFigures,
 };
