@@ -159,3 +159,72 @@ fn an_order_paid_at_the_store_is_left_for_the_till() {
     ));
     assert_eq!(money_in(&log), (vec![], vec![]));
 }
+
+/// ADR-0259 decisions 4 and 5: on the till's X the app's order is its own line, the app named and
+/// delivered, and its in-app payment is named by the app instead of "other"; a rebuild from the log
+/// reads the same.
+#[test]
+fn the_x_names_the_apps_order_and_its_in_app_payment() {
+    use pos_core::decision::Actor;
+    use pos_proto::ids::EmployeeId;
+    use pos_proto::sale_channel::{OrderType, SaleSource};
+
+    let actor = Actor {
+        employee_id: EmployeeId::new(Ulid::from_u128(10)),
+        device_id: DeviceId::new(Ulid::from_u128(20)),
+    };
+    let (edge, log) = edge_paid("");
+    let shift = run_ready(edge.open_shift(actor, Money::new(CurrencyCode::VND, 0)))
+        .expect("opens a shift")
+        .shift_id;
+    let order_id = take_order(&edge);
+    run_ready(pos_edge::delivery_slips::confirmed(
+        None, None, &edge, order_id,
+    ));
+    let read = |edge: &Edge<FakeStore>| {
+        let figures = edge.shift_x(actor, shift).expect("reads").figures;
+        let lines: Vec<_> = figures
+            .channels
+            .iter()
+            .map(|line| {
+                (
+                    line.channel.source,
+                    line.channel.vendor_id,
+                    line.channel.order_type,
+                    line.name.as_ref().map(|name| name.as_str().to_owned()),
+                    line.bills,
+                    line.sales.amount_minor,
+                )
+            })
+            .collect();
+        let apps: Vec<_> = figures
+            .tenders
+            .in_app
+            .iter()
+            .map(|app| (app.vendor_id, app.amount.amount_minor))
+            .collect();
+        (lines, apps, figures.tenders.other.amount_minor)
+    };
+    let expected = (
+        vec![(
+            SaleSource::App,
+            Some(vendor_id()),
+            OrderType::Delivery,
+            Some("Sandbox delivery".to_owned()),
+            1,
+            132_000,
+        )],
+        vec![(vendor_id(), 132_000)],
+        132_000,
+    );
+    assert_eq!(read(&edge), expected);
+    let rebuilt = Edge::new(
+        log,
+        StoreIdentity::for_store(store()),
+        edge.session().as_ref().clone(),
+        Arc::new(InMemoryReceipts::new()),
+    )
+    .expect("seed the id generator");
+    run_ready(rebuilt.rebuild()).expect("rebuilds");
+    assert_eq!(read(&rebuilt), expected, "the same after a rebuild");
+}

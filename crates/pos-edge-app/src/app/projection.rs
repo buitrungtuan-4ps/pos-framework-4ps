@@ -6,6 +6,7 @@
 //! and bill inputs the commands read from it.
 
 mod bills;
+mod channels;
 mod checks;
 mod custom;
 mod fold;

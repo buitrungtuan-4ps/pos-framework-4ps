@@ -18,7 +18,10 @@ use pos_proto::ids::ShiftId;
 use pos_proto::money::{CurrencyCode, Money};
 use pos_proto::{ClockSource, PaymentMethod};
 
-use crate::app::{AppError, Edge, ShiftRecord, ShiftX, StoreX, TenderTotals, XFigures};
+use crate::app::views::sort_lines;
+use crate::app::{
+    AppError, ChannelLine, Edge, InAppTotal, ShiftRecord, ShiftX, StoreX, TenderTotals, XFigures,
+};
 
 impl<S: EventStore> Edge<S> {
     /// Whether `actor` may read an X at all: whoever sees the day's takings, or holds
@@ -94,7 +97,7 @@ impl<S: EventStore> Edge<S> {
             let x = self.x_of(*shift_id, record, shows)?;
             totals = Some(match totals {
                 Some(sum) => sum.plus(&x.figures)?,
-                None => x.figures,
+                None => x.figures.clone(),
             });
             shifts.push(x);
         }
@@ -123,7 +126,18 @@ impl<S: EventStore> Edge<S> {
             figures: XFigures {
                 sales: record.sales,
                 bills: record.bills,
-                tenders: tenders_of(record, record.opening_float.currency_code)?,
+                tenders: TenderTotals {
+                    in_app: record
+                        .in_app
+                        .iter()
+                        .map(|(vendor_id, amount)| InAppTotal {
+                            vendor_id: *vendor_id,
+                            name: self.vendor_name(Some(*vendor_id)),
+                            amount: *amount,
+                        })
+                        .collect(),
+                    ..tenders_of(record, record.opening_float.currency_code)?
+                },
                 discounts: record.discounts,
                 voided_bills: record.voided_bills,
                 voided_cash: record.voided_cash,
@@ -134,6 +148,20 @@ impl<S: EventStore> Edge<S> {
                     Some(record.expected()?)
                 } else {
                     None
+                },
+                channels: {
+                    let mut lines: Vec<ChannelLine> = record
+                        .channels
+                        .iter()
+                        .map(|(channel, bills, sales)| ChannelLine {
+                            channel: *channel,
+                            name: self.vendor_name(channel.vendor_id),
+                            bills: *bills,
+                            sales: *sales,
+                        })
+                        .collect();
+                    sort_lines(&mut lines);
+                    lines
                 },
             },
         })
@@ -148,6 +176,7 @@ fn tenders_of(record: &ShiftRecord, currency: CurrencyCode) -> Result<TenderTota
         card: zero,
         qr: zero,
         other: zero,
+        in_app: Vec::new(),
     };
     for (method, applied) in &record.tenders {
         let slot = match method {

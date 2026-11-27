@@ -39,6 +39,19 @@ use crate::http::shifts::{printed_at, till_scope};
 use crate::http::{ERROR_REASON_HEADER, bad_request, error_response, parse_ulid};
 use crate::printing::{PrintOutcome, Printers, XPaper};
 
+/// What one delivery app's in-app payments applied (ADR-0259 decision 5).
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+struct InAppResponse {
+    /// The app's connection.
+    vendor_id: String,
+    /// What the store calls it; absent for an app the store no longer lists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    name: Option<DisplayName>,
+    amount: Money,
+}
+
 /// What each tender took.
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -46,7 +59,32 @@ struct TendersResponse {
     cash: Money,
     card: Money,
     qr: Money,
+    /// Every other tender, in-app payments included.
     other: Money,
+    /// Each delivery app's in-app payments, by app (ADR-0259 decision 5).
+    in_app: Vec<InAppResponse>,
+    /// `other` without the in-app payments: what the till labels "other".
+    other_than_apps: Money,
+}
+
+/// One line of the settled bills by channel and order type (ADR-0259 decision 4).
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+struct ChannelLineResponse {
+    /// Where the orders came from, a `SALE_SOURCE_*` token.
+    source: String,
+    /// The delivery app's connection, for `SALE_SOURCE_APP`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    vendor_id: Option<String>,
+    /// What the store calls that app; absent otherwise or for one it no longer lists.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(nullable = false))]
+    name: Option<DisplayName>,
+    /// How they were served, an `ORDER_TYPE_*` token.
+    order_type: String,
+    bill_count: u32,
+    sales_amount: Money,
 }
 
 /// One shift's figures, or several shifts' together.
@@ -74,6 +112,9 @@ struct XFiguresResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(nullable = false))]
     expected_amount: Option<Money>,
+    /// The settled bills by channel and order type, summing to `bill_count` and `sales_amount`
+    /// (ADR-0259 decision 4).
+    channels: Vec<ChannelLineResponse>,
 }
 
 impl From<&XFigures> for XFiguresResponse {
@@ -86,6 +127,24 @@ impl From<&XFigures> for XFiguresResponse {
                 card: figures.tenders.card,
                 qr: figures.tenders.qr,
                 other: figures.tenders.other,
+                in_app: figures
+                    .tenders
+                    .in_app
+                    .iter()
+                    .map(|app| InAppResponse {
+                        vendor_id: app.vendor_id.to_string(),
+                        name: app.name.clone(),
+                        amount: app.amount,
+                    })
+                    .collect(),
+                other_than_apps: figures
+                    .tenders
+                    .in_app
+                    .iter()
+                    .try_fold(figures.tenders.other, |left, app| {
+                        left.checked_sub(app.amount)
+                    })
+                    .unwrap_or(figures.tenders.other),
             },
             discount_amount: figures.discounts,
             voided_bill_count: figures.voided_bills,
@@ -94,6 +153,18 @@ impl From<&XFigures> for XFiguresResponse {
             paid_out_amount: figures.paid_out,
             dropped_amount: figures.dropped,
             expected_amount: figures.expected_cash,
+            channels: figures
+                .channels
+                .iter()
+                .map(|line| ChannelLineResponse {
+                    source: line.channel.source.as_wire().to_owned(),
+                    vendor_id: line.channel.vendor_id.map(|app| app.to_string()),
+                    name: line.name.clone(),
+                    order_type: line.channel.order_type.as_wire().to_owned(),
+                    bill_count: line.bills,
+                    sales_amount: line.sales,
+                })
+                .collect(),
         }
     }
 }

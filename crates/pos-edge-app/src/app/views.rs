@@ -21,4 +21,5 @@ pub use shifts::{
     CashMovement, ClosedDrawers, CombinedReport, DrawerFigures, DrawerView, DrawersView,
     HandoverSlip, ShiftHeader, ShiftReport, ShiftView, TillScope,
 };
-pub use x_read::{ShiftX, StoreX, TenderTotals, XFigures};
+pub(in crate::app) use x_read::sort_lines;
+pub use x_read::{ChannelLine, InAppTotal, ShiftX, StoreX, TenderTotals, XFigures};

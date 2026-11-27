@@ -134,6 +134,8 @@ pub struct PaperLabels {
     pub tender_qr: &'static str,
     /// Every other tender, in the tender mix.
     pub tender_other: &'static str,
+    /// Before a delivery app's name, for what was paid in that app (ADR-0259 decision 5).
+    pub tender_paid_via: &'static str,
     /// The heading of a handover slip (ADR-0187 decision 3).
     pub handover: &'static str,
     /// What the outgoing shift counted out of the drawer.
@@ -207,6 +209,7 @@ pub static ENGLISH: PaperLabels = PaperLabels {
     tender_card: "Card",
     tender_qr: "QR",
     tender_other: "Other",
+    tender_paid_via: "Paid via",
     handover: "SHIFT HANDOVER",
     counted_out: "Counted out",
     counted_in: "Counted in",
@@ -272,6 +275,7 @@ pub static VIETNAMESE: PaperLabels = PaperLabels {
     tender_card: "Thẻ",
     tender_qr: "QR",
     tender_other: "Khác",
+    tender_paid_via: "Trả qua",
     handover: "GIAO CA",
     counted_out: "Ca trước đếm giao",
     counted_in: "Ca sau đếm nhận",
@@ -378,6 +382,7 @@ mod tests {
             ENGLISH.tender_card,
             ENGLISH.tender_qr,
             ENGLISH.tender_other,
+            ENGLISH.tender_paid_via,
             ENGLISH.handover,
             ENGLISH.counted_out,
             ENGLISH.counted_in,

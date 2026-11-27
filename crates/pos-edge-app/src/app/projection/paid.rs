@@ -17,6 +17,7 @@ use pos_proto::ids::{BillId, OrderId, ShiftId};
 use pos_proto::money::Money;
 use pos_proto::{BillState, PaymentMethod, ShiftState};
 
+use super::channels::take_channel_out;
 use crate::app::{PaidBill, Projection, TakenPayment};
 
 impl Projection {
@@ -54,7 +55,7 @@ impl Projection {
 
     /// Adds a settled bill's total and its discounts and comps to `shift`'s, for its X
     /// ([ADR-0187](../../../../../docs/adr/0187-a-shift-is-handed-over-at-the-till-and-read-there.md)
-    /// decision 4).
+    /// decision 4), and the bill to its channel's line (ADR-0259).
     pub(in crate::app) fn record_shift_sale(
         &mut self,
         shift: Option<ShiftId>,
@@ -64,7 +65,7 @@ impl Projection {
             record.sales = record.sales.checked_add(settled.total_due)?;
             record.discounts = record.discounts.checked_add(settled.reduction_total)?;
         }
-        Ok(())
+        self.record_shift_channel(shift, settled.bill_id, settled.total_due)
     }
 
     /// Adds one tender's `applied` towards `bill_id` to `shift`'s tender mix, for its report, and
@@ -75,6 +76,7 @@ impl Projection {
         method: PaymentMethod,
         applied: Money,
     ) -> Result<(), DomainError> {
+        self.record_shift_in_app((shift, bill_id), method, applied)?;
         let Some(record) = shift.and_then(|shift| self.shifts.get_mut(&shift)) else {
             return Ok(());
         };
@@ -124,7 +126,9 @@ impl Projection {
                     *total = total.checked_sub(applied)?;
                 }
             }
-            let Some(receipt) = receipt.as_ref().filter(|_| settled_on == Some(*shift_id)) else {
+            let here = receipt.as_ref().filter(|_| settled_on == Some(*shift_id));
+            take_channel_out(record, bill_id, here.map(|receipt| receipt.total_due))?;
+            let Some(receipt) = here else {
                 continue;
             };
             record.bills = record.bills.saturating_sub(1);

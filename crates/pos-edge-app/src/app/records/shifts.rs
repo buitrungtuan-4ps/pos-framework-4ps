@@ -9,8 +9,9 @@ use pos_core::billing::TaxComponentLine;
 use pos_core::cash_count::CountBreakdown;
 use pos_core::error::DomainError;
 use pos_proto::devices::DeviceKind;
-use pos_proto::ids::{BillId, DeviceId, EmployeeId, ShiftId};
+use pos_proto::ids::{BillId, DeviceId, EmployeeId, ShiftId, VendorId};
 use pos_proto::money::{CurrencyCode, Money};
+use pos_proto::sale_channel::SaleChannel;
 use pos_proto::time::{BusinessDate, Timestamp};
 use pos_proto::{PaymentMethod, ShiftState};
 
@@ -74,6 +75,18 @@ pub(in crate::app) struct ShiftRecord {
     /// them back out while this shift is open
     /// ([ADR-0258](../../../../../docs/adr/0258-the-tills-x-leaves-out-a-bill-voided-after-payment.md)).
     pub(in crate::app) bill_tenders: BTreeMap<BillId, Vec<(PaymentMethod, Money)>>,
+    /// Its settled bills by channel and order type: each line's channel, bills and sales, in order
+    /// of channel
+    /// ([ADR-0259](../../../../../docs/adr/0259-a-sale-is-reported-by-its-channel-and-its-order-type.md)
+    /// decision 4).
+    pub(in crate::app) channels: Vec<(SaleChannel, u32, Money)>,
+    /// The line each bill it settled joined, so a void takes it back out (ADR-0258).
+    pub(in crate::app) bill_channels: BTreeMap<BillId, SaleChannel>,
+    /// What each delivery app's in-app payments applied, in order of connection id (ADR-0259
+    /// decision 5).
+    pub(in crate::app) in_app: Vec<(VendorId, Money)>,
+    /// What each bill's in-app payments added to [`Self::in_app`], so a void takes them back out.
+    pub(in crate::app) bill_in_app: BTreeMap<BillId, Vec<(VendorId, Money)>>,
 }
 
 impl ShiftRecord {
@@ -111,6 +124,10 @@ impl ShiftRecord {
             handed_over_from: None,
             tax_components: Vec::new(),
             bill_tenders: BTreeMap::new(),
+            channels: Vec::new(),
+            bill_channels: BTreeMap::new(),
+            in_app: Vec::new(),
+            bill_in_app: BTreeMap::new(),
         }
     }
 

@@ -81,12 +81,13 @@ use records::{
 pub use roster::{RoleIds, StaffAuth, StaffRoster, StoreIdentity};
 pub use session::EdgeSession;
 pub use views::{
-    BillCheckView, BillView, BumpView, BuyerDetails, CashMovement, ClosedDrawers, CombinedReport,
-    CounterOrderLine, CounterOrderOpened, CounterOrderView, DrawerFigures, DrawerView, DrawersView,
-    FiredLine, HandoverSlip, IssuedInvoiceRef, LineDraft, LineView, LiveOrderLine, LiveOrderView,
-    MAX_SETTLED_LISTED, OrderLineChoice, PreBill, ReceiptCopy, ReceiptLine, SettledBillView,
-    SettledVoidView, ShiftHeader, ShiftReport, ShiftView, ShiftX, StoreX, TabView, TableView,
-    Takings, TenderTotals, TillScope, TransferView, WaitingLine, XFigures,
+    BillCheckView, BillView, BumpView, BuyerDetails, CashMovement, ChannelLine, ClosedDrawers,
+    CombinedReport, CounterOrderLine, CounterOrderOpened, CounterOrderView, DrawerFigures,
+    DrawerView, DrawersView, FiredLine, HandoverSlip, InAppTotal, IssuedInvoiceRef, LineDraft,
+    LineView, LiveOrderLine, LiveOrderView, MAX_SETTLED_LISTED, OrderLineChoice, PreBill,
+    ReceiptCopy, ReceiptLine, SettledBillView, SettledVoidView, ShiftHeader, ShiftReport,
+    ShiftView, ShiftX, StoreX, TabView, TableView, Takings, TenderTotals, TillScope, TransferView,
+    WaitingLine, XFigures,
 };
 
 /// Milliseconds in a day, for turning a retention period in days into a cutoff instant. No leap

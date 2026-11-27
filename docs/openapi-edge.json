@@ -6145,6 +6145,42 @@
           }
         }
       },
+      "ChannelLineResponse": {
+        "type": "object",
+        "description": "One line of the settled bills by channel and order type (ADR-0259 decision 4).",
+        "required": [
+          "source",
+          "order_type",
+          "bill_count",
+          "sales_amount"
+        ],
+        "properties": {
+          "bill_count": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "name": {
+            "$ref": "#/components/schemas/DisplayName",
+            "description": "What the store calls that app; absent otherwise or for one it no longer lists."
+          },
+          "order_type": {
+            "type": "string",
+            "description": "How they were served, an `ORDER_TYPE_*` token."
+          },
+          "sales_amount": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "source": {
+            "type": "string",
+            "description": "Where the orders came from, a `SALE_SOURCE_*` token."
+          },
+          "vendor_id": {
+            "type": "string",
+            "description": "The delivery app's connection, for `SALE_SOURCE_APP`."
+          }
+        }
+      },
       "CheckFeeLine": {
         "allOf": [
           {
@@ -7389,6 +7425,27 @@
           "version": {
             "type": "string",
             "description": "The binary's version."
+          }
+        }
+      },
+      "InAppResponse": {
+        "type": "object",
+        "description": "What one delivery app's in-app payments applied (ADR-0259 decision 5).",
+        "required": [
+          "vendor_id",
+          "amount"
+        ],
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "name": {
+            "$ref": "#/components/schemas/DisplayName",
+            "description": "What the store calls it; absent for an app the store no longer lists."
+          },
+          "vendor_id": {
+            "type": "string",
+            "description": "The app's connection."
           }
         }
       },
@@ -10475,7 +10532,9 @@
           "cash",
           "card",
           "qr",
-          "other"
+          "other",
+          "in_app",
+          "other_than_apps"
         ],
         "properties": {
           "card": {
@@ -10484,8 +10543,20 @@
           "cash": {
             "$ref": "#/components/schemas/Money"
           },
+          "in_app": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InAppResponse"
+            },
+            "description": "Each delivery app's in-app payments, by app (ADR-0259 decision 5)."
+          },
           "other": {
-            "$ref": "#/components/schemas/Money"
+            "$ref": "#/components/schemas/Money",
+            "description": "Every other tender, in-app payments included."
+          },
+          "other_than_apps": {
+            "$ref": "#/components/schemas/Money",
+            "description": "`other` without the in-app payments: what the till labels \"other\"."
           },
           "qr": {
             "$ref": "#/components/schemas/Money"
@@ -11194,7 +11265,8 @@
           "voided_cash_amount",
           "paid_in_amount",
           "paid_out_amount",
-          "dropped_amount"
+          "dropped_amount",
+          "channels"
         ],
         "properties": {
           "bill_count": {
@@ -11202,6 +11274,13 @@
             "format": "int32",
             "description": "How many bills settled.",
             "minimum": 0
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChannelLineResponse"
+            },
+            "description": "The settled bills by channel and order type, summing to `bill_count` and `sales_amount`\n(ADR-0259 decision 4)."
           },
           "discount_amount": {
             "$ref": "#/components/schemas/Money",

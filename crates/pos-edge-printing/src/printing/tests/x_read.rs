@@ -5,14 +5,14 @@
 
 use pos_core::business_date::StoreTimeZone;
 use pos_proto::ShiftState;
-use pos_proto::ids::ShiftId;
+use pos_proto::ids::{ShiftId, VendorId};
 use pos_proto::money::{CurrencyCode, Money};
 use pos_proto::store_profile::StoreProfile;
 use pos_proto::text::DisplayName;
 use pos_proto::time::{BusinessDate, Timestamp};
 use pos_proto::ulid::Ulid;
 
-use crate::app::{ShiftX, StoreX, TenderTotals, XFigures};
+use crate::app::{InAppTotal, ShiftX, StoreX, TenderTotals, XFigures};
 use crate::paper_labels::{ENGLISH, VIETNAMESE};
 use crate::printing::tests::{lines_of, style};
 use crate::printing::{XPaper, x_document};
@@ -30,6 +30,7 @@ fn figures(expected: Option<i64>) -> XFigures {
             card: vnd(165_000),
             qr: vnd(0),
             other: vnd(0),
+            in_app: Vec::new(),
         },
         discounts: vnd(0),
         voided_bills: 0,
@@ -38,6 +39,7 @@ fn figures(expected: Option<i64>) -> XFigures {
         paid_out: vnd(85_000),
         dropped: vnd(0),
         expected_cash: expected.map(vnd),
+        channels: Vec::new(),
     }
 }
 
@@ -114,4 +116,31 @@ fn an_x_says_it_closes_nothing_and_shows_the_expectation_only_where_it_was_read(
             "Doanh thu  VND 330,000"
         ]
     );
+}
+
+/// ADR-0259 decision 5: money paid in a delivery app prints under the app's name, and "Other" is
+/// what is left once each app's is taken out.
+#[test]
+fn an_x_names_each_delivery_apps_payments_apart_from_other() {
+    let zone = StoreTimeZone::from_iana_name("Asia/Ho_Chi_Minh").expect("a real zone");
+    let mut read = shift(Some(580_000));
+    read.figures.tenders.other = vnd(238_000);
+    read.figures.tenders.in_app = vec![InAppTotal {
+        vendor_id: VendorId::new(Ulid::from_u128(0x0EE1)),
+        name: Some(DisplayName::new("GrabFood")),
+        amount: vnd(188_000),
+    }];
+    let paper = x_document(
+        &StoreProfile::default(),
+        &style(0),
+        &VIETNAMESE,
+        &zone,
+        XPaper::Shift(&read),
+    );
+    let lines = lines_of(&paper);
+    assert!(
+        lines.contains(&"Trả qua GrabFood  VND 188,000"),
+        "{lines:?}"
+    );
+    assert!(lines.contains(&"Khác  VND 50,000"), "{lines:?}");
 }
