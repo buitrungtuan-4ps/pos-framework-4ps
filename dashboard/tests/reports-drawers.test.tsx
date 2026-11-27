@@ -69,6 +69,7 @@ function report(
     },
     cash: { business_date, currency_code: "VND", ...totals, by_drawer },
     till_names,
+    vendor_names: {},
   };
 }
 

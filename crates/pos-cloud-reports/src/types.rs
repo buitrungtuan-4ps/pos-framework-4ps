@@ -424,4 +424,10 @@ pub struct XzReport {
     #[serde(default)]
     #[schema(required = true)]
     pub till_names: BTreeMap<String, String>,
+    /// The name of each delivery app among the day's lines and in-app payments, keyed by its
+    /// connection id, from the store's `vendors` node when the report is served (ADR-0259 decision
+    /// 5). An app the store no longer lists has none.
+    #[serde(default)]
+    #[schema(required = true)]
+    pub vendor_names: BTreeMap<String, String>,
 }

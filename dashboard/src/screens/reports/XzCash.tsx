@@ -8,6 +8,7 @@ import { For, Show } from "solid-js";
 import { t, type MessageKey } from "../../i18n";
 import { formatAmount } from "../../state/money";
 import type { XzReport } from "../../api/schemas";
+import { appName } from "./XzChannels";
 
 /** The tenders the X splits by, in the order a cash-up reads them. */
 const TENDERS: readonly (readonly [string, MessageKey])[] = [
@@ -19,14 +20,38 @@ const TENDERS: readonly (readonly [string, MessageKey])[] = [
   ["PAYMENT_METHOD_VENDOR", "reports.tenderVendor"],
 ];
 
-/** The day's captured amounts: cash, card, a wallet, paid via delivery apps, and every other tender. */
-export function tenderSplit(report: XzReport): readonly (readonly [MessageKey, number])[] {
+/** A tender row: its message key, the amount, and the app's name for "Paid via {app}". */
+export type TenderRow = readonly [MessageKey, number] | readonly [MessageKey, number, { app: string }];
+
+/**
+ * The day's captured amounts: cash, card, a wallet, each delivery app's in-app payments by its name
+ * (ADR-0259 decision 5), and every other tender. A day folded before apps were named reads its
+ * in-app payments as one "Paid via delivery apps" row, and any part of them no app accounts for
+ * stays on that row.
+ */
+export function tenderSplit(
+  report: XzReport,
+  nameOf: (vendorId: string) => string = (id) => id,
+): readonly TenderRow[] {
   const byTender = report.revenue.by_tender ?? {};
-  const named = TENDERS.map(([token, key]) => [key, byTender[token] ?? 0] as const);
+  const byApp = Object.entries(report.revenue.by_app_tender ?? {})
+    .filter(([, amount]) => amount !== 0)
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+  const rows: TenderRow[] = [];
+  for (const [token, key] of TENDERS) {
+    const amount = byTender[token] ?? 0;
+    if (token !== "PAYMENT_METHOD_VENDOR" || byApp.length === 0) {
+      rows.push([key, amount]);
+      continue;
+    }
+    for (const [vendorId, paid] of byApp) rows.push(["reports.tenderPaidVia", paid, { app: nameOf(vendorId) }]);
+    const unnamed = amount - byApp.reduce((sum, [, paid]) => sum + paid, 0);
+    if (unnamed !== 0) rows.push([key, unnamed]);
+  }
   const other = Object.entries(byTender)
     .filter(([token]) => !TENDERS.some(([known]) => known === token))
     .reduce((sum, [, amount]) => sum + amount, 0);
-  return [...named, ["reports.tenderOther", other] as const];
+  return [...rows, ["reports.tenderOther", other]];
 }
 
 export function XzCash(props: { report: XzReport }) {
@@ -50,10 +75,10 @@ export function XzCash(props: { report: XzReport }) {
         <dd class="font-medium text-ink">{closed(props.report.cash.variance)}</dd>
       </div>
       <Show when={Object.keys(props.report.revenue.by_tender ?? {}).length > 0}>
-        <For each={tenderSplit(props.report)}>
-          {([key, amount]) => (
+        <For each={tenderSplit(props.report, (vendorId) => appName(props.report, vendorId))}>
+          {([key, amount, args]) => (
             <div>
-              <dt class="text-ink-muted">{t(key)}</dt>
+              <dt class="text-ink-muted">{t(key, args)}</dt>
               <dd class="text-ink">{tender(amount)}</dd>
             </div>
           )}
