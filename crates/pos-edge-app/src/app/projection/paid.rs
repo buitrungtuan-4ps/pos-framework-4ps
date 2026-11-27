@@ -15,7 +15,7 @@ use pos_core::error::DomainError;
 use pos_proto::events::BillingBillSettled;
 use pos_proto::ids::{BillId, OrderId, ShiftId};
 use pos_proto::money::Money;
-use pos_proto::{BillState, PaymentMethod};
+use pos_proto::{BillState, PaymentMethod, ShiftState};
 
 use crate::app::{PaidBill, Projection, TakenPayment};
 
@@ -67,10 +67,11 @@ impl Projection {
         Ok(())
     }
 
-    /// Adds one tender's `applied` to `shift`'s tender mix, for its report.
+    /// Adds one tender's `applied` towards `bill_id` to `shift`'s tender mix, for its report, and
+    /// remembers it against the bill so a void can take it back out (ADR-0258).
     pub(in crate::app) fn collect_tender(
         &mut self,
-        shift: Option<ShiftId>,
+        (shift, bill_id): (Option<ShiftId>, BillId),
         method: PaymentMethod,
         applied: Money,
     ) -> Result<(), DomainError> {
@@ -84,6 +85,59 @@ impl Projection {
         {
             Some((_, total)) => *total = total.checked_add(applied)?,
             None => record.tenders.push((method, applied)),
+        }
+        record
+            .bill_tenders
+            .entry(bill_id)
+            .or_default()
+            .push((method, applied));
+        Ok(())
+    }
+
+    /// Folds one captured tender: onto its bill ([`Self::record_payment`]) and into its shift's
+    /// tender mix ([`Self::collect_tender`]).
+    pub(in crate::app) fn record_tender(
+        &mut self,
+        shift: Option<ShiftId>,
+        bill_id: BillId,
+        method: PaymentMethod,
+        applied: Money,
+    ) -> Result<(), DomainError> {
+        self.record_payment(bill_id, method, applied)?;
+        self.collect_tender((shift, bill_id), method, applied)
+    }
+
+    /// Takes a bill voided after payment out of the X of each shift it reached while that shift is
+    /// open
+    /// ([ADR-0258](../../../../../docs/adr/0258-the-tills-x-leaves-out-a-bill-voided-after-payment.md)):
+    /// its count, sales, discounts and tax components out of the shift that settled it, and each
+    /// payment out of the tenders of the shift that took it. A closed shift's close stands.
+    fn take_out_of_open_shifts(&mut self, bill_id: BillId) -> Result<(), DomainError> {
+        let settled_on = self.paid(bill_id).and_then(|paid| paid.shift_id);
+        let receipt = self.settled.get(&bill_id).cloned();
+        for (shift_id, record) in &mut self.shifts {
+            if record.state != ShiftState::Open {
+                continue;
+            }
+            for (method, applied) in record.bill_tenders.remove(&bill_id).unwrap_or_default() {
+                if let Some((_, total)) = record.tenders.iter_mut().find(|(m, _)| *m == method) {
+                    *total = total.checked_sub(applied)?;
+                }
+            }
+            let Some(receipt) = receipt.as_ref().filter(|_| settled_on == Some(*shift_id)) else {
+                continue;
+            };
+            record.bills = record.bills.saturating_sub(1);
+            record.sales = record.sales.checked_sub(receipt.total_due)?;
+            record.discounts = record.discounts.checked_sub(receipt.reduction_total)?;
+            for component in receipt.tax_lines.iter().flat_map(|line| &line.components) {
+                if let Some(sum) = record.tax_components.iter_mut().find(|sum| {
+                    sum.name == component.name
+                        && sum.rate_basis_points == component.rate_basis_points
+                }) {
+                    sum.tax = sum.tax.checked_sub(component.tax)?;
+                }
+            }
         }
         Ok(())
     }
@@ -141,6 +195,7 @@ impl Projection {
             }
             record.voided_bills = record.voided_bills.saturating_add(1);
         }
+        self.take_out_of_open_shifts(bill_id)?;
         self.void_bill_record(bill_id);
         // An invoice still waiting is never issued, and so takes no number (ADR-0229 decision 3).
         self.invoices.drop_pending(bill_id);

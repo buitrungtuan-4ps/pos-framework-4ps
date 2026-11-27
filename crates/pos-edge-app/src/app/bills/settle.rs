@@ -450,7 +450,11 @@ impl<S: EventStore> Edge<S> {
         // after payment gives back the same cash either way (ADR-0184 decision 6).
         for payment in payments {
             projection.record_payment(settled.bill_id, payment.method, payment.applied_to_bill)?;
-            projection.collect_tender(shift, payment.method, payment.applied_to_bill)?;
+            projection.collect_tender(
+                (shift, settled.bill_id),
+                payment.method,
+                payment.applied_to_bill,
+            )?;
         }
         projection.fold_settle(settled, shift, ctx.business_date, ctx.now)?;
         projection.collect_cash(shift, proved.cash_taken)?;
