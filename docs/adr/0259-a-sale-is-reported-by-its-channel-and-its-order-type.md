@@ -1,6 +1,8 @@
 # ADR-0259 — A sale is reported by its channel and its order type
 
-**Status** Accepted 2026-11-27 under the owner's request; decision 3 to be confirmed by the owner ·
+**Status** Accepted 2026-11-27 under the owner's request; superseded in part by
+[ADR-0260](0260-order-types-and-sale-sources-are-published-lists.md) (decision 3's closed set and
+decision 2's reserved kiosk: order types and sale sources are published lists) ·
 **Owner** @maintainers-architecture · **Date** 2026-11-27 · Phase 11 ("data matched from edge to
 console") · Details [ADR-0187](0187-a-shift-is-handed-over-at-the-till-and-read-there.md) decision 4
 and [ADR-0081](0081-reports-and-analytics.md) · Relates to
