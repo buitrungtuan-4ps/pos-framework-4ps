@@ -290,4 +290,6 @@ fn void(kept: &mut KeptChannels, revenue: &mut BTreeMap<String, DailyRevenue>, b
 }
 
 #[cfg(test)]
+mod shared_day;
+#[cfg(test)]
 mod tests;

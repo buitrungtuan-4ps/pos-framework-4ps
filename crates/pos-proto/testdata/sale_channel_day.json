@@ -1,0 +1,863 @@
+{
+ "_about": "One fake store day folded by both the till's X (pos-edge-app) and the console's rollup (pos-cloud-reports); each side's test asserts `expected` (ADR-0259). Fake data only.",
+ "store_id": "000000000000000000000001Z3",
+ "shift_id": "000000000000000000000001FH",
+ "events": [
+  {
+   "event_id": "00000000000000040000000001",
+   "event_type": "cash.shift.opened",
+   "event_time": "2026-11-27T03:00:01.000Z",
+   "business_date": "2026-11-27",
+   "schema_version": 1,
+   "tenant_id": "000000000000000000000001Z1",
+   "brand_id": "000000000000000000000001Z2",
+   "store_id": "000000000000000000000001Z3",
+   "device_id": "000000000000000000000001Z4",
+   "employee_id": "000000000000000000000001Z5",
+   "shift_id": "000000000000000000000001FH",
+   "data": {
+    "opened_shift_id": "000000000000000000000001FH",
+    "opening_float": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    }
+   }
+  },
+  {
+   "event_id": "00000000000000040000000002",
+   "event_type": "sales.order.opened",
+   "event_time": "2026-11-27T03:00:02.000Z",
+   "business_date": "2026-11-27",
+   "schema_version": 1,
+   "tenant_id": "000000000000000000000001Z1",
+   "brand_id": "000000000000000000000001Z2",
+   "store_id": "000000000000000000000001Z3",
+   "device_id": "000000000000000000000001Z4",
+   "employee_id": "000000000000000000000001Z5",
+   "shift_id": "000000000000000000000001FH",
+   "data": {
+    "order_id": "000000000000000000000002G1",
+    "channel": "SALES_CHANNEL_DINE_IN",
+    "table_id": "000000000000000000000001X1"
+   }
+  },
+  {
+   "event_id": "00000000000000040000000003",
+   "event_type": "billing.bill.opened",
+   "event_time": "2026-11-27T03:00:03.000Z",
+   "business_date": "2026-11-27",
+   "schema_version": 1,
+   "tenant_id": "000000000000000000000001Z1",
+   "brand_id": "000000000000000000000001Z2",
+   "store_id": "000000000000000000000001Z3",
+   "device_id": "000000000000000000000001Z4",
+   "employee_id": "000000000000000000000001Z5",
+   "shift_id": "000000000000000000000001FH",
+   "data": {
+    "bill_id": "000000000000000000000002R1",
+    "order_id": "000000000000000000000002G1",
+    "order_line_ids": []
+   }
+  },
+  {
+   "event_id": "00000000000000040000000004",
+   "event_type": "billing.payment.captured",
+   "event_time": "2026-11-27T03:00:04.000Z",
+   "business_date": "2026-11-27",
+   "schema_version": 1,
+   "tenant_id": "000000000000000000000001Z1",
+   "brand_id": "000000000000000000000001Z2",
+   "store_id": "000000000000000000000001Z3",
+   "device_id": "000000000000000000000001Z4",
+   "employee_id": "000000000000000000000001Z5",
+   "shift_id": "000000000000000000000001FH",
+   "data": {
+    "bill_id": "000000000000000000000002R1",
+    "payment_id": "00000000000000000000000301",
+    "method": "PAYMENT_METHOD_CASH",
+    "outcome": "PAYMENT_OUTCOME_CAPTURED",
+    "tendered": {
+     "currency_code": "VND",
+     "amount_minor": 200000
+    },
+    "applied_to_bill": {
+     "currency_code": "VND",
+     "amount_minor": 200000
+    },
+    "change_given": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "tip_amount": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    }
+   }
+  },
+  {
+   "event_id": "00000000000000040000000005",
+   "event_type": "billing.bill.settled",
+   "event_time": "2026-11-27T03:00:05.000Z",
+   "business_date": "2026-11-27",
+   "schema_version": 1,
+   "tenant_id": "000000000000000000000001Z1",
+   "brand_id": "000000000000000000000001Z2",
+   "store_id": "000000000000000000000001Z3",
+   "device_id": "000000000000000000000001Z4",
+   "employee_id": "000000000000000000000001Z5",
+   "shift_id": "000000000000000000000001FH",
+   "data": {
+    "bill_id": "000000000000000000000002R1",
+    "receipt_number": 1,
+    "subtotal": {
+     "currency_code": "VND",
+     "amount_minor": 200000
+    },
+    "reduction_total": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "service_charge": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "tax_total": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "rounding_adjustment": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "total_due": {
+     "currency_code": "VND",
+     "amount_minor": 200000
+    }
+   }
+  },
+  {
+   "event_id": "00000000000000040000000006",
+   "event_type": "sales.order.opened",
+   "event_time": "2026-11-27T03:00:06.000Z",
+   "business_date": "2026-11-27",
+   "schema_version": 1,
+   "tenant_id": "000000000000000000000001Z1",
+   "brand_id": "000000000000000000000001Z2",
+   "store_id": "000000000000000000000001Z3",
+   "device_id": "000000000000000000000001Z4",
+   "employee_id": "000000000000000000000001Z5",
+   "shift_id": "000000000000000000000001FH",
+   "data": {
+    "order_id": "000000000000000000000002G2",
+    "channel": "SALES_CHANNEL_TAKEAWAY"
+   }
+  },
+  {
+   "event_id": "00000000000000040000000007",
+   "event_type": "billing.bill.opened",
+   "event_time": "2026-11-27T03:00:07.000Z",
+   "business_date": "2026-11-27",
+   "schema_version": 1,
+   "tenant_id": "000000000000000000000001Z1",
+   "brand_id": "000000000000000000000001Z2",
+   "store_id": "000000000000000000000001Z3",
+   "device_id": "000000000000000000000001Z4",
+   "employee_id": "000000000000000000000001Z5",
+   "shift_id": "000000000000000000000001FH",
+   "data": {
+    "bill_id": "000000000000000000000002R2",
+    "order_id": "000000000000000000000002G2",
+    "order_line_ids": []
+   }
+  },
+  {
+   "event_id": "00000000000000040000000008",
+   "event_type": "billing.payment.captured",
+   "event_time": "2026-11-27T03:00:08.000Z",
+   "business_date": "2026-11-27",
+   "schema_version": 1,
+   "tenant_id": "000000000000000000000001Z1",
+   "brand_id": "000000000000000000000001Z2",
+   "store_id": "000000000000000000000001Z3",
+   "device_id": "000000000000000000000001Z4",
+   "employee_id": "000000000000000000000001Z5",
+   "shift_id": "000000000000000000000001FH",
+   "data": {
+    "bill_id": "000000000000000000000002R2",
+    "payment_id": "00000000000000000000000302",
+    "method": "PAYMENT_METHOD_CARD",
+    "outcome": "PAYMENT_OUTCOME_CAPTURED",
+    "tendered": {
+     "currency_code": "VND",
+     "amount_minor": 90000
+    },
+    "applied_to_bill": {
+     "currency_code": "VND",
+     "amount_minor": 90000
+    },
+    "change_given": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "tip_amount": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    }
+   }
+  },
+  {
+   "event_id": "00000000000000040000000009",
+   "event_type": "billing.bill.settled",
+   "event_time": "2026-11-27T03:00:09.000Z",
+   "business_date": "2026-11-27",
+   "schema_version": 1,
+   "tenant_id": "000000000000000000000001Z1",
+   "brand_id": "000000000000000000000001Z2",
+   "store_id": "000000000000000000000001Z3",
+   "device_id": "000000000000000000000001Z4",
+   "employee_id": "000000000000000000000001Z5",
+   "shift_id": "000000000000000000000001FH",
+   "data": {
+    "bill_id": "000000000000000000000002R2",
+    "receipt_number": 2,
+    "subtotal": {
+     "currency_code": "VND",
+     "amount_minor": 90000
+    },
+    "reduction_total": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "service_charge": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "tax_total": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "rounding_adjustment": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "total_due": {
+     "currency_code": "VND",
+     "amount_minor": 90000
+    }
+   }
+  },
+  {
+   "event_id": "0000000000000004000000000A",
+   "event_type": "sales.order.opened",
+   "event_time": "2026-11-27T03:00:10.000Z",
+   "business_date": "2026-11-27",
+   "schema_version": 1,
+   "tenant_id": "000000000000000000000001Z1",
+   "brand_id": "000000000000000000000001Z2",
+   "store_id": "000000000000000000000001Z3",
+   "device_id": "000000000000000000000001Z4",
+   "employee_id": "000000000000000000000001Z5",
+   "shift_id": "000000000000000000000001FH",
+   "data": {
+    "order_id": "000000000000000000000002G3",
+    "channel": "SALES_CHANNEL_QR",
+    "table_id": "000000000000000000000001X2"
+   }
+  },
+  {
+   "event_id": "0000000000000004000000000B",
+   "event_type": "billing.bill.opened",
+   "event_time": "2026-11-27T03:00:11.000Z",
+   "business_date": "2026-11-27",
+   "schema_version": 1,
+   "tenant_id": "000000000000000000000001Z1",
+   "brand_id": "000000000000000000000001Z2",
+   "store_id": "000000000000000000000001Z3",
+   "device_id": "000000000000000000000001Z4",
+   "employee_id": "000000000000000000000001Z5",
+   "shift_id": "000000000000000000000001FH",
+   "data": {
+    "bill_id": "000000000000000000000002R3",
+    "order_id": "000000000000000000000002G3",
+    "order_line_ids": []
+   }
+  },
+  {
+   "event_id": "0000000000000004000000000C",
+   "event_type": "billing.payment.captured",
+   "event_time": "2026-11-27T03:00:12.000Z",
+   "business_date": "2026-11-27",
+   "schema_version": 1,
+   "tenant_id": "000000000000000000000001Z1",
+   "brand_id": "000000000000000000000001Z2",
+   "store_id": "000000000000000000000001Z3",
+   "device_id": "000000000000000000000001Z4",
+   "employee_id": "000000000000000000000001Z5",
+   "shift_id": "000000000000000000000001FH",
+   "data": {
+    "bill_id": "000000000000000000000002R3",
+    "payment_id": "00000000000000000000000303",
+    "method": "PAYMENT_METHOD_CASH",
+    "outcome": "PAYMENT_OUTCOME_CAPTURED",
+    "tendered": {
+     "currency_code": "VND",
+     "amount_minor": 150000
+    },
+    "applied_to_bill": {
+     "currency_code": "VND",
+     "amount_minor": 150000
+    },
+    "change_given": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "tip_amount": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    }
+   }
+  },
+  {
+   "event_id": "0000000000000004000000000D",
+   "event_type": "billing.bill.settled",
+   "event_time": "2026-11-27T03:00:13.000Z",
+   "business_date": "2026-11-27",
+   "schema_version": 1,
+   "tenant_id": "000000000000000000000001Z1",
+   "brand_id": "000000000000000000000001Z2",
+   "store_id": "000000000000000000000001Z3",
+   "device_id": "000000000000000000000001Z4",
+   "employee_id": "000000000000000000000001Z5",
+   "shift_id": "000000000000000000000001FH",
+   "data": {
+    "bill_id": "000000000000000000000002R3",
+    "receipt_number": 3,
+    "subtotal": {
+     "currency_code": "VND",
+     "amount_minor": 150000
+    },
+    "reduction_total": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "service_charge": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "tax_total": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "rounding_adjustment": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "total_due": {
+     "currency_code": "VND",
+     "amount_minor": 150000
+    }
+   }
+  },
+  {
+   "event_id": "0000000000000004000000000E",
+   "event_type": "sales.order.opened",
+   "event_time": "2026-11-27T03:00:14.000Z",
+   "business_date": "2026-11-27",
+   "schema_version": 1,
+   "tenant_id": "000000000000000000000001Z1",
+   "brand_id": "000000000000000000000001Z2",
+   "store_id": "000000000000000000000001Z3",
+   "device_id": "000000000000000000000001Z4",
+   "employee_id": "000000000000000000000001Z5",
+   "shift_id": "000000000000000000000001FH",
+   "data": {
+    "order_id": "000000000000000000000002G4",
+    "channel": "SALES_CHANNEL_DELIVERY",
+    "vendor_id": "000000000000000000000001NB"
+   }
+  },
+  {
+   "event_id": "0000000000000004000000000F",
+   "event_type": "billing.bill.opened",
+   "event_time": "2026-11-27T03:00:15.000Z",
+   "business_date": "2026-11-27",
+   "schema_version": 1,
+   "tenant_id": "000000000000000000000001Z1",
+   "brand_id": "000000000000000000000001Z2",
+   "store_id": "000000000000000000000001Z3",
+   "device_id": "000000000000000000000001Z4",
+   "employee_id": "000000000000000000000001Z5",
+   "shift_id": "000000000000000000000001FH",
+   "data": {
+    "bill_id": "000000000000000000000002R4",
+    "order_id": "000000000000000000000002G4",
+    "order_line_ids": []
+   }
+  },
+  {
+   "event_id": "0000000000000004000000000G",
+   "event_type": "billing.payment.captured",
+   "event_time": "2026-11-27T03:00:16.000Z",
+   "business_date": "2026-11-27",
+   "schema_version": 1,
+   "tenant_id": "000000000000000000000001Z1",
+   "brand_id": "000000000000000000000001Z2",
+   "store_id": "000000000000000000000001Z3",
+   "device_id": "000000000000000000000001Z4",
+   "employee_id": "000000000000000000000001Z5",
+   "shift_id": "000000000000000000000001FH",
+   "data": {
+    "bill_id": "000000000000000000000002R4",
+    "payment_id": "00000000000000000000000304",
+    "method": "PAYMENT_METHOD_VENDOR",
+    "outcome": "PAYMENT_OUTCOME_CAPTURED",
+    "tendered": {
+     "currency_code": "VND",
+     "amount_minor": 188000
+    },
+    "applied_to_bill": {
+     "currency_code": "VND",
+     "amount_minor": 188000
+    },
+    "change_given": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "tip_amount": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    }
+   }
+  },
+  {
+   "event_id": "0000000000000004000000000H",
+   "event_type": "billing.bill.settled",
+   "event_time": "2026-11-27T03:00:17.000Z",
+   "business_date": "2026-11-27",
+   "schema_version": 1,
+   "tenant_id": "000000000000000000000001Z1",
+   "brand_id": "000000000000000000000001Z2",
+   "store_id": "000000000000000000000001Z3",
+   "device_id": "000000000000000000000001Z4",
+   "employee_id": "000000000000000000000001Z5",
+   "shift_id": "000000000000000000000001FH",
+   "data": {
+    "bill_id": "000000000000000000000002R4",
+    "receipt_number": 4,
+    "subtotal": {
+     "currency_code": "VND",
+     "amount_minor": 188000
+    },
+    "reduction_total": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "service_charge": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "tax_total": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "rounding_adjustment": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "total_due": {
+     "currency_code": "VND",
+     "amount_minor": 188000
+    }
+   }
+  },
+  {
+   "event_id": "0000000000000004000000000J",
+   "event_type": "sales.order.opened",
+   "event_time": "2026-11-27T03:00:18.000Z",
+   "business_date": "2026-11-27",
+   "schema_version": 1,
+   "tenant_id": "000000000000000000000001Z1",
+   "brand_id": "000000000000000000000001Z2",
+   "store_id": "000000000000000000000001Z3",
+   "device_id": "000000000000000000000001Z4",
+   "employee_id": "000000000000000000000001Z5",
+   "shift_id": "000000000000000000000001FH",
+   "data": {
+    "order_id": "000000000000000000000002G5",
+    "channel": "SALES_CHANNEL_DELIVERY",
+    "vendor_id": "00000000000000000000000351"
+   }
+  },
+  {
+   "event_id": "0000000000000004000000000K",
+   "event_type": "billing.bill.opened",
+   "event_time": "2026-11-27T03:00:19.000Z",
+   "business_date": "2026-11-27",
+   "schema_version": 1,
+   "tenant_id": "000000000000000000000001Z1",
+   "brand_id": "000000000000000000000001Z2",
+   "store_id": "000000000000000000000001Z3",
+   "device_id": "000000000000000000000001Z4",
+   "employee_id": "000000000000000000000001Z5",
+   "shift_id": "000000000000000000000001FH",
+   "data": {
+    "bill_id": "000000000000000000000002R5",
+    "order_id": "000000000000000000000002G5",
+    "order_line_ids": []
+   }
+  },
+  {
+   "event_id": "0000000000000004000000000M",
+   "event_type": "billing.payment.captured",
+   "event_time": "2026-11-27T03:00:20.000Z",
+   "business_date": "2026-11-27",
+   "schema_version": 1,
+   "tenant_id": "000000000000000000000001Z1",
+   "brand_id": "000000000000000000000001Z2",
+   "store_id": "000000000000000000000001Z3",
+   "device_id": "000000000000000000000001Z4",
+   "employee_id": "000000000000000000000001Z5",
+   "shift_id": "000000000000000000000001FH",
+   "data": {
+    "bill_id": "000000000000000000000002R5",
+    "payment_id": "00000000000000000000000305",
+    "method": "PAYMENT_METHOD_VENDOR",
+    "outcome": "PAYMENT_OUTCOME_CAPTURED",
+    "tendered": {
+     "currency_code": "VND",
+     "amount_minor": 120000
+    },
+    "applied_to_bill": {
+     "currency_code": "VND",
+     "amount_minor": 120000
+    },
+    "change_given": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "tip_amount": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    }
+   }
+  },
+  {
+   "event_id": "0000000000000004000000000N",
+   "event_type": "billing.bill.settled",
+   "event_time": "2026-11-27T03:00:21.000Z",
+   "business_date": "2026-11-27",
+   "schema_version": 1,
+   "tenant_id": "000000000000000000000001Z1",
+   "brand_id": "000000000000000000000001Z2",
+   "store_id": "000000000000000000000001Z3",
+   "device_id": "000000000000000000000001Z4",
+   "employee_id": "000000000000000000000001Z5",
+   "shift_id": "000000000000000000000001FH",
+   "data": {
+    "bill_id": "000000000000000000000002R5",
+    "receipt_number": 5,
+    "subtotal": {
+     "currency_code": "VND",
+     "amount_minor": 120000
+    },
+    "reduction_total": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "service_charge": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "tax_total": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "rounding_adjustment": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "total_due": {
+     "currency_code": "VND",
+     "amount_minor": 120000
+    }
+   }
+  },
+  {
+   "event_id": "0000000000000004000000000P",
+   "event_type": "sales.order.opened",
+   "event_time": "2026-11-27T03:00:22.000Z",
+   "business_date": "2026-11-27",
+   "schema_version": 1,
+   "tenant_id": "000000000000000000000001Z1",
+   "brand_id": "000000000000000000000001Z2",
+   "store_id": "000000000000000000000001Z3",
+   "device_id": "000000000000000000000001Z4",
+   "employee_id": "000000000000000000000001Z5",
+   "shift_id": "000000000000000000000001FH",
+   "data": {
+    "order_id": "000000000000000000000002G6",
+    "channel": "SALES_CHANNEL_DELIVERY",
+    "vendor_id": "000000000000000000000001NB"
+   }
+  },
+  {
+   "event_id": "0000000000000004000000000Q",
+   "event_type": "billing.bill.opened",
+   "event_time": "2026-11-27T03:00:23.000Z",
+   "business_date": "2026-11-27",
+   "schema_version": 1,
+   "tenant_id": "000000000000000000000001Z1",
+   "brand_id": "000000000000000000000001Z2",
+   "store_id": "000000000000000000000001Z3",
+   "device_id": "000000000000000000000001Z4",
+   "employee_id": "000000000000000000000001Z5",
+   "shift_id": "000000000000000000000001FH",
+   "data": {
+    "bill_id": "000000000000000000000002R6",
+    "order_id": "000000000000000000000002G6",
+    "order_line_ids": []
+   }
+  },
+  {
+   "event_id": "0000000000000004000000000R",
+   "event_type": "billing.payment.captured",
+   "event_time": "2026-11-27T03:00:24.000Z",
+   "business_date": "2026-11-27",
+   "schema_version": 1,
+   "tenant_id": "000000000000000000000001Z1",
+   "brand_id": "000000000000000000000001Z2",
+   "store_id": "000000000000000000000001Z3",
+   "device_id": "000000000000000000000001Z4",
+   "employee_id": "000000000000000000000001Z5",
+   "shift_id": "000000000000000000000001FH",
+   "data": {
+    "bill_id": "000000000000000000000002R6",
+    "payment_id": "00000000000000000000000306",
+    "method": "PAYMENT_METHOD_VENDOR",
+    "outcome": "PAYMENT_OUTCOME_CAPTURED",
+    "tendered": {
+     "currency_code": "VND",
+     "amount_minor": 50000
+    },
+    "applied_to_bill": {
+     "currency_code": "VND",
+     "amount_minor": 50000
+    },
+    "change_given": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "tip_amount": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    }
+   }
+  },
+  {
+   "event_id": "0000000000000004000000000S",
+   "event_type": "billing.bill.settled",
+   "event_time": "2026-11-27T03:00:25.000Z",
+   "business_date": "2026-11-27",
+   "schema_version": 1,
+   "tenant_id": "000000000000000000000001Z1",
+   "brand_id": "000000000000000000000001Z2",
+   "store_id": "000000000000000000000001Z3",
+   "device_id": "000000000000000000000001Z4",
+   "employee_id": "000000000000000000000001Z5",
+   "shift_id": "000000000000000000000001FH",
+   "data": {
+    "bill_id": "000000000000000000000002R6",
+    "receipt_number": 6,
+    "subtotal": {
+     "currency_code": "VND",
+     "amount_minor": 50000
+    },
+    "reduction_total": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "service_charge": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "tax_total": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "rounding_adjustment": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "total_due": {
+     "currency_code": "VND",
+     "amount_minor": 50000
+    }
+   }
+  },
+  {
+   "event_id": "0000000000000004000000000T",
+   "event_type": "billing.bill.voided",
+   "event_time": "2026-11-27T03:00:26.000Z",
+   "business_date": "2026-11-27",
+   "schema_version": 1,
+   "tenant_id": "000000000000000000000001Z1",
+   "brand_id": "000000000000000000000001Z2",
+   "store_id": "000000000000000000000001Z3",
+   "device_id": "000000000000000000000001Z4",
+   "employee_id": "000000000000000000000001Z5",
+   "shift_id": "000000000000000000000001FH",
+   "data": {
+    "bill_id": "000000000000000000000002R6",
+    "reason_code_id": "0000000000000000000000017A"
+   }
+  },
+  {
+   "event_id": "0000000000000004000000000V",
+   "event_type": "billing.bill.opened",
+   "event_time": "2026-11-27T03:00:27.000Z",
+   "business_date": "2026-11-27",
+   "schema_version": 1,
+   "tenant_id": "000000000000000000000001Z1",
+   "brand_id": "000000000000000000000001Z2",
+   "store_id": "000000000000000000000001Z3",
+   "device_id": "000000000000000000000001Z4",
+   "employee_id": "000000000000000000000001Z5",
+   "shift_id": "000000000000000000000001FH",
+   "data": {
+    "bill_id": "000000000000000000000002R7",
+    "order_id": "000000000000000000000002G7",
+    "order_line_ids": []
+   }
+  },
+  {
+   "event_id": "0000000000000004000000000W",
+   "event_type": "billing.payment.captured",
+   "event_time": "2026-11-27T03:00:28.000Z",
+   "business_date": "2026-11-27",
+   "schema_version": 1,
+   "tenant_id": "000000000000000000000001Z1",
+   "brand_id": "000000000000000000000001Z2",
+   "store_id": "000000000000000000000001Z3",
+   "device_id": "000000000000000000000001Z4",
+   "employee_id": "000000000000000000000001Z5",
+   "shift_id": "000000000000000000000001FH",
+   "data": {
+    "bill_id": "000000000000000000000002R7",
+    "payment_id": "00000000000000000000000307",
+    "method": "PAYMENT_METHOD_CASH",
+    "outcome": "PAYMENT_OUTCOME_CAPTURED",
+    "tendered": {
+     "currency_code": "VND",
+     "amount_minor": 10000
+    },
+    "applied_to_bill": {
+     "currency_code": "VND",
+     "amount_minor": 10000
+    },
+    "change_given": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "tip_amount": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    }
+   }
+  },
+  {
+   "event_id": "0000000000000004000000000X",
+   "event_type": "billing.bill.settled",
+   "event_time": "2026-11-27T03:00:29.000Z",
+   "business_date": "2026-11-27",
+   "schema_version": 1,
+   "tenant_id": "000000000000000000000001Z1",
+   "brand_id": "000000000000000000000001Z2",
+   "store_id": "000000000000000000000001Z3",
+   "device_id": "000000000000000000000001Z4",
+   "employee_id": "000000000000000000000001Z5",
+   "shift_id": "000000000000000000000001FH",
+   "data": {
+    "bill_id": "000000000000000000000002R7",
+    "receipt_number": 7,
+    "subtotal": {
+     "currency_code": "VND",
+     "amount_minor": 10000
+    },
+    "reduction_total": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "service_charge": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "tax_total": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "rounding_adjustment": {
+     "currency_code": "VND",
+     "amount_minor": 0
+    },
+    "total_due": {
+     "currency_code": "VND",
+     "amount_minor": 10000
+    }
+   }
+  }
+ ],
+ "expected": {
+  "business_date": "2026-11-27",
+  "bills": 6,
+  "sales": 758000,
+  "by_channel": [
+   {
+    "source": "SALE_SOURCE_APP",
+    "order_type": "ORDER_TYPE_DELIVERY",
+    "bills": 1,
+    "sales": 188000,
+    "vendor_id": "000000000000000000000001NB"
+   },
+   {
+    "source": "SALE_SOURCE_APP",
+    "order_type": "ORDER_TYPE_DELIVERY",
+    "bills": 1,
+    "sales": 120000,
+    "vendor_id": "00000000000000000000000351"
+   },
+   {
+    "source": "SALE_SOURCE_POS",
+    "order_type": "ORDER_TYPE_DINE_IN",
+    "bills": 1,
+    "sales": 200000
+   },
+   {
+    "source": "SALE_SOURCE_POS",
+    "order_type": "ORDER_TYPE_TAKEAWAY",
+    "bills": 1,
+    "sales": 90000
+   },
+   {
+    "source": "SALE_SOURCE_POS",
+    "order_type": "ORDER_TYPE_UNSPECIFIED",
+    "bills": 1,
+    "sales": 10000
+   },
+   {
+    "source": "SALE_SOURCE_QR",
+    "order_type": "ORDER_TYPE_DINE_IN",
+    "bills": 1,
+    "sales": 150000
+   }
+  ],
+  "by_app_tender": {
+   "00000000000000000000000351": 120000,
+   "000000000000000000000001NB": 188000
+  },
+  "by_tender": {
+   "PAYMENT_METHOD_CARD": 90000,
+   "PAYMENT_METHOD_CASH": 360000,
+   "PAYMENT_METHOD_VENDOR": 308000
+  }
+ }
+}
