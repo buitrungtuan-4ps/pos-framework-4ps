@@ -232,7 +232,7 @@ impl<S: EventStore> Edge<S> {
         let applied = captured.applied_to_bill;
         let mut projection = self.lock_projection();
         projection.record_payment(captured.bill_id, method, applied)?;
-        projection.collect_tender(shift, method, applied)?;
+        projection.collect_tender((shift, captured.bill_id), method, applied)?;
         if method == PaymentMethod::Cash {
             projection.collect_cash(shift, applied)?;
         }

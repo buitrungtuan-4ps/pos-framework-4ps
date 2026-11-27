@@ -3,11 +3,13 @@
 
 //! What the projection remembers about cash shifts, and which drawer a settle's cash goes to.
 
+use std::collections::BTreeMap;
+
 use pos_core::billing::TaxComponentLine;
 use pos_core::cash_count::CountBreakdown;
 use pos_core::error::DomainError;
 use pos_proto::devices::DeviceKind;
-use pos_proto::ids::{DeviceId, EmployeeId, ShiftId};
+use pos_proto::ids::{BillId, DeviceId, EmployeeId, ShiftId};
 use pos_proto::money::{CurrencyCode, Money};
 use pos_proto::time::{BusinessDate, Timestamp};
 use pos_proto::{PaymentMethod, ShiftState};
@@ -68,6 +70,10 @@ pub(in crate::app) struct ShiftRecord {
     /// decision 5), one entry for each name and rate, and none for a line that recorded none.
     /// Fee tax is inside the tax lines, so a fee's own components are not added again.
     pub(in crate::app) tax_components: Vec<TaxComponentLine>,
+    /// What each bill's payments added to [`Self::tenders`], by bill, so a void after payment takes
+    /// them back out while this shift is open
+    /// ([ADR-0258](../../../../../docs/adr/0258-the-tills-x-leaves-out-a-bill-voided-after-payment.md)).
+    pub(in crate::app) bill_tenders: BTreeMap<BillId, Vec<(PaymentMethod, Money)>>,
 }
 
 impl ShiftRecord {
@@ -104,6 +110,7 @@ impl ShiftRecord {
             float_breakdown: CountBreakdown::default(),
             handed_over_from: None,
             tax_components: Vec::new(),
+            bill_tenders: BTreeMap::new(),
         }
     }
 
