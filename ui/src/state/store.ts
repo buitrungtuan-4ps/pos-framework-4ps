@@ -15,6 +15,7 @@ import { keptShift, shiftInfo } from "./shift-info";
 import { afterLastVoid, closeBill, forgetLines, settleBill, voidBillClosed } from "./closing";
 import { applyPayFirst } from "./pay-first";
 import { noteWalkInOpened, walkInsOpenedSince, type LiveOrdersRead } from "./live-orders-read";
+import { applyOrderChannels, type OrderRecording } from "./order-channels";
 import type { LinkStatus, ServerEvent } from "../api/live";
 import type {
   ApproverRequest,
@@ -1229,9 +1230,9 @@ export function holdWalkIn(orderId: string): void {
 //
 // An edge write (ADR-0196 decision 1): the draft walk-in on screen is its paint (`./draft-walk-in`),
 // a refusal leaves the draft as it was, and no answer reads the open orders again.
-export async function startWalkIn(channel?: string): Promise<string> {
+export async function startWalkIn(channel?: string, recording?: OrderRecording): Promise<string> {
   const opened = await editWrite("sales.order.open", {
-    send: () => api.openOrder(channel),
+    send: () => api.openOrder(channel, recording),
     reread: () => void loadLiveOrders(),
   });
   holdWalkIn(opened.order_id);
@@ -1462,6 +1463,7 @@ export function applyMenu(response: MenuResponse): void {
   setState("tipPercents", readTipPercents(response.tip_percents));
   setState("splitWaysMax", readSplitWaysMax(response.split_ways_max));
   setState("walkInChannel", readWalkInChannel(response.walk_in_channel));
+  applyOrderChannels(response);
   setState("checkBeforePayment", response.check_before_payment === true);
   setState("partPayments", response.part_payments === true);
   applyPayFirst(response);
