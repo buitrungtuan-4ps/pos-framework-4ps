@@ -26,8 +26,8 @@ use crate::anchor::{AnchorLedger, AnchorVerdict, ChainWindow, ConflictReport, St
 // `pos_cloud::cloud::DailyRevenue` and the rest keep their paths.
 use crate::chain_audit::{ChainFinding, EnvelopeCheck, MAX_WINDOW, audit_window, check_envelope};
 pub use pos_cloud_reports::types::{
-    AdmittedDevice, CashTotals, DailyCash, DailyRevenue, DailyRollup, FeeTotal, ItemMix,
-    STORE_DRAWER, TaxComponentTotal, XzReport,
+    AdmittedDevice, CashTotals, ChannelSales, DailyCash, DailyRevenue, DailyRollup, FeeTotal,
+    ItemMix, STORE_DRAWER, TaxComponentTotal, XzReport,
 };
 
 /// Who owns a store, as the registry records it

@@ -26,6 +26,7 @@ use pos_proto::ids::{EventId, StoreId, TenantId};
 
 use crate::types::{AdmittedDevice, DailyCash, DailyRevenue, DailyRollup, XzReport};
 
+use super::channels::{KeptChannels, fold_channels};
 use super::drops::fold_drops;
 use super::floats::{KeptFloats, fold_closed_floats};
 use super::handovers::{KeptHandovers, fold_handovers};
@@ -112,6 +113,11 @@ pub struct StoredRollups {
     /// decision 3). `#[serde(default)]` for the same forward-compatible reason as `revenue`.
     #[serde(default)]
     pub vendors: KeptVendors,
+    /// Each open order's channel and order type, each open bill's order, and each settled bill's
+    /// line, kept so a settle and a void reach the right line (ADR-0259 decision 4); see
+    /// [`fold_channels`]. `#[serde(default)]` for the same forward-compatible reason as `revenue`.
+    #[serde(default)]
+    pub channels: KeptChannels,
 }
 
 /// The store that persists materialised rollups (a table in `store-postgres`; a fake in tests).
@@ -213,6 +219,7 @@ where
             fold_voids(&mut state.voids, &mut state.revenue, &mut state.cash, event);
             fold_devices(&mut state.devices, event);
             fold_vendors(&mut state.vendors, event);
+            fold_channels(&mut state.channels, &mut state.revenue, event);
             folded = folded.saturating_add(1);
         }
         let short = batch.len() < page_len;
@@ -382,8 +389,8 @@ mod tests {
     use std::sync::Mutex;
 
     use super::{
-        RollupError, RollupStore, RollupWindow, StoredRollups, dashboard, fold_revenue, project,
-        render_revenue_window, revenue,
+        KeptChannels, RollupError, RollupStore, RollupWindow, StoredRollups, dashboard,
+        fold_channels, fold_revenue, project, render_revenue_window, revenue,
     };
 
     use pos_contract_tests::fixtures;
@@ -571,8 +578,10 @@ mod tests {
             .read(&EventQuery::first(store_id(), NonZeroU32::MAX))
             .await
             .expect("read the whole log");
+        let mut channels = KeptChannels::default();
         for event in &log {
             fold_revenue(&mut rescanned, event);
+            fold_channels(&mut channels, &mut rescanned, event);
         }
         let authoritative_revenue = render_revenue_window(rescanned, &RollupWindow::default());
         let authoritative = daily_rollups_from_log(&events, store_id())
@@ -661,8 +670,10 @@ mod tests {
             .read(&EventQuery::first(store_id(), NonZeroU32::MAX))
             .await
             .expect("read the whole log");
+        let mut channels = KeptChannels::default();
         for event in &log {
             fold_revenue(&mut rescanned, event);
+            fold_channels(&mut channels, &mut rescanned, event);
         }
         assert_eq!(
             rebuilt,
