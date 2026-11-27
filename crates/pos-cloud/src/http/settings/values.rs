@@ -127,13 +127,16 @@ where
         Ok(scope) => scope,
         Err(refusal) => return refusal,
     };
-    let notice = match crate::settings::validate(&request.setting_key, scope, &request.value)
-        .and_then(|setting| {
-            crate::settings::confirmation(&setting, &request.value, request.notice_confirmed)
-        }) {
-        Ok(notice) => notice,
-        Err(refusal) => return setting_refusal_response(&refusal),
-    };
+    let (setting, notice) =
+        match crate::settings::validate(&request.setting_key, scope, &request.value).and_then(
+            |setting| {
+                crate::settings::confirmation(&setting, &request.value, request.notice_confirmed)
+                    .map(|notice| (setting, notice))
+            },
+        ) {
+            Ok(checked) => checked,
+            Err(refusal) => return setting_refusal_response(&refusal),
+        };
     if let Err(refusal) = state
         .receipt
         .check(tenant_id, &request.setting_key, &request.value)
@@ -150,10 +153,11 @@ where
         Err(refusal) => return refusal,
     };
     let slot = (request.setting_key.as_str(), scope, scope_id.as_str());
-    let before = match before_write(&state, tenant_id, &layout, slot, &request.value).await {
-        Ok(before) => before,
-        Err(refusal) => return refusal,
-    };
+    let before =
+        match before_write(&state, tenant_id, &layout, slot, (&setting, &request.value)).await {
+            Ok(before) => before,
+            Err(refusal) => return refusal,
+        };
     let value = crate::settings::SettingValue {
         setting_key: request.setting_key.clone(),
         scope: Open::from_known(scope),
@@ -193,13 +197,14 @@ where
 }
 
 /// The value held where a write lands, before it lands, once the law of every store it reaches
-/// (ADR-0223 decision 3) and the `package` settings' own rules (ADR-0189 decision 2) let it through.
+/// (ADR-0223 decision 3), the `package` settings' own rules (ADR-0189 decision 2) and the order
+/// channels' never-dropped tokens (ADR-0260 decision 3) let it through.
 async fn before_write<St, Rg, Grp, Cfg, A, C>(
     state: &SettingsState<St, Rg, Grp, Cfg, A, C>,
     tenant_id: TenantId,
     layout: &TenantLayout,
     (setting_key, scope, scope_id): (&str, SettingScope, &str),
-    value: &serde_json::Value,
+    (setting, value): (&pos_proto::settings::Setting, &serde_json::Value),
 ) -> Result<Option<serde_json::Value>, Response>
 where
     St: SettingsStore + SettingsPackages,
@@ -231,14 +236,18 @@ where
     {
         return Err(refusal);
     }
-    Ok(held
+    let before = held
         .into_iter()
         .find(|held| {
             held.setting_key == setting_key
                 && held.scope.known() == scope
                 && held.scope_id == scope_id
         })
-        .map(|held| held.value))
+        .map(|held| held.value);
+    // A published type or source is deactivated, never removed (ADR-0260 decision 3).
+    crate::settings::keeps_tokens(setting, before.as_ref(), value)
+        .map_err(|refusal| setting_refusal_response(&refusal))?;
+    Ok(before)
 }
 
 /// The value a `DELETE /admin/settings` clears.

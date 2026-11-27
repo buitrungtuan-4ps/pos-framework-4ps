@@ -213,6 +213,24 @@ locale.tax_rounding	scope=SETTING_SCOPE_TENANT
 locale.tax_rounding	since=0.14.1
 locale.tax_rounding	value=TAX_ROUNDING_DOWN
 locale.tax_rounding	value=TAX_ROUNDING_HALF_UP
+order_channels.order_types
+order_channels.order_types	default=[{"base_order_type":"ORDER_TYPE_DINE_IN","order_type":"ORDER_TYPE_DINE_IN"},{"base_order_type":"ORDER_TYPE_TAKEAWAY","order_type":"ORDER_TYPE_TAKEAWAY"},{"base_order_type":"ORDER_TYPE_DELIVERY","order_type":"ORDER_TYPE_DELIVERY"}]
+order_channels.order_types	kind=SETTING_KIND_ORDER_TYPES
+order_channels.order_types	max=32
+order_channels.order_types	scope=SETTING_SCOPE_BRAND
+order_channels.order_types	scope=SETTING_SCOPE_STORE
+order_channels.order_types	scope=SETTING_SCOPE_STORE_GROUP
+order_channels.order_types	scope=SETTING_SCOPE_TENANT
+order_channels.order_types	since=0.14.1
+order_channels.sources
+order_channels.sources	default=[]
+order_channels.sources	kind=SETTING_KIND_SALE_SOURCES
+order_channels.sources	max=64
+order_channels.sources	scope=SETTING_SCOPE_BRAND
+order_channels.sources	scope=SETTING_SCOPE_STORE
+order_channels.sources	scope=SETTING_SCOPE_STORE_GROUP
+order_channels.sources	scope=SETTING_SCOPE_TENANT
+order_channels.sources	since=0.14.1
 package.allowed_version_ids
 package.allowed_version_ids	default=[]
 package.allowed_version_ids	kind=SETTING_KIND_ULID_LIST

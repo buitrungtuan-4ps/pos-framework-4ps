@@ -21445,7 +21445,7 @@
         "operationId": "admin_settings_catalogue",
         "responses": {
           "200": {
-            "description": "Every setting in the register: its key, node and field, its kind (SETTING_KIND_CHOICE, _INT, _BOOL, _ULID, _ULID_LIST or _RECEIPT_TEMPLATES) and what it takes — a choice's values, or a whole number's min, max and unit — its default and the value a new store is given (each as the node carries it), the scopes it may be written at, the first release that honours it, and any value it writes only with a recorded confirmation (confirm)",
+            "description": "Every setting in the register: its key, node and field, its kind (SETTING_KIND_CHOICE, _INT, _BOOL, _ULID, _ULID_LIST, _RECEIPT_TEMPLATES, _ORDER_TYPES or _SALE_SOURCES) and what it takes — a choice's values, or a whole number's min, max and unit — its default and the value a new store is given (each as the node carries it), the scopes it may be written at, the first release that honours it, and any value it writes only with a recorded confirmation (confirm)",
             "content": {
               "application/json": {
                 "schema": {
@@ -37619,7 +37619,9 @@
           "SETTING_KIND_BOOL",
           "SETTING_KIND_ULID",
           "SETTING_KIND_ULID_LIST",
-          "SETTING_KIND_RECEIPT_TEMPLATES"
+          "SETTING_KIND_RECEIPT_TEMPLATES",
+          "SETTING_KIND_ORDER_TYPES",
+          "SETTING_KIND_SALE_SOURCES"
         ]
       },
       "SettingPublishOutcome": {
@@ -37679,6 +37681,13 @@
           {
             "type": "object",
             "description": "A `RECEIPT_TEMPLATES`' base and per-channel templates"
+          },
+          {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "An `ORDER_TYPES` or `SALE_SOURCES` list of entries (ADR-0260)"
           }
         ],
         "description": "A setting's value, in the shape its kind gives it"

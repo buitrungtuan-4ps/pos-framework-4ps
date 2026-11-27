@@ -342,7 +342,11 @@ fn assert_well_formed(setting: &Setting) {
             assert!(min <= max, "{key}: its bounds are the wrong way round");
             assert_ne!(*unit, SettingUnit::Unspecified, "{key} counts nothing");
         }
-        SettingShape::Bool { .. } | SettingShape::Ulid | SettingShape::ReceiptTemplates => {}
+        SettingShape::Bool { .. }
+        | SettingShape::Ulid
+        | SettingShape::ReceiptTemplates
+        | SettingShape::OrderTypes
+        | SettingShape::SaleSources => {}
         SettingShape::UlidList { max } => assert!(*max > 0, "{key} holds nothing"),
     }
     assert!(!setting.scopes.is_empty(), "{key} can be set nowhere");
@@ -483,6 +487,26 @@ fn samples(setting: &Setting) -> Vec<Value> {
                 "channels": { "SALES_CHANNEL_TAKEAWAY": { "footer_keys": ["receipt.footer.go"] } }
             }),
         ],
+        // Fake configuration only (ADR-0260).
+        SettingShape::OrderTypes => vec![
+            setting.default_value(),
+            json!([
+                { "order_type": "ORDER_TYPE_TAKEAWAY", "base_order_type": "ORDER_TYPE_TAKEAWAY",
+                  "default": true },
+                { "order_type": "ORDER_TYPE_PICKUP", "base_order_type": "ORDER_TYPE_TAKEAWAY",
+                  "names": { "en": "Pick-up", "vi": "Tự đến lấy" },
+                  "applies_to_sources": ["SALE_SOURCE_APP"] },
+                { "order_type": "ORDER_TYPE_DINE_IN", "base_order_type": "ORDER_TYPE_DINE_IN",
+                  "active": false }
+            ]),
+        ],
+        SettingShape::SaleSources => vec![
+            json!([]),
+            json!([
+                { "source": "SALE_SOURCE_HOTLINE", "names": { "en": "Hotline", "vi": "Tổng đài" } },
+                { "source": "SALE_SOURCE_KIOSK", "names": { "en": "Kiosk" }, "active": false }
+            ]),
+        ],
     }
 }
 
@@ -579,6 +603,15 @@ fn read_back(node: &str, field: &str, value: Option<&Value>) -> Option<Value> {
                 "second_tip_percent" => Some(json!(keys.second_tip_percent())),
                 "third_tip_percent" => Some(json!(keys.third_tip_percent())),
                 "split_ways_max" => Some(json!(keys.split_ways_max())),
+                _ => None,
+            }
+        }
+        crate::order_channels::PublishedOrderChannels::NODE => {
+            let node: crate::order_channels::PublishedOrderChannels =
+                serde_json::from_value(document).ok()?;
+            match field {
+                "order_types" => serde_json::to_value(node.order_types()).ok(),
+                "sources" => serde_json::to_value(node.sources).ok(),
                 _ => None,
             }
         }

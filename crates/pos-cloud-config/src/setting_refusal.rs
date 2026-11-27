@@ -39,7 +39,8 @@ pub fn setting_refusal_response(refusal: &SettingRefusal) -> Response {
                 ValueRefusal::NotAWholeNumber
                 | ValueRefusal::NotTrueOrFalse
                 | ValueRefusal::NotAnIdentifier
-                | ValueRefusal::NotATemplate => "INVALID_VALUE",
+                | ValueRefusal::NotATemplate
+                | ValueRefusal::NotAList => "INVALID_VALUE",
             },
         ),
         SettingRefusal::WrittenThroughItsRoute(_) => ("setting_key", "WRITTEN_THROUGH_ITS_ROUTE"),
@@ -48,6 +49,7 @@ pub fn setting_refusal_response(refusal: &SettingRefusal) -> Response {
         SettingRefusal::SectionRequired { .. } => ("value", "SECTION_REQUIRED"),
         SettingRefusal::ForbiddenByCountry { .. } => ("value", "SETTING_FORBIDDEN_BY_COUNTRY"),
         SettingRefusal::BeyondCountryLimit { .. } => ("value", "SETTING_BEYOND_COUNTRY_LIMIT"),
+        SettingRefusal::TokenDropped { .. } => ("value", "TOKEN_DROPPED"),
         SettingRefusal::LockedAbove { .. } => {
             return api_error_with_details(
                 ErrorStatus::FailedPrecondition,

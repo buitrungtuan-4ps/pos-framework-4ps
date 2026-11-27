@@ -45,7 +45,7 @@ use pos_proto::wire_enum::Open;
 
 /// The schema of a setting's value: one of the shapes a [`SettingKind`] allows — a `CHOICE`'s
 /// token, an `INT`'s whole number, a `BOOL`'s `true` or `false`, a `ULID`'s identifier or `null`, a
-/// `ULID_LIST`'s identifiers (ADR-0180 D-T3, ADR-0189), or a `RECEIPT_TEMPLATES`' object (ADR-0207). A schema only;
+/// `ULID_LIST`'s identifiers (ADR-0180 D-T3, ADR-0189), a `RECEIPT_TEMPLATES`' object (ADR-0207), or an `ORDER_TYPES` or `SALE_SOURCES` list (ADR-0260). A schema only;
 /// the values themselves stay `serde_json::Value`, and `setting_value_schema_tests` holds every
 /// register default to it.
 ///
@@ -87,6 +87,13 @@ impl utoipa::PartialSchema for SettingValueSchema {
                     .schema_type(Type::Object)
                     .description(Some(
                         "A `RECEIPT_TEMPLATES`' base and per-channel templates",
+                    )),
+            )
+            .item(
+                ArrayBuilder::new()
+                    .items(ObjectBuilder::new().schema_type(Type::Object))
+                    .description(Some(
+                        "An `ORDER_TYPES` or `SALE_SOURCES` list of entries (ADR-0260)",
                     )),
             )
             .description(Some("A setting's value, in the shape its kind gives it"))
@@ -227,6 +234,50 @@ pub enum SettingRefusal {
         /// The value that needs confirming.
         value: &'static str,
     },
+    /// An order-types or sale-sources list drops a token the same scope's list held: a type or a
+    /// source is deactivated, never removed
+    /// ([ADR-0260](../../../docs/adr/0260-order-types-and-sale-sources-are-published-lists.md)
+    /// decision 3).
+    #[error("`{setting_key}` drops {token}: set it inactive instead, since an order may record it")]
+    TokenDropped {
+        /// The setting.
+        setting_key: String,
+        /// The first token dropped.
+        token: String,
+    },
+}
+
+/// Whether writing `value` where `before` was held drops a token of an order-types or a
+/// sale-sources list (ADR-0260 decision 3). Any other setting, and a first write, drops none.
+///
+/// # Errors
+///
+/// [`SettingRefusal::TokenDropped`] naming the first token `before` held and `value` does not.
+pub fn keeps_tokens(
+    setting: &Setting,
+    before: Option<&serde_json::Value>,
+    value: &serde_json::Value,
+) -> Result<(), SettingRefusal> {
+    use pos_proto::settings::SettingShape;
+    let field = match setting.shape {
+        SettingShape::OrderTypes => "order_type",
+        SettingShape::SaleSources => "source",
+        _ => return Ok(()),
+    };
+    let Some(before) = before else {
+        return Ok(());
+    };
+    let kept = pos_proto::order_channels::tokens_of(value, field);
+    match pos_proto::order_channels::tokens_of(before, field)
+        .into_iter()
+        .find(|token| !kept.contains(token))
+    {
+        Some(token) => Err(SettingRefusal::TokenDropped {
+            setting_key: setting.key(),
+            token,
+        }),
+        None => Ok(()),
+    }
 }
 
 /// The notice a write of `value` confirms, which its audit entry records beside the value.
@@ -505,8 +556,52 @@ mod tests {
 
     use super::{
         SettingRefusal, SettingValue, SettingsStore, SettingsStoreError, StorePlacement,
-        confirmation, resolve_for_store, switch_without_people, tenant_layer_nodes, validate,
+        confirmation, keeps_tokens, resolve_for_store, switch_without_people, tenant_layer_nodes,
+        validate,
     };
+
+    /// ADR-0260 decision 3: a scope's list never drops a token it held; deactivating is the way.
+    #[test]
+    fn an_order_types_list_keeps_every_token_its_scope_held() {
+        let key = "order_channels.order_types";
+        let before = json!([
+            { "order_type": "ORDER_TYPE_DINE_IN", "base_order_type": "ORDER_TYPE_DINE_IN" },
+            { "order_type": "ORDER_TYPE_PICKUP", "base_order_type": "ORDER_TYPE_TAKEAWAY",
+              "names": { "en": "Pick-up" } }
+        ]);
+        let setting = validate(key, SettingScope::Store, &before).expect("a sound list");
+        assert_eq!(
+            keeps_tokens(&setting, None, &before),
+            Ok(()),
+            "a first write"
+        );
+        let deactivated = json!([
+            { "order_type": "ORDER_TYPE_DINE_IN", "base_order_type": "ORDER_TYPE_DINE_IN" },
+            { "order_type": "ORDER_TYPE_PICKUP", "base_order_type": "ORDER_TYPE_TAKEAWAY",
+              "names": { "en": "Pick-up" }, "active": false }
+        ]);
+        assert_eq!(keeps_tokens(&setting, Some(&before), &deactivated), Ok(()));
+        let dropped = json!([
+            { "order_type": "ORDER_TYPE_DINE_IN", "base_order_type": "ORDER_TYPE_DINE_IN" }
+        ]);
+        assert_eq!(
+            keeps_tokens(&setting, Some(&before), &dropped),
+            Err(SettingRefusal::TokenDropped {
+                setting_key: key.to_owned(),
+                token: "ORDER_TYPE_PICKUP".to_owned(),
+            })
+        );
+        let other = validate(
+            "shift.no_shift_selling",
+            SettingScope::Store,
+            &json!(REFUSE),
+        )
+        .expect("a choice");
+        assert_eq!(
+            keeps_tokens(&other, Some(&json!(ALLOW)), &json!(REFUSE)),
+            Ok(())
+        );
+    }
 
     const KEY: &str = "shift.no_shift_selling";
     const REFUSE: &str = "NO_SHIFT_SELLING_REFUSE";
@@ -867,7 +962,10 @@ mod setting_value_schema_tests {
             .collect();
         assert_eq!(
             shapes,
-            ["string", "integer", "boolean", "null", "array", "object"]
+            [
+                "string", "integer", "boolean", "null", "array", "object", "array"
+            ],
+            "the ULID_LIST's strings, and ADR-0260's lists of entries"
         );
         for setting in pos_proto::settings::register() {
             let values = std::iter::once(setting.default_value()).chain(setting.preset_value());
