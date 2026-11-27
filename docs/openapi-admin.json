@@ -29186,6 +29186,41 @@
           }
         }
       },
+      "ChannelSales": {
+        "type": "object",
+        "description": "One line of a day's sales by channel and order type (part of [`DailyRevenue`], ADR-0259).",
+        "required": [
+          "source",
+          "order_type",
+          "bills",
+          "sales"
+        ],
+        "properties": {
+          "bills": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Settled bills.",
+            "minimum": 0
+          },
+          "order_type": {
+            "type": "string",
+            "description": "How they were served, an `ORDER_TYPE_*` token; `ORDER_TYPE_UNSPECIFIED` where the order did\nnot say."
+          },
+          "sales": {
+            "type": "integer",
+            "format": "int64",
+            "description": "What they took, `total_due` summed, minor units."
+          },
+          "source": {
+            "type": "string",
+            "description": "Where the orders came from, a `SALE_SOURCE_*` token."
+          },
+          "vendor_id": {
+            "type": "string",
+            "description": "The delivery app's connection id, for `SALE_SOURCE_APP`; absent otherwise."
+          }
+        }
+      },
       "ConfigNodeView": {
         "type": "object",
         "description": "One node of a store's published configuration, as the console lists it (finding **F6**).\n\nThe console's question has always been per node — \"is the menu this store is running the menu I\nlast edited?\" — and until now the only answer available was per tree: one version id covering\nthirteen nodes, so publishing a tax change made the menu look freshly published too. Every\nversion now records which nodes it wrote ([`PublishedVersion::nodes`]), and this is that read.",
@@ -30807,6 +30842,24 @@
           "business_date": {
             "type": "string",
             "description": "The store's trading day, `YYYY-MM-DD`."
+          },
+          "by_app_tender": {
+            "type": "object",
+            "description": "What each delivery app's in-app payments (`PAYMENT_METHOD_VENDOR`) captured on the day, keyed\nby the app's connection id, minor units (ADR-0259 decision 5): `by_tender`'s vendor amount by\napp. Left out while empty, and `#[serde(default)]`.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "by_channel": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChannelSales"
+            },
+            "description": "The day's bills and sales by channel, delivery app and order type, one line each, in order of\nsource, app and type\n([ADR-0259](../../../docs/adr/0259-a-sale-is-reported-by-its-channel-and-its-order-type.md)\ndecision 4). The lines sum to [`bills`](Self::bills) and [`net`](Self::net) on a day folded\nsince this field; a bill voided after payment leaves its line as it leaves them. Left out\nwhile empty, and `#[serde(default)]`, so a day stored before it loads with none until the\nrollup is reset."
           },
           "by_fee": {
             "type": "object",
