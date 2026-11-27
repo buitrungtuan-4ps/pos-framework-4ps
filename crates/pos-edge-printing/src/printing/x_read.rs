@@ -88,16 +88,34 @@ fn figure_blocks(
         (labels.tender_cash, figures.tenders.cash),
         (labels.tender_card, figures.tenders.card),
         (labels.tender_qr, figures.tenders.qr),
-        (labels.tender_other, figures.tenders.other),
     ];
+    for (label, amount) in tenders {
+        if !amount.is_zero() {
+            blocks.push(amount_line(label, amount, money));
+        }
+    }
+    // Each delivery app's in-app payments by its name, then every other tender (ADR-0259).
+    let mut other = figures.tenders.other;
+    for app in &figures.tenders.in_app {
+        other = other.checked_sub(app.amount).unwrap_or(other);
+        if !app.amount.is_zero() {
+            let name = app.name.as_ref().map_or_else(
+                || app.vendor_id.to_string(),
+                |name| name.as_str().to_owned(),
+            );
+            let label = format!("{} {name}", labels.tender_paid_via);
+            blocks.push(amount_line(&label, app.amount, money));
+        }
+    }
     let moved = [
+        (labels.tender_other, other),
         (labels.discount, figures.discounts),
         (labels.voided_after_payment, figures.voided_cash),
         (labels.paid_in, figures.paid_in),
         (labels.paid_out, figures.paid_out),
         (labels.dropped_to_safe, figures.dropped),
     ];
-    for (label, amount) in tenders.into_iter().chain(moved) {
+    for (label, amount) in moved {
         if !amount.is_zero() {
             blocks.push(amount_line(label, amount, money));
         }

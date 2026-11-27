@@ -635,6 +635,51 @@ fn a_bill_voided_after_payment_leaves_the_open_shifts_x() {
     });
 }
 
+/// ADR-0259 decision 4: the X's bills by channel and order type sum to its bills and sales, a table's
+/// bill on the store's own till reads dine-in, and a void after payment leaves its line as it leaves
+/// the sales; a rebuild from the log reads the same.
+#[test]
+fn the_xs_channel_lines_sum_to_its_sales_and_a_void_leaves_its_line() {
+    use pos_proto::sale_channel::{OrderType, SaleSource};
+    pos_fakes::executor::run_ready(async {
+        let store = FakeStore::default();
+        let edge = over(store.clone(), session());
+        let shift = edge
+            .open_shift(actor(), vnd(100_000))
+            .await
+            .expect("opens")
+            .shift_id;
+        let voided = a_paid_bill(&edge, 531, vec![cash(165_000)]).await;
+        let _kept = a_paid_bill(&edge, 532, vec![card(165_000)]).await;
+        void(&edge, voided, Some("MGR-1")).await.expect("voids");
+        let read = |edge: &Edge<FakeStore>| {
+            let figures = edge.shift_x(actor(), shift).expect("reads").figures;
+            let lines: Vec<_> = figures
+                .channels
+                .iter()
+                .map(|line| {
+                    (
+                        line.channel.source,
+                        line.channel.order_type,
+                        line.bills,
+                        line.sales,
+                    )
+                })
+                .collect();
+            (lines, figures.bills, figures.sales)
+        };
+        let expected = (
+            vec![(SaleSource::Pos, OrderType::DineIn, 1, vnd(165_000))],
+            1,
+            vnd(165_000),
+        );
+        assert_eq!(read(&edge), expected);
+        let rebuilt = over(store, session());
+        rebuilt.rebuild().await.expect("rebuilds");
+        assert_eq!(read(&rebuilt), expected, "the same after a rebuild");
+    });
+}
+
 /// ADR-0256 decision 2: a void of a bill with an issued e-invoice says which correction kind the
 /// store ran it under, so the cloud corrects with that kind; a void of a bill with none says none.
 #[test]
