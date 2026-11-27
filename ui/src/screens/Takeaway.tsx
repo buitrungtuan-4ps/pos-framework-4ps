@@ -29,6 +29,8 @@ import { openCounterBill } from "../state/floor-writes";
 import { SendFirst } from "../components/SendFirst";
 import { counterKey, createSendFirst } from "../state/unsent";
 import { draftWalkIn } from "../state/draft-walk-in";
+import { listsBeyondBuiltIns, type OrderRecording } from "../state/order-channels";
+import { OrderTypePicker } from "../components/OrderTypePicker";
 import { invoiceLine } from "../state/settle-act";
 import { createPrint } from "../state/print-writes";
 import { Children } from "../../../packages/package-renderer/src/render";
@@ -127,12 +129,15 @@ export function Takeaway() {
   // a store without tables could charge an order someone else started and could not start one. The
   // order is opened on the edge by its first item (`../state/draft-walk-in`), so a guest who leaves
   // before ordering leaves no empty order behind.
-  const openWalkIn = (channel?: string) => navigate(draftWalkIn(channel));
+  const openWalkIn = (channel?: string, recording?: OrderRecording) =>
+    navigate(draftWalkIn(channel, recording));
   // A store that asks each walk-in guest whether they eat in or take away (ADR-0160 decision 2):
   // New order offers the two answers, and the order opens on the channel tapped. Every other store
   // opens the order at the first tap, as before.
   const [asking, setAsking] = createSignal(false);
-  const newOrder = () => (walkInAsks() ? setAsking(!asking()) : void openWalkIn());
+  // A store that lists its own order types or sources (ADR-0260) offers them here too: the type's
+  // base kind sets the order's channel, and the source is the till's own unless staff pick one.
+  const newOrder = () => (walkInAsks() || listsBeyondBuiltIns() ? setAsking(!asking()) : void openWalkIn());
 
   onMount(() => void refresh());
 
@@ -273,13 +278,16 @@ export function Takeaway() {
           <button
             type="button"
             class="mt-3 min-h-touch w-full rounded-token bg-primary px-4 text-primary-ink"
-            aria-expanded={walkInAsks() ? asking() : undefined}
+            aria-expanded={walkInAsks() || listsBeyondBuiltIns() ? asking() : undefined}
             data-step="newOrder"
             onClick={() => newOrder()}
           >
             {t("counter.new_order")}
           </button>
-          <Show when={walkInAsks() && asking()}>
+          <Show when={listsBeyondBuiltIns() && asking()}>
+            <OrderTypePicker onPick={(channel, recording) => void openWalkIn(channel, recording)} />
+          </Show>
+          <Show when={walkInAsks() && !listsBeyondBuiltIns() && asking()}>
             <div class="mt-2 grid grid-cols-2 gap-2">
               <button
                 type="button"

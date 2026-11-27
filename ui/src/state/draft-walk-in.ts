@@ -17,18 +17,22 @@ import { createSignal } from "solid-js";
 import { ApiError } from "../api/client";
 import { t } from "../i18n";
 import { Unconfirmed } from "../lib/errors";
+import type { OrderRecording } from "./order-channels";
 import { DINE_IN, startWalkIn, walkInEatenIn, walkInKey, walkInSalesChannel } from "./store";
 
 /** The order screen's id for a walk-in not opened yet. Never a real order's, which are ULIDs. */
 export const DRAFT = "new";
 
 const [channel, setChannel] = createSignal<string | undefined>(undefined);
+// The type and source staff picked from the store's lists (ADR-0260), recorded when the draft opens.
+const [recording, setRecording] = createSignal<OrderRecording | undefined>(undefined);
 let opening: Promise<string> | null = null;
 let unconfirmed = false;
 
 /** Starts a draft walk-in on `chosen` (the guest's answer, or none) and answers where it opens. */
-export function draftWalkIn(chosen?: string): string {
+export function draftWalkIn(chosen?: string, recorded?: OrderRecording): string {
   setChannel(chosen);
+  setRecording(recorded);
   opening = null;
   unconfirmed = false;
   return `/order/${DRAFT}`;
@@ -65,7 +69,7 @@ export async function keyToAddTo(
   if (unconfirmed) {
     throw new Unconfirmed(t("order.draft_unconfirmed"));
   }
-  const tried = (opening ??= startWalkIn(channel()));
+  const tried = (opening ??= startWalkIn(channel(), recording()));
   let opened: string;
   try {
     opened = await tried;

@@ -67,6 +67,9 @@ const REASONS: Readonly<Record<string, MessageKey>> = {
   NOT_THE_SHIFT_HANDED_OVER: "error.not_the_shift_handed_over",
   MODIFIER_SELECTION_INVALID: "error.modifier_selection_invalid",
   CHANNEL_NOT_ACCEPTED: "error.channel_not_accepted",
+  // A type or source the store has since retired (ADR-0260).
+  ORDER_TYPE_NOT_OFFERED: "error.order_type_not_offered",
+  SALE_SOURCE_NOT_OFFERED: "error.sale_source_not_offered",
   ITEM_NOT_SELLABLE: "error.item_not_sellable",
   UNKNOWN_CODE: "error.unknown_code",
   PRICE_LABEL_NOT_OPEN_PRICE: "error.price_label_not_open_price",

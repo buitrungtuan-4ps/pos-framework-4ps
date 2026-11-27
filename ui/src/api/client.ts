@@ -489,8 +489,9 @@ export const api = {
   // The counter starts its own order (ADR-0146): a tableless order and its queue number, on
   // `channel` where the cashier asked the guest, and on the store's walk-in channel without one
   // (ADR-0160 decision 2).
-  openOrder: (channel?: string) =>
-    request<OpenedOrder>("POST", "/api/orders", channel === undefined ? {} : { channel }),
+  // With the type and source staff picked from the store's lists (ADR-0260), where they did.
+  openOrder: (channel?: string, recording?: { order_type?: string; sale_source?: string }) =>
+    request<OpenedOrder>("POST", "/api/orders", { ...(channel === undefined ? {} : { channel }), ...recording }),
   // The line a scanned code names, priced by the edge, which reads a scale's label (ADR-0222).
   scanLine: (orderId: string, code: string) => request<LineResponse>("POST", `/api/orders/${orderId}/scan`, { code }),
   // A weighed item's line from the scale or a typed weight, and what the scale reads (ADR-0223).
