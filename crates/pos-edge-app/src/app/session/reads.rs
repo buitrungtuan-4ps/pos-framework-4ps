@@ -140,6 +140,7 @@ impl EdgeSession {
             accepted_tender: None,
             tender_keys: PublishedTenderKeys::default(),
             counter: PublishedCounter::default(),
+            order_channels: pos_proto::order_channels::PublishedOrderChannels::default(),
             scan: pos_proto::scan::PublishedScan::default(),
             weighing: pos_proto::weighing::PublishedWeighing::default(),
             einvoice: pos_proto::einvoice::PublishedEInvoice::default(),
@@ -314,6 +315,22 @@ impl EdgeSession {
         self.accepted_tender
             .as_ref()
             .is_none_or(|set| set.contains(&method))
+    }
+
+    /// The type a QR, API or app order takes: the first active type the store lists for its source
+    /// and base kind ([ADR-0260](../../../../../docs/adr/0260-order-types-and-sale-sources-are-published-lists.md)
+    /// decision 4); `None` records none, and the order reads as ADR-0259 derives it.
+    #[must_use]
+    pub fn intake_order_type(
+        &self,
+        channel: Option<SalesChannel>,
+        table_id: Option<TableId>,
+        vendor_id: Option<pos_proto::ids::VendorId>,
+    ) -> Option<pos_proto::sale_channel::SaleToken> {
+        self.order_channels.matched_type(
+            pos_proto::sale_channel::derived_source(channel, vendor_id),
+            pos_proto::sale_channel::derived_order_type(channel, table_id),
+        )
     }
 
     /// Whether a guest's order on `channel` naming `table_id` waits for a member of staff before

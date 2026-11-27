@@ -20,6 +20,7 @@ use crate::origins::Origins;
 use pos_proto::billing::PublishedBilling;
 use pos_proto::einvoice::PublishedEInvoice;
 use pos_proto::kiosk::PublishedKiosk;
+use pos_proto::order_channels::PublishedOrderChannels;
 use pos_proto::receipt::PublishedReceipt;
 use pos_proto::scan::PublishedScan;
 use pos_proto::tabs::PublishedTabs;
@@ -460,6 +461,7 @@ pub(super) fn apply_till_settings(session: &mut EdgeSession, document: &serde_js
             }
         }
     }
+    apply_order_channels(document, session);
     // The `scan` node (ADR-0222 decision 2): how quickly a scanner's keystrokes arrive. A node of
     // settings like `counter`: absent puts the default back, a node that is not an object keeps the
     // last ([`PublishedScan`]).
@@ -771,5 +773,19 @@ pub(super) fn apply_origins(origins: &Origins, document: &serde_json::Value) {
             %error,
             "the origins node was refused whole; keeping the origins already applied"
         ),
+    }
+}
+
+/// The `order_channels` node (ADR-0260): the store's order types and sale sources. Absent puts the
+/// built-ins back; a node that is not an object keeps the last, and a list that does not read as
+/// entries reads as absent ([`PublishedOrderChannels`]).
+fn apply_order_channels(document: &serde_json::Value, session: &mut EdgeSession) {
+    match document.get(PublishedOrderChannels::NODE) {
+        None => session.order_channels = PublishedOrderChannels::default(),
+        Some(value) => {
+            if let Ok(lists) = serde_json::from_value::<PublishedOrderChannels>(value.clone()) {
+                session.order_channels = lists;
+            }
+        }
     }
 }

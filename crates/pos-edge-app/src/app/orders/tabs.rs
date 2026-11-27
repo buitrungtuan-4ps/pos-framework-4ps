@@ -14,7 +14,7 @@ use pos_core::decision::Actor;
 use pos_ports::event_store::EventStore;
 use pos_proto::SalesChannel;
 
-use crate::app::{AppError, CounterOrderOpened, Edge, TabView};
+use crate::app::{AppError, CounterOrderOpened, Edge, OrderRecording, TabView};
 use crate::queue::QueueNumberAuthority;
 
 impl<S: EventStore> Edge<S> {
@@ -33,13 +33,31 @@ impl<S: EventStore> Edge<S> {
     where
         A: QueueNumberAuthority,
     {
+        self.open_tab_recorded(actor, (channel, OrderRecording::default()), authority)
+            .await
+    }
+
+    /// [`Self::open_tab`], recording the order type and source the till names (ADR-0260).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::open_tab`].
+    pub async fn open_tab_recorded<A>(
+        &self,
+        actor: Actor,
+        (channel, recording): (SalesChannel, OrderRecording),
+        authority: &A,
+    ) -> Result<CounterOrderOpened, AppError>
+    where
+        A: QueueNumberAuthority,
+    {
         let (ctx, order_id) = self.begin_tableless(actor, channel)?;
         ctx.require_capability(Capability::Tabs)?;
         let tab_number = authority
             .allocate_queue_number(self.identity.store_id, ctx.business_date, order_id)
             .await
             .map_err(AppError::Port)?;
-        self.finish_tableless(&ctx, order_id, channel, Some(tab_number))
+        self.finish_tableless(&ctx, order_id, (channel, recording), Some(tab_number))
             .await
     }
 

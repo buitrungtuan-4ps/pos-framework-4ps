@@ -107,6 +107,18 @@ pub struct CounterOrderOpened {
     pub business_date: BusinessDate,
 }
 
+/// What the till records about an order it opens beside its channel
+/// ([ADR-0260](../../../../../docs/adr/0260-order-types-and-sale-sources-are-published-lists.md)
+/// decision 4): the type staff picked and the source, either absent. Checked against the store's
+/// lists before it reaches here.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OrderRecording {
+    /// An `ORDER_TYPE_*` token the store offers.
+    pub order_type: Option<pos_proto::sale_channel::SaleToken>,
+    /// A `SALE_SOURCE_*` token: a kiosk's, or one the store lists.
+    pub sale_source: Option<pos_proto::sale_channel::SaleToken>,
+}
+
 /// An open bar tab, as every till lists it (ADR-0221 decision 3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TabView {

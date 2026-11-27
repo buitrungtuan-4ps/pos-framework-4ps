@@ -36,7 +36,7 @@ use pos_proto::quantity::Quantity;
 use pos_proto::time::Timestamp;
 use pos_proto::{Open, SalesChannel};
 
-use crate::app::{Edge, OrderLineChoice};
+use crate::app::{Edge, OrderLineChoice, OrderRecording};
 use crate::http::lines::LineResponse;
 use crate::http::{bad_request, error_response, parse_ulid};
 use crate::line_notes::NoteText;
@@ -244,6 +244,102 @@ pub(super) struct OpenOrderRequest {
     /// number. Refused on a store without `tabs_enabled`.
     #[serde(default)]
     tab: bool,
+    /// The order type staff picked, an active `ORDER_TYPE_*` token from the store's
+    /// `order_channels` list ([ADR-0260](../../../../docs/adr/0260-order-types-and-sale-sources-are-published-lists.md)
+    /// decision 4). Its base kind sets the channel.
+    #[serde(default)]
+    order_type: Option<String>,
+    /// The source staff picked: `SALE_SOURCE_POS` or an active source the store lists.
+    #[serde(default)]
+    sale_source: Option<String>,
+}
+
+/// The channel and the recording an open asks for, checked against the store's lists
+/// (ADR-0260 decision 4), or the refusal to answer.
+#[expect(
+    clippy::result_large_err,
+    reason = "the Err is an axum Response by design: it is the refusal the handler returns"
+)]
+fn recorded_open(
+    request: &OpenOrderRequest,
+    lists: &pos_proto::order_channels::PublishedOrderChannels,
+    walk_in: SalesChannel,
+    kiosk: bool,
+) -> Result<(SalesChannel, OrderRecording), Response> {
+    use pos_proto::sale_channel::{OrderType, SaleToken};
+    let named = match request.channel.as_ref().map(Open::require) {
+        None => None,
+        Some(Ok(channel)) => Some(channel),
+        // A token this build does not know: refused, never guessed, since the channel sets the tax.
+        Some(Err(_)) => {
+            return Err(bad_request(
+                "channel is not a sales channel this edge knows",
+            ));
+        }
+    };
+    let order_type = match request.order_type.as_deref() {
+        None => None,
+        Some(text) => Some(
+            SaleToken::order_type(text)
+                .map_err(|_| bad_request("order_type is not an order type token"))?,
+        ),
+    };
+    let base = match &order_type {
+        None => None,
+        Some(token) => Some(lists.active_base(token).ok_or_else(|| {
+            super::refusal(
+                StatusCode::CONFLICT,
+                "ORDER_TYPE_NOT_OFFERED",
+                "the store does not offer this order type".to_owned(),
+            )
+        })?),
+    };
+    // The type's base kind sets the channel, so price and tax follow it and nothing else.
+    let from_type = base.map(|kind| match kind {
+        OrderType::DineIn => SalesChannel::DineIn,
+        OrderType::Delivery => SalesChannel::Delivery,
+        OrderType::Takeaway | OrderType::Unspecified => SalesChannel::Takeaway,
+    });
+    let channel = match (named, from_type) {
+        (Some(named), Some(typed)) if named != typed => {
+            return Err(bad_request(
+                "channel and order_type name different kinds of order",
+            ));
+        }
+        (Some(channel), _) | (None, Some(channel)) => channel,
+        (None, None) => walk_in,
+    };
+    let sale_source = match (request.sale_source.as_deref(), kiosk) {
+        // A kiosk's order is the kiosk's: the reserved source made real (decision 4).
+        (None, true) => Some(SaleToken::KIOSK),
+        (Some(_), true) => {
+            return Err(super::refusal(
+                StatusCode::FORBIDDEN,
+                "KIOSK_NOT_ALLOWED",
+                "a kiosk records its own source".to_owned(),
+            ));
+        }
+        (None, false) => None,
+        (Some(text), false) => {
+            let token = SaleToken::source(text)
+                .map_err(|_| bad_request("sale_source is not a sale source token"))?;
+            if !lists.till_may_record(&token) {
+                return Err(super::refusal(
+                    StatusCode::CONFLICT,
+                    "SALE_SOURCE_NOT_OFFERED",
+                    "the store does not list this sale source for the till".to_owned(),
+                ));
+            }
+            Some(token)
+        }
+    };
+    Ok((
+        channel,
+        OrderRecording {
+            order_type,
+            sale_source,
+        },
+    ))
 }
 
 /// A walk-in order the counter has just opened, with the number the guest will be called by.
@@ -263,20 +359,26 @@ struct OpenedOrderResponse {
     request_body(
         content = OpenOrderRequest, description = "Optional `channel`, a `SALES_CHANNEL_*` token. Without one the order takes the \
                        store's walk-in channel. `tab: true` opens a bar tab, whose queue number is its \
-                       tab number. The body may be left out",
+                       tab number. Optional `order_type`, an active type of the store's `order_channels` \
+                       list, whose base kind sets the channel, and `sale_source`, `SALE_SOURCE_POS` or \
+                       an active source the store lists (ADR-0260); a kiosk's order records \
+                       `SALE_SOURCE_KIOSK`. The body may be left out",
         content_type = "application/json",
     ),
     responses(
         (status = 201, body = OpenedOrderResponse, description = "Opened: the `order_id`, the day's `queue_number` it is called by, and \
                                       its `business_date`"),
-        (status = 400, description = "The channel is not a sales channel this edge knows"),
+        (status = 400, description = "The channel is not a sales channel this edge knows, a token is malformed, or \
+                                      the channel and the order type's base kind disagree"),
         (status = 401, description = "This device is not paired: no token, or one the edge does not accept"),
         (status = 403, description = "Nobody is signed in on this device, or the sign-in lapsed; or this box \
                                       was superseded by a replacement that holds the store's lease \
                                       (`SUPERSEDED`); or a kiosk asked for a tab or for a channel other than \
-                                      eat-in or takeaway (`KIOSK_NOT_ALLOWED`)"),
+                                      eat-in or takeaway, or named a source (`KIOSK_NOT_ALLOWED`)"),
         (status = 409, description = "Refused: the person lacks the permission, the store does not keep tabs \
-                                      (`CAPABILITY_DISABLED`), or the record is not in a state the command \
+                                      (`CAPABILITY_DISABLED`), the store does not offer the order type \
+                                      (`ORDER_TYPE_NOT_OFFERED`) or list the source for the till \
+                                      (`SALE_SOURCE_NOT_OFFERED`), or the record is not in a state the command \
                                       applies to. `pos-error-reason` names which"),
         (status = 503, description = "The store is unavailable, and nothing was recorded"),
         (status = 500, description = "The edge could not apply the command"),
@@ -299,18 +401,20 @@ where
     Q: QueueNumberAuthority + 'static,
 {
     let request = body.map(|Json(request)| request).unwrap_or_default();
-    let walk_in = deps.edge.session().counter.walk_in_channel();
-    let channel = match request.channel.map(|channel| channel.require()) {
-        None => walk_in.sales_channel(),
-        Some(Ok(channel)) => channel,
-        // A token this build does not know: refused, never guessed, since the channel sets the tax.
-        Some(Err(_)) => return bad_request("channel is not a sales channel this edge knows"),
+    let session = deps.edge.session();
+    let kiosk = deps.edge.is_kiosk(actor.employee_id);
+    let (channel, recording) = match recorded_open(
+        &request,
+        &session.order_channels,
+        session.counter.walk_in_channel().sales_channel(),
+        kiosk,
+    ) {
+        Ok(open) => open,
+        Err(refusal) => return refusal,
     };
     // A kiosk opens a plain eat-in or takeaway order (ADR-0224 decision 4): never a tab, and never
     // another channel, which would change the order's tax (phase 9 security review, finding K3).
-    if deps.edge.is_kiosk(actor.employee_id)
-        && (request.tab || !matches!(channel, SalesChannel::DineIn | SalesChannel::Takeaway))
-    {
+    if kiosk && (request.tab || !matches!(channel, SalesChannel::DineIn | SalesChannel::Takeaway)) {
         return super::refusal(
             StatusCode::FORBIDDEN,
             "KIOSK_NOT_ALLOWED",
@@ -318,9 +422,13 @@ where
         );
     }
     let opened = if request.tab {
-        deps.edge.open_tab(actor, channel, &deps.queue).await
+        deps.edge
+            .open_tab_recorded(actor, (channel, recording), &deps.queue)
+            .await
     } else {
-        deps.edge.open_counter_order(actor, channel).await
+        deps.edge
+            .open_counter_order_recorded(actor, channel, recording)
+            .await
     };
     let opened = match opened {
         Ok(opened) => opened,

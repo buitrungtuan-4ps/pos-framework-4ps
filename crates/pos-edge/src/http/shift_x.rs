@@ -16,6 +16,7 @@
 //! A holder of `reports.shift.read_x` also prints a handover's slip again,
 //! `POST /api/shifts/{id}/handover-slip/print`, from the drawer list (decision 3).
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::Json;
@@ -81,8 +82,15 @@ struct ChannelLineResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "openapi", schema(nullable = false))]
     name: Option<DisplayName>,
-    /// How they were served, an `ORDER_TYPE_*` token.
+    /// How they were served, an `ORDER_TYPE_*` token: a built-in or one the store lists
+    /// ([ADR-0260](../../../../docs/adr/0260-order-types-and-sale-sources-are-published-lists.md)).
     order_type: String,
+    /// What the store calls that type, by language; absent where it names it not.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    order_type_names: BTreeMap<String, DisplayName>,
+    /// What the store calls the source, by language; absent where it names it not.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    source_names: BTreeMap<String, DisplayName>,
     bill_count: u32,
     sales_amount: Money,
 }
@@ -161,6 +169,8 @@ impl From<&XFigures> for XFiguresResponse {
                     vendor_id: line.channel.vendor_id.map(|app| app.to_string()),
                     name: line.name.clone(),
                     order_type: line.channel.order_type.as_str().to_owned(),
+                    order_type_names: line.order_type_names.clone(),
+                    source_names: line.source_names.clone(),
                     bill_count: line.bills,
                     sales_amount: line.sales,
                 })

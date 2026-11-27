@@ -228,3 +228,68 @@ fn the_x_names_the_apps_order_and_its_in_app_payment() {
     run_ready(rebuilt.rebuild()).expect("rebuilds");
     assert_eq!(read(&rebuilt), expected, "the same after a rebuild");
 }
+
+/// ADR-0260 decision 4: an app's order takes the type the store lists for apps of its base kind,
+/// and the X names it as the store does, live and after a rebuild. Fake configuration only.
+#[test]
+fn an_apps_order_takes_the_type_the_store_maps_apps_to() {
+    use pos_core::decision::Actor;
+    use pos_proto::ids::EmployeeId;
+
+    let actor = Actor {
+        employee_id: EmployeeId::new(Ulid::from_u128(10)),
+        device_id: DeviceId::new(Ulid::from_u128(20)),
+    };
+    let (edge, log) = edge_paid("");
+    let mut session = edge.session().as_ref().clone();
+    session.order_channels = serde_json::from_value(serde_json::json!({
+        "order_types": [
+            { "order_type": "ORDER_TYPE_DELIVERY", "base_order_type": "ORDER_TYPE_DELIVERY" },
+            { "order_type": "ORDER_TYPE_APP_DELIVERY", "base_order_type": "ORDER_TYPE_DELIVERY",
+              "names": { "en": "App delivery", "vi": "Giao qua ứng dụng" },
+              "applies_to_sources": ["SALE_SOURCE_APP"] }
+        ]
+    }))
+    .expect("the node reads");
+    edge.apply_session(session);
+    let shift = run_ready(edge.open_shift(actor, Money::new(CurrencyCode::VND, 0)))
+        .expect("opens a shift")
+        .shift_id;
+    let order_id = take_order(&edge);
+    run_ready(pos_edge::delivery_slips::confirmed(
+        None, None, &edge, order_id,
+    ));
+    let read = |edge: &Edge<FakeStore>| {
+        let figures = edge.shift_x(actor, shift).expect("reads").figures;
+        figures
+            .channels
+            .iter()
+            .map(|line| {
+                (
+                    line.channel.source.as_str().to_owned(),
+                    line.channel.order_type.as_str().to_owned(),
+                    line.order_type_names
+                        .get("vi")
+                        .map(|name| name.as_str().to_owned()),
+                    line.bills,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let expected = vec![(
+        "SALE_SOURCE_APP".to_owned(),
+        "ORDER_TYPE_APP_DELIVERY".to_owned(),
+        Some("Giao qua ứng dụng".to_owned()),
+        1,
+    )];
+    assert_eq!(read(&edge), expected);
+    let rebuilt = Edge::new(
+        log,
+        StoreIdentity::for_store(store()),
+        edge.session().as_ref().clone(),
+        Arc::new(InMemoryReceipts::new()),
+    )
+    .expect("seed the id generator");
+    run_ready(rebuilt.rebuild()).expect("rebuilds");
+    assert_eq!(read(&rebuilt), expected, "the same after a rebuild");
+}

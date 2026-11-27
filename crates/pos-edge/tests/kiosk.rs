@@ -743,3 +743,163 @@ async fn a_kiosks_history_outlives_its_record() {
     assert_eq!(opened.employee_id, Some(record));
     assert_eq!(record.as_ulid(), id(KIOSK_TERMINAL).as_ulid());
 }
+
+/// The store lists a pick-up type and a hotline, and has retired catering (ADR-0260). Fake
+/// configuration only.
+fn with_order_channels(store: &Store) {
+    let mut document = devices_node(Some(DeviceClass::Kiosk));
+    document["order_channels"] = json!({
+        "order_types": [
+            { "order_type": "ORDER_TYPE_DINE_IN", "base_order_type": "ORDER_TYPE_DINE_IN" },
+            { "order_type": "ORDER_TYPE_TAKEAWAY", "base_order_type": "ORDER_TYPE_TAKEAWAY" },
+            { "order_type": "ORDER_TYPE_PICKUP", "base_order_type": "ORDER_TYPE_TAKEAWAY",
+              "names": { "en": "Pick-up", "vi": "Tự đến lấy" }, "default": true },
+            { "order_type": "ORDER_TYPE_CATERING", "base_order_type": "ORDER_TYPE_DELIVERY",
+              "names": { "en": "Catering" }, "active": false }
+        ],
+        "sources": [
+            { "source": "SALE_SOURCE_HOTLINE", "names": { "en": "Hotline", "vi": "Tổng đài" } },
+            { "source": "SALE_SOURCE_WEBSITE", "names": { "en": "Website" }, "active": false }
+        ]
+    });
+    let listed = pos_edge::config_client::session_from_config(&store.edge.session(), &document);
+    store.edge.apply_session(listed);
+}
+
+/// What the log's `sales.order.opened` for `order` recorded.
+async fn opening_of(store: &Store, order: &str) -> Value {
+    use pos_ports::event_store::{EventQuery, EventStore as _};
+    let query = EventQuery::first(
+        StoreId::new(Ulid::from_u128(1)),
+        std::num::NonZeroU32::new(200).expect("a positive limit"),
+    );
+    let written = store.log.read(&query).await.expect("the log reads");
+    written
+        .iter()
+        .filter(|envelope| envelope.event_type.as_str() == "sales.order.opened")
+        .map(|envelope| serde_json::to_value(&envelope.data).expect("the payload encodes"))
+        .find(|data| data["order_id"] == order)
+        .expect("the order opened")
+}
+
+/// ADR-0260 decision 4: the till records the type and source staff picked, the type's base kind
+/// sets the channel, and the till may record only what the store offers.
+#[tokio::test]
+async fn the_till_records_a_published_type_and_source_and_nothing_else() {
+    let store = store().await;
+    with_order_channels(&store);
+    let (status, _, _) = send(
+        &store.app,
+        &store.counter,
+        "POST",
+        "/api/session/sign-in",
+        Some(json!({ "code": "CSH-1", "pin": CASHIER_PIN })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _, menu) = send(&store.app, &store.counter, "GET", "/api/menu", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let offered: Vec<_> = menu["order_types"]
+        .as_array()
+        .expect("the types offered")
+        .iter()
+        .map(|offered| {
+            offered["order_type"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(
+        offered,
+        [
+            "ORDER_TYPE_PICKUP",
+            "ORDER_TYPE_DINE_IN",
+            "ORDER_TYPE_TAKEAWAY"
+        ],
+        "the default first, the inactive left out"
+    );
+    assert_eq!(
+        menu["sale_sources"],
+        json!([{ "source": "SALE_SOURCE_HOTLINE", "names": { "en": "Hotline", "vi": "Tổng đài" } }])
+    );
+
+    let (status, _, opened) = send(
+        &store.app,
+        &store.counter,
+        "POST",
+        "/api/orders",
+        Some(json!({ "order_type": "ORDER_TYPE_PICKUP", "sale_source": "SALE_SOURCE_HOTLINE" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{opened}");
+    let order = opened["order_id"].as_str().expect("an order id").to_owned();
+    let recorded = opening_of(&store, &order).await;
+    assert_eq!(
+        recorded["channel"], "SALES_CHANNEL_TAKEAWAY",
+        "the base kind's channel"
+    );
+    assert_eq!(recorded["order_type"], "ORDER_TYPE_PICKUP");
+    assert_eq!(recorded["sale_source"], "SALE_SOURCE_HOTLINE");
+
+    for (body, status, reason) in [
+        (
+            json!({ "order_type": "ORDER_TYPE_CATERING" }),
+            StatusCode::CONFLICT,
+            "ORDER_TYPE_NOT_OFFERED",
+        ),
+        (
+            json!({ "order_type": "ORDER_TYPE_PICKUP", "channel": "SALES_CHANNEL_DINE_IN" }),
+            StatusCode::BAD_REQUEST,
+            "INVALID_ARGUMENT",
+        ),
+        (
+            json!({ "order_type": "pickup" }),
+            StatusCode::BAD_REQUEST,
+            "INVALID_ARGUMENT",
+        ),
+        (
+            json!({ "sale_source": "SALE_SOURCE_WEBSITE" }),
+            StatusCode::CONFLICT,
+            "SALE_SOURCE_NOT_OFFERED",
+        ),
+        (
+            json!({ "sale_source": "SALE_SOURCE_KIOSK" }),
+            StatusCode::CONFLICT,
+            "SALE_SOURCE_NOT_OFFERED",
+        ),
+    ] {
+        let (got, why, _) = send(
+            &store.app,
+            &store.counter,
+            "POST",
+            "/api/orders",
+            Some(body.clone()),
+        )
+        .await;
+        assert_eq!((got, why.as_deref()), (status, Some(reason)), "{body}");
+    }
+}
+
+/// ADR-0260 decision 4: a kiosk's order records `SALE_SOURCE_KIOSK`, and a kiosk names no source.
+#[tokio::test]
+async fn a_kiosks_order_records_the_kiosk_as_its_source() {
+    let store = store().await;
+    with_order_channels(&store);
+    let (status, _, _) = send(&store.app, &store.kiosk, "POST", "/api/session/kiosk", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (order, _) = an_order_with_a_pizza(&store.app, &store.kiosk).await;
+    let recorded = opening_of(&store, &order).await;
+    assert_eq!(recorded["sale_source"], "SALE_SOURCE_KIOSK");
+    assert!(recorded.get("order_type").is_none(), "{recorded}");
+    refused(
+        &store,
+        vec![(
+            "POST",
+            "/api/orders".to_owned(),
+            json!({ "sale_source": "SALE_SOURCE_HOTLINE" }),
+        )],
+    )
+    .await;
+}
