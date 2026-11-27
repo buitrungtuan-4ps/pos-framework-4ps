@@ -16,6 +16,7 @@ use serde_json::json;
 
 use super::{KeptBills, fold_voids};
 use crate::dashboard::rollup::{fold_cash, fold_revenue};
+use crate::dashboard::tenders::fold_tenders;
 use crate::types::{DailyCash, DailyRevenue, STORE_DRAWER};
 
 fn ulid(n: u128) -> String {
@@ -116,6 +117,7 @@ fn folded(
         (BTreeMap::new(), BTreeMap::new(), KeptBills::default());
     for event in events {
         fold_revenue(&mut revenue, event);
+        fold_tenders(&mut revenue, event);
         fold_cash(&mut cash, event);
         fold_voids(&mut kept, &mut revenue, &mut cash, event);
     }
@@ -149,6 +151,11 @@ fn a_voided_bill_leaves_the_days_sales_tax_and_fees_and_is_counted_apart() {
     );
     assert_eq!(day.by_fee, kept_day.by_fee);
     assert_eq!(day.by_tax_component, kept_day.by_tax_component);
+    assert_eq!(
+        day.by_tender,
+        BTreeMap::from([("PAYMENT_METHOD_CARD".to_owned(), 113_000)]),
+        "the tenders of the bill that stayed paid: its card alone, the voided bill's cash out"
+    );
     assert_eq!(day.voided_after_payment.bills, 1);
     assert_eq!(day.voided_after_payment.amount, 113_000);
     assert!(
@@ -267,4 +274,22 @@ fn a_part_paid_bill_voided_before_it_settles_gives_its_cash_back() {
             .map_or(0, |day| day.voided_after_payment.bills),
         0
     );
+}
+
+/// A bill part paid and then voided before it settled took no sale, so its payment leaves the day's
+/// tenders too (ADR-0184 decision 9, ADR-0220 decision 4).
+#[test]
+fn a_part_paid_bill_voided_before_its_settle_leaves_the_days_tenders() {
+    let mut events = paid(DAY, 1, (50_000, 63_000));
+    events.pop(); // no settle
+    events.extend(paid(DAY, 2, (0, 113_000)));
+    events.push(voided(DAY, 1, Some(7)));
+    let (revenue, _, kept) = folded(&events);
+    let day = revenue.get(DAY).expect("the day");
+    assert_eq!(
+        day.by_tender,
+        BTreeMap::from([("PAYMENT_METHOD_CARD".to_owned(), 113_000)]),
+        "the second bill's card alone"
+    );
+    assert!(kept.pending_tenders.is_empty());
 }
