@@ -144,3 +144,100 @@ fn an_x_names_each_delivery_apps_payments_apart_from_other() {
     );
     assert!(lines.contains(&"Khác  VND 50,000"), "{lines:?}");
 }
+
+/// ADR-0259 decision 4 and ADR-0260 decision 6: the printed X lists its bills by channel and order
+/// type, a type or source the store named by its name in the paper's language, a built-in it left
+/// unnamed by the paper's word, then the same summed by type. Fake configuration only.
+#[test]
+fn an_x_prints_its_bills_by_channel_and_type_in_the_stores_names() {
+    use std::collections::BTreeMap;
+
+    use pos_proto::sale_channel::{OrderType, SaleChannel, SaleSource, SaleToken};
+
+    use crate::app::ChannelLine;
+
+    let zone = StoreTimeZone::from_iana_name("Asia/Ho_Chi_Minh").expect("a real zone");
+    let named = |en: &str, vi: &str| {
+        BTreeMap::from([
+            ("en".to_owned(), DisplayName::new(en)),
+            ("vi".to_owned(), DisplayName::new(vi)),
+        ])
+    };
+    let line = |source: SaleToken, vendor_id, order_type: SaleToken, bills, sales| ChannelLine {
+        channel: SaleChannel {
+            source,
+            vendor_id,
+            order_type,
+        },
+        name: None,
+        order_type_names: BTreeMap::new(),
+        source_names: BTreeMap::new(),
+        bills,
+        sales: vnd(sales),
+    };
+    let grab = VendorId::new(Ulid::from_u128(0x0EE1));
+    let pickup = SaleToken::order_type("ORDER_TYPE_PICKUP").expect("a token");
+    let hotline = SaleToken::source("SALE_SOURCE_HOTLINE").expect("a token");
+    let mut read = shift(None);
+    read.figures.channels = vec![
+        ChannelLine {
+            name: Some(DisplayName::new("GrabFood")),
+            ..line(
+                SaleToken::of(SaleSource::App),
+                Some(grab),
+                SaleToken::of(OrderType::Delivery),
+                3,
+                598_000,
+            )
+        },
+        ChannelLine {
+            order_type_names: named("Pick-up", "Tự đến lấy"),
+            source_names: named("Hotline", "Tổng đài"),
+            ..line(hotline, None, pickup.clone(), 1, 70_000)
+        },
+        ChannelLine {
+            order_type_names: named("Pick-up", "Tự đến lấy"),
+            ..line(SaleToken::KIOSK, None, pickup, 2, 120_000)
+        },
+        line(
+            SaleToken::POS,
+            None,
+            SaleToken::of(OrderType::DineIn),
+            1,
+            195_000,
+        ),
+    ];
+    let paper = x_document(
+        &StoreProfile::default(),
+        &style(0),
+        &VIETNAMESE,
+        &zone,
+        XPaper::Shift(&read),
+    );
+    let lines = lines_of(&paper);
+    for expected in [
+        "THEO KÊNH VÀ LOẠI ĐƠN",
+        "GrabFood - Giao hàng (3)  VND 598,000",
+        "Tổng đài - Tự đến lấy (1)  VND 70,000",
+        "Kiosk - Tự đến lấy (2)  VND 120,000",
+        "POS tại quầy - Ăn tại chỗ (1)  VND 195,000",
+        "THEO LOẠI ĐƠN",
+        "Giao hàng (3)  VND 598,000",
+        "Tự đến lấy (3)  VND 190,000",
+        "Ăn tại chỗ (1)  VND 195,000",
+    ] {
+        assert!(lines.contains(&expected), "{expected}: {lines:?}");
+    }
+    let english_paper = x_document(
+        &StoreProfile::default(),
+        &style(0),
+        &ENGLISH,
+        &zone,
+        XPaper::Shift(&read),
+    );
+    let english = lines_of(&english_paper);
+    assert!(
+        english.contains(&"Hotline - Pick-up (1)  VND 70,000"),
+        "{english:?}"
+    );
+}

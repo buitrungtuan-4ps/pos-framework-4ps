@@ -136,6 +136,13 @@ pub struct PaperLabels {
     pub tender_other: &'static str,
     /// Before a delivery app's name, for what was paid in that app (ADR-0259 decision 5).
     pub tender_paid_via: &'static str,
+    /// The heading over an X's lines by channel and order type (ADR-0259 decision 4, ADR-0260).
+    pub x_by_channel: &'static str,
+    /// The heading over the same lines summed by order type.
+    pub x_by_order_type: &'static str,
+    /// The built-in sources and order types by token, for a line the store's lists leave unnamed;
+    /// the last entry of each, under the empty token, names any other.
+    pub sale_tokens: &'static [(&'static str, &'static str)],
     /// The heading of a handover slip (ADR-0187 decision 3).
     pub handover: &'static str,
     /// What the outgoing shift counted out of the drawer.
@@ -210,6 +217,19 @@ pub static ENGLISH: PaperLabels = PaperLabels {
     tender_qr: "QR",
     tender_other: "Other",
     tender_paid_via: "Paid via",
+    x_by_channel: "BY CHANNEL AND TYPE",
+    x_by_order_type: "BY ORDER TYPE",
+    sale_tokens: &[
+        ("SALE_SOURCE_POS", "Store POS"),
+        ("SALE_SOURCE_QR", "QR order"),
+        ("SALE_SOURCE_KIOSK", "Kiosk"),
+        ("SALE_SOURCE_API", "API"),
+        ("ORDER_TYPE_DINE_IN", "Dine-in"),
+        ("ORDER_TYPE_TAKEAWAY", "Take-away"),
+        ("ORDER_TYPE_DELIVERY", "Delivery"),
+        ("ORDER_TYPE_UNSPECIFIED", "Type not recorded"),
+        ("", "Other"),
+    ],
     handover: "SHIFT HANDOVER",
     counted_out: "Counted out",
     counted_in: "Counted in",
@@ -276,6 +296,19 @@ pub static VIETNAMESE: PaperLabels = PaperLabels {
     tender_qr: "QR",
     tender_other: "Khác",
     tender_paid_via: "Trả qua",
+    x_by_channel: "THEO KÊNH VÀ LOẠI ĐƠN",
+    x_by_order_type: "THEO LOẠI ĐƠN",
+    sale_tokens: &[
+        ("SALE_SOURCE_POS", "POS tại quầy"),
+        ("SALE_SOURCE_QR", "Gọi món QR"),
+        ("SALE_SOURCE_KIOSK", "Kiosk"),
+        ("SALE_SOURCE_API", "API"),
+        ("ORDER_TYPE_DINE_IN", "Ăn tại chỗ"),
+        ("ORDER_TYPE_TAKEAWAY", "Mang về"),
+        ("ORDER_TYPE_DELIVERY", "Giao hàng"),
+        ("ORDER_TYPE_UNSPECIFIED", "Chưa ghi loại đơn"),
+        ("", "Khác"),
+    ],
     handover: "GIAO CA",
     counted_out: "Ca trước đếm giao",
     counted_in: "Ca sau đếm nhận",
@@ -383,11 +416,16 @@ mod tests {
             ENGLISH.tender_qr,
             ENGLISH.tender_other,
             ENGLISH.tender_paid_via,
+            ENGLISH.x_by_channel,
+            ENGLISH.x_by_order_type,
             ENGLISH.handover,
             ENGLISH.counted_out,
             ENGLISH.counted_in,
             ENGLISH.handover_difference,
         ] {
+            assert!(label.is_ascii(), "{label}");
+        }
+        for (_, label) in ENGLISH.sale_tokens {
             assert!(label.is_ascii(), "{label}");
         }
     }
