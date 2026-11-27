@@ -89,7 +89,7 @@ import {
 } from "../components/SettingConfirmation";
 import { PermissionsReadinessPanel } from "../components/PermissionsReadiness";
 import { isTemplates, templateCount } from "../lib/receipt-templates";
-import { ReceiptTemplatesEditor } from "./settings/receipt/ReceiptTemplatesEditor";
+import { LIST_KINDS, listLabel, listTakes, StructuredEditor } from "./settings/OrderChannelsEditor";
 import { toast } from "../components/Toast";
 import type {
   EffectiveSetting,
@@ -219,7 +219,7 @@ function valueLabel(setting: SettingDefinition, value: Json | undefined): string
   if (typeof value === "boolean") {
     return value ? t("settings.on") : t("settings.off");
   }
-  return value === undefined ? "" : JSON.stringify(value);
+  return value === undefined ? "" : (listLabel(setting.kind, value) ?? JSON.stringify(value));
 }
 
 /** The bounds a whole number takes, when the catalogue gave both. */
@@ -249,7 +249,7 @@ function takes(setting: SettingDefinition, value: Json | undefined): boolean {
     case RECEIPT:
       return isTemplates(value);
     default:
-      return false;
+      return listTakes(setting.kind, value);
   }
 }
 
@@ -264,7 +264,7 @@ function editable(setting: SettingDefinition): boolean {
     case RECEIPT:
       return true;
     default:
-      return false;
+      return LIST_KINDS.includes(setting.kind);
   }
 }
 
@@ -957,8 +957,8 @@ export function Settings() {
                     hint={switchHint()}
                   />
                 </Match>
-                <Match when={setting().kind === RECEIPT}>
-                  <ReceiptTemplatesEditor tenantId={tenantId()} value={draft() ?? hereValue()} onChange={pick} disabled={writing.saving()} />
+                <Match when={setting().kind === RECEIPT || LIST_KINDS.includes(setting().kind)}>
+                  <StructuredEditor kind={setting().kind} tenantId={tenantId()} value={draft() ?? hereValue()} saved={hereValue()} fallback={setting().default} onChange={pick} disabled={writing.saving()} />
                 </Match>
                 <Match when={setting().kind === CHOICE}>
                   <SelectField
