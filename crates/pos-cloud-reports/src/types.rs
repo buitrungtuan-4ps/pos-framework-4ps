@@ -115,6 +115,38 @@ pub struct DailyRevenue {
     /// stored before it loads with none and gains it from the rollup's cursor forward.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub by_tender: BTreeMap<String, i64>,
+    /// The day's bills and sales by channel, delivery app and order type, one line each, in order of
+    /// source, app and type
+    /// ([ADR-0259](../../../docs/adr/0259-a-sale-is-reported-by-its-channel-and-its-order-type.md)
+    /// decision 4). The lines sum to [`bills`](Self::bills) and [`net`](Self::net) on a day folded
+    /// since this field; a bill voided after payment leaves its line as it leaves them. Left out
+    /// while empty, and `#[serde(default)]`, so a day stored before it loads with none until the
+    /// rollup is reset.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub by_channel: Vec<ChannelSales>,
+    /// What each delivery app's in-app payments (`PAYMENT_METHOD_VENDOR`) captured on the day, keyed
+    /// by the app's connection id, minor units (ADR-0259 decision 5): `by_tender`'s vendor amount by
+    /// app. Left out while empty, and `#[serde(default)]`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub by_app_tender: BTreeMap<String, i64>,
+}
+
+/// One line of a day's sales by channel and order type (part of [`DailyRevenue`], ADR-0259).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct ChannelSales {
+    /// Where the orders came from, a `SALE_SOURCE_*` token.
+    pub source: String,
+    /// The delivery app's connection id, for `SALE_SOURCE_APP`; absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(nullable = false)]
+    pub vendor_id: Option<String>,
+    /// How they were served, an `ORDER_TYPE_*` token; `ORDER_TYPE_UNSPECIFIED` where the order did
+    /// not say.
+    pub order_type: String,
+    /// Settled bills.
+    pub bills: u64,
+    /// What they took, `total_due` summed, minor units.
+    pub sales: i64,
 }
 
 /// The bills voided after payment on one trading day (part of [`DailyRevenue`]).

@@ -375,6 +375,8 @@ pub fn empty_revenue(business_date: &str) -> DailyRevenue {
         by_tax_component: Vec::new(),
         voided_after_payment: VoidedAfterPayment::default(),
         by_tender: BTreeMap::new(),
+        by_channel: Vec::new(),
+        by_app_tender: BTreeMap::new(),
     }
 }
 
