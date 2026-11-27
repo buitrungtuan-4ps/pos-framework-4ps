@@ -478,7 +478,7 @@ impl<S: EventStore> Edge<S> {
         if known == EventType::FiscalCorrectionRequested {
             let event: pos_proto::events::FiscalCorrectionRequested =
                 envelope.data.decode().map_err(AppError::Encode)?;
-            projection.invoices.fold_requested(event.request.bill_id);
+            projection.invoices.fold_requested(&event.request);
         } else if known == EventType::FiscalCorrectionDecided {
             let event: pos_proto::events::FiscalCorrectionDecided =
                 envelope.data.decode().map_err(AppError::Encode)?;

@@ -10,9 +10,10 @@ use pos_fakes::FakeStore;
 use pos_ports::event_store::{EventQuery, EventStore};
 use pos_proto::BillState;
 use pos_proto::einvoice::{
-    CorrectionDecision, DecidedCorrection, EInvoiceIssueMoment, InvoicedCorrection,
+    CorrectionDecision, DecidedCorrection, EInvoiceIssueMoment, EInvoiceKind, InvoicedCorrection,
     PublishedEInvoice,
 };
+use pos_proto::events::BillingBillVoided;
 use pos_proto::ids::BillId;
 use pos_proto::time::Timestamp;
 use pos_proto::ulid::Ulid;
@@ -265,6 +266,66 @@ fn the_store_records_each_decision_on_a_bill_it_asked_about_once() {
             envelope_employee,
             Some(actor().employee_id),
             "stamped by the box, not a person"
+        );
+    });
+}
+
+/// The kind on the till's void of `bill_id`, read from the log.
+async fn voided_kind(store: &FakeStore, bill_id: BillId) -> Option<EInvoiceKind> {
+    store
+        .read(&EventQuery::first(
+            identity().store_id,
+            NonZeroU32::new(500).expect("not zero"),
+        ))
+        .await
+        .expect("reads")
+        .iter()
+        .filter(|event| event.event_type.as_str() == "billing.bill.voided")
+        .filter_map(|event| event.data.decode::<BillingBillVoided>().ok())
+        .find(|voided| voided.bill_id == bill_id)
+        .and_then(|voided| voided.correction_kind)
+        .map(|kind| kind.known())
+}
+
+/// ADR-0257: a void HQ's approval lets the till make carries the kind the store asked for and HQ
+/// approved, even after the store's kind changed, and after a restart that rebuilds from the log.
+#[test]
+fn a_void_hq_approved_carries_the_kind_the_store_asked_for() {
+    pos_fakes::executor::run_ready(async {
+        let store = FakeStore::default();
+        let edge = over(store.clone(), routed(InvoicedCorrection::Request));
+        let bill_id = a_paid_bill(&edge, 602, vec![card(165_000)]).await;
+        edge.request_invoice_correction(actor(), bill_id, Some(reason()), Some(&approval("MGR-1")))
+            .await
+            .expect("asked as an adjustment, the default kind");
+
+        // The kind changes before HQ approves and the till voids; the box restarts in between.
+        let mut later = routed(InvoicedCorrection::Request);
+        later.einvoice.correction_kind = Open::from_known(EInvoiceKind::Replacement);
+        let edge = over(store.clone(), later);
+        edge.rebuild().await.expect("rebuilds from the log");
+        decided(&edge, bill_id, CorrectionDecision::Approved);
+        void(&edge, bill_id, Some("MGR-1"))
+            .await
+            .expect("approved, the till voids it");
+        assert_eq!(
+            voided_kind(&store, bill_id).await,
+            Some(EInvoiceKind::Adjustment),
+            "the kind HQ approved, not today's"
+        );
+
+        // A void the route allows by itself takes today's kind (ADR-0256 decision 2).
+        let mut own = routed_with(InvoicedCorrection::ManagerUpToLimit, 1_000_000);
+        own.einvoice.correction_kind = Open::from_known(EInvoiceKind::Replacement);
+        let edge = over(store.clone(), own);
+        edge.rebuild().await.expect("rebuilds from the log");
+        let within = a_paid_bill(&edge, 603, vec![card(165_000)]).await;
+        void(&edge, within, Some("MGR-1"))
+            .await
+            .expect("within the manager's limit");
+        assert_eq!(
+            voided_kind(&store, within).await,
+            Some(EInvoiceKind::Replacement)
         );
     });
 }
