@@ -93,7 +93,6 @@ impl<S: EventStore> Edge<S> {
             self.order_joined_on_arrival(&session, order_channel, table_id, holds_for_staff);
 
         let package_version_id = self.opening_package_version();
-        let order_type = session.intake_order_type(order_channel, table_id, vendor_id);
         let opened = SalesOrderOpened {
             order_id,
             channel,
@@ -105,7 +104,7 @@ impl<S: EventStore> Edge<S> {
             tab_number: None,
             // Intake opens through no catalogue act, so it enters no flow (ADR-0244).
             opened_by_action_id: None,
-            order_type: order_type.clone(),
+            order_type: session.intake_order_type(order_channel, table_id, vendor_id),
             sale_source: None,
         };
         let mut prepared = self.prepare_inbound(stamp, &opened, lines, joins)?;
@@ -141,7 +140,7 @@ impl<S: EventStore> Edge<S> {
             projection.record_opened(order_id, None, package_version_id);
             projection.record_recipient(order_id, opened.subject_id);
             projection.record_vendor(order_id, vendor_id);
-            projection.record_sale_tokens(order_id, order_type, None);
+            projection.record_sale_tokens(order_id, opened.order_type.clone(), None);
             projection.record_price_flag(order_id, price_differs);
         }
         if let Some((ctx, applied)) = fires {
