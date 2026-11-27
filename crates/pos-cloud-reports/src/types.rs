@@ -430,4 +430,16 @@ pub struct XzReport {
     #[serde(default)]
     #[schema(required = true)]
     pub vendor_names: BTreeMap<String, String>,
+    /// The store's names, by language, for each order type token among the day's lines, from its
+    /// `order_channels` node when the report is served
+    /// ([ADR-0260](../../../docs/adr/0260-order-types-and-sale-sources-are-published-lists.md)
+    /// decision 6). A built-in the store left unnamed has none, and the console shows its own words.
+    #[serde(default)]
+    #[schema(required = true)]
+    pub order_type_names: BTreeMap<String, BTreeMap<String, String>>,
+    /// The store's names, by language, for each source token among the day's lines, as
+    /// `order_type_names`.
+    #[serde(default)]
+    #[schema(required = true)]
+    pub source_names: BTreeMap<String, BTreeMap<String, String>>,
 }

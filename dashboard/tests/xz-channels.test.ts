@@ -93,3 +93,19 @@ describe("the X/Z by channel and order type", () => {
     ]);
   });
 });
+
+// ADR-0260 decision 6: a type or source the store named reads by its name, in the console's
+// language, and a built-in it left unnamed by the console's words. Fake configuration only.
+describe("the X/Z names the store's own types and sources", () => {
+  const named = {
+    ...report,
+    order_type_names: { ORDER_TYPE_PICKUP: { en: "Pick-up", vi: "Tự đến lấy" } },
+    source_names: { SALE_SOURCE_HOTLINE: { en: "Hotline", vi: "Tổng đài" } },
+  } as unknown as XzReport;
+  it("uses the store's names, else its own", () => {
+    const line = { source: "SALE_SOURCE_HOTLINE", order_type: "ORDER_TYPE_PICKUP", bills: 1, sales: 70_000 };
+    expect(channelName(named, line)).toBe("Hotline");
+    expect(orderTypeName("ORDER_TYPE_PICKUP", named)).toBe("Pick-up");
+    expect(orderTypeName("ORDER_TYPE_TAKEAWAY", named)).toBe(orderTypeName("ORDER_TYPE_TAKEAWAY"));
+  });
+});

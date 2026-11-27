@@ -777,3 +777,91 @@ async fn the_xz_report_names_each_delivery_app_from_the_vendors_node() {
     assert_eq!(report["revenue"]["by_app_tender"][gone.as_str()], 50_000);
     assert_eq!(report["revenue"]["by_channel"][0]["sales"], 188_000);
 }
+
+/// The X/Z report names each order type and source token among the day's lines from the store's
+/// `order_channels` node as it is served (**ADR-0260** decision 6); a built-in the node leaves
+/// unnamed has no name, and the figures stand. Fake configuration only.
+#[tokio::test]
+async fn the_xz_report_names_the_stores_order_types_and_sources() {
+    use pos_cloud::cloud::ChannelSales;
+    use pos_cloud::config_tree::{ConfigTreeState, ConfigTreeStore as _, PublishedVersion};
+    use pos_proto::ids::ConfigVersionId;
+
+    let lists = serde_json::json!({
+        "order_types": [
+            { "order_type": "ORDER_TYPE_TAKEAWAY", "base_order_type": "ORDER_TYPE_TAKEAWAY" },
+            { "order_type": "ORDER_TYPE_PICKUP", "base_order_type": "ORDER_TYPE_TAKEAWAY",
+              "names": { "en": "Pick-up", "vi": "Tự đến lấy" } }
+        ],
+        "sources": [{ "source": "SALE_SOURCE_HOTLINE", "names": { "en": "Hotline", "vi": "Tổng đài" } }]
+    });
+    let trees = FakeConfigTrees::default();
+    let state = ConfigTreeState {
+        layers: [
+            serde_json::json!({ "order_channels": lists.clone() }),
+            serde_json::json!({}),
+            serde_json::json!({}),
+            serde_json::json!({}),
+        ],
+        history: vec![PublishedVersion {
+            id: ConfigVersionId::new(Ulid::from_u128(0xC0F2)),
+            effective: serde_json::json!({ "order_channels": lists }),
+            nodes: vec!["order_channels".to_owned()],
+        }],
+        k: 8,
+    };
+    trees
+        .save(tenant(), store_id(), &state, None)
+        .await
+        .expect("seed the tree");
+    let rollups = FakeRollups::default();
+    let router = device_publish_app_with(
+        &FakeKeys::default(),
+        trees,
+        rollups.clone(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let cookie = admin_cookie(&router).await;
+    let line = |source: &str, order_type: &str, sales| ChannelSales {
+        source: source.to_owned(),
+        vendor_id: None,
+        order_type: order_type.to_owned(),
+        bills: 1,
+        sales,
+    };
+    let mut seeded = StoredRollups::default();
+    let mut day = pos_cloud::dashboard::rollup::empty_revenue("2026-03-15");
+    day.by_channel = vec![
+        line("SALE_SOURCE_HOTLINE", "ORDER_TYPE_PICKUP", 70_000),
+        line("SALE_SOURCE_POS", "ORDER_TYPE_TAKEAWAY", 90_000),
+    ];
+    seeded.revenue.insert("2026-03-15".to_owned(), day);
+    rollups
+        .save(tenant(), store_id(), &seeded)
+        .await
+        .expect("seed the rollup");
+
+    let response = router
+        .oneshot(get_with_cookie(
+            &format!(
+                "/admin/stores/{}/reports/xz?tenant_id={}&business_date=2026-03-15",
+                store_id().as_ulid(),
+                tenant().as_ulid()
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("route the report");
+    assert_eq!(response.status(), StatusCode::OK);
+    let report = json_body(response).await;
+    assert_eq!(
+        report["order_type_names"],
+        serde_json::json!({ "ORDER_TYPE_PICKUP": { "en": "Pick-up", "vi": "Tự đến lấy" } }),
+        "{report}"
+    );
+    assert_eq!(
+        report["source_names"],
+        serde_json::json!({ "SALE_SOURCE_HOTLINE": { "en": "Hotline", "vi": "Tổng đài" } })
+    );
+    assert_eq!(report["revenue"]["by_channel"][0]["sales"], 70_000);
+}
