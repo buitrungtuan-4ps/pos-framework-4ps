@@ -39,4 +39,18 @@ pub trait TillNames {
         store: (TenantId, StoreId),
         revenue: &DailyRevenue,
     ) -> impl Future<Output = BTreeMap<String, String>> + Send;
+
+    /// The names, by language, the store's `order_channels` node gives each order type and source
+    /// token among `revenue`'s channel lines
+    /// ([ADR-0260](../../../docs/adr/0260-order-types-and-sale-sources-are-published-lists.md)
+    /// decision 6), as `(order types, sources)`. A token the node does not name, or every token when
+    /// it cannot be read, is left out: the figures stand without the names.
+    fn channel_names(
+        &self,
+        store: (TenantId, StoreId),
+        revenue: &DailyRevenue,
+    ) -> impl Future<Output = (ChannelNames, ChannelNames)> + Send;
 }
+
+/// Names by language, by token.
+pub type ChannelNames = BTreeMap<String, BTreeMap<String, String>>;

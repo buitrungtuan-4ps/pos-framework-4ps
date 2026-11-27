@@ -91,6 +91,10 @@ where
                 .till_names
                 .vendor_names((tenant_id, store_id), &report.revenue)
                 .await;
+            (report.order_type_names, report.source_names) = app
+                .till_names
+                .channel_names((tenant_id, store_id), &report.revenue)
+                .await;
             (StatusCode::OK, Json(report)).into_response()
         }
         Err(error) => rollup_error_response(&error),

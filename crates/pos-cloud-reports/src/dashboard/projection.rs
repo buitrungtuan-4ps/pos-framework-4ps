@@ -380,6 +380,8 @@ where
         till_names: BTreeMap::new(),
         // So are the apps' names, from its vendors node (ADR-0259 decision 5).
         vendor_names: BTreeMap::new(),
+        order_type_names: BTreeMap::new(),
+        source_names: BTreeMap::new(),
         business_date: day,
     })
 }

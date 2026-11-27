@@ -41620,7 +41620,9 @@
           "revenue",
           "cash",
           "till_names",
-          "vendor_names"
+          "vendor_names",
+          "order_type_names",
+          "source_names"
         ],
         "properties": {
           "activity": {
@@ -41639,9 +41641,41 @@
             "type": "string",
             "description": "`\"X\"` (current, interim) or `\"Z\"` (closed, final)."
           },
+          "order_type_names": {
+            "type": "object",
+            "description": "The store's names, by language, for each order type token among the day's lines, from its\n`order_channels` node when the report is served\n([ADR-0260](../../../docs/adr/0260-order-types-and-sale-sources-are-published-lists.md)\ndecision 6). A built-in the store left unnamed has none, and the console shows its own words.",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "propertyNames": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "revenue": {
             "$ref": "#/components/schemas/DailyRevenue",
             "description": "The day's recognised revenue and product mix."
+          },
+          "source_names": {
+            "type": "object",
+            "description": "The store's names, by language, for each source token among the day's lines, as\n`order_type_names`.",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "propertyNames": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           },
           "till_names": {
             "type": "object",
