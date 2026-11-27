@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use pos_proto::ids::{StoreId, TenantId};
 
-use crate::types::DailyCash;
+use crate::types::{DailyCash, DailyRevenue};
 
 /// The names a store's published configuration gives the tills among a day's cash drawers, by
 /// `terminal_device_id` ([ADR-0167](../../../docs/adr/0167-a-till-has-its-own-cash-drawer.md)
@@ -27,5 +27,16 @@ pub trait TillNames {
         &self,
         store: (TenantId, StoreId),
         cash: &DailyCash,
+    ) -> impl Future<Output = BTreeMap<String, String>> + Send;
+
+    /// The names the store's `vendors` node gives the delivery apps among `revenue`'s channel lines
+    /// and in-app payments, by connection id
+    /// ([ADR-0259](../../../docs/adr/0259-a-sale-is-reported-by-its-channel-and-its-order-type.md)
+    /// decision 5). An app the node no longer lists, or every app when it cannot be read, is left
+    /// out: the figures stand without the names.
+    fn vendor_names(
+        &self,
+        store: (TenantId, StoreId),
+        revenue: &DailyRevenue,
     ) -> impl Future<Output = BTreeMap<String, String>> + Send;
 }

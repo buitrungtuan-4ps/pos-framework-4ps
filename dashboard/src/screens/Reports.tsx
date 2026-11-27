@@ -22,6 +22,7 @@ import { Banner, Button, Card, PageHeader } from "../components/ui";
 import { DateField, DateRange, Toolbar } from "../components/kit";
 import { DrawerTable } from "./reports/DrawerTable";
 import { XzCash } from "./reports/XzCash";
+import { XzChannels } from "./reports/XzChannels";
 import { DeliveryReconciliation } from "./reports/Delivery";
 import { apiMessage } from "../lib/errors";
 import type {
@@ -619,6 +620,7 @@ export function Reports() {
                 )}
               </Show>
               <Show when={xz()}>{(report) => <XzExtras report={report()} />}</Show>
+              <Show when={xz()}>{(report) => <XzChannels report={report()} />}</Show>
             </Card>
             <DeliveryReconciliation window={win} />
 

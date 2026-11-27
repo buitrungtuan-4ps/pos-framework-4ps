@@ -378,6 +378,8 @@ where
         // Names are the published devices node's, which this rollup does not hold: the route reads
         // them when it serves the report.
         till_names: BTreeMap::new(),
+        // So are the apps' names, from its vendors node (ADR-0259 decision 5).
+        vendor_names: BTreeMap::new(),
         business_date: day,
     })
 }

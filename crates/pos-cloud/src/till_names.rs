@@ -6,9 +6,9 @@
 use pos_proto::devices::PublishedDevices;
 use pos_proto::ids::{StoreId, TenantId};
 
-use crate::cloud::{DailyCash, STORE_DRAWER};
+use crate::cloud::{DailyCash, DailyRevenue, STORE_DRAWER};
 use crate::config_tree::{CapabilityValidator, ConfigTree, ConfigTreeStore};
-use crate::http::strip_tree_version;
+use crate::http::{published_vendors, strip_tree_version};
 use pos_cloud_reports::till_names::TillNames;
 
 /// The reports' [`TillNames`] over the stores' configuration trees.
@@ -22,6 +22,29 @@ impl<T: ConfigTreeStore + Sync> TillNames for PublishedTillNames<T> {
         cash: &DailyCash,
     ) -> std::collections::BTreeMap<String, String> {
         published_till_names(&self.0, store, cash).await
+    }
+
+    async fn vendor_names(
+        &self,
+        (tenant_id, store_id): (TenantId, StoreId),
+        revenue: &DailyRevenue,
+    ) -> std::collections::BTreeMap<String, String> {
+        let apps: std::collections::BTreeSet<&String> = revenue
+            .by_channel
+            .iter()
+            .filter_map(|line| line.vendor_id.as_ref())
+            .chain(revenue.by_app_tender.keys())
+            .collect();
+        if apps.is_empty() {
+            return std::collections::BTreeMap::new();
+        }
+        let vendors = published_vendors(&self.0, tenant_id, store_id).await;
+        apps.into_iter()
+            .filter_map(|app| {
+                let vendor = vendors.get(app.parse().ok()?)?;
+                Some((app.clone(), vendor.display_name.as_str().to_owned()))
+            })
+            .collect()
     }
 }
 

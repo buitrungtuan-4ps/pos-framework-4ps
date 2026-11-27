@@ -698,3 +698,82 @@ async fn the_xz_report_names_each_tills_drawer_from_the_published_devices_node()
         "the store's figures sit where they always did"
     );
 }
+
+/// The X/Z report names each delivery app among the day's channel lines and in-app payments from
+/// the store's `vendors` node as it is served (**ADR-0259** decision 5); an app the node no longer
+/// lists has no name, and its figures stand.
+#[tokio::test]
+async fn the_xz_report_names_each_delivery_app_from_the_vendors_node() {
+    use pos_cloud::cloud::ChannelSales;
+    use pos_cloud::config_tree::{ConfigTreeState, ConfigTreeStore as _, PublishedVersion};
+    use pos_proto::ids::ConfigVersionId;
+
+    let grab = Ulid::from_u128(0x0EE1).to_string();
+    let gone = Ulid::from_u128(0x0EE9).to_string();
+    let trees = FakeConfigTrees::default();
+    let vendors = serde_json::json!({ "vendors": [{
+        "vendor_id": grab, "display_name": "GrabFood", "staff_confirm": false, "prep_minutes": 15,
+    }] });
+    let state = ConfigTreeState {
+        layers: [
+            serde_json::json!({}),
+            serde_json::json!({}),
+            serde_json::json!({ "vendors": vendors.clone() }),
+            serde_json::json!({}),
+        ],
+        history: vec![PublishedVersion {
+            id: ConfigVersionId::new(Ulid::from_u128(0xC0F1)),
+            effective: serde_json::json!({ "vendors": vendors }),
+            nodes: vec!["vendors".to_owned()],
+        }],
+        k: 8,
+    };
+    trees
+        .save(tenant(), store_id(), &state, None)
+        .await
+        .expect("seed the tree");
+    let rollups = FakeRollups::default();
+    let router = device_publish_app_with(
+        &FakeKeys::default(),
+        trees,
+        rollups.clone(),
+        Arc::new(NoopAuditRecorder),
+    );
+    let cookie = admin_cookie(&router).await;
+    let mut seeded = StoredRollups::default();
+    let mut day = pos_cloud::dashboard::rollup::empty_revenue("2026-03-15");
+    day.by_channel = vec![ChannelSales {
+        source: "SALE_SOURCE_APP".to_owned(),
+        vendor_id: Some(grab.clone()),
+        order_type: "ORDER_TYPE_DELIVERY".to_owned(),
+        bills: 1,
+        sales: 188_000,
+    }];
+    day.by_app_tender = BTreeMap::from([(grab.clone(), 188_000), (gone.clone(), 50_000)]);
+    seeded.revenue.insert("2026-03-15".to_owned(), day);
+    rollups
+        .save(tenant(), store_id(), &seeded)
+        .await
+        .expect("seed the rollup");
+
+    let response = router
+        .oneshot(get_with_cookie(
+            &format!(
+                "/admin/stores/{}/reports/xz?tenant_id={}&business_date=2026-03-15",
+                store_id().as_ulid(),
+                tenant().as_ulid()
+            ),
+            &cookie,
+        ))
+        .await
+        .expect("route the report");
+    assert_eq!(response.status(), StatusCode::OK);
+    let report = json_body(response).await;
+    assert_eq!(
+        report["vendor_names"],
+        serde_json::json!({ grab.as_str(): "GrabFood" }),
+        "{report}"
+    );
+    assert_eq!(report["revenue"]["by_app_tender"][gone.as_str()], 50_000);
+    assert_eq!(report["revenue"]["by_channel"][0]["sales"], 188_000);
+}
