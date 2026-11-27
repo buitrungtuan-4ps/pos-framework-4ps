@@ -71,11 +71,17 @@ impl SettingCatalogueEntry {
             SettingShape::Bool { .. }
             | SettingShape::Ulid
             | SettingShape::UlidList { .. }
-            | SettingShape::ReceiptTemplates => (None, None),
+            | SettingShape::ReceiptTemplates
+            | SettingShape::OrderTypes
+            | SettingShape::SaleSources => (None, None),
         };
         // An identifier list's most is its `max`; it has no `min` and no unit.
         let list_max = match &setting.shape {
             SettingShape::UlidList { max } => i64::try_from(*max).ok(),
+            SettingShape::OrderTypes => {
+                i64::try_from(pos_proto::order_channels::MAX_ORDER_TYPES).ok()
+            }
+            SettingShape::SaleSources => i64::try_from(pos_proto::order_channels::MAX_SOURCES).ok(),
             _ => None,
         };
         Self {
@@ -119,7 +125,7 @@ struct SettingValues {
     extensions(("x-permission" = json!("console.data.read"))),
     responses(
         (status = 200, body = SettingsCatalogue, description = "Every setting in the register: its key, node and field, its \
-                                      kind (SETTING_KIND_CHOICE, _INT, _BOOL, _ULID, _ULID_LIST or _RECEIPT_TEMPLATES) and what it \
+                                      kind (SETTING_KIND_CHOICE, _INT, _BOOL, _ULID, _ULID_LIST, _RECEIPT_TEMPLATES, _ORDER_TYPES or _SALE_SOURCES) and what it \
                                       takes — a choice's values, or a whole number's min, max \
                                       and unit — its default and the value a new store is given \
                                       (each as the node carries it), the scopes it may be written \

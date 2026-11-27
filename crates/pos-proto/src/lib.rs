@@ -56,6 +56,7 @@ pub mod kitchen_release;
 pub mod locale;
 pub mod menu;
 pub mod money;
+pub mod order_channels;
 pub mod origins;
 pub mod package;
 pub mod people;

@@ -30,6 +30,39 @@ mod einvoice_nodes;
 mod kitchen_nodes;
 mod nodes;
 
+/// The settings on the `order_channels` node (ADR-0260), in the register's order.
+fn order_channel_settings() -> Vec<Setting> {
+    use crate::order_channels::PublishedOrderChannels;
+    vec![
+        Setting {
+            node: PublishedOrderChannels::NODE,
+            field: "order_types",
+            shape: SettingShape::OrderTypes,
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            confirm: None,
+            summary: "The order types the till offers and the reports name, each mapped onto a \
+                      base kind (dine-in, takeaway, delivery) that alone sets the order's sales \
+                      channel, price and tax. HQ adds types such as pick-up or catering, names \
+                      them in English and Vietnamese, marks one the default, and lets QR, API or \
+                      app orders of a type's base kind take it. A type is deactivated, never \
+                      removed: a write that drops a token this scope held is refused.",
+        },
+        Setting {
+            node: PublishedOrderChannels::NODE,
+            field: "sources",
+            shape: SettingShape::SaleSources,
+            scopes: STORE_WIDE,
+            since: NEXT_RELEASE,
+            confirm: None,
+            summary: "The sale sources beyond the built-ins (the till, QR, API, a kiosk and each \
+                      delivery app by its connection), such as a hotline or a website, which the \
+                      till may record on an order it opens; listing a built-in renames it. A \
+                      source is deactivated, never removed.",
+        },
+    ]
+}
+
 /// Where the rendered snapshot is committed, relative to the repository root.
 pub const SNAPSHOT_PATH: &str = "docs/snapshots/settings.txt";
 
@@ -65,6 +98,12 @@ wire_enum! {
     /// The `receipt` node's templates: a base template and at most one per sales channel, as
     /// [`crate::receipt::ReceiptTemplates`] holds them (ADR-0207).
     ReceiptTemplates = "RECEIPT_TEMPLATES",
+    /// The `order_channels` node's order types, as
+    /// [`crate::order_channels::check_order_types`] takes them (ADR-0260).
+    OrderTypes = "ORDER_TYPES",
+    /// The `order_channels` node's sale sources, as [`crate::order_channels::check_sources`] takes
+    /// them (ADR-0260).
+    SaleSources = "SALE_SOURCES",
 }
 
 wire_enum! {
@@ -139,6 +178,13 @@ pub enum SettingShape {
     /// which is structure and never free text (ADR-0207 decision 3). Its default is the empty set,
     /// which prints every receipt as before, and a new store is given that.
     ReceiptTemplates,
+    /// A list of order types, each a token, its base kind, its names, whether it is active, whether
+    /// it is the default and the sources it applies to (ADR-0260). Its default is the three
+    /// built-ins, and a new store is given that.
+    OrderTypes,
+    /// A list of sale sources, each a token, its names and whether it is active (ADR-0260). Its
+    /// default is the empty list, the built-ins only, and a new store is given that.
+    SaleSources,
 }
 
 /// Why a value is not one a setting takes.
@@ -165,6 +211,11 @@ pub enum ValueRefusal {
     /// [`Self::OutOfRange`].
     #[error("it is not a set of receipt templates")]
     NotATemplate,
+    /// An order-types or sale-sources value is not a list of sound entries
+    /// ([`crate::order_channels::ListRefusal::NotAList`]). One over its limits is
+    /// [`Self::OutOfRange`].
+    #[error("it is not a list of order types or sale sources")]
+    NotAList,
 }
 
 /// One setting: a field on a published node.
@@ -225,6 +276,8 @@ impl Setting {
             SettingShape::Ulid => SettingKind::Ulid,
             SettingShape::UlidList { .. } => SettingKind::UlidList,
             SettingShape::ReceiptTemplates => SettingKind::ReceiptTemplates,
+            SettingShape::OrderTypes => SettingKind::OrderTypes,
+            SettingShape::SaleSources => SettingKind::SaleSources,
         }
     }
 
@@ -236,8 +289,14 @@ impl Setting {
             SettingShape::Int { default, .. } => serde_json::Value::from(*default),
             SettingShape::Bool { default, .. } => serde_json::Value::from(*default),
             SettingShape::Ulid => serde_json::Value::Null,
-            SettingShape::UlidList { .. } => serde_json::Value::Array(Vec::new()),
+            SettingShape::UlidList { .. } | SettingShape::SaleSources => {
+                serde_json::Value::Array(Vec::new())
+            }
             SettingShape::ReceiptTemplates => serde_json::Value::Object(serde_json::Map::new()),
+            SettingShape::OrderTypes => {
+                serde_json::to_value(crate::order_channels::built_in_types())
+                    .unwrap_or_else(|_| serde_json::Value::Array(Vec::new()))
+            }
         }
     }
 
@@ -249,9 +308,11 @@ impl Setting {
             SettingShape::Choice { preset, .. } => preset.map(serde_json::Value::from),
             SettingShape::Int { preset, .. } => preset.map(serde_json::Value::from),
             SettingShape::Bool { preset, .. } => preset.map(serde_json::Value::from),
-            SettingShape::Ulid | SettingShape::UlidList { .. } | SettingShape::ReceiptTemplates => {
-                None
-            }
+            SettingShape::Ulid
+            | SettingShape::UlidList { .. }
+            | SettingShape::ReceiptTemplates
+            | SettingShape::OrderTypes
+            | SettingShape::SaleSources => None,
         }
     }
 
@@ -304,6 +365,12 @@ impl Setting {
                     crate::receipt::TemplateRefusal::NotATemplate => ValueRefusal::NotATemplate,
                     crate::receipt::TemplateRefusal::OverLimit => ValueRefusal::OutOfRange,
                 }),
+            SettingShape::OrderTypes => {
+                crate::order_channels::check_order_types(value).map_err(list_refusal)
+            }
+            SettingShape::SaleSources => {
+                crate::order_channels::check_sources(value).map_err(list_refusal)
+            }
         }
     }
 
@@ -326,9 +393,31 @@ impl Setting {
             SettingShape::Ulid => "an identifier or null".to_owned(),
             SettingShape::UlidList { max } => format!("at most {max} distinct identifiers"),
             SettingShape::ReceiptTemplates => RECEIPT_TEMPLATES_TAKE.to_owned(),
+            SettingShape::OrderTypes => ORDER_TYPES_TAKE.to_owned(),
+            SettingShape::SaleSources => SALE_SOURCES_TAKE.to_owned(),
         }
     }
 }
+
+/// A list's refusal as a setting's.
+const fn list_refusal(refusal: crate::order_channels::ListRefusal) -> ValueRefusal {
+    match refusal {
+        crate::order_channels::ListRefusal::NotAList => ValueRefusal::NotAList,
+        crate::order_channels::ListRefusal::OverLimit => ValueRefusal::OutOfRange,
+    }
+}
+
+/// What an order-types setting takes, for a refusal and for the register.
+const ORDER_TYPES_TAKE: &str = "at most 32 order types, each an `ORDER_TYPE_*` token of at most 48 \
+     characters, its base kind (`ORDER_TYPE_DINE_IN`, `_TAKEAWAY` or `_DELIVERY`; a built-in's is \
+     itself), names in at most 4 languages (`en` required for a new token), whether it is active, \
+     whether it is the one default, and at most 3 of `SALE_SOURCE_QR`, `_API` and `_APP` it \
+     applies to";
+
+/// What a sale-sources setting takes, for a refusal and for the register.
+const SALE_SOURCES_TAKE: &str = "at most 64 sale sources, each a `SALE_SOURCE_*` token of at most \
+     48 characters other than `SALE_SOURCE_APP`, names in at most 4 languages (`en` required for a \
+     new token) and whether it is active";
 
 /// What a receipt-templates setting takes, for a refusal and for the register.
 const RECEIPT_TEMPLATES_TAKE: &str = "a base receipt template and at most one per sales channel, \
@@ -382,6 +471,7 @@ pub fn register() -> Vec<Setting> {
         nodes::locale_settings(),
         nodes::tender_key_settings(),
         nodes::counter_settings(),
+        order_channel_settings(),
         nodes::scan_settings(),
         nodes::weighing_settings(),
         nodes::kiosk_settings(),
@@ -452,6 +542,13 @@ fn render_snapshot_of(settings: &[Setting]) -> String {
             }
             SettingShape::Ulid | SettingShape::ReceiptTemplates => {}
             SettingShape::UlidList { max } => lines.push(format!("{key}\tmax={max}")),
+            SettingShape::OrderTypes => lines.push(format!(
+                "{key}\tmax={}",
+                crate::order_channels::MAX_ORDER_TYPES
+            )),
+            SettingShape::SaleSources => {
+                lines.push(format!("{key}\tmax={}", crate::order_channels::MAX_SOURCES));
+            }
         }
         lines.push(format!(
             "{key}\tdefault={}",
@@ -547,6 +644,8 @@ fn render_markdown_of(settings: &[Setting]) -> String {
             SettingShape::Ulid => "an identifier, or `null` for none".to_owned(),
             SettingShape::UlidList { max } => format!("up to {max} distinct identifiers"),
             SettingShape::ReceiptTemplates => RECEIPT_TEMPLATES_TAKE.to_owned(),
+            SettingShape::OrderTypes => ORDER_TYPES_TAKE.to_owned(),
+            SettingShape::SaleSources => SALE_SOURCES_TAKE.to_owned(),
         };
         let values = match setting.confirm {
             Some(confirm) => format!("{values}; `{}` is confirmed", confirm.value),
