@@ -123,4 +123,76 @@ fn figure_blocks(
     if let Some(expected) = figures.expected_cash {
         blocks.push(amount_line(labels.expected_in_drawer, expected, money));
     }
+    channel_blocks(blocks, money, labels, figures);
+}
+
+/// What the paper calls a token: the store's name in the paper's language, else in English, else
+/// the paper's own word for a built-in (ADR-0260 decision 6).
+fn token_name(
+    labels: &PaperLabels,
+    token: &str,
+    names: &std::collections::BTreeMap<String, pos_proto::text::DisplayName>,
+) -> String {
+    names
+        .get(labels.language)
+        .or_else(|| names.get("en"))
+        .map(|name| name.as_str().to_owned())
+        .or_else(|| {
+            labels
+                .sale_tokens
+                .iter()
+                .find(|(known, _)| *known == token)
+                .map(|(_, label)| (*label).to_owned())
+        })
+        .unwrap_or_else(|| {
+            labels
+                .sale_tokens
+                .last()
+                .map_or_else(|| token.to_owned(), |(_, other)| (*other).to_owned())
+        })
+}
+
+/// An X's settled bills by channel and order type, "GrabFood - Giao hàng (3)", then summed by
+/// order type, as the till's X screen lists them (ADR-0259 decision 4, ADR-0260 decision 6).
+fn channel_blocks(
+    blocks: &mut Vec<PrintBlock>,
+    money: &MoneyStyle,
+    labels: &PaperLabels,
+    figures: &XFigures,
+) {
+    if figures.channels.is_empty() {
+        return;
+    }
+    blocks.push(centred(labels.x_by_channel, true));
+    let mut by_type: Vec<(String, u32, pos_proto::money::Money)> = Vec::new();
+    for line in &figures.channels {
+        let source = match (&line.name, line.channel.vendor_id) {
+            (Some(app), Some(_)) => app.as_str().to_owned(),
+            (None, Some(app)) => app.to_string(),
+            (_, None) => token_name(labels, line.channel.source.as_str(), &line.source_names),
+        };
+        let order_type = token_name(
+            labels,
+            line.channel.order_type.as_str(),
+            &line.order_type_names,
+        );
+        // A hyphen, not a middle dot: a printer that cannot rasterise prints ASCII only.
+        let label = format!("{source} - {order_type} ({})", line.bills);
+        blocks.push(amount_line(&label, line.sales, money));
+        match by_type.iter_mut().find(|(kept, _, _)| *kept == order_type) {
+            Some(row) => {
+                row.1 = row.1.saturating_add(line.bills);
+                row.2 = row.2.checked_add(line.sales).unwrap_or(row.2);
+            }
+            None => by_type.push((order_type, line.bills, line.sales)),
+        }
+    }
+    blocks.push(centred(labels.x_by_order_type, true));
+    for (order_type, bills, sales) in by_type {
+        blocks.push(amount_line(
+            &format!("{order_type} ({bills})"),
+            sales,
+            money,
+        ));
+    }
 }
