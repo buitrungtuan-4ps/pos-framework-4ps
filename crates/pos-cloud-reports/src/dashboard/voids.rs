@@ -19,11 +19,11 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use pos_proto::PaymentMethod;
 use pos_proto::envelope::{EventEnvelope, RawPayload};
 use pos_proto::events::{
     BillingBillSettled, BillingBillVoided, BillingPaymentCaptured, CashShiftClosed, CashShiftOpened,
 };
+use pos_proto::{PaymentMethod, PaymentOutcome, WireEnum as _};
 
 use super::rollup::{empty_cash, empty_revenue};
 use crate::types::{DailyCash, DailyRevenue, STORE_DRAWER};
@@ -47,6 +47,11 @@ pub struct KeptBill {
     pub components: Vec<(String, u32, i64)>,
     /// The cash its payments applied to it.
     pub cash: i64,
+    /// What each captured payment applied to it: the payment's business date, its method's token
+    /// and the amount, so a void takes it back out of that day's tender totals (ADR-0184 decision
+    /// 9). Absent on a bill kept before this field, whose tenders a void leaves as they were.
+    #[serde(default)]
+    pub tenders: Vec<(String, String, i64)>,
 }
 
 /// What the rollup keeps to fold voids after payment: each day's settled bills, the cash a bill's
@@ -63,6 +68,10 @@ pub struct KeptBills {
     /// until a void before the settle gives the cash back.
     #[serde(default)]
     pub pending_cash: BTreeMap<String, i64>,
+    /// Each captured payment applied to a bill whose settle has not been folded yet, as
+    /// [`KeptBill::tenders`] keeps them, until the settle or a void before it.
+    #[serde(default)]
+    pub pending_tenders: BTreeMap<String, Vec<(String, String, i64)>>,
     /// The drawer each open shift counts, its till's id or [`STORE_DRAWER`], from
     /// `cash.shift.opened` until `cash.shift.closed`.
     #[serde(default)]
@@ -80,9 +89,20 @@ pub fn fold_voids(
 ) {
     match event.event_type.as_str() {
         "billing.payment.captured" => {
-            if let Ok(payment) = event.data.decode::<BillingPaymentCaptured>()
-                && payment.method.known() == PaymentMethod::Cash
-            {
+            let Ok(payment) = event.data.decode::<BillingPaymentCaptured>() else {
+                return;
+            };
+            if payment.outcome.known() == PaymentOutcome::Captured {
+                kept.pending_tenders
+                    .entry(payment.bill_id.to_string())
+                    .or_default()
+                    .push((
+                        event.business_date.to_string(),
+                        payment.method.known().as_wire().to_owned(),
+                        payment.applied_to_bill.amount_minor,
+                    ));
+            }
+            if payment.method.known() == PaymentMethod::Cash {
                 let slot = kept
                     .pending_cash
                     .entry(payment.bill_id.to_string())
@@ -94,10 +114,11 @@ pub fn fold_voids(
             if let Ok(bill) = event.data.decode::<BillingBillSettled>() {
                 let id = bill.bill_id.to_string();
                 let cash = kept.pending_cash.remove(&id).unwrap_or(0);
+                let tenders = kept.pending_tenders.remove(&id).unwrap_or_default();
                 kept.days
                     .entry(event.business_date.to_string())
                     .or_default()
-                    .insert(id, kept_bill(&bill, cash));
+                    .insert(id, kept_bill(&bill, cash, tenders));
             }
         }
         "cash.shift.opened" => {
@@ -125,7 +146,11 @@ pub fn fold_voids(
 }
 
 /// What a settle added to its day, with the cash its payments applied.
-fn kept_bill(bill: &BillingBillSettled, cash: i64) -> KeptBill {
+fn kept_bill(
+    bill: &BillingBillSettled,
+    cash: i64,
+    tenders: Vec<(String, String, i64)>,
+) -> KeptBill {
     KeptBill {
         total_due: bill.total_due.amount_minor,
         subtotal: bill.subtotal.amount_minor,
@@ -146,6 +171,7 @@ fn kept_bill(bill: &BillingBillSettled, cash: i64) -> KeptBill {
             })
             .collect(),
         cash,
+        tenders,
     }
 }
 
@@ -203,13 +229,38 @@ fn fold_void(
         if let Some(paid) = kept.pending_cash.remove(bill_id) {
             give_back_cash(kept, cash, event, paid);
         }
+        if let Some(tenders) = kept.pending_tenders.remove(bill_id) {
+            take_back_tenders(revenue, &tenders);
+        }
         return;
     };
+    take_back_tenders(revenue, &bill.tenders);
     let day = revenue
         .entry(settled_on.clone())
         .or_insert_with(|| empty_revenue(&settled_on));
     take_back(day, &bill);
     give_back_cash(kept, cash, event, bill.cash);
+}
+
+/// Takes each payment a voided bill took back out of its own day's tender totals: ADR-0184 decision
+/// 9 keeps a voided bill out of the day's tenders as out of its sales and tax. A method whose total
+/// reaches zero is left out, as a day with no such payment never lists it.
+fn take_back_tenders(
+    revenue: &mut BTreeMap<String, DailyRevenue>,
+    tenders: &[(String, String, i64)],
+) {
+    for (day, method, amount) in tenders {
+        let Some(totals) = revenue.get_mut(day) else {
+            continue;
+        };
+        let emptied = totals.by_tender.get_mut(method).is_some_and(|total| {
+            *total = total.saturating_sub(*amount);
+            *total == 0
+        });
+        if emptied {
+            totals.by_tender.remove(method);
+        }
+    }
 }
 
 /// Counts `amount` of cash as voided on the void's own day, against the drawer whose shift the void
