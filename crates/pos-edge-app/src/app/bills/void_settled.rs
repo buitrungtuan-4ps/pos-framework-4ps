@@ -4,6 +4,7 @@
 //! Voiding a bill that was paid, whole
 //! ([ADR-0184](../../../../../docs/adr/0184-a-settled-bill-is-voided-whole-not-refunded.md)).
 
+use pos_core::decision::settled_void::invoiced_needs_request;
 use pos_core::decision::{
     Actor, BillCommand, DecisionCtx, Effect, InvoicedVoid, SettledVoid, decide_bill,
 };
@@ -107,7 +108,7 @@ impl<S: EventStore> Edge<S> {
             &ctx,
         )?;
 
-        let voided = self.settled_voided(bill_id, reason_code_id, facts.e_invoice_issued);
+        let voided = self.settled_voided(bill_id, reason_code_id, invoiced);
         let (envelope, message) = self.prepare_on(&ctx, &voided, shift)?;
         let job_id = envelope.event_id;
         let mut envelopes = vec![envelope];
@@ -153,18 +154,26 @@ impl<S: EventStore> Edge<S> {
 
     /// The void of a paid bill, saying which correction kind the store applied where the bill had an
     /// issued e-invoice, so the cloud corrects with that kind
-    /// ([ADR-0256](../../../../../docs/adr/0256-a-voided-bills-invoice-is-corrected-by-the-kind-the-store-applied.md)).
+    /// ([ADR-0256](../../../../../docs/adr/0256-a-voided-bills-invoice-is-corrected-by-the-kind-the-store-applied.md)):
+    /// the kind of the store's own request where only HQ's approval lets the till void it
+    /// ([ADR-0257](../../../../../docs/adr/0257-a-void-hq-approved-carries-the-kind-hq-approved.md)),
+    /// and the `einvoice` node's otherwise.
     fn settled_voided(
         &self,
         bill_id: BillId,
         reason_code_id: ReasonCodeId,
-        invoiced: bool,
+        invoiced: Option<InvoicedVoid>,
     ) -> BillingBillVoided {
+        let correction_kind = invoiced.map(|invoiced| {
+            let approved = (invoiced.approved_by_hq && invoiced_needs_request(invoiced))
+                .then(|| self.lock_projection().invoices.requested_kind(bill_id))
+                .flatten();
+            Open::from_known(approved.unwrap_or_else(|| self.session().einvoice.correction_kind()))
+        });
         BillingBillVoided {
             bill_id,
             reason_code_id,
-            correction_kind: invoiced
-                .then(|| Open::from_known(self.session().einvoice.correction_kind())),
+            correction_kind,
         }
     }
 
