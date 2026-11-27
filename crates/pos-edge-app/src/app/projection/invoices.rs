@@ -10,7 +10,10 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use pos_core::decision::Actor;
-use pos_proto::einvoice::{DecidedCorrection, InvoiceSymbol, VendorNumber};
+use pos_proto::einvoice::{
+    CORRECTION_DECISIONS_MAX, CorrectionRequest, DecidedCorrection, EInvoiceKind, InvoiceSymbol,
+    VendorNumber,
+};
 use pos_proto::events::{FiscalInvoiceIssued, FiscalInvoiceScheduled};
 use pos_proto::ids::{BillId, EventId, SubjectId};
 use pos_proto::time::Timestamp;
@@ -55,6 +58,10 @@ pub(in crate::app) struct Invoices {
     /// ([ADR-0250](../../../../../docs/adr/0250-a-store-learns-a-correction-decision-on-its-einvoice-node.md)
     /// decision 3). At most [`CORRECTIONS_LIMIT`].
     corrections: BTreeMap<BillId, Option<Timestamp>>,
+    /// The kind of this store's latest correction request for each bill, for the void HQ's approval
+    /// lets the till make (ADR-0257): the newest [`CORRECTION_DECISIONS_MAX`] bills, as many as
+    /// the store's `einvoice` node can hold decisions for.
+    requested_kinds: BTreeMap<BillId, EInvoiceKind>,
     /// The bills whose invoice was issued "number pending" and whose number the vendor has not yet
     /// given (ADR-0251), at most [`PENDING_LIMIT`]. While any waits, the store takes no number of
     /// its own, so it never numbers over one the vendor is about to give (decision 5).
@@ -203,7 +210,14 @@ impl Invoices {
 
     /// Remembers that this store asked HQ to correct `bill_id`'s invoice. Past
     /// [`CORRECTIONS_LIMIT`] the oldest bill (the smallest id, which a ULID orders by time) goes.
-    pub(in crate::app) fn fold_requested(&mut self, bill_id: BillId) {
+    pub(in crate::app) fn fold_requested(&mut self, request: &CorrectionRequest) {
+        let bill_id = request.bill_id;
+        if self.requested_kinds.len() >= CORRECTION_DECISIONS_MAX
+            && !self.requested_kinds.contains_key(&bill_id)
+        {
+            self.requested_kinds.pop_first();
+        }
+        self.requested_kinds.insert(bill_id, request.kind.known());
         if self.corrections.contains_key(&bill_id) {
             return;
         }
@@ -211,6 +225,11 @@ impl Invoices {
             self.corrections.pop_first();
         }
         self.corrections.insert(bill_id, None);
+    }
+
+    /// The kind of this store's latest correction request for `bill_id`, if it asked (ADR-0257).
+    pub(in crate::app) fn requested_kind(&self, bill_id: BillId) -> Option<EInvoiceKind> {
+        self.requested_kinds.get(&bill_id).copied()
     }
 
     /// Remembers that `decided` was recorded, for a bill this store asked about.

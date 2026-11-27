@@ -97,7 +97,9 @@ impl<S: EventStore> Edge<S> {
             messages.push(message);
         }
         self.append_and_publish(envelopes, messages).await?;
-        self.lock_projection().invoices.fold_requested(bill_id);
+        self.lock_projection()
+            .invoices
+            .fold_requested(&requested.request);
         Ok(CorrectionRequested {
             bill_id,
             amount,
