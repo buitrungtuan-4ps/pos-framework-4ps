@@ -167,7 +167,7 @@ fn an_order_paid_at_the_store_is_left_for_the_till() {
 fn the_x_names_the_apps_order_and_its_in_app_payment() {
     use pos_core::decision::Actor;
     use pos_proto::ids::EmployeeId;
-    use pos_proto::sale_channel::{OrderType, SaleSource};
+    use pos_proto::sale_channel::{OrderType, SaleSource, SaleToken};
 
     let actor = Actor {
         employee_id: EmployeeId::new(Ulid::from_u128(10)),
@@ -188,9 +188,9 @@ fn the_x_names_the_apps_order_and_its_in_app_payment() {
             .iter()
             .map(|line| {
                 (
-                    line.channel.source,
+                    line.channel.source.clone(),
                     line.channel.vendor_id,
-                    line.channel.order_type,
+                    line.channel.order_type.clone(),
                     line.name.as_ref().map(|name| name.as_str().to_owned()),
                     line.bills,
                     line.sales.amount_minor,
@@ -207,9 +207,9 @@ fn the_x_names_the_apps_order_and_its_in_app_payment() {
     };
     let expected = (
         vec![(
-            SaleSource::App,
+            SaleToken::of(SaleSource::App),
             Some(vendor_id()),
-            OrderType::Delivery,
+            SaleToken::of(OrderType::Delivery),
             Some("Sandbox delivery".to_owned()),
             1,
             132_000,

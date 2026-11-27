@@ -97,6 +97,8 @@ impl<S: EventStore> Edge<S> {
             subject_id: None,
             tab_number: None,
             opened_by_action_id: Some(pos_proto::ActionKey::new(SEAT_ACT)),
+            order_type: None,
+            sale_source: None,
         };
         let (table_envelope, table_message) = self.prepare(&ctx, &table_opened)?;
         let (order_envelope, order_message) = self.prepare(&ctx, &order_opened)?;

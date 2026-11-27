@@ -83,6 +83,8 @@ impl<S: EventStore> Edge<S> {
             subject_id: None,
             tab_number,
             opened_by_action_id: Some(opened_by.clone()),
+            order_type: None,
+            sale_source: None,
         };
         self.commit_and_publish(ctx, &opened).await?;
         {

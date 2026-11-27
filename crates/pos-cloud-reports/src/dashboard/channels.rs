@@ -23,8 +23,8 @@ use pos_proto::events::{
     BillingBillMerged, BillingBillOpened, BillingBillSettled, BillingBillSplit, BillingBillVoided,
     BillingPaymentCaptured, SalesOrderClosed, SalesOrderOpened,
 };
-use pos_proto::sale_channel::{SaleChannel, sale_channel};
-use pos_proto::{PaymentMethod, PaymentOutcome, WireEnum as _};
+use pos_proto::sale_channel::{Opening, SaleChannel, sale_channel};
+use pos_proto::{PaymentMethod, PaymentOutcome};
 
 use super::rollup::{empty_revenue, set_currency};
 use super::vendors::MAX_WAITING;
@@ -45,9 +45,9 @@ pub struct LineKey {
 impl From<SaleChannel> for LineKey {
     fn from(channel: SaleChannel) -> Self {
         Self {
-            source: channel.source.as_wire().to_owned(),
+            source: channel.source.as_str().to_owned(),
             vendor_id: channel.vendor_id.map(|vendor| vendor.to_string()),
-            order_type: channel.order_type.as_wire().to_owned(),
+            order_type: channel.order_type.as_str().to_owned(),
         }
     }
 }
@@ -104,11 +104,13 @@ pub fn fold_channels(
     match event.event_type.as_str() {
         "sales.order.opened" => {
             if let Ok(opened) = event.data.decode::<SalesOrderOpened>() {
-                let channel = sale_channel(
-                    opened.channel.require().ok(),
-                    opened.table_id,
-                    opened.vendor_id,
-                );
+                let channel = sale_channel(Opening {
+                    channel: opened.channel.require().ok(),
+                    table_id: opened.table_id,
+                    vendor_id: opened.vendor_id,
+                    order_type: opened.order_type.as_ref(),
+                    sale_source: opened.sale_source.as_ref(),
+                });
                 keep(
                     &mut kept.orders,
                     opened.order_id.to_string(),

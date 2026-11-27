@@ -318,6 +318,7 @@ impl<S: EventStore> Edge<S> {
         projection.record_opening_act(event.order_id, event.opened_by_action_id);
         projection.record_recipient(event.order_id, event.subject_id);
         projection.record_vendor(event.order_id, event.vendor_id);
+        projection.record_sale_tokens(event.order_id, event.order_type, event.sale_source);
         projection.record_tab(event.order_id, event.tab_number);
         projection.record_opener(event.order_id, envelope.employee_id);
         // A waiter's order already sat down on its `sales.table.opened`; a guest's has no

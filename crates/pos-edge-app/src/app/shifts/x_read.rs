@@ -154,7 +154,7 @@ impl<S: EventStore> Edge<S> {
                         .channels
                         .iter()
                         .map(|(channel, bills, sales)| ChannelLine {
-                            channel: *channel,
+                            channel: channel.clone(),
                             name: self.vendor_name(channel.vendor_id),
                             bills: *bills,
                             sales: *sales,

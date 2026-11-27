@@ -102,6 +102,13 @@ const MILLISECONDS_PER_DAY: i64 = 24 * 60 * 60 * 1_000;
 /// it had.
 pub use pos_proto::retention::EVENT_LOG_DAYS;
 
+/// The order type and the sale source an order recorded on its opening, either absent
+/// ([ADR-0260](../../../../docs/adr/0260-order-types-and-sale-sources-are-published-lists.md)).
+type SaleTokens = (
+    Option<pos_proto::sale_channel::SaleToken>,
+    Option<pos_proto::sale_channel::SaleToken>,
+);
+
 /// The in-memory projection: the current state of each aggregate, folded from the event log.
 ///
 /// Durable truth is the event log in the store; this is a cache rebuilt at boot and updated as
@@ -146,6 +153,10 @@ struct Projection {
     /// against the `vendors` node, whether it waits for staff and which vendor is answered.
     /// Dropped when the order closes.
     order_vendors: HashMap<OrderId, pos_proto::ids::VendorId>,
+    /// The order type and sale source each open order recorded on its opening
+    /// ([ADR-0260](../../../../docs/adr/0260-order-types-and-sale-sources-are-published-lists.md)
+    /// decision 4), which its bills are reported by. Dropped when the order closes.
+    order_tokens: HashMap<OrderId, SaleTokens>,
     /// Each open order from outside the store whose quoted price differed from the store's menu
     /// past its vendor's tolerance ([ADR-0248](../../../../docs/adr/0248-a-delivery-order-is-priced-paid-and-reconciled-as-the-app-sold-it.md)
     /// decision 1), for the till to flag. Kept while the edge runs: the intake record keeps it for

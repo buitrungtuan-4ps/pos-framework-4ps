@@ -640,7 +640,7 @@ fn a_bill_voided_after_payment_leaves_the_open_shifts_x() {
 /// the sales; a rebuild from the log reads the same.
 #[test]
 fn the_xs_channel_lines_sum_to_its_sales_and_a_void_leaves_its_line() {
-    use pos_proto::sale_channel::{OrderType, SaleSource};
+    use pos_proto::sale_channel::{OrderType, SaleSource, SaleToken};
     pos_fakes::executor::run_ready(async {
         let store = FakeStore::default();
         let edge = over(store.clone(), session());
@@ -659,8 +659,8 @@ fn the_xs_channel_lines_sum_to_its_sales_and_a_void_leaves_its_line() {
                 .iter()
                 .map(|line| {
                     (
-                        line.channel.source,
-                        line.channel.order_type,
+                        line.channel.source.clone(),
+                        line.channel.order_type.clone(),
                         line.bills,
                         line.sales,
                     )
@@ -669,7 +669,12 @@ fn the_xs_channel_lines_sum_to_its_sales_and_a_void_leaves_its_line() {
             (lines, figures.bills, figures.sales)
         };
         let expected = (
-            vec![(SaleSource::Pos, OrderType::DineIn, 1, vnd(165_000))],
+            vec![(
+                SaleToken::of(SaleSource::Pos),
+                SaleToken::of(OrderType::DineIn),
+                1,
+                vnd(165_000),
+            )],
             1,
             vnd(165_000),
         );

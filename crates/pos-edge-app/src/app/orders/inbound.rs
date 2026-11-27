@@ -104,6 +104,8 @@ impl<S: EventStore> Edge<S> {
             tab_number: None,
             // Intake opens through no catalogue act, so it enters no flow (ADR-0244).
             opened_by_action_id: None,
+            order_type: None,
+            sale_source: None,
         };
         let mut prepared = self.prepare_inbound(stamp, &opened, lines, joins)?;
         // What the bill will open at, tax and fees included, is what the caller is answered with and

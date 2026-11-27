@@ -29,6 +29,7 @@ use crate::ids::{
 use crate::money::{Money, Ratio};
 use crate::package::DataObject;
 use crate::quantity::Quantity;
+use crate::sale_channel::SaleToken;
 use crate::text::{ActionKey, DisplayName, PermissionKey, ReleaseTag, TerminalReference};
 use crate::time::Timestamp;
 use crate::ulid::Ulid;
@@ -81,6 +82,13 @@ event_catalogue! {
         /// The catalogue act that opened the order (ADR-0244); absent for intake and older orders.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         opened_by_action_id: Option<ActionKey>,
+        /// `ORDER_TYPE_*` token (ADR-0260 decision 4), for reporting only: price and tax follow
+        /// `channel`. Absent, on older orders too, or not a token, it reads as ADR-0259 derives.
+        #[serde(default, deserialize_with = "crate::sale_channel::lenient_token", skip_serializing_if = "Option::is_none")]
+        order_type: Option<SaleToken>,
+        /// `SALE_SOURCE_*` token, read as `order_type` is: a kiosk's, or one the store published.
+        #[serde(default, deserialize_with = "crate::sale_channel::lenient_token", skip_serializing_if = "Option::is_none")]
+        sale_source: Option<SaleToken>,
     },
     /// An order reached a terminal state (declared beyond the specification's list: an order can
     /// end other than by a settled bill).

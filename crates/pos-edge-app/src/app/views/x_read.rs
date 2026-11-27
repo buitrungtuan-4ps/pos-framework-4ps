@@ -7,7 +7,6 @@
 
 use pos_core::error::DomainError;
 use pos_proto::ShiftState;
-use pos_proto::WireEnum as _;
 use pos_proto::ids::{DeviceId, ShiftId, VendorId};
 use pos_proto::money::Money;
 use pos_proto::sale_channel::SaleChannel;
@@ -42,16 +41,8 @@ pub struct ChannelLine {
 
 /// Puts X lines in the order the console's X/Z lists them: by source token, app and type token.
 pub(in crate::app) fn sort_lines(lines: &mut [ChannelLine]) {
-    lines.sort_by(|left, right| {
-        let key = |line: &ChannelLine| {
-            (
-                line.channel.source.as_wire(),
-                line.channel.vendor_id,
-                line.channel.order_type.as_wire(),
-            )
-        };
-        key(left).cmp(&key(right))
-    });
+    // `SaleChannel` orders by source token, app and type token, as the console does.
+    lines.sort_by(|left, right| left.channel.cmp(&right.channel));
 }
 
 /// What each tender took, in four kinds: cash, card, a scan-to-pay wallet, and every other; and,
