@@ -593,3 +593,44 @@ fn an_invoiced_bill_is_voided_at_the_till_only_where_the_stores_route_allows() {
         }
     });
 }
+
+/// ADR-0258: a bill voided after payment leaves the open shift's X, its count, sales and tenders,
+/// as the console leaves it out of the day; the void is counted apart and its cash handed back,
+/// and a rebuild from the log reads the same.
+#[test]
+fn a_bill_voided_after_payment_leaves_the_open_shifts_x() {
+    pos_fakes::executor::run_ready(async {
+        let store = FakeStore::default();
+        let edge = over(store.clone(), session());
+        let shift = edge
+            .open_shift(actor(), vnd(100_000))
+            .await
+            .expect("opens")
+            .shift_id;
+        let by_cash = a_paid_bill(&edge, 521, vec![cash(165_000)]).await;
+        let by_card = a_paid_bill(&edge, 522, vec![card(165_000)]).await;
+        let _kept = a_paid_bill(&edge, 523, vec![cash(100_000), card(65_000)]).await;
+        void(&edge, by_cash, Some("MGR-1")).await.expect("voids");
+        void(&edge, by_card, Some("MGR-1")).await.expect("voids");
+        let read = |edge: &Edge<FakeStore>| {
+            let figures = edge.shift_x(actor(), shift).expect("reads").figures;
+            (
+                figures.bills,
+                figures.sales,
+                figures.tenders.cash,
+                figures.tenders.card,
+                figures.voided_bills,
+                figures.voided_cash,
+            )
+        };
+        let expected = (1, vnd(165_000), vnd(100_000), vnd(65_000), 2, vnd(165_000));
+        assert_eq!(
+            read(&edge),
+            expected,
+            "the bill that stayed paid, the voids apart"
+        );
+        let rebuilt = over(store, session());
+        rebuilt.rebuild().await.expect("rebuilds");
+        assert_eq!(read(&rebuilt), expected, "the same after a rebuild");
+    });
+}

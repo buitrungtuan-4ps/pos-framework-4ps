@@ -28,11 +28,13 @@ pub struct TenderTotals {
 /// One shift's figures, or several shifts' together, as an X reads them. Names no person.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct XFigures {
-    /// What the shift's settled bills came to: what their guests paid.
+    /// What the shift's settled bills came to: what their guests paid. A bill voided after payment
+    /// while the shift is open is left out (ADR-0258), and counted under `voided_bills`.
     pub sales: Money,
-    /// How many bills it settled.
+    /// How many bills it settled and still stand.
     pub bills: u32,
-    /// What each tender applied to those bills, change and tips apart.
+    /// What each tender applied to those bills, change and tips apart; a voided bill's payments are
+    /// left out while the shift that took them is open (ADR-0258).
     pub tenders: TenderTotals,
     /// The discounts and comps on those bills.
     pub discounts: Money,

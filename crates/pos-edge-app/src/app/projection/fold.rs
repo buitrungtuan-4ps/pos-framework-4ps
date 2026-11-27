@@ -190,8 +190,8 @@ impl<S: EventStore> Edge<S> {
                 if event.method.known() == PaymentMethod::Cash {
                     projection.collect_cash(shift, event.applied_to_bill)?;
                 }
-                projection.collect_tender(shift, event.method.known(), event.applied_to_bill)?;
-                projection.record_payment(
+                projection.record_tender(
+                    shift,
                     event.bill_id,
                     event.method.known(),
                     event.applied_to_bill,
