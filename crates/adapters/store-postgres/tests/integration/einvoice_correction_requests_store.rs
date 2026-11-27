@@ -99,3 +99,69 @@ fn a_request_is_queued_once_and_decided_once() {
         );
     });
 }
+
+/// The kind HQ approved for a bill, read when the store's void reaches the cloud (ADR-0256
+/// decision 3): only an approved request counts, the newest decision wins, and another store's or
+/// tenant's request for the same bill id is not it.
+#[test]
+fn the_approved_request_of_a_bill_is_read_by_store_and_bill() {
+    block_on(async {
+        let (store, _admin) = prepared().await.expect("prepare the database");
+        let queue = store.einvoice_correction_requests();
+        // A bill of its own, so the queue test beside it, which approves bill 1, is not read here.
+        let (store_id, bill) = ("01J0000000000000000000RQS1", "01J0000000000000000000BIL2");
+        assert_eq!(
+            queue
+                .approved_for_bill(TENANT_A, store_id, bill)
+                .await
+                .expect("read"),
+            None
+        );
+        let of_bill = |request: &str, at: i64| CorrectionRequestRow {
+            bill_id: bill.to_owned(),
+            ..row(request, at)
+        };
+        let declined = of_bill("01J0000000000000000000REQ7", 1);
+        let mut approved = of_bill("01J0000000000000000000REQ8", 2);
+        approved.kind = "REPLACEMENT".to_owned();
+        let mut elsewhere = of_bill("01J0000000000000000000REQ9", 3);
+        elsewhere.store_id = "01J0000000000000000000RQS2".to_owned();
+        for one in [&declined, &approved, &elsewhere] {
+            assert!(queue.record(one).await.expect("record"));
+        }
+        for (request, status, at) in [
+            (&declined, "DECLINED", 5),
+            (&approved, "APPROVED", 6),
+            (&elsewhere, "APPROVED", 7),
+        ] {
+            assert!(
+                queue
+                    .decide(
+                        TENANT_A,
+                        &request.request_id,
+                        status,
+                        "01J0000000000000000000USR1",
+                        at
+                    )
+                    .await
+                    .expect("decide")
+            );
+        }
+        let found = queue
+            .approved_for_bill(TENANT_A, store_id, bill)
+            .await
+            .expect("read")
+            .expect("the approved request");
+        assert_eq!(
+            (found.request_id.as_str(), found.kind.as_str()),
+            (approved.request_id.as_str(), "REPLACEMENT")
+        );
+        assert_eq!(
+            queue
+                .approved_for_bill(TENANT_B, store_id, bill)
+                .await
+                .expect("read"),
+            None
+        );
+    });
+}

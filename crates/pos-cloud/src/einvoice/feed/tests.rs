@@ -124,6 +124,7 @@ fn voided(sequence: u32, id: u128) -> EventEnvelope<RawPayload> {
     event.data = RawPayload::encode(&BillingBillVoided {
         bill_id: BillId::new(Ulid::from_u128(u128::from(sequence))),
         reason_code_id: pos_proto::ids::ReasonCodeId::new(Ulid::from_u128(0x5EA)),
+        correction_kind: None,
     })
     .expect("a payload");
     event
@@ -485,4 +486,114 @@ async fn a_void_of_a_pending_invoice_is_corrected_once_the_vendor_has_numbered_i
         Some(original.invoice_number.as_str())
     );
     assert_eq!(correction.total_minor, -165_000);
+}
+
+/// `voided` with the kind the store applied written on the void (ADR-0256).
+fn voided_as(sequence: u32, id: u128, kind: EInvoiceKind) -> EventEnvelope<RawPayload> {
+    let mut event = voided(sequence, id);
+    event.data = RawPayload::encode(&BillingBillVoided {
+        bill_id: BillId::new(Ulid::from_u128(u128::from(sequence))),
+        reason_code_id: pos_proto::ids::ReasonCodeId::new(Ulid::from_u128(0x5EA)),
+        correction_kind: Some(Open::from_known(kind)),
+    })
+    .expect("a payload");
+    event
+}
+
+/// The one correction `submissions` holds: its kind and total.
+async fn the_correction(submissions: &InMemorySubmissions) -> (String, i64) {
+    let rows = submissions.list(tenant(), None, false).await.expect("list");
+    let corrections: Vec<_> = rows
+        .iter()
+        .filter(|row| row.corrects_invoice_number.is_some())
+        .collect();
+    assert_eq!(corrections.len(), 1);
+    (corrections[0].kind.clone(), corrections[0].total_minor)
+}
+
+/// ADR-0256 decision 3: the kind the store applied wins over today's setting, which changed after
+/// the void (the cloud read REPLACEMENT for a bill the store voided under ADJUSTMENT).
+#[tokio::test]
+async fn a_void_is_corrected_with_the_kind_the_store_applied_not_todays_setting() {
+    for (applied, setting, expected) in [
+        (
+            EInvoiceKind::Adjustment,
+            "EINVOICE_KIND_REPLACEMENT",
+            ("ADJUSTMENT", -165_000),
+        ),
+        (
+            EInvoiceKind::Replacement,
+            "EINVOICE_KIND_ADJUSTMENT",
+            ("REPLACEMENT", 0),
+        ),
+    ] {
+        let events = FakeStore::new();
+        let mut batch = log(0, &[1]);
+        batch.push(voided_as(1, u128::MAX, applied));
+        append(&events, &batch).await;
+        let submissions = InMemorySubmissions::default();
+        let corrector = corrector(setting).await;
+        assert_eq!(
+            feed_store(&events, &submissions, &corrector, tenant(), store(), NOW_MS).await,
+            Ok(2)
+        );
+        let (kind, total) = the_correction(&submissions).await;
+        assert_eq!(
+            (kind.as_str(), total),
+            expected,
+            "{applied:?} under {setting}"
+        );
+    }
+}
+
+/// ADR-0256 decision 3: a void from an edge that writes no kind takes the kind HQ approved on the
+/// bill's request, not today's setting; with no approved request, today's setting.
+#[tokio::test]
+async fn a_void_without_a_kind_takes_the_approved_requests_kind() {
+    for (approve, expected) in [
+        (true, ("REPLACEMENT", 0)),
+        (false, ("ADJUSTMENT", -165_000)),
+    ] {
+        let events = FakeStore::new();
+        let mut batch = log(0, &[1]);
+        batch.push(requested(1, u128::MAX - 1));
+        batch.push(voided(1, u128::MAX));
+        append(&events, &batch).await;
+        let queue = InMemoryCorrectionRequests::default();
+        // The request (REPLACEMENT) is queued and, in the first case, approved before the void lands.
+        let mut corrector = corrector("EINVOICE_KIND_ADJUSTMENT").await;
+        corrector.requests = Arc::new(queue.clone());
+        let request = super::super::requests::requested_row(
+            tenant(),
+            &batch[batch.len() - 2],
+            &pos_proto::einvoice::CorrectionRequest {
+                bill_id: BillId::new(Ulid::from_u128(1)),
+                amount: Money::new(CurrencyCode::parse("VND").expect("VND"), 165_000),
+                kind: Open::from_known(EInvoiceKind::Replacement),
+                reason_code_id: None,
+            },
+        );
+        queue.record(request.clone()).await.expect("queued");
+        if approve {
+            let decided = queue
+                .decide(
+                    tenant(),
+                    request.request_id.clone(),
+                    "APPROVED",
+                    "u".to_owned(),
+                    1,
+                )
+                .await;
+            assert_eq!(decided, Ok(true));
+        }
+        let submissions = InMemorySubmissions::default();
+        assert_eq!(
+            feed_store(&events, &submissions, &corrector, tenant(), store(), NOW_MS).await,
+            Ok(2)
+        );
+        assert_eq!(
+            the_correction(&submissions).await,
+            (expected.0.to_owned(), expected.1)
+        );
+    }
 }

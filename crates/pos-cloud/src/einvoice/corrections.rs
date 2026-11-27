@@ -240,9 +240,15 @@ impl core::fmt::Debug for Corrector {
     }
 }
 
-/// Corrects the invoice of a bill the store voided at the till (ADR-0245): an
-/// `einvoice.correction_kind` correction to zero, recorded as the void event's id so a void read
-/// twice is recorded once. `false` when the bill has no invoice or it already stands at zero.
+/// Corrects the invoice of a bill the store voided at the till (ADR-0245): a correction to zero,
+/// recorded as the void event's id so a void read twice is recorded once. `false` when the bill has
+/// no invoice or it already stands at zero.
+///
+/// Its kind is the one the store applied
+/// ([ADR-0256](../../../../docs/adr/0256-a-voided-bills-invoice-is-corrected-by-the-kind-the-store-applied.md)
+/// decision 3): `applied`, the kind the void carries; else the kind of the bill's approved
+/// correction request, which HQ approved; else today's `einvoice.correction_kind`, for a void from an
+/// edge that writes no kind.
 ///
 /// # Errors
 ///
@@ -254,7 +260,7 @@ pub async fn correct_voided_bill(
     tenant: TenantId,
     store: StoreId,
     bill_id: String,
-    void_event: Ulid,
+    (void_event, applied): (Ulid, Option<EInvoiceKind>),
     now: Timestamp,
 ) -> Result<bool, String> {
     let Some(original) = submissions
@@ -272,9 +278,19 @@ pub async fn correct_voided_bill(
         .corrections_of(tenant, original.invoice_number.clone())
         .await?;
     let (node, country) = corrector.settings.read(tenant, store).await?;
-    let Some(correction) =
-        void_correction(node.correction_kind(), standing_total(&original, &earlier))
-    else {
+    let kind = match applied {
+        Some(kind) => kind,
+        None => match corrector
+            .requests
+            .approved_for_bill(tenant, store, original.bill_id.clone())
+            .await?
+        {
+            Some(approved) if approved.kind == "REPLACEMENT" => EInvoiceKind::Replacement,
+            Some(approved) if approved.kind == "ADJUSTMENT" => EInvoiceKind::Adjustment,
+            _ => node.correction_kind(),
+        },
+    };
+    let Some(correction) = void_correction(kind, standing_total(&original, &earlier)) else {
         return Ok(false);
     };
     let countries = crate::countries::registry();

@@ -134,6 +134,35 @@ impl PostgresCorrectionRequests {
         Ok(rows.iter().map(from_row).collect())
     }
 
+    /// The newest approved request for `bill_id` at `store_id`, the kind HQ approved
+    /// ([ADR-0256](../../../../docs/adr/0256-a-voided-bills-invoice-is-corrected-by-the-kind-the-store-applied.md)
+    /// decision 3).
+    ///
+    /// # Errors
+    ///
+    /// [`PortError::unavailable`] if the database cannot be reached.
+    pub async fn approved_for_bill(
+        &self,
+        tenant_id: &str,
+        store_id: &str,
+        bill_id: &str,
+    ) -> Result<Option<CorrectionRequestRow>, PortError> {
+        let connection = self.pool.get().await.map_err(pool_unavailable)?;
+        let row = connection
+            .query_opt(
+                &format!(
+                    "SELECT {COLUMNS} FROM einvoice_correction_requests \
+                     WHERE tenant_id = $1 AND store_id = $2 AND bill_id = $3 \
+                     AND status = 'APPROVED' \
+                     ORDER BY decided_time_ms DESC, request_id DESC LIMIT 1"
+                ),
+                &[&tenant_id, &store_id, &bill_id],
+            )
+            .await
+            .map_err(unavailable)?;
+        Ok(row.as_ref().map(from_row))
+    }
+
     /// One request.
     ///
     /// # Errors
