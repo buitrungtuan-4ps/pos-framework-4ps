@@ -7323,6 +7323,7 @@ test("signing out clears the snapshot, and a new pairing never reads the old one
     // a tag taken from the snapshot is sent before any answer and fails here.
     await page.evaluate(() => localStorage.setItem("pos-edge.pairing-id", "a-later-pairing"));
     const given = new Map();
+    const firsts = new Map();
     const unearned = [];
     const read = (url) => {
       const { pathname, search } = new URL(url);
@@ -7331,6 +7332,9 @@ test("signing out clears the snapshot, and a new pairing never reads the old one
     page.on("request", (request) => {
       const key = read(request.url());
       const tag = request.headers()["if-none-match"];
+      if (key !== null && !firsts.has(key)) {
+        firsts.set(key, tag ?? null);
+      }
       if (key !== null && tag !== undefined && !(given.get(key) ?? new Set()).has(tag)) {
         unearned.push(`${key} ${tag}`);
       }
@@ -7344,6 +7348,8 @@ test("signing out clears the snapshot, and a new pairing never reads the old one
     });
     await page.reload();
     await expect(page.locator('[data-outcome="floor"]')).toBeVisible();
+    // The first read of each after the reload names no tag: nothing of the old pairing is offered.
+    expect([...firsts].filter(([, tag]) => tag !== null)).toEqual([]);
     expect(unearned).toEqual([]);
 
     await page.getByRole("button", { name: "Sign out" }).click();
