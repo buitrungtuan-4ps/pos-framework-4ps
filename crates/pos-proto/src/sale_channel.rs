@@ -226,12 +226,16 @@ pub struct Opening<'a> {
 /// (ADR-0260 decision 4).
 #[must_use]
 pub fn derived_order_type(channel: Option<SalesChannel>, table_id: Option<TableId>) -> OrderType {
+    let at_table = if table_id.is_some() {
+        OrderType::DineIn
+    } else {
+        OrderType::Takeaway
+    };
     match channel {
         Some(SalesChannel::DineIn) => OrderType::DineIn,
         Some(SalesChannel::Takeaway) => OrderType::Takeaway,
         Some(SalesChannel::Delivery) => OrderType::Delivery,
-        Some(SalesChannel::Qr | SalesChannel::Api) if table_id.is_some() => OrderType::DineIn,
-        Some(SalesChannel::Qr | SalesChannel::Api) => OrderType::Takeaway,
+        Some(SalesChannel::Qr | SalesChannel::Api) => at_table,
         Some(SalesChannel::Unspecified) | None => OrderType::Unspecified,
     }
 }
