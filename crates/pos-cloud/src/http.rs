@@ -194,6 +194,7 @@ pub(crate) use custom_values::{
 };
 pub(crate) use delivery_reconciliation::__path_admin_delivery_reconciliation;
 use delivery_reconciliation::admin_delivery_reconciliation;
+pub(crate) use delivery_reconciliation::published_vendors;
 pub(crate) use devices::{
     __path_admin_revoke_device, __path_admin_set_printer_paper,
     __path_admin_set_terminal_device_class, __path_admin_set_terminal_float,

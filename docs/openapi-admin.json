@@ -41610,7 +41610,8 @@
           "activity",
           "revenue",
           "cash",
-          "till_names"
+          "till_names",
+          "vendor_names"
         ],
         "properties": {
           "activity": {
@@ -41636,6 +41637,16 @@
           "till_names": {
             "type": "object",
             "description": "The name of each till among the day's drawers, keyed as [`DailyCash::by_drawer`] is, from the\nstore's published `devices` node when the report is served (ADR-0167 decision 13). The\nstore's drawer, and a till the node no longer lists, have none. Device names, never a person.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "vendor_names": {
+            "type": "object",
+            "description": "The name of each delivery app among the day's lines and in-app payments, keyed by its\nconnection id, from the store's `vendors` node when the report is served (ADR-0259 decision\n5). An app the store no longer lists has none.",
             "additionalProperties": {
               "type": "string"
             },
