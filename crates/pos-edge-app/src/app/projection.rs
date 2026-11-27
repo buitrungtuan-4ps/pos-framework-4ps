@@ -26,4 +26,6 @@ pub(in crate::app) use invoices::Invoices;
 #[cfg(test)]
 use super::{OrderLineId, Projection};
 #[cfg(test)]
+mod shared_day;
+#[cfg(test)]
 mod tests;
