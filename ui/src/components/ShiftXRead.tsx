@@ -15,6 +15,7 @@ import { printOutcomeKey } from "../lib/print";
 import { holdsOwn } from "../state/permissions";
 import { formatAmount, state } from "../state/store";
 import type { Money } from "../lib/money";
+import { channelName, groupChannels, orderTypeName, tenderRows, type ChannelLine } from "../lib/x-channels";
 import { createPrint } from "../state/print-writes";
 
 /** Whether the person signed in reads an X: by their own role, as the edge asks. */
@@ -24,29 +25,35 @@ export function readsX(): boolean {
 
 /** An X's figures, as the till lists them; a movement that moved nothing is left out. */
 export function XFiguresList(props: { figures: XFigures }) {
-  const rows = (): readonly (readonly [MessageKey, Money])[] => {
+  const rows = (): readonly (readonly [string, Money])[] => {
     const figures = props.figures;
-    const moved: [MessageKey, Money][] = [
-      ["x.cash", figures.tenders.cash],
-      ["x.card", figures.tenders.card],
-      ["x.qr", figures.tenders.qr],
-      ["x.other", figures.tenders.other],
-      ["x.discounts", figures.discount_amount],
-      ["x.voided", figures.voided_cash_amount],
-      ["x.paid_in", figures.paid_in_amount],
-      ["x.paid_out", figures.paid_out_amount],
-      ["x.dropped", figures.dropped_amount],
+    const moved: (readonly [string, Money])[] = [
+      ...tenderRows(figures),
+      [t("x.discounts"), figures.discount_amount],
+      [t("x.voided"), figures.voided_cash_amount],
+      [t("x.paid_in"), figures.paid_in_amount],
+      [t("x.paid_out"), figures.paid_out_amount],
+      [t("x.dropped"), figures.dropped_amount],
     ];
-    return [["x.sales", figures.sales_amount], ...moved.filter(([, amount]) => amount.amount_minor !== 0)];
+    return [[t("x.sales"), figures.sales_amount], ...moved.filter(([, amount]) => amount.amount_minor !== 0)];
   };
+  const grouped = (heading: MessageKey, label: (line: ChannelLine) => string) => ({
+    heading,
+    rows: groupChannels(props.figures.channels, label),
+  });
+  const sections = () => [
+    grouped("x.channel_and_type", (line) => `${channelName(line)} · ${orderTypeName(line.order_type)}`),
+    grouped("x.by_channel", channelName),
+    grouped("x.by_order_type", (line) => orderTypeName(line.order_type)),
+  ];
   return (
     <dl class="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-sm tabular-nums" data-outcome="x-figures">
       <dt class="text-ink-muted">{t("x.bills")}</dt>
       <dd>{props.figures.bill_count}</dd>
       <For each={rows()}>
-        {([key, amount]) => (
+        {([label, amount]) => (
           <>
-            <dt class="text-ink-muted">{t(key)}</dt>
+            <dt class="text-ink-muted">{label}</dt>
             <dd>{formatAmount(amount)}</dd>
           </>
         )}
@@ -60,6 +67,25 @@ export function XFiguresList(props: { figures: XFigures }) {
             </dd>
           </>
         )}
+      </Show>
+      <Show when={props.figures.channels.length > 0}>
+        <For each={sections()}>
+          {(section) => (
+            <>
+              <dt class="col-span-2 mt-2 font-semibold" data-outcome={section.heading}>
+                {t(section.heading)}
+              </dt>
+              <For each={section.rows}>
+                {([label, bills, sales]) => (
+                  <>
+                    <dt class="text-ink-muted">{`${label} (${String(bills)})`}</dt>
+                    <dd>{formatAmount(sales)}</dd>
+                  </>
+                )}
+              </For>
+            </>
+          )}
+        </For>
       </Show>
     </dl>
   );
