@@ -158,7 +158,7 @@ fn commission_of(gross: i64, currency: &str, bps: u32) -> i64 {
 }
 
 /// The `vendors` node the store runs now, or none.
-async fn published_vendors<T: ConfigTreeStore>(
+pub(crate) async fn published_vendors<T: ConfigTreeStore>(
     config_trees: &T,
     tenant_id: TenantId,
     store_id: StoreId,

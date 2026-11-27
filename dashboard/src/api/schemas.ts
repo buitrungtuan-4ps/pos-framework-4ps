@@ -101,6 +101,7 @@ export type SubjectStores = Schemas["SubjectStoresView"];
 
 export type WebhookSummary = Schemas["WebhookSummary"];
 export type XzReport = Schemas["XzReport"];
+export type ChannelSales = Schemas["ChannelSales"];
 export type ItemCategory = Schemas["Versioned_ItemCategory"];
 export type ItemSubcategory = Schemas["Versioned_ItemSubcategory"];
 export type DisplayCategory = Schemas["Versioned_CatalogDisplayCategory"];
