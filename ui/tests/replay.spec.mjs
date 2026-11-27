@@ -7316,17 +7316,41 @@ test("signing out clears the snapshot, and a new pairing never reads the old one
     await signIn(page, edge);
     await expect.poll(async () => (await snapshotRecords(page)).length).toBe(KEPT.length);
 
-    // Another pairing: whatever the snapshot holds is not this one's, and no tag of it is sent.
+    // Another pairing: whatever the snapshot holds is not this one's, and no tag of it is sent. A
+    // tag the edge gave this page is its own: once the live link subscribes, its resync reads the
+    // store again naming the tags of the page's first reads, and that may come before the floor
+    // shows. So each tag sent must be one the edge answered this page with, for that read, earlier;
+    // a tag taken from the snapshot is sent before any answer and fails here.
     await page.evaluate(() => localStorage.setItem("pos-edge.pairing-id", "a-later-pairing"));
-    const tags = [];
+    const given = new Map();
+    const firsts = new Map();
+    const unearned = [];
+    const read = (url) => {
+      const { pathname, search } = new URL(url);
+      return pathname.startsWith("/api/") ? pathname + search : null;
+    };
     page.on("request", (request) => {
-      if (new URL(request.url()).pathname.startsWith("/api/")) {
-        tags.push(request.headers()["if-none-match"]);
+      const key = read(request.url());
+      const tag = request.headers()["if-none-match"];
+      if (key !== null && !firsts.has(key)) {
+        firsts.set(key, tag ?? null);
+      }
+      if (key !== null && tag !== undefined && !(given.get(key) ?? new Set()).has(tag)) {
+        unearned.push(`${key} ${tag}`);
+      }
+    });
+    page.on("response", (response) => {
+      const key = read(response.url());
+      const tag = response.headers()["etag"];
+      if (key !== null && tag !== undefined) {
+        given.set(key, (given.get(key) ?? new Set()).add(tag));
       }
     });
     await page.reload();
     await expect(page.locator('[data-outcome="floor"]')).toBeVisible();
-    expect(tags.filter((tag) => tag !== undefined)).toEqual([]);
+    // The first read of each after the reload names no tag: nothing of the old pairing is offered.
+    expect([...firsts].filter(([, tag]) => tag !== null)).toEqual([]);
+    expect(unearned).toEqual([]);
 
     await page.getByRole("button", { name: "Sign out" }).click();
     await expect(page).toHaveURL(/\/signin$/);
