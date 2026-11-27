@@ -1,11 +1,12 @@
 // The X/Z report's sales by channel and order type (ADR-0259 decision 4): each line the day's
 // figures carry, "Grab · Delivery", then the same lines grouped by channel and by order type. A
-// delivery app is named by its connection, from the report's `vendor_names`; the rest by a key.
+// delivery app is named by its connection, from the report's `vendor_names`; a type or source the
+// store named by `order_type_names` and `source_names` (ADR-0260); the rest by a key.
 
 import { For, Show } from "solid-js";
 
 import type { ChannelSales, XzReport } from "../../api/schemas";
-import { t, type MessageKey } from "../../i18n";
+import { locale, t, type MessageKey } from "../../i18n";
 import { formatAmount } from "../../state/money";
 
 const SOURCES: Readonly<Record<string, MessageKey>> = {
@@ -26,15 +27,20 @@ export function appName(report: XzReport, vendorId: string): string {
   return report.vendor_names?.[vendorId] || t("reports.sourceAppUnnamed", { id: vendorId.slice(-6) });
 }
 
-/** Where a line's orders came from: the app's name, or the channel's. */
-export function channelName(report: XzReport, line: ChannelSales): string {
-  if (line.vendor_id) return appName(report, line.vendor_id);
-  return t(SOURCES[line.source] ?? "reports.sourceOther");
+/** A name the store gave, in the console's language, else English (ADR-0260). */
+function storeName(names: Readonly<Record<string, string>> | undefined): string | undefined {
+  return names === undefined ? undefined : (names[locale()] ?? names.en);
 }
 
-/** How a line's orders were served. */
-export function orderTypeName(orderType: string): string {
-  return t(ORDER_TYPES[orderType] ?? "reports.orderTypeUnspecified");
+/** Where a line's orders came from: the app's name, the store's name for the source, or ours. */
+export function channelName(report: XzReport, line: ChannelSales): string {
+  if (line.vendor_id) return appName(report, line.vendor_id);
+  return storeName(report.source_names?.[line.source]) ?? t(SOURCES[line.source] ?? "reports.sourceOther");
+}
+
+/** How a line's orders were served: the store's name for the type, or ours. */
+export function orderTypeName(orderType: string, report?: XzReport): string {
+  return storeName(report?.order_type_names?.[orderType]) ?? t(ORDER_TYPES[orderType] ?? "reports.orderTypeUnspecified");
 }
 
 /** One row: what it is called, its bills, its sales. */
@@ -84,7 +90,8 @@ function Rows(props: { heading: MessageKey; rows: readonly ChannelRow[]; currenc
 export function XzChannels(props: { report: XzReport }) {
   const lines = () => props.report.revenue.by_channel ?? [];
   const currency = () => props.report.revenue.currency_code || "";
-  const both = (line: ChannelSales) => `${channelName(props.report, line)} · ${orderTypeName(line.order_type)}`;
+  const both = (line: ChannelSales) =>
+    `${channelName(props.report, line)} · ${orderTypeName(line.order_type, props.report)}`;
   return (
     <Show when={lines().length > 0}>
       <Rows
@@ -101,7 +108,7 @@ export function XzChannels(props: { report: XzReport }) {
       />
       <Rows
         heading="reports.byOrderType"
-        rows={groupLines(lines(), (line) => orderTypeName(line.order_type))}
+        rows={groupLines(lines(), (line) => orderTypeName(line.order_type, props.report))}
         currency={currency()}
         outcome="xz-by-order-type"
       />

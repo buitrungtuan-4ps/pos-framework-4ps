@@ -9,7 +9,8 @@ use pos_proto::ids::{StoreId, TenantId};
 use crate::cloud::{DailyCash, DailyRevenue, STORE_DRAWER};
 use crate::config_tree::{CapabilityValidator, ConfigTree, ConfigTreeStore};
 use crate::http::{published_vendors, strip_tree_version};
-use pos_cloud_reports::till_names::TillNames;
+use pos_cloud_reports::till_names::{ChannelNames, TillNames};
+use pos_proto::order_channels::PublishedOrderChannels;
 
 /// The reports' [`TillNames`] over the stores' configuration trees.
 #[derive(Debug, Clone)]
@@ -46,6 +47,64 @@ impl<T: ConfigTreeStore + Sync> TillNames for PublishedTillNames<T> {
             })
             .collect()
     }
+
+    async fn channel_names(
+        &self,
+        store: (TenantId, StoreId),
+        revenue: &DailyRevenue,
+    ) -> (ChannelNames, ChannelNames) {
+        published_channel_names(&self.0, store, revenue).await
+    }
+}
+
+/// The store's names for the order type and source tokens among `revenue`'s lines, from its
+/// published `order_channels` node (ADR-0260 decision 6); nothing where it cannot be read.
+async fn published_channel_names<T: ConfigTreeStore>(
+    config_trees: &T,
+    (tenant_id, store_id): (TenantId, StoreId),
+    revenue: &DailyRevenue,
+) -> (ChannelNames, ChannelNames) {
+    if revenue.by_channel.is_empty() {
+        return (ChannelNames::new(), ChannelNames::new());
+    }
+    let Ok(Some(state)) = config_trees
+        .load(tenant_id, store_id)
+        .await
+        .map(strip_tree_version)
+    else {
+        return (ChannelNames::new(), ChannelNames::new());
+    };
+    let named = ConfigTree::from_state(store_id, CapabilityValidator, state)
+        .current_effective()
+        .and_then(|effective| effective.get(PublishedOrderChannels::NODE).cloned())
+        .and_then(|node| serde_json::from_value::<PublishedOrderChannels>(node).ok())
+        .unwrap_or_default()
+        .names();
+    let pick = |tokens: std::collections::BTreeSet<&String>| -> ChannelNames {
+        tokens
+            .into_iter()
+            .filter_map(|token| {
+                let by_language = named.get(token.as_str())?;
+                Some((
+                    token.clone(),
+                    by_language
+                        .iter()
+                        .map(|(language, name)| (language.clone(), name.as_str().to_owned()))
+                        .collect(),
+                ))
+            })
+            .collect()
+    };
+    (
+        pick(
+            revenue
+                .by_channel
+                .iter()
+                .map(|line| &line.order_type)
+                .collect(),
+        ),
+        pick(revenue.by_channel.iter().map(|line| &line.source).collect()),
+    )
 }
 
 /// The names the store's published `devices` node gives the tills among `cash`'s drawers, by
