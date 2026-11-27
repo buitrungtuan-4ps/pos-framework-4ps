@@ -21,7 +21,7 @@ use pos_proto::events::{
 
 use crate::types::{
     AdmittedDevice, CashTotals, DailyCash, DailyRevenue, DailyRollup, FeeTotal, STORE_DRAWER,
-    TaxComponentTotal, VoidedAfterPayment,
+    TaxComponentTotal,
 };
 
 /// Folds one event into a store's **admitted-device roster**, keyed by the edge-minted local device
@@ -363,20 +363,7 @@ pub fn empty_activity(business_date: &str) -> DailyRollup {
 pub fn empty_revenue(business_date: &str) -> DailyRevenue {
     DailyRevenue {
         business_date: business_date.to_owned(),
-        currency_code: String::new(),
-        bills: 0,
-        gross: 0,
-        reductions: 0,
-        service_charge: 0,
-        tax: 0,
-        net: 0,
-        by_item: BTreeMap::new(),
-        by_fee: BTreeMap::new(),
-        by_tax_component: Vec::new(),
-        voided_after_payment: VoidedAfterPayment::default(),
-        by_tender: BTreeMap::new(),
-        by_channel: Vec::new(),
-        by_app_tender: BTreeMap::new(),
+        ..DailyRevenue::default()
     }
 }
 

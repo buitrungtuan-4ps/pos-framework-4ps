@@ -34,7 +34,7 @@ pub struct DailyRollup {
 /// popularity, not per-item recognised revenue. All amounts are the store's single currency's minor
 /// units (`docs/pos-spec.md` §19). Prices are **T2**: this rollup, and every route that serves it, is
 /// gated behind `console.reports.revenue`. It carries no customer or employee identifier.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, ToSchema)]
 pub struct DailyRevenue {
     /// The store's trading day, `YYYY-MM-DD`.
     pub business_date: String,
