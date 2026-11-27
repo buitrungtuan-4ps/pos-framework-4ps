@@ -14,6 +14,7 @@ use pos_proto::einvoice::DecidedCorrection;
 use pos_proto::events::BillingBillVoided;
 use pos_proto::ids::{BillId, ReasonCodeId};
 use pos_proto::reason_codes::ReasonAction;
+use pos_proto::wire_enum::Open;
 
 use crate::app::{
     AppError, Approval, BillRecord, Edge, PaidBill, SettledReceipt, SettledVoidView, TillScope,
@@ -106,10 +107,7 @@ impl<S: EventStore> Edge<S> {
             &ctx,
         )?;
 
-        let voided = BillingBillVoided {
-            bill_id,
-            reason_code_id,
-        };
+        let voided = self.settled_voided(bill_id, reason_code_id, facts.e_invoice_issued);
         let (envelope, message) = self.prepare_on(&ctx, &voided, shift)?;
         let job_id = envelope.event_id;
         let mut envelopes = vec![envelope];
@@ -151,6 +149,23 @@ impl<S: EventStore> Edge<S> {
             reason: session.reason_codes.find(reason_code_id).cloned(),
             till_name: self.till_name(scope.own),
         })
+    }
+
+    /// The void of a paid bill, saying which correction kind the store applied where the bill had an
+    /// issued e-invoice, so the cloud corrects with that kind
+    /// ([ADR-0256](../../../../../docs/adr/0256-a-voided-bills-invoice-is-corrected-by-the-kind-the-store-applied.md)).
+    fn settled_voided(
+        &self,
+        bill_id: BillId,
+        reason_code_id: ReasonCodeId,
+        invoiced: bool,
+    ) -> BillingBillVoided {
+        BillingBillVoided {
+            bill_id,
+            reason_code_id,
+            correction_kind: invoiced
+                .then(|| Open::from_known(self.session().einvoice.correction_kind())),
+        }
     }
 
     /// What the store's `einvoice` route decides the void of an invoiced bill on (ADR-0245): its
