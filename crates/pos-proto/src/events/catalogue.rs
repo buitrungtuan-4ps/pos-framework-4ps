@@ -3,6 +3,18 @@
 
 //! The macro the event catalogue is declared with, kept beside it so the catalogue's file holds
 //! the catalogue. It expands where it is invoked, in [`super`], and names that module's items.
+//!
+//! # Why the catalogue declares more types than the specification lists
+//!
+//! `docs/pos-spec.md` §18 declares thirty-eight types. Sixteen more are declared in [`super`], each because
+//! a stated requirement had no event able to carry it — most sharply `security.permission.overridden`,
+//! since a manager-PIN override above a discount ceiling is a fraud control and had no auditable
+//! record at all.
+//!
+//! The asymmetry is what makes adding them now correct rather than presumptuous: **adding an event
+//! type is additive and free; removing one is forbidden.** So the cost of declaring a type early is
+//! near zero, and the cost of discovering a missing one after a thousand stores hold offline data is
+//! a protocol version bump. Issue #13 records the reasoning per event.
 
 /// Declares the whole catalogue: the [`EventType`] enumeration, one payload struct per
 /// entry, the [`TypedPayload`] union, and the decode step.

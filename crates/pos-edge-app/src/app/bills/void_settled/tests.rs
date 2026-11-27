@@ -634,3 +634,65 @@ fn a_bill_voided_after_payment_leaves_the_open_shifts_x() {
         assert_eq!(read(&rebuilt), expected, "the same after a rebuild");
     });
 }
+
+/// ADR-0256 decision 2: a void of a bill with an issued e-invoice says which correction kind the
+/// store ran it under, so the cloud corrects with that kind; a void of a bill with none says none.
+#[test]
+fn an_invoiced_void_records_the_correction_kind_the_store_applied() {
+    use pos_proto::einvoice::{
+        EInvoiceIssueMoment, EInvoiceKind, InvoicedCorrection, PublishedEInvoice,
+    };
+    use pos_proto::events::BillingBillVoided;
+    pos_fakes::executor::run_ready(async {
+        for (issue, kind, expected) in [
+            (
+                true,
+                EInvoiceKind::Replacement,
+                Some(EInvoiceKind::Replacement),
+            ),
+            (
+                true,
+                EInvoiceKind::Adjustment,
+                Some(EInvoiceKind::Adjustment),
+            ),
+            (false, EInvoiceKind::Replacement, None),
+        ] {
+            let mut session = session();
+            session.einvoice = PublishedEInvoice {
+                issue_moment: Open::from_known(if issue {
+                    EInvoiceIssueMoment::Immediate
+                } else {
+                    EInvoiceIssueMoment::Off
+                }),
+                symbol: Some("1C26MAA".to_owned()),
+                invoiced_correction: Open::from_known(InvoicedCorrection::ManagerUpToLimit),
+                manager_correction_limit: Some(1_000_000),
+                correction_kind: Open::from_known(kind),
+                ..PublishedEInvoice::default()
+            };
+            let store = FakeStore::default();
+            let edge = over(store.clone(), session);
+            let bill_id = a_paid_bill(&edge, 502, vec![card(165_000)]).await;
+            void(&edge, bill_id, Some("MGR-1"))
+                .await
+                .expect("the manager's limit covers it");
+            let log = store
+                .read(&EventQuery::first(
+                    identity().store_id,
+                    NonZeroU32::new(500).expect("non-zero"),
+                ))
+                .await
+                .expect("reads the log");
+            let recorded = log
+                .iter()
+                .find(|event| event.event_type.as_str() == "billing.bill.voided")
+                .and_then(|event| event.data.decode::<BillingBillVoided>().ok())
+                .expect("the void is recorded");
+            assert_eq!(
+                recorded.correction_kind.map(|kind| kind.known()),
+                expected,
+                "issued {issue}, kind {kind:?}"
+            );
+        }
+    });
+}

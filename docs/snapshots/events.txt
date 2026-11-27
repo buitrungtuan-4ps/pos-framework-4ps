@@ -58,6 +58,7 @@ billing.bill.split	field=resulting_bill_ids
 billing.bill.split	field=source_bill_id
 billing.bill.split	schema_version=1
 billing.bill.voided	field=bill_id
+billing.bill.voided	field=correction_kind
 billing.bill.voided	field=reason_code_id
 billing.bill.voided	schema_version=1
 billing.check.printed	field=bill_id

@@ -8,17 +8,7 @@
 //! permission identifiers (`docs/naming-and-api.md` §5). Events already happened, so they are never
 //! named imperatively.
 //!
-//! # Why there are more than the specification lists
-//!
-//! `docs/pos-spec.md` §18 declares thirty-eight types. Sixteen more are declared here, each because
-//! a stated requirement had no event able to carry it — most sharply `security.permission.overridden`,
-//! since a manager-PIN override above a discount ceiling is a fraud control and had no auditable
-//! record at all.
-//!
-//! The asymmetry is what makes adding them now correct rather than presumptuous: **adding an event
-//! type is additive and free; removing one is forbidden.** So the cost of declaring a type early is
-//! near zero, and the cost of discovering a missing one after a thousand stores hold offline data is
-//! a protocol version bump. Issue #13 records the reasoning per event.
+//! Why it declares more types than the specification lists is told in `events/catalogue.rs`.
 
 use serde::{Deserialize, Serialize};
 
@@ -438,6 +428,9 @@ event_catalogue! {
         bill_id: BillId,
         /// Why.
         reason_code_id: ReasonCodeId,
+        /// The `einvoice.correction_kind` the store voided an invoiced bill under (ADR-0256).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        correction_kind: Option<Open<crate::einvoice::EInvoiceKind>>,
     },
     /// A settled bill's e-invoice was issued, with its settle or when due (ADR-0225, ADR-0229).
     FiscalInvoiceIssued => "fiscal.invoice.issued", version = 1 {

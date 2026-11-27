@@ -104,6 +104,7 @@ impl<S: EventStore> Edge<S> {
         let voided = BillingBillVoided {
             bill_id,
             reason_code_id,
+            correction_kind: None,
         };
         let (voided_envelope, voided_message) = self.prepare_on(&ctx, &voided, shift)?;
         let mut envelopes = vec![voided_envelope];

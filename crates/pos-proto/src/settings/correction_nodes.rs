@@ -73,7 +73,9 @@ pub(super) fn correction_settings() -> Vec<Setting> {
                   total back to zero; `EINVOICE_KIND_REPLACEMENT` replaces it with an invoice of \
                   zero. Either is numbered under the tenant's correction symbol and never takes \
                   an invoice below zero. Which errors need which kind is to be confirmed by legal \
-                  or the accountant. The cloud reads it; the edge does not.",
+                  or the accountant. The edge writes the kind it runs on each void of an invoiced \
+                  bill, and the cloud corrects with that kind (ADR-0256), so a later change \
+                  does not reach an earlier void.",
         },
         Setting {
             node: PublishedEInvoice::NODE,

@@ -480,8 +480,23 @@ pub async fn feed_store<E: EventStore>(
                     .map_err(text)?;
                 let bill = voided.bill_id.to_string();
                 let void_event = event.event_id.as_ulid();
-                if correct_voided_bill(corrector, submissions, tenant, store, bill, void_event, now)
-                    .await?
+                // The kind the store applied, where its edge wrote one (ADR-0256).
+                let applied = voided
+                    .correction_kind
+                    .map(|kind| kind.known())
+                    .filter(|kind| {
+                        matches!(kind, EInvoiceKind::Adjustment | EInvoiceKind::Replacement)
+                    });
+                if correct_voided_bill(
+                    corrector,
+                    submissions,
+                    tenant,
+                    store,
+                    bill,
+                    (void_event, applied),
+                    now,
+                )
+                .await?
                 {
                     recorded = recorded.saturating_add(1);
                 }

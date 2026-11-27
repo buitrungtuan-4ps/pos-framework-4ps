@@ -18,7 +18,6 @@ A citation is `ADR-NNNN`, or a link to `adr/NNNN-…`, in a tracked file under `
 - [ADR-0216](../adr/0216-integrations-come-in-three-tiers-and-functions-wait.md) Integrations come in three tiers, and WebAssembly functions wait for a real case
 - [ADR-0231](../adr/0231-a-phone-keeps-its-till-token-in-a-store-the-owner-chooses.md) A phone keeps its till token in a store the owner chooses
 - [ADR-0252](../adr/0252-hybrid-numbering-is-confirmed-on-its-own-value.md) HYBRID numbering is confirmed on its own value, not by a separate setting
-- [ADR-0256](../adr/0256-a-voided-bills-invoice-is-corrected-by-the-kind-the-store-applied.md) A voided bill's invoice is corrected by the kind the store applied
 - [ADR-0257](../adr/0257-a-void-hq-approved-carries-the-kind-hq-approved.md) A void HQ approved carries the kind HQ approved
 
 ## Citations of ADRs that do not exist

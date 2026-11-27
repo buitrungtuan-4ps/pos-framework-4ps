@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use pos_proto::einvoice::CorrectionRequest;
 use pos_proto::envelope::EventEnvelope;
-use pos_proto::ids::TenantId;
+use pos_proto::ids::{StoreId, TenantId};
 use store_postgres::CorrectionRequestRow;
 
 use super::feed::{FeedError, FeedFuture, kind_token};
@@ -37,6 +37,13 @@ pub trait CorrectionRequests: Send + Sync {
         tenant: TenantId,
         status: Option<&'static str>,
     ) -> FeedFuture<'_, Vec<CorrectionRequestRow>>;
+    /// The newest approved request for `bill_id` at `store`, whose kind HQ approved (ADR-0256).
+    fn approved_for_bill(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        bill_id: String,
+    ) -> FeedFuture<'_, Option<CorrectionRequestRow>>;
     /// One request.
     fn get(
         &self,
@@ -95,6 +102,19 @@ impl CorrectionRequests for store_postgres::PostgresCorrectionRequests {
     ) -> FeedFuture<'_, Vec<CorrectionRequestRow>> {
         Box::pin(async move {
             Self::list(self, &tenant.to_string(), status, LIST_LIMIT)
+                .await
+                .map_err(text)
+        })
+    }
+
+    fn approved_for_bill(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        bill_id: String,
+    ) -> FeedFuture<'_, Option<CorrectionRequestRow>> {
+        Box::pin(async move {
+            Self::approved_for_bill(self, &tenant.to_string(), &store.to_string(), &bill_id)
                 .await
                 .map_err(text)
         })
@@ -186,6 +206,30 @@ impl CorrectionRequests for InMemoryCorrectionRequests {
             });
             found.truncate(usize::try_from(LIST_LIMIT).unwrap_or(usize::MAX));
             Ok(found)
+        });
+        Box::pin(async move { found })
+    }
+
+    fn approved_for_bill(
+        &self,
+        tenant: TenantId,
+        store: StoreId,
+        bill_id: String,
+    ) -> FeedFuture<'_, Option<CorrectionRequestRow>> {
+        let (tenant, store) = (tenant.to_string(), store.to_string());
+        let found = self.with(|rows| {
+            Ok(rows
+                .values()
+                .filter(|row| {
+                    row.tenant_id == tenant
+                        && row.store_id == store
+                        && row.bill_id == bill_id
+                        && row.status == "APPROVED"
+                })
+                .max_by(|a, b| {
+                    (a.decided_time_ms, &a.request_id).cmp(&(b.decided_time_ms, &b.request_id))
+                })
+                .cloned())
         });
         Box::pin(async move { found })
     }
